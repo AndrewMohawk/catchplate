@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/policy-bundle.v1.schema.json",
+  "title": "Serverware PolicyBundle v1",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "principals", "credentials", "routes"],
+  "additionalProperties": false,
+  "properties": {
+    "apiVersion": {"const": "serverware.policy/v1"},
+    "kind": {"const": "PolicyBundle"},
+    "metadata": {
+      "type": "object",
+      "required": ["id", "sequence", "rollbackEpoch"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 1},
+        "rollbackEpoch": {"type": "integer", "minimum": 1},
+        "validFrom": {"type": "string"},
+        "signature": {"type": "string"}
+      }
+    },
+    "defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "action": {"enum": ["deny"]},
+        "failMode": {"enum": ["closed"]},
+        "unknownHosts": {"enum": ["block"]},
+        "unknownPaths": {"enum": ["block"]},
+        "validationFailure": {"enum": ["block", "allowWithAudit"]}
+      }
+    },
+    "principals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "sourceCidrs": {"type": "array", "items": {"type": "string"}},
+          "spiffeIds": {"type": "array", "items": {"type": "string"}},
+          "requiredHeaders": {"type": "object", "additionalProperties": {"type": "string"}},
+          "proxyAuthorization": {
+            "oneOf": [
+              {"type": "string", "minLength": 1},
+              {
+                "type": "object",
+                "required": ["scheme", "tokenSha256"],
+                "additionalProperties": false,
+                "properties": {
+                  "scheme": {"enum": ["Bearer"]},
+                  "tokenId": {"type": "string", "minLength": 1},
+                  "tokenSha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+                  "sourceCidrs": {"type": "array", "items": {"type": "string"}},
+                  "expiresAtEpochMs": {"type": "integer", "minimum": 1}
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    "credentials": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "injection"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "provider": {"type": "string"},
+          "scopes": {"type": "array", "items": {"type": "string"}},
+          "injection": {
+            "type": "object",
+            "required": ["type"],
+            "additionalProperties": true,
+            "properties": {
+              "type": {"enum": ["bearer", "basic", "header", "query", "cookie"]},
+              "header": {"type": "string"},
+              "name": {"type": "string"},
+              "field": {"type": "string"},
+              "prefix": {"type": "string"},
+              "username": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "routes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["id", "principals", "match", "adapter"],
+        "additionalProperties": false,
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "principals": {"type": "array", "items": {"type": "string"}},
+          "match": {
+            "type": "object",
+            "required": ["scheme", "host", "port", "methods", "paths"],
+            "additionalProperties": false,
+            "properties": {
+              "scheme": {"enum": ["https"]},
+              "host": {"type": "string", "minLength": 1},
+              "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+              "methods": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+              "paths": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}}
+            }
+          },
+          "credentialRef": {"type": "string"},
+          "adapter": {
+            "type": "object",
+            "required": ["type", "config"],
+            "additionalProperties": false,
+            "properties": {
+              "type": {"enum": ["generic.rest", "gmail.v1", "x.v2", "npm.registry"]},
+              "config": {"type": "object"}
+            }
+          },
+          "jit": {
+            "type": "object",
+            "required": ["required", "mode", "ttlSeconds", "maxUses", "consumeOn", "binding", "approvers"],
+            "additionalProperties": false,
+            "properties": {
+              "required": {"type": "boolean"},
+              "mode": {"enum": ["perRequest", "perOperation"]},
+              "ttlSeconds": {"type": "integer", "minimum": 1, "maximum": 3600},
+              "maxUses": {"type": "integer", "minimum": 1},
+              "consumeOn": {"enum": ["forwardStart", "successfulResponse"]},
+              "binding": {
+                "type": "object",
+                "required": ["type", "fields"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"enum": ["requestDigest", "operationDigest"]},
+                  "fields": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "enum": [
+                        "principal",
+                        "routeId",
+                        "credentialRef",
+                        "credentialVersion",
+                        "policyHash",
+                        "method",
+                        "authority",
+                        "path",
+                        "query",
+                        "selectedHeaders",
+                        "bodySha256",
+                        "packageName",
+                        "packageVersion",
+                        "tarballIntegrity",
+                        "operation"
+                      ]
+                    }
+                  }
+                }
+              },
+              "approvers": {
+                "type": "object",
+                "required": ["quorum", "users", "authn"],
+                "additionalProperties": false,
+                "properties": {
+                  "quorum": {"type": "integer", "minimum": 1},
+                  "users": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                  "authn": {
+                    "type": "object",
+                    "required": ["webauthnRequired", "userVerification", "allowedAuthenticatorClasses", "requireHardwareAttestation"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "webauthnRequired": {"type": "boolean"},
+                      "userVerification": {"enum": ["required", "preferred", "discouraged"]},
+                      "allowedAuthenticatorClasses": {
+                        "type": "array",
+                        "items": {"enum": ["yubikey", "hardware", "platform", "dev", "unknown"]}
+                      },
+                      "requireHardwareAttestation": {"type": "boolean"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

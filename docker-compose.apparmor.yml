@@ -1,0 +1,20 @@
+services:
+  serverware:
+    security_opt:
+      - apparmor=serverware-docker
+
+  audit-anchor:
+    security_opt:
+      - apparmor=serverware-docker
+
+  grant-store:
+    security_opt:
+      - apparmor=serverware-docker
+
+  demo-upstream:
+    security_opt:
+      - apparmor=serverware-docker
+
+  decision-gate-rs:
+    security_opt:
+      - apparmor=serverware-docker

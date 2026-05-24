@@ -1,0 +1,23 @@
+.DS_Store
+
+# Generated verification artifacts and local secret material.
+.tmp/
+
+# Python/runtime caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Rust build output.
+target/
+data-plane/decision-gate-rs/target/
+
+# Local editor and environment files.
+.env
+.env.*
+!.env.example
+*.log

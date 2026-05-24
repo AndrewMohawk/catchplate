@@ -1,0 +1,107 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import secrets
+import urllib.request
+from typing import Any
+
+
+def canonical_json(value: Any) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def sha256_prefixed(data: bytes) -> str:
+    return "sha256:" + hashlib.sha256(data).hexdigest()
+
+
+def request_json(url: str, admin_token: str | None = None) -> dict[str, Any]:
+    headers = {}
+    if admin_token:
+        headers["X-Serverware-Admin-Token"] = admin_token
+    request = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read())
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Verify the Rust decision-gate dev attestation.")
+    parser.add_argument("--gate", default="http://localhost:9090")
+    parser.add_argument("--serverware", default="http://localhost:3000")
+    parser.add_argument("--admin-token", default="dev-admin-token")
+    parser.add_argument("--expected-binary-digest")
+    args = parser.parse_args()
+
+    gate = args.gate.rstrip("/")
+    serverware = args.serverware.rstrip("/")
+    nonce = secrets.token_urlsafe(24)
+    attestation = request_json(f"{gate}/attestation?nonce={nonce}")
+    health = request_json(f"{gate}/healthz")
+    policy = request_json(f"{serverware}/api/policy", args.admin_token)
+    control_attestation = request_json(f"{serverware}/attestation?nonce={nonce}-control")
+
+    if attestation.get("nonce") != nonce:
+        raise ValueError("decision gate attestation nonce mismatch")
+    manifest = attestation.get("runtime_manifest")
+    if not isinstance(manifest, dict):
+        raise ValueError("decision gate attestation missing runtime_manifest")
+    expected_manifest_digest = sha256_prefixed(canonical_json(manifest).encode("utf-8"))
+    if attestation.get("runtime_manifest_digest") != expected_manifest_digest:
+        raise ValueError("decision gate runtime_manifest_digest mismatch")
+    binary_digest = attestation.get("data_plane_binary_digest")
+    if not isinstance(binary_digest, str) or not binary_digest.startswith("sha256:"):
+        raise ValueError("decision gate missing binary digest")
+    if manifest.get("binary_digest") != binary_digest:
+        raise ValueError("decision gate manifest binary digest mismatch")
+    if health.get("data_plane_binary_digest") != binary_digest:
+        raise ValueError("decision gate health binary digest mismatch")
+    if args.expected_binary_digest and args.expected_binary_digest != binary_digest:
+        raise ValueError("decision gate binary digest does not match expected digest")
+    control_binary_digest = control_attestation.get("data_plane_binary_digest")
+    if control_binary_digest and control_binary_digest != binary_digest:
+        raise ValueError("control-plane data-plane binary digest does not match running decision gate")
+    control_quote = control_attestation.get("quote") or {}
+    control_claims = control_quote.get("claims") or {}
+    if control_claims.get("data_plane_binary_digest") != control_binary_digest:
+        raise ValueError("control-plane quote data-plane binary digest claim mismatch")
+    control_image_signatures = control_attestation.get("image_signatures_digest")
+    gate_image_signatures = attestation.get("image_signatures_digest")
+    if control_image_signatures != gate_image_signatures:
+        raise ValueError("control-plane and decision gate image signatures digest mismatch")
+    if control_claims.get("image_signatures_digest") != control_image_signatures:
+        raise ValueError("control-plane quote image signatures digest claim mismatch")
+
+    policy_hash = policy.get("policy_hash")
+    signing_key_id = (policy.get("metadata") or {}).get("signingKeyId")
+    if attestation.get("policy_bundle_digest") != policy_hash:
+        raise ValueError("decision gate policy hash does not match control plane")
+    if manifest.get("policy_hash") != policy_hash or health.get("policy_hash") != policy_hash:
+        raise ValueError("decision gate policy hash is inconsistent")
+    if attestation.get("policy_signing_key_id") != signing_key_id:
+        raise ValueError("decision gate policy signing key does not match control plane")
+    if manifest.get("policy_signing_key_id") != signing_key_id:
+        raise ValueError("decision gate manifest policy signing key mismatch")
+
+    hot_path = manifest.get("hot_path") or {}
+    if hot_path.get("sqlite_calls") != 0 or hot_path.get("filesystem_calls") != 0:
+        raise ValueError("decision gate hot path must report zero SQLite/filesystem calls")
+
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "data_plane_binary_digest": binary_digest,
+                "policy_hash": policy_hash,
+                "policy_signing_key_id": signing_key_id,
+                "tee_platform": attestation.get("tee_platform"),
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+
+
+if __name__ == "__main__":
+    main()

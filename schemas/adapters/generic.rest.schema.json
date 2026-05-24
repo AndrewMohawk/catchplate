@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/generic.rest.schema.json",
+  "title": "Serverware generic REST adapter config",
+  "type": "object",
+  "required": ["request", "response"],
+  "additionalProperties": false,
+  "properties": {
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowedQueryKeys": {"type": "array", "items": {"type": "string"}},
+        "allowedHeaders": {"type": "array", "items": {"type": "string"}},
+        "bodyMode": {"enum": ["none", "any", "json", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxEventBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxPairBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxRecordBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxNestedBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "allowedFields": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {"enum": ["headersOnly", "json", "any", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxEventBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxPairBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxRecordBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "maxNestedBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "allowedFields": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

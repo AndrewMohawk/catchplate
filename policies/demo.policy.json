@@ -1,0 +1,651 @@
+{
+  "apiVersion": "serverware.policy/v1",
+  "credentials": [
+    {
+      "id": "cred-demo-bearer",
+      "injection": {
+        "header": "Authorization",
+        "type": "bearer"
+      },
+      "provider": "demo",
+      "scopes": [
+        "demo"
+      ]
+    }
+  ],
+  "defaults": {
+    "action": "deny",
+    "failMode": "closed",
+    "unknownHosts": "block",
+    "unknownPaths": "block",
+    "validationFailure": "block"
+  },
+  "kind": "PolicyBundle",
+  "metadata": {
+    "id": "serverware-demo",
+    "rollbackEpoch": 1,
+    "sequence": 1
+  },
+  "principals": [
+    {
+      "id": "agent:demo",
+      "requiredHeaders": {
+        "X-Serverware-Agent": "demo-agent"
+      },
+      "sourceCidrs": [
+        "0.0.0.0/0",
+        "::/0"
+      ]
+    }
+  ],
+  "routes": [
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "content-type"
+            ],
+            "allowedQueryKeys": [],
+            "bodyMode": "any",
+            "maxBodyBytes": 65536
+          },
+          "response": {
+            "allowedFields": [
+              "method",
+              "path",
+              "query",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 65536,
+            "mode": "json"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.echo",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET",
+          "POST"
+        ],
+        "paths": [
+          "/echo"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "content-type"
+            ],
+            "allowedQueryKeys": [],
+            "allowedFields": [
+              "id",
+              "public",
+              "safe_note"
+            ],
+            "bodyMode": "csvStream",
+            "maxBodyBytes": 1048576,
+            "maxRecordBytes": 8192
+          },
+          "response": {
+            "allowedFields": [
+              "id",
+              "public",
+              "safe_note",
+              "sawSecret",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxRecordBytes": 8192,
+            "mode": "csvStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.csv.redact.stream",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/csv-redact"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "content-type"
+            ],
+            "allowedQueryKeys": [],
+            "allowedFields": [
+              "requestId",
+              "profile.email",
+              "profile.settings.theme",
+              "items.id",
+              "items.details.safe",
+              "audit.trace"
+            ],
+            "bodyMode": "jsonNestedStream",
+            "maxBodyBytes": 1048576,
+            "maxNestedBytes": 262144
+          },
+          "response": {
+            "allowedFields": [
+              "requestId",
+              "profile.email",
+              "profile.settings.theme",
+              "items.id",
+              "items.details.safe",
+              "audit.trace",
+              "sawSecret",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxNestedBytes": 262144,
+            "mode": "jsonNestedStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.json.nested.redact.stream",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/json-nested-redact"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "content-type"
+            ],
+            "allowedQueryKeys": [],
+            "allowedFields": [
+              "kept",
+              "safe"
+            ],
+            "bodyMode": "formUrlencodedStream",
+            "maxBodyBytes": 1048576,
+            "maxPairBytes": 8192
+          },
+          "response": {
+            "allowedFields": [
+              "kept",
+              "safe",
+              "sawSecret",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxPairBytes": 8192,
+            "mode": "formUrlencodedStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.form.urlencoded.redact.stream",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/form-redact"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "content-type"
+            ],
+            "allowedQueryKeys": [],
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe"
+            ],
+            "bodyMode": "jsonSseStream",
+            "maxBodyBytes": 1048576,
+            "maxEventBytes": 8192,
+            "maxLineBytes": 8192
+          },
+          "response": {
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe",
+              "sawSecret",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxEventBytes": 8192,
+            "maxLineBytes": 8192,
+            "mode": "jsonSseStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.json.sse.redact.stream",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/json-sse-redact"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "content-type"
+            ],
+            "allowedQueryKeys": [],
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe"
+            ],
+            "bodyMode": "jsonArrayStream",
+            "maxBodyBytes": 1048576,
+            "maxItemBytes": 8192
+          },
+          "response": {
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe",
+              "sawSecret",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxItemBytes": 8192,
+            "mode": "jsonArrayStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.json.array.redact.stream",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/json-array-redact"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [],
+            "allowedQueryKeys": [
+              "chunks",
+              "chunkSize"
+            ],
+            "bodyMode": "none",
+            "maxBodyBytes": 0
+          },
+          "response": {
+            "maxBodyBytes": 1048576,
+            "mode": "stream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.stream",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/stream-bytes"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "content-type"
+            ],
+            "allowedQueryKeys": [],
+            "bodyMode": "stream",
+            "maxBodyBytes": 1048576
+          },
+          "response": {
+            "allowedFields": [
+              "method",
+              "path",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256",
+              "bytes",
+              "sha256"
+            ],
+            "maxBodyBytes": 65536,
+            "mode": "json"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.upload.stream",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/upload-bytes"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "content-type"
+            ],
+            "allowedQueryKeys": [],
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe"
+            ],
+            "bodyMode": "jsonlStream",
+            "maxBodyBytes": 1048576,
+            "maxLineBytes": 8192
+          },
+          "response": {
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe",
+              "sawSecret",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxLineBytes": 8192,
+            "mode": "jsonlStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.jsonl.redact.stream",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/jsonl-redact"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "allowMessageGetOnlyFromPriorSearch": true,
+          "cacheTtlSeconds": 1800,
+          "denyEquivalentEndpoints": [
+            "threads",
+            "history",
+            "attachments",
+            "imap"
+          ],
+          "forceQuery": true,
+          "maxAgeDays": 30,
+          "maxResults": 10,
+          "response": {
+            "allowedFields": [
+              "id",
+              "threadId",
+              "labelIds",
+              "snippet",
+              "internalDate",
+              "payload.headers"
+            ],
+            "onViolation": "block",
+            "validateInternalDate": true,
+            "validateListByMetadataFetch": true
+          }
+        },
+        "type": "gmail.v1"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.gmail.recent",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/gmail/v1/users/{user}/messages",
+          "/gmail/v1/users/{user}/messages/{message_id}"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "appIds": [
+            "demo-x-app"
+          ],
+          "allowedReadOperations": [
+            "tweets.read"
+          ],
+          "response": {
+            "allowedFields": [
+              "data.id",
+              "data.text",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 65536,
+            "mode": "json"
+          },
+          "blockWrites": true,
+          "mode": "readOnly"
+        },
+        "type": "x.v2"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.x.readonly",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET",
+          "POST",
+          "DELETE"
+        ],
+        "paths": [
+          "/2/**"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "operations": [
+            "publish",
+            "distTagWrite"
+          ],
+          "response": {
+            "allowedFields": [
+              "package",
+              "published",
+              "tag",
+              "dist_tag_written",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 65536,
+            "mode": "json"
+          }
+        },
+        "type": "npm.registry"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "id": "demo.npm.publish.jit",
+      "jit": {
+        "approvers": {
+          "authn": {
+            "allowedAuthenticatorClasses": [
+              "dev"
+            ],
+            "requireHardwareAttestation": false,
+            "userVerification": "discouraged",
+            "webauthnRequired": true
+          },
+          "quorum": 1,
+          "users": [
+            "user:demo"
+          ]
+        },
+        "binding": {
+          "fields": [
+            "principal",
+            "routeId",
+            "credentialRef",
+            "credentialVersion",
+            "policyHash",
+            "method",
+            "authority",
+            "path",
+            "bodySha256",
+            "packageName",
+            "packageVersion",
+            "tarballIntegrity"
+          ],
+          "type": "operationDigest"
+        },
+        "consumeOn": "forwardStart",
+        "maxUses": 1,
+        "mode": "perOperation",
+        "required": true,
+        "ttlSeconds": 30
+      },
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "PUT",
+          "POST"
+        ],
+        "paths": [
+          "/npm/{package}",
+          "/npm/-/package/{package}/dist-tags/{tag}"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.local/schemas/adapters/gmail.v1.schema.json",
+  "title": "Serverware Gmail v1 adapter config",
+  "type": "object",
+  "required": ["maxAgeDays"],
+  "additionalProperties": false,
+  "properties": {
+    "maxAgeDays": {"type": "integer", "minimum": 1, "maximum": 3650},
+    "maxResults": {"type": "integer", "minimum": 1, "maximum": 500},
+    "forceQuery": {"type": "boolean"},
+    "allowMessageGetOnlyFromPriorSearch": {"type": "boolean"},
+    "cacheTtlSeconds": {"type": "integer", "minimum": 1, "maximum": 86400},
+    "denyEquivalentEndpoints": {"type": "array", "items": {"type": "string"}},
+    "response": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "validateInternalDate": {"type": "boolean"},
+        "validateListByMetadataFetch": {"type": "boolean"},
+        "allowedFields": {"type": "array", "items": {"type": "string"}},
+        "onViolation": {"enum": ["block"]}
+      }
+    }
+  }
+}

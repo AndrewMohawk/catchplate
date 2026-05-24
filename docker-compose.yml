@@ -1,0 +1,174 @@
+services:
+  serverware:
+    build: .
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 256
+    environment:
+      SERVERWARE_DATA_DIR: /data
+      SERVERWARE_PUBLIC_URL: http://localhost:3000
+      SERVERWARE_ADMIN_TOKEN: dev-admin-token
+      SERVERWARE_ADMIN_USER: user:demo
+      SERVERWARE_DEV_AUTHENTICATOR: "1"
+      SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9090
+      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-data-plane-audit-token
+      SERVERWARE_AUDIT_ANCHOR_URL: http://audit-anchor:9100/anchors
+      SERVERWARE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
+      SERVERWARE_AUDIT_ANCHOR_INTERVAL_SECONDS: "0.5"
+      SERVERWARE_AUDIT_STORE_BACKEND: postgres
+      SERVERWARE_AUDIT_STORE_POSTGRES_DSN: postgresql://serverware:serverware@grant-store:5432/serverware
+      SERVERWARE_METADATA_STORE_BACKEND: postgres
+      SERVERWARE_METADATA_STORE_POSTGRES_DSN: postgresql://serverware:serverware@grant-store:5432/serverware
+      SERVERWARE_GRANT_STORE_BACKEND: postgres
+      SERVERWARE_GRANT_STORE_POSTGRES_DSN: postgresql://serverware:serverware@grant-store:5432/serverware
+      SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
+      SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
+      SERVERWARE_KEY_RELEASE_REQUIRED: "1"
+      SERVERWARE_RELEASE_CHANNEL: dev
+      SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
+      SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:29294553bd661e075ef21482c965d80f4f634fef59f55f2c98c363debe408506
+    ports:
+      - "3000:3000"
+      - "8080:8080"
+    volumes:
+      - serverware-data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    depends_on:
+      audit-anchor:
+        condition: service_started
+      grant-store:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  audit-anchor:
+    build: .
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 128
+    command: ["python", "scripts/audit_anchor_sink.py"]
+    environment:
+      SERVERWARE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
+      SERVERWARE_AUDIT_ANCHOR_PATH: /anchors/transparency-log.jsonl
+      SERVERWARE_TRANSPARENCY_LOG_SIGNING_KEY: /anchors/transparency-log-ed25519.pem
+      SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND: python scripts/transparency_checkpoint.py checkpoint
+      SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE: fixture
+      SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED: "1"
+      SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH: /anchors/managed-transparency-log.jsonl
+    ports:
+      - "9100:9100"
+    volumes:
+      - serverware-audit-anchors:/anchors
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9100/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  grant-store:
+    image: postgres:16-alpine
+    init: true
+    user: postgres
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 128
+    environment:
+      POSTGRES_DB: serverware
+      POSTGRES_USER: serverware
+      POSTGRES_PASSWORD: serverware
+      PGDATA: /var/lib/postgresql/data/pgdata
+    expose:
+      - "5432"
+    volumes:
+      - serverware-grant-store:/var/lib/postgresql/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,size=8m,uid=70,gid=70,mode=3775
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U serverware -d serverware"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  demo-upstream:
+    build: .
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 128
+    command: ["python", "scripts/demo_upstream.py"]
+    expose:
+      - "8443"
+    volumes:
+      - serverware-data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+
+  decision-gate-rs:
+    build:
+      context: .
+      dockerfile: data-plane/decision-gate-rs/Dockerfile
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 256
+    environment:
+      SERVERWARE_POLICY_BUNDLE: /data/policy-bundle.json
+      SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL: http://serverware:3000/attestation
+      SERVERWARE_CREDENTIAL_GENERATIONS: /data/credential-generations.json
+      SERVERWARE_CREDENTIAL_LEASES: /data/credential-leases.json
+      SERVERWARE_UPSTREAM_CA_BUNDLE: /data/demo-upstream/ca.pem
+      SERVERWARE_MITM_CA_CERT: /data/decision-gate-ca-cert.pem
+      SERVERWARE_MITM_CA_KEY: /data/decision-gate-ca-key.pem
+      SERVERWARE_CREDENTIAL_GENERATION_POLL_SECONDS: "0.25"
+      SERVERWARE_POLICY_POLL_SECONDS: "0.25"
+      SERVERWARE_CONTROL_PLANE_AUDIT_URL: http://serverware:3000/api/data-plane/audit
+      SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL: http://serverware:3000/api/data-plane/grants/consume
+      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-data-plane-audit-token
+      SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
+      SERVERWARE_DECISION_GATE_PORT: "9090"
+      SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
+      SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
+    ports:
+      - "9090:9090"
+    volumes:
+      - serverware-data:/data:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+    depends_on:
+      - serverware
+      - demo-upstream
+
+volumes:
+  serverware-data:
+  serverware-audit-anchors:
+  serverware-grant-store:

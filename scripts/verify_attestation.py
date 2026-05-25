@@ -154,6 +154,8 @@ def verify_quote(attestation: dict[str, Any], tee_verify_command: str | None = N
         "rollback_epoch",
         "provenance_digest",
         "image_signatures_digest",
+        "source_tree_digest",
+        "response_signing_key_id",
         "release_channel",
     ):
         if claims.get(field) != attestation.get(field):
@@ -231,6 +233,8 @@ def main() -> None:
                 "policy_signing_key_id": key_hash,
                 "ca_intermediate_spki_sha256": ca_spki,
                 "data_plane_binary_digest": attestation.get("data_plane_binary_digest"),
+                "source_tree_digest": attestation.get("source_tree_digest"),
+                "response_signing_key_id": attestation.get("response_signing_key_id"),
                 "rollback_epoch": attestation.get("rollback_epoch"),
                 "ca_out": str(ca_out),
             },

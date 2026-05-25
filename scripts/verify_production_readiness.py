@@ -250,6 +250,8 @@ def run_live_probes(env: dict[str, str], claims_file: str | None) -> dict[str, A
         "rollback_epoch": claims.get("rollback_epoch"),
         "release_channel": claims.get("release_channel"),
         "provenance_digest": claims.get("provenance_digest"),
+        "source_tree_digest": claims.get("source_tree_digest"),
+        "response_signing_key_id": claims.get("response_signing_key_id"),
         "data_plane_binary_digest": claims.get("data_plane_binary_digest"),
     }
     release = run_command(

@@ -67,6 +67,8 @@ def _claims_from_attestation(attestation: dict[str, Any]) -> dict[str, Any]:
         "data_plane_binary_digest": attestation.get("data_plane_binary_digest"),
         "rollback_epoch": attestation.get("rollback_epoch"),
         "provenance_digest": attestation.get("provenance_digest"),
+        "source_tree_digest": attestation.get("source_tree_digest"),
+        "response_signing_key_id": attestation.get("response_signing_key_id"),
         "release_channel": attestation.get("release_channel"),
     }
     for field, expected in checks.items():

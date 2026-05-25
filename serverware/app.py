@@ -4,12 +4,20 @@ import hmac
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from serverware import __version__
-from serverware.attestation import attestation_document
+from serverware.attestation import (
+    attestation_document,
+    image_signatures_digest,
+    image_signatures_document,
+    release_provenance_digest,
+    release_provenance_document,
+    runtime_manifest_digest,
+    source_tree_digest,
+)
 from serverware.config import DATA_PLANE_AUDIT_TOKEN, MITMPROXY_CONF_DIR, POLICY_BUNDLE_PATH
 from serverware import db, grants, runtime
 from serverware.auth import AdminIdentity, admin_status, require_admin, require_role
@@ -21,6 +29,7 @@ from serverware.policy_bundle import (
     policy_public_key_pem,
     write_policy_bundle,
 )
+from serverware.response_identity import response_signature_headers, response_statement
 from serverware.webauthn import (
     WebAuthnError,
     approval_options,
@@ -34,6 +43,40 @@ from serverware.webauthn_trust import WebAuthnTrustError, status as webauthn_tru
 
 
 app = FastAPI(title="Serverware", version=__version__)
+
+
+@app.middleware("http")
+async def signed_response_middleware(request: Request, call_next):
+    response = await call_next(request)
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    snapshot = get_policy_snapshot()
+    statement = response_statement(
+        method=request.method,
+        path=request.url.path,
+        query=request.url.query,
+        status_code=response.status_code,
+        body=body,
+        nonce=request.headers.get("X-Serverware-Response-Nonce"),
+        context={
+            "runtime_manifest_digest": runtime_manifest_digest(),
+            "policy_bundle_digest": snapshot.hash if snapshot else None,
+            "provenance_digest": release_provenance_digest(),
+            "image_signatures_digest": image_signatures_digest(),
+            "source_tree_digest": source_tree_digest(),
+        },
+    )
+    headers = dict(response.headers)
+    headers.pop("content-length", None)
+    headers.update(response_signature_headers(statement))
+    return Response(
+        content=body,
+        status_code=response.status_code,
+        headers=headers,
+        media_type=response.media_type,
+        background=response.background,
+    )
 
 
 class CredentialCreate(BaseModel):
@@ -188,6 +231,22 @@ def _approval_is_expired(approval: dict[str, Any]) -> bool:
 @app.get("/attestation")
 def attestation(nonce: str | None = None) -> dict[str, Any]:
     return attestation_document(nonce)
+
+
+@app.get("/api/release/provenance")
+def release_provenance_api(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+    document = release_provenance_document()
+    if document is None:
+        raise HTTPException(status_code=404, detail="release provenance has not been published")
+    return document
+
+
+@app.get("/api/release/image-signatures")
+def image_signatures_api(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+    document = image_signatures_document()
+    if document is None:
+        raise HTTPException(status_code=404, detail="image signatures have not been published")
+    return document
 
 
 @app.get("/ca.pem")

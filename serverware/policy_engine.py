@@ -12,6 +12,7 @@ from mitmproxy import http
 
 from serverware import db, runtime
 from serverware.adapters import get_adapter
+from serverware.constraints import evaluate_request_constraints, evaluate_response_constraints
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     CredentialPolicy,
@@ -274,6 +275,27 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         return RequestEvaluation(decision, snapshot, principal, route, credential_policy, params)
 
     operation_fields = adapter.operation_fields(flow, route, params)
+    constraint_decision = evaluate_request_constraints(
+        flow,
+        route,
+        principal_id=principal.id,
+        credential_ref=route.credential_ref,
+        credential_version=credential_version_int,
+        operation_fields=operation_fields,
+        consume_rate_limits=False,
+    )
+    if not constraint_decision.allowed:
+        runtime.log_request(
+            route.id,
+            flow.request.method,
+            safe_url,
+            "blocked",
+            constraint_decision.status_code,
+            constraint_decision.reason,
+            pre_policy_audit_context,
+        )
+        return RequestEvaluation(constraint_decision, snapshot, principal, route, credential_policy, params)
+
     canonical_request = _canonical_request(
         flow,
         principal=principal,
@@ -399,6 +421,28 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             runtime.log_request(route.id, flow.request.method, safe_url, "blocked", decision.status_code, decision.reason, audit_context)
             return RequestEvaluation(decision, snapshot, principal, route, credential_policy, params, request_digest, operation_digest)
 
+    rate_limit_decision = evaluate_request_constraints(
+        flow,
+        route,
+        principal_id=principal.id,
+        credential_ref=route.credential_ref,
+        credential_version=credential_version_int,
+        operation_fields=operation_fields,
+        consume_rate_limits=True,
+        rate_limits_only=True,
+    )
+    if not rate_limit_decision.allowed:
+        runtime.log_request(
+            route.id,
+            flow.request.method,
+            safe_url,
+            "blocked",
+            rate_limit_decision.status_code,
+            rate_limit_decision.reason,
+            audit_context,
+        )
+        return RequestEvaluation(rate_limit_decision, snapshot, principal, route, credential_policy, params, request_digest, operation_digest)
+
     decision = adapter.rewrite_request(flow, route, params)
     if not decision.allowed:
         runtime.log_request(route.id, flow.request.method, safe_url, "blocked", decision.status_code, decision.reason, audit_context)
@@ -473,5 +517,17 @@ def evaluate_response(flow: http.HTTPFlow) -> PolicyDecision:
             audit_context,
         )
         return decision
+    constraint_decision = evaluate_response_constraints(flow, route)
+    if not constraint_decision.allowed:
+        runtime.log_request(
+            route_id,
+            flow.request.method,
+            redact_url(flow.request.pretty_url),
+            "blocked",
+            constraint_decision.status_code,
+            constraint_decision.reason,
+            audit_context,
+        )
+        return constraint_decision
     runtime.log_request(route_id, flow.request.method, redact_url(flow.request.pretty_url), "response", status_code, None, audit_context)
     return decision

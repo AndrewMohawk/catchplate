@@ -36,7 +36,15 @@ def main() -> None:
     claims = quote.get("claims") or {}
     if quote.get("provider") != "dev-signed-quote":
         raise SystemExit(f"unexpected quote provider: {quote}")
-    for field in ("runtime_manifest_digest", "policy_bundle_digest", "ca_intermediate_spki_sha256", "data_plane_binary_digest", "rollback_epoch"):
+    for field in (
+        "runtime_manifest_digest",
+        "policy_bundle_digest",
+        "ca_intermediate_spki_sha256",
+        "data_plane_binary_digest",
+        "source_tree_digest",
+        "response_signing_key_id",
+        "rollback_epoch",
+    ):
         if claims.get(field) != attestation.get(field):
             raise SystemExit(f"quote claim {field} does not match attestation: {attestation}")
 

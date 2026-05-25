@@ -98,7 +98,29 @@ def source_tree() -> dict[str, Any]:
             continue
         raw = path.read_bytes()
         files.append({"path": str(rel), "bytes": len(raw), "sha256": sha256_prefixed_bytes(raw)})
-    return {"files": files, "digest": sha256_prefixed_json(files)}
+    return {
+        "files": files,
+        "digest": sha256_prefixed_json(files),
+        "git": git_source_info(),
+        "exclusions": [".git", ".tmp", "__pycache__", "target"],
+    }
+
+
+def git_source_info() -> dict[str, Any]:
+    def maybe(args: list[str]) -> str | None:
+        try:
+            return run(args)
+        except Exception:
+            return None
+
+    status = maybe(["git", "status", "--short"])
+    return {
+        "commit": maybe(["git", "rev-parse", "HEAD"]),
+        "branch": maybe(["git", "rev-parse", "--abbrev-ref", "HEAD"]),
+        "remote_origin": maybe(["git", "remote", "get-url", "origin"]),
+        "dirty": bool(status),
+        "status_short": status or "",
+    }
 
 
 def python_sbom() -> list[dict[str, str]]:
@@ -295,6 +317,17 @@ def main() -> None:
         "source": "serverware-docker-dev-release",
         "compose_config_sha256": sha256_prefixed_bytes(compose_config.encode("utf-8")),
         "source_tree": source,
+        "build_recipe": {
+            "source_tree_digest": source["digest"],
+            "compose_config_sha256": sha256_prefixed_bytes(compose_config.encode("utf-8")),
+            "commands": [
+                "docker compose build",
+                "docker compose up",
+                "make release-provenance",
+                "make image-signatures",
+            ],
+            "rebuild_verifier": "scripts/verify_codebase_attestation.py",
+        },
         "images": image_inventory(),
         "containers": container_inventory(),
         "sbom": {

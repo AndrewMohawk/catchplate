@@ -133,6 +133,8 @@ def release() -> None:
         "rollback_epoch": "rollback_epoch",
         "release_channel": "release_channel",
         "provenance_digest": "provenance_digest",
+        "source_tree_digest": "source_tree_digest",
+        "response_signing_key_id": "response_signing_key_id",
         "data_plane_binary_digest": "data_plane_binary_digest",
     }
     for expected_key, claim_key in checks.items():

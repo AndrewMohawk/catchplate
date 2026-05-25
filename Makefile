@@ -1,4 +1,4 @@
-.PHONY: up down logs e2e bench bench-gate-rs release-provenance image-signatures install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-transparency-checkpoint verify-production-config verify-production-readiness verify-nitro-tee verify-decision-gate-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs release-provenance image-signatures install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-transparency-checkpoint verify-production-config verify-production-readiness verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 up:
 	docker compose up -d --build serverware demo-upstream audit-anchor
@@ -121,6 +121,9 @@ verify-nitro-tee:
 
 verify-decision-gate-attestation:
 	python3 scripts/verify_decision_gate_attestation.py
+
+verify-codebase-attestation:
+	python3 scripts/verify_codebase_attestation.py --admin-token "$${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
 
 install-ca:
 	docker compose up -d --build serverware demo-upstream

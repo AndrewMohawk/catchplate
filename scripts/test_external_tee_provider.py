@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
+os.environ.setdefault("SERVERWARE_DATA_DIR", str(Path(".tmp/test-external-tee-provider/data").resolve()))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from serverware.attestation import attestation_document, verify_attestation_quote
 from serverware.key_release import release_material
@@ -25,6 +27,8 @@ def main() -> None:
         "rollback_epoch",
         "provenance_digest",
         "image_signatures_digest",
+        "source_tree_digest",
+        "response_signing_key_id",
         "release_channel",
     ):
         assert claims.get(field) == attestation.get(field), (field, claims, attestation)

@@ -60,6 +60,7 @@ The smoke test proves:
 - Principal access control using source CIDRs, required trusted identity headers, and hashed `Proxy-Authorization` bearer tokens bound to agent ID, source CIDR, and expiry.
 - Bearer token injection from the encrypted credential vault.
 - A typed policy bundle with strict JIT binding schema, bounded generic REST config, response `allowedFields` redaction, and a stable policy hash exposed through quote-backed `/attestation`.
+- A shared credential-constraint layer for route-level quotas, operation allow/deny lists, query lookback windows, query caps, JSON body shape rules, and response date-window validation. See [docs/credential-constraints.md](docs/credential-constraints.md) and [policies/credential-limits.examples.json](policies/credential-limits.examples.json).
 - A Gmail adapter that forces `newer_than:30d`, tightens weaker existing age guards, caps `maxResults`, validates response `internalDate`, redacts responses to `allowedFields`, marks unproven list IDs as pending, and only allows message reads for IDs observed from validated recent responses under the same scoped proof context.
 - An X adapter that allows configured read operations, blocks write methods, denies unconfigured read operations, binds the route `appIds` policy to credential metadata, and redacts responses to policy-selected fields.
 - An npm adapter that classifies operations before JIT, denies publish requests missing package/version/integrity fields, requires approval only for configured sensitive operations, and redacts publish responses before returning them to agents.
@@ -74,8 +75,9 @@ The smoke test proves:
 - External TEE/KMS provider hooks plus an AWS Nitro-compatible provider: `SERVERWARE_TEE_QUOTE_COMMAND`, `SERVERWARE_TEE_QUOTE_VERIFY_COMMAND`, and `SERVERWARE_KEY_RELEASE_COMMAND` let deployments plug in vendor quote verification and KMS/HSM policy without changing the policy engine. Docker verifies both the generic external-command interface and [scripts/aws_nitro_tee_provider.py](scripts/aws_nitro_tee_provider.py), including Nitro CBOR/COSE_Sign1 parsing, certificate-chain trust-root checks, PCR allowlisting, Serverware claim binding through Nitro `user_data`, a material-release policy for `broker-kek`/`decision-gate-ca`, and the production KMS/HSM command contract through [scripts/nitro_kms_fixture.py](scripts/nitro_kms_fixture.py).
 - A Dockerized Rust data-plane candidate that verifies the Ed25519 policy signature against an attested control-plane trust root at startup, exposes a binary-digest attestation, loads the signed policy snapshot once, denies unknown CONNECT authorities before leaf issuance, performs explicit CONNECT TLS interception with dynamic leaf certificates from the verifier-installed CA, handles sequential keep-alive requests inside an intercepted CONNECT tunnel, validates upstream TLS, injects credentials from broker leases, validates and redacts Gmail responses before release, applies generic JSON response `allowedFields` redaction for non-Gmail adapters, streams policy-declared absolute-form and CONNECT MITM request bodies for non-mutating generic routes, streams policy-declared non-redacting responses with backpressure and constant-memory hashing, redacts JSON Lines, top-level JSON array, JSON SSE event-stream, arbitrary nested JSON, form-urlencoded, and CSV request/response streams to policy `allowedFields`, watches broker-published credential generations and secret leases, receives approved grants from the control plane, consumes one-use JIT grants through the shared transactional control-plane grant store, returns request-only allow/deny/JIT decisions without hot-path SQLite/filesystem calls or plaintext secret exposure, and benchmarks below the p99 request-policy target.
 - Hardened Docker runtime settings verified by [scripts/test_container_hardening.sh](scripts/test_container_hardening.sh): all services run as UID/GID `10001`, use read-only root filesystems, drop all Linux capabilities, enable `no-new-privileges`, set PID limits, mount `/tmp` as `noexec,nosuid,nodev` tmpfs, and run under [security/seccomp/serverware-deny-dangerous.json](security/seccomp/serverware-deny-dangerous.json). The verifier confirms Docker seccomp filter mode and proves the profile is active by checking a denied `bpf` syscall returns the profile's custom errno.
-- Signed local release provenance with Python/Rust SBOM summaries, a CycloneDX 1.5 SBOM at `.tmp/sbom.cdx.json`, source/config/image/hardening inventory, published control-plane and data-plane attestations, provenance digest binding in both attestation endpoints, and a `release.provenance.v1` record with a verified inclusion proof in the signed transparency log.
+- Signed local release provenance with Python/Rust SBOM summaries, a CycloneDX 1.5 SBOM at `.tmp/sbom.cdx.json`, source/config/image/hardening inventory, source tree digest, build recipe, published control-plane and data-plane attestations, provenance/source digest binding in both attestation endpoints, and a `release.provenance.v1` record with a verified inclusion proof in the signed transparency log.
 - Sigstore-compatible image-release bundle at `.tmp/image-signatures.json` with per-image in-toto statements for every Compose image, a cosign `sign-blob`/`verify-blob` adapter, required transparency evidence, provenance/SBOM/config/source bindings, image-signature digest binding in both attestation endpoints, and a `release.image_signatures.v1` transparency-log record with a verified inclusion proof.
+- Control-plane responses carry `X-Serverware-Response-*` proof headers: a nonce-capable Ed25519 signature over method, path, query, status, response body hash, source tree digest, runtime manifest digest, policy hash, provenance digest, and image-signature digest. The response signing key ID is itself bound into `/attestation` quote claims.
 
 ## Policy Model
 
@@ -95,9 +97,12 @@ Every route binds:
 - endpoint allowlist: scheme, host, port, methods, and path templates;
 - credential reference and injection mode;
 - API adapter and typed config;
+- shared request/response credential constraints;
 - optional JIT approval policy.
 
 Unknown hosts, paths, methods, principals, and missing policy bundles are blocked. The legacy SQLite `routes` table remains only for UI compatibility and state inspection.
+
+Route `constraints` are the reusable layer for limits that should apply to any credential, independent of the upstream SDK. Implemented constraint types are `operationPolicy`, `rateLimit`, `queryDateWindow`, `queryNumericBounds`, `jsonBody`, and `responseDateWindow`. The Python proxy and Rust data plane both enforce them before credential injection; response date-window checks run before redaction and release.
 
 Principal `proxyAuthorization` rules can be either a legacy exact string for compatibility or a structured bearer-token constraint:
 
@@ -114,6 +119,16 @@ Principal `proxyAuthorization` rules can be either a legacy exact string for com
 The token itself is never stored in the policy bundle. The Rust CONNECT preflight validates the token before leaf issuance, carries the authenticated principal into the intercepted request, strips `Proxy-Authorization` before upstream forwarding, and denies missing, expired, wrong-source, or wrong-token requests as `client_principal_denied`.
 
 Policy signing uses `/data/policy-signing-ed25519.pem` in the Docker prototype. The public key hash and signature are exposed through `/attestation`, `/api/bootstrap`, and `/api/policy` so agents or operators can pin the key and detect policy replacement. The Rust Docker data plane does not trust a public-key file mount directly: it fetches the policy trust root from the control-plane `/attestation` endpoint through `SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL`, verifies the dev quote signature, nonce, optional quote-signing key pin, policy signing-key hash, and attested policy digest, then verifies the local signed bundle against that attested key. Unsigned or invalid bundles fail closed: `/healthz` stays alive, but the proxy has no usable policy snapshot. Stale bundles that no longer satisfy the active schema are treated as policy-load failures instead of uncaught control-plane exceptions.
+
+To verify a live server against this exact source tree and a concrete response, run:
+
+```bash
+python scripts/verify_codebase_attestation.py \
+  --base http://localhost:3000 \
+  --admin-token "$SERVERWARE_ADMIN_TOKEN"
+```
+
+The verifier checks the attestation quote, the published release provenance signature, the local source tree digest, the attested source/provenance/image-signature digests, and a nonce-bound response signature from the server it contacted.
 
 ## Secret Broker
 

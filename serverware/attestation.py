@@ -33,6 +33,7 @@ from serverware.config import (
     ensure_data_dirs,
 )
 from serverware.policy_bundle import get_policy_snapshot, policy_public_key_hash, policy_public_key_pem
+from serverware.response_identity import response_public_key_info
 
 
 def canonical_json(value: Any) -> str:
@@ -160,6 +161,33 @@ def image_signatures_digest() -> str | None:
     return digest if isinstance(digest, str) and digest.startswith("sha256:") else sha256_prefixed(raw)
 
 
+def release_provenance_document() -> dict[str, Any] | None:
+    if not RELEASE_PROVENANCE_PATH.exists():
+        return None
+    try:
+        value = json.loads(RELEASE_PROVENANCE_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def image_signatures_document() -> dict[str, Any] | None:
+    if not IMAGE_SIGNATURES_PATH.exists():
+        return None
+    try:
+        value = json.loads(IMAGE_SIGNATURES_PATH.read_text())
+    except (OSError, json.JSONDecodeError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def source_tree_digest() -> str | None:
+    document = release_provenance_document()
+    source_tree = ((document or {}).get("provenance") or {}).get("source_tree") or {}
+    digest = source_tree.get("digest") if isinstance(source_tree, dict) else None
+    return digest if isinstance(digest, str) and digest.startswith("sha256:") else None
+
+
 def _unsigned_quote(payload: dict[str, Any]) -> dict[str, Any]:
     copied = json.loads(json.dumps(payload))
     copied.pop("signature", None)
@@ -244,6 +272,8 @@ def attestation_document(nonce: str | None = None) -> dict[str, Any]:
     ca_hash = ca_spki_hash()
     provenance_digest = release_provenance_digest()
     image_signature_digest = image_signatures_digest()
+    source_digest = source_tree_digest()
+    response_key_info = response_public_key_info()
     data_plane_digest = EXPECTED_DATA_PLANE_BINARY_DIGEST
     quote_claims = {
         "nonce": nonce,
@@ -256,6 +286,8 @@ def attestation_document(nonce: str | None = None) -> dict[str, Any]:
         "rollback_epoch": rollback_epoch,
         "provenance_digest": provenance_digest,
         "image_signatures_digest": image_signature_digest,
+        "source_tree_digest": source_digest,
+        "response_signing_key_id": response_key_info["spki_sha256"],
         "release_channel": RELEASE_CHANNEL,
         "debug": TEE_QUOTE_PROVIDER == "dev-signed-quote",
         "key_release_required": KEY_RELEASE_REQUIRED,
@@ -279,6 +311,9 @@ def attestation_document(nonce: str | None = None) -> dict[str, Any]:
         "rollback_epoch": rollback_epoch,
         "provenance_digest": provenance_digest,
         "image_signatures_digest": image_signature_digest,
+        "source_tree_digest": source_digest,
+        "response_signing_key_id": response_key_info["spki_sha256"],
+        "response_signing_public_key_pem": response_key_info["pem"],
         "release_channel": RELEASE_CHANNEL,
         "nonce": nonce,
         "tls_exporter_binding": None,

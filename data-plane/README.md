@@ -17,6 +17,7 @@ The decision API covers:
 - upstream TLS validation through `SERVERWARE_UPSTREAM_CA_BUNDLE`;
 - host, port, method, and path-template route matching;
 - request-only adapter checks for `generic.rest`, `gmail.v1`, `x.v2`, and `npm.registry`;
+- shared route constraints for operation allow/deny lists, fixed-window credential quotas, query lookback windows, query numeric caps, JSON body rules, and JSON response date-window validation;
 - Gmail recent-query rewrite planning and unproven direct-message read denial;
 - X read/write classification and credential app metadata binding;
 - npm publish/dist-tag classification, required field extraction, and JIT-required decisions;
@@ -33,6 +34,7 @@ The decision API covers:
 - credential injection from broker-fed leases during forwarding, while decision responses still carry injection plans by credential reference only;
 - Gmail response validation that blocks old `internalDate`, marks unproven list IDs as pending, validates recent list IDs before release, enforces `response.allowedFields` redaction, and fails closed on invalid JSON/date proofs;
 - generic JSON response redaction for `generic.rest`, `x.v2`, and `npm.registry` routes with `response.allowedFields`, including demo tests that prove upstream received the bearer credential while the agent only sees non-secret authorization presence/scheme/hash markers;
+- forwarded response proof headers for released buffered responses: `X-Serverware-Policy-Hash`, `X-Serverware-Request-Digest`, `X-Serverware-Operation-Digest`, and `X-Serverware-Response-Body-SHA256`, so clients can bind received bytes to the decision and audit record over the attested CA/TLS channel;
 - `request.bodyMode: "stream"` for absolute-form and CONNECT MITM generic REST routes that do not need JIT or body mutation, requiring `Content-Length`, rejecting oversized bodies before read, streaming absolute-form bodies from the client socket, streaming CONNECT bodies through a bounded TLS-reader channel, and hashing streamed bodies for audit;
 - `response.mode: "stream"` for non-redacting routes, using a direct writer with upstream backpressure, constant-memory SHA-256 hashing, policy `maxBodyBytes` preflight when `Content-Length` is known, fail-closed denial for unknown-length capped streams, and CONNECT keep-alive reuse after streamed responses;
 - `request.bodyMode: "jsonlStream"` plus `response.mode: "jsonlStream"` for generic REST routes, redacting each JSON Lines record to configured `allowedFields`, enforcing `maxBodyBytes` and `maxLineBytes`, hashing raw and mutated bodies for audit, and covering both absolute-form and CONNECT MITM paths;

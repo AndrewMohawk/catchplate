@@ -506,6 +506,36 @@
         "type": "gmail.v1"
       },
       "credentialRef": "cred-demo-bearer",
+      "constraints": [
+        {
+          "description": "Agents may not widen Gmail list pages beyond the configured recent-mail window.",
+          "id": "gmail-max-results",
+          "integer": true,
+          "max": 10,
+          "min": 1,
+          "parameters": [
+            "maxResults"
+          ],
+          "type": "queryNumericBounds"
+        },
+        {
+          "dateFields": [
+            "internalDate"
+          ],
+          "description": "List responses may only release message metadata proven to be inside the last 30 days.",
+          "formats": [
+            "epochMillis"
+          ],
+          "id": "gmail-list-response-30d",
+          "items": [
+            "messages"
+          ],
+          "maxAgeDays": 30,
+          "phase": "response",
+          "required": false,
+          "type": "responseDateWindow"
+        }
+      ],
       "id": "demo.gmail.recent",
       "match": {
         "host": "demo-upstream",
@@ -515,6 +545,193 @@
         "paths": [
           "/gmail/v1/users/{user}/messages",
           "/gmail/v1/users/{user}/messages/{message_id}"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "appIds": [
+            "demo-x-app"
+          ],
+          "blockWrites": false,
+          "mode": "controlledWrite",
+          "response": {
+            "allowedFields": [
+              "data.id",
+              "data.text",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 65536,
+            "mode": "json"
+          }
+        },
+        "type": "x.v2"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "constraints": [
+        {
+          "allowedOperations": [
+            "tweets.write"
+          ],
+          "description": "This controlled-write route can only use the tweet-create operation.",
+          "id": "x-only-tweet-create",
+          "type": "operationPolicy"
+        },
+        {
+          "description": "A principal can publish at most one tweet per day with this credential.",
+          "id": "x-one-tweet-per-day",
+          "key": {
+            "scope": [
+              "principal",
+              "credential",
+              "route",
+              "operation"
+            ]
+          },
+          "max": 1,
+          "store": "local",
+          "type": "rateLimit",
+          "windowSeconds": 86400
+        },
+        {
+          "allowedFields": [
+            "text",
+            "reply_settings"
+          ],
+          "contentTypes": [
+            "application/json"
+          ],
+          "deniedFields": [
+            "media",
+            "poll",
+            "direct_message_deep_link",
+            "for_super_followers_only"
+          ],
+          "description": "Tweets must be plain text posts with no media, polls, or hidden write side effects.",
+          "fields": {
+            "reply_settings": {
+              "enum": [
+                "following",
+                "mentionedUsers"
+              ],
+              "type": "string"
+            },
+            "text": {
+              "maxLength": 280,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "id": "x-tweet-body-shape",
+          "requiredFields": [
+            "text"
+          ],
+          "type": "jsonBody"
+        }
+      ],
+      "id": "demo.x.tweet.one_per_day",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "POST"
+        ],
+        "paths": [
+          "/2/tweets"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "appIds": [
+            "demo-x-app"
+          ],
+          "allowedReadOperations": [
+            "search.read"
+          ],
+          "blockWrites": true,
+          "mode": "recentSearchOnly",
+          "response": {
+            "allowedFields": [
+              "data.id",
+              "data.text",
+              "data.created_at",
+              "meta.result_count",
+              "authorization_present",
+              "authorization_scheme",
+              "authorization_sha256"
+            ],
+            "maxBodyBytes": 65536,
+            "mode": "json"
+          }
+        },
+        "type": "x.v2"
+      },
+      "credentialRef": "cred-demo-bearer",
+      "constraints": [
+        {
+          "description": "Search cursors cannot ask for tweets older than seven days.",
+          "formats": [
+            "rfc3339",
+            "date"
+          ],
+          "id": "x-search-start-time-7d",
+          "maxAgeDays": 7,
+          "parameters": [
+            "start_time",
+            "end_time"
+          ],
+          "required": false,
+          "type": "queryDateWindow"
+        },
+        {
+          "description": "Result pages stay bounded even when SDK defaults are overridden.",
+          "id": "x-search-result-cap",
+          "integer": true,
+          "max": 100,
+          "min": 1,
+          "parameters": [
+            "max_results"
+          ],
+          "type": "queryNumericBounds"
+        },
+        {
+          "dateFields": [
+            "data.created_at"
+          ],
+          "description": "The upstream response must not contain tweets outside the same seven-day window.",
+          "formats": [
+            "rfc3339",
+            "date"
+          ],
+          "id": "x-search-response-7d",
+          "maxAgeDays": 7,
+          "phase": "response",
+          "required": false,
+          "type": "responseDateWindow"
+        }
+      ],
+      "id": "demo.x.search.recent",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/2/tweets/search/recent"
         ],
         "port": 8443,
         "scheme": "https"
@@ -549,6 +766,16 @@
         "type": "x.v2"
       },
       "credentialRef": "cred-demo-bearer",
+      "constraints": [
+        {
+          "allowedOperations": [
+            "tweets.read"
+          ],
+          "description": "The broad X route remains read-only even if the method list is widened for compatibility.",
+          "id": "x-readonly-operation-allowlist",
+          "type": "operationPolicy"
+        }
+      ],
       "id": "demo.x.readonly",
       "match": {
         "host": "demo-upstream",
@@ -591,6 +818,21 @@
         "type": "npm.registry"
       },
       "credentialRef": "cred-demo-bearer",
+      "constraints": [
+        {
+          "allowedOperations": [
+            "npm.publish",
+            "npm.distTagWrite"
+          ],
+          "deniedOperations": [
+            "npm.tokenWrite",
+            "npm.metadataWrite"
+          ],
+          "description": "Only publish and dist-tag writes may reach this JIT-protected npm route.",
+          "id": "npm-sensitive-operation-allowlist",
+          "type": "operationPolicy"
+        }
+      ],
       "id": "demo.npm.publish.jit",
       "jit": {
         "approvers": {

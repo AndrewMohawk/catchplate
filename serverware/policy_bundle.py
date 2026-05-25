@@ -28,6 +28,14 @@ from serverware.config import (
 
 
 SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "x.v2", "npm.registry"}
+SUPPORTED_CONSTRAINTS = {
+    "rateLimit",
+    "operationPolicy",
+    "queryDateWindow",
+    "queryNumericBounds",
+    "jsonBody",
+    "responseDateWindow",
+}
 REQUIRED_JIT_BINDING_FIELDS = {
     "principal",
     "routeId",
@@ -306,6 +314,7 @@ class RoutePolicy:
     credential_ref: str | None
     adapter_type: str
     adapter_config: dict[str, Any]
+    constraints: tuple[dict[str, Any], ...] = ()
     jit: dict[str, Any] = field(default_factory=dict)
 
     def match_path(self, path: str) -> dict[str, str] | None:
@@ -373,6 +382,60 @@ def _load_raw_policy(path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise PolicyBundleError("policy bundle must be an object")
     return loaded
+
+
+def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, Any], ...]:
+    if constraints is None:
+        return ()
+    if not isinstance(constraints, list):
+        raise PolicyBundleError(f"route {route_id} constraints must be an array")
+    compiled: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for index, constraint in enumerate(constraints):
+        if not isinstance(constraint, dict):
+            raise PolicyBundleError(f"route {route_id} constraint {index} must be an object")
+        constraint_id = str(constraint.get("id") or "")
+        if not constraint_id:
+            raise PolicyBundleError(f"route {route_id} constraint {index} must define id")
+        if constraint_id in seen_ids:
+            raise PolicyBundleError(f"route {route_id} has duplicate constraint id {constraint_id}")
+        seen_ids.add(constraint_id)
+        constraint_type = str(constraint.get("type") or "")
+        if constraint_type not in SUPPORTED_CONSTRAINTS:
+            raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has unsupported type {constraint_type}")
+        phase = constraint.get("phase", "request")
+        if phase not in {"request", "response", "both"}:
+            raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has invalid phase {phase}")
+        if constraint_type == "rateLimit":
+            if int(constraint.get("max") or 0) < 1:
+                raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} must define max >= 1")
+            if int(constraint.get("windowSeconds") or 0) < 1:
+                raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} must define windowSeconds >= 1")
+        elif constraint_type == "operationPolicy":
+            if not (constraint.get("allowedOperations") or constraint.get("deniedOperations")):
+                raise PolicyBundleError(
+                    f"route {route_id} operationPolicy {constraint_id} must define allowedOperations or deniedOperations"
+                )
+        elif constraint_type in {"queryDateWindow", "queryNumericBounds"}:
+            if not constraint.get("parameters"):
+                raise PolicyBundleError(f"route {route_id} {constraint_type} {constraint_id} must define parameters")
+            if constraint_type == "queryDateWindow" and int(constraint.get("maxAgeDays") or 0) < 1:
+                raise PolicyBundleError(f"route {route_id} queryDateWindow {constraint_id} must define maxAgeDays >= 1")
+        elif constraint_type == "jsonBody":
+            if not (
+                constraint.get("allowedFields")
+                or constraint.get("requiredFields")
+                or constraint.get("deniedFields")
+                or constraint.get("fields")
+            ):
+                raise PolicyBundleError(f"route {route_id} jsonBody {constraint_id} must define at least one field rule")
+        elif constraint_type == "responseDateWindow":
+            if int(constraint.get("maxAgeDays") or 0) < 1:
+                raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} must define maxAgeDays >= 1")
+            if not constraint.get("dateFields"):
+                raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} must define dateFields")
+        compiled.append(dict(constraint))
+    return tuple(compiled)
 
 
 def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False, validate_schema: bool = False) -> PolicySnapshot:
@@ -475,6 +538,7 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             authn = approvers.get("authn") or {}
             if authn.get("webauthnRequired") and not authn.get("allowedAuthenticatorClasses"):
                 raise PolicyBundleError(f"route {route_id} WebAuthn JIT policy must define allowed authenticator classes")
+        constraints = _validate_constraints(route_id, item.get("constraints"))
 
         routes.append(
             RoutePolicy(
@@ -489,6 +553,7 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                 credential_ref=credential_ref,
                 adapter_type=adapter_type,
                 adapter_config=adapter_config,
+                constraints=constraints,
                 jit=jit,
             )
         )
@@ -971,6 +1036,155 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         },
                     },
                 },
+                "constraints": [
+                    {
+                        "id": "gmail-max-results",
+                        "type": "queryNumericBounds",
+                        "description": "Agents may not widen Gmail list pages beyond the configured recent-mail window.",
+                        "parameters": ["maxResults"],
+                        "min": 1,
+                        "max": 10,
+                        "integer": True,
+                    },
+                    {
+                        "id": "gmail-list-response-30d",
+                        "type": "responseDateWindow",
+                        "phase": "response",
+                        "description": "List responses may only release message metadata proven to be inside the last 30 days.",
+                        "items": ["messages"],
+                        "dateFields": ["internalDate"],
+                        "formats": ["epochMillis"],
+                        "maxAgeDays": 30,
+                        "required": False,
+                    },
+                ],
+            },
+            {
+                "id": "demo.x.tweet.one_per_day",
+                "principals": ["agent:demo"],
+                "match": {
+                    "scheme": "https",
+                    "host": "demo-upstream",
+                    "port": 8443,
+                    "methods": ["POST"],
+                    "paths": ["/2/tweets"],
+                },
+                "credentialRef": credential_id,
+                "adapter": {
+                    "type": "x.v2",
+                    "config": {
+                        "mode": "controlledWrite",
+                        "blockWrites": False,
+                        "appIds": ["demo-x-app"],
+                        "response": {
+                            "mode": "json",
+                            "maxBodyBytes": 65536,
+                            "allowedFields": [
+                                "data.id",
+                                "data.text",
+                                "authorization_present",
+                                "authorization_scheme",
+                                "authorization_sha256",
+                            ],
+                        },
+                    },
+                },
+                "constraints": [
+                    {
+                        "id": "x-only-tweet-create",
+                        "type": "operationPolicy",
+                        "description": "This controlled-write route can only use the tweet-create operation.",
+                        "allowedOperations": ["tweets.write"],
+                    },
+                    {
+                        "id": "x-one-tweet-per-day",
+                        "type": "rateLimit",
+                        "description": "A principal can publish at most one tweet per day with this credential.",
+                        "max": 1,
+                        "windowSeconds": 86400,
+                        "store": "local",
+                        "key": {
+                            "scope": ["principal", "credential", "route", "operation"],
+                        },
+                    },
+                    {
+                        "id": "x-tweet-body-shape",
+                        "type": "jsonBody",
+                        "description": "Tweets must be plain text posts with no media, polls, or hidden write side effects.",
+                        "contentTypes": ["application/json"],
+                        "allowedFields": ["text", "reply_settings"],
+                        "requiredFields": ["text"],
+                        "deniedFields": ["media", "poll", "direct_message_deep_link", "for_super_followers_only"],
+                        "fields": {
+                            "text": {"type": "string", "minLength": 1, "maxLength": 280},
+                            "reply_settings": {"type": "string", "enum": ["following", "mentionedUsers"]},
+                        },
+                    },
+                ],
+            },
+            {
+                "id": "demo.x.search.recent",
+                "principals": ["agent:demo"],
+                "match": {
+                    "scheme": "https",
+                    "host": "demo-upstream",
+                    "port": 8443,
+                    "methods": ["GET"],
+                    "paths": ["/2/tweets/search/recent"],
+                },
+                "credentialRef": credential_id,
+                "adapter": {
+                    "type": "x.v2",
+                    "config": {
+                        "mode": "recentSearchOnly",
+                        "blockWrites": True,
+                        "appIds": ["demo-x-app"],
+                        "allowedReadOperations": ["search.read"],
+                        "response": {
+                            "mode": "json",
+                            "maxBodyBytes": 65536,
+                            "allowedFields": [
+                                "data.id",
+                                "data.text",
+                                "data.created_at",
+                                "meta.result_count",
+                                "authorization_present",
+                                "authorization_scheme",
+                                "authorization_sha256",
+                            ],
+                        },
+                    },
+                },
+                "constraints": [
+                    {
+                        "id": "x-search-start-time-7d",
+                        "type": "queryDateWindow",
+                        "description": "Search cursors cannot ask for tweets older than seven days.",
+                        "parameters": ["start_time", "end_time"],
+                        "maxAgeDays": 7,
+                        "formats": ["rfc3339", "date"],
+                        "required": False,
+                    },
+                    {
+                        "id": "x-search-result-cap",
+                        "type": "queryNumericBounds",
+                        "description": "Result pages stay bounded even when SDK defaults are overridden.",
+                        "parameters": ["max_results"],
+                        "min": 1,
+                        "max": 100,
+                        "integer": True,
+                    },
+                    {
+                        "id": "x-search-response-7d",
+                        "type": "responseDateWindow",
+                        "phase": "response",
+                        "description": "The upstream response must not contain tweets outside the same seven-day window.",
+                        "dateFields": ["data.created_at"],
+                        "formats": ["rfc3339", "date"],
+                        "maxAgeDays": 7,
+                        "required": False,
+                    },
+                ],
             },
             {
                 "id": "demo.x.readonly",
@@ -1003,6 +1217,14 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         },
                     },
                 },
+                "constraints": [
+                    {
+                        "id": "x-readonly-operation-allowlist",
+                        "type": "operationPolicy",
+                        "description": "The broad X route remains read-only even if the method list is widened for compatibility.",
+                        "allowedOperations": ["tweets.read"],
+                    },
+                ],
             },
             {
                 "id": "demo.npm.publish.jit",
@@ -1034,6 +1256,15 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         },
                     },
                 },
+                "constraints": [
+                    {
+                        "id": "npm-sensitive-operation-allowlist",
+                        "type": "operationPolicy",
+                        "description": "Only publish and dist-tag writes may reach this JIT-protected npm route.",
+                        "allowedOperations": ["npm.publish", "npm.distTagWrite"],
+                        "deniedOperations": ["npm.tokenWrite", "npm.metadataWrite"],
+                    },
+                ],
                 "jit": {
                     "required": True,
                     "mode": "perOperation",

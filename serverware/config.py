@@ -11,6 +11,7 @@ MITMPROXY_CONF_DIR = DATA_DIR / "mitmproxy"
 MASTER_KEY_PATH = DATA_DIR / "master.key"
 KEY_RELEASE_STATE_PATH = Path(os.getenv("SERVERWARE_KEY_RELEASE_STATE", str(DATA_DIR / "key-release-state.json")))
 TEE_QUOTE_SIGNING_KEY_PATH = Path(os.getenv("SERVERWARE_TEE_QUOTE_SIGNING_KEY", str(DATA_DIR / "dev-tee-quote-ed25519.pem")))
+RESPONSE_SIGNING_KEY_PATH = Path(os.getenv("SERVERWARE_RESPONSE_SIGNING_KEY", str(DATA_DIR / "response-signing-ed25519.pem")))
 TEE_QUOTE_PROVIDER = os.getenv("SERVERWARE_TEE_QUOTE_PROVIDER", "dev-signed-quote").strip()
 TEE_QUOTE_COMMAND = os.getenv("SERVERWARE_TEE_QUOTE_COMMAND", "").strip()
 TEE_QUOTE_VERIFY_COMMAND = os.getenv("SERVERWARE_TEE_QUOTE_VERIFY_COMMAND", "").strip()

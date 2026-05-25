@@ -72,6 +72,7 @@ struct Route {
     credential_ref: Option<String>,
     adapter_type: String,
     adapter_config: Value,
+    constraints: Vec<Value>,
     jit: Value,
 }
 
@@ -178,6 +179,7 @@ struct GateState {
     policy_reload_success: AtomicU64,
     policy_reload_failed: AtomicU64,
     grants: Mutex<HashMap<String, Grant>>,
+    constraint_rate_counters: Mutex<HashMap<String, ConstraintRateCounter>>,
     credential_generations: Mutex<HashMap<String, Option<u64>>>,
     generation_mtime: Mutex<Option<SystemTime>>,
     generation_path: String,
@@ -202,6 +204,12 @@ struct GateState {
     binary_digest: String,
     release_provenance_path: Option<String>,
     image_signatures_path: Option<String>,
+}
+
+#[derive(Clone)]
+struct ConstraintRateCounter {
+    window_start_ms: u128,
+    count: u64,
 }
 
 #[derive(Clone)]
@@ -1018,6 +1026,11 @@ fn load_snapshot(
                 .unwrap_or("generic.rest")
                 .to_string(),
             adapter_config: adapter.get("config").cloned().unwrap_or_else(|| json!({})),
+            constraints: item
+                .get("constraints")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default(),
             jit: item.get("jit").cloned().unwrap_or_else(|| json!({})),
         });
     }
@@ -2489,6 +2502,1053 @@ fn validate_adapter(
     }
 }
 
+fn constraint_phase_includes(constraint: &Value, phase: &str) -> bool {
+    let configured = constraint
+        .get("phase")
+        .and_then(Value::as_str)
+        .unwrap_or("request");
+    configured == phase || configured == "both"
+}
+
+fn constraint_payload(
+    constraint: &Value,
+    error: &str,
+    reason: &str,
+    mut extra: Map<String, Value>,
+) -> Value {
+    extra.insert("error".to_string(), Value::String(error.to_string()));
+    extra.insert("reason".to_string(), Value::String(reason.to_string()));
+    extra.insert(
+        "constraint_id".to_string(),
+        Value::String(
+            constraint
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed")
+                .to_string(),
+        ),
+    );
+    if let Some(kind) = constraint.get("type").and_then(Value::as_str) {
+        extra.insert(
+            "constraint_type".to_string(),
+            Value::String(kind.to_string()),
+        );
+    }
+    if let Some(status) = constraint.get("statusCode").and_then(Value::as_u64) {
+        extra.insert("status_code".to_string(), json!(status));
+    }
+    Value::Object(extra)
+}
+
+fn constraint_error(constraint: &Value, error: &str, reason: &str) -> Value {
+    constraint_payload(constraint, error, reason, Map::new())
+}
+
+fn operation_name(operation: &Value) -> &str {
+    operation
+        .get("operation")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+}
+
+fn rate_limit_key(
+    constraint: &Value,
+    route: &Route,
+    principal_id: &str,
+    credential_ref: Option<&str>,
+    credential_version: u64,
+    operation: &Value,
+) -> String {
+    let scope = constraint
+        .get("key")
+        .and_then(|key| key.get("scope"))
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(|| {
+            vec![
+                Value::String("principal".to_string()),
+                Value::String("credential".to_string()),
+                Value::String("route".to_string()),
+                Value::String("operation".to_string()),
+            ]
+        });
+    let mut material = Map::new();
+    material.insert(
+        "constraint".to_string(),
+        Value::String(
+            constraint
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed")
+                .to_string(),
+        ),
+    );
+    for item in scope {
+        let Some(item) = item.as_str() else {
+            continue;
+        };
+        match item {
+            "principal" => {
+                material.insert(item.to_string(), Value::String(principal_id.to_string()));
+            }
+            "credential" => {
+                material.insert(
+                    item.to_string(),
+                    Value::String(credential_ref.unwrap_or_default().to_string()),
+                );
+            }
+            "credentialVersion" => {
+                material.insert(item.to_string(), json!(credential_version));
+            }
+            "route" => {
+                material.insert(item.to_string(), Value::String(route.id.clone()));
+            }
+            "operation" => {
+                material.insert(
+                    item.to_string(),
+                    Value::String(operation_name(operation).to_string()),
+                );
+            }
+            item if item.starts_with("operation.") => {
+                let field = item.trim_start_matches("operation.");
+                material.insert(
+                    item.to_string(),
+                    Value::String(
+                        operation
+                            .get(field)
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                    ),
+                );
+            }
+            _ => {}
+        }
+    }
+    if let Some(fields) = constraint
+        .get("key")
+        .and_then(|key| key.get("operationFields"))
+        .and_then(Value::as_array)
+    {
+        for field in fields.iter().filter_map(Value::as_str) {
+            material.insert(
+                format!("operation.{field}"),
+                Value::String(
+                    operation
+                        .get(field)
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                ),
+            );
+        }
+    }
+    sha256_prefixed(canonical_json(&Value::Object(material)).as_bytes())
+}
+
+fn enforce_rate_limit(
+    state: &GateState,
+    constraint: &Value,
+    route: &Route,
+    principal_id: &str,
+    credential_ref: Option<&str>,
+    credential_version: u64,
+    operation: &Value,
+    consume: bool,
+) -> Result<(), Value> {
+    let max = constraint.get("max").and_then(Value::as_u64).unwrap_or(0);
+    let window_seconds = constraint
+        .get("windowSeconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if max == 0 || window_seconds == 0 {
+        return Err(constraint_error(
+            constraint,
+            "constraint_invalid_rate_limit",
+            "rate limit constraint is invalid",
+        ));
+    }
+    let now = now_epoch_ms();
+    let window_ms = window_seconds as u128 * 1000;
+    let key = rate_limit_key(
+        constraint,
+        route,
+        principal_id,
+        credential_ref,
+        credential_version,
+        operation,
+    );
+    let mut counters = state
+        .constraint_rate_counters
+        .lock()
+        .expect("constraint rate counter lock poisoned");
+    let counter = counters.entry(key).or_insert(ConstraintRateCounter {
+        window_start_ms: now,
+        count: 0,
+    });
+    if now >= counter.window_start_ms + window_ms {
+        counter.window_start_ms = now;
+        counter.count = 0;
+    }
+    if counter.count >= max {
+        let retry_after = ((counter.window_start_ms + window_ms).saturating_sub(now) / 1000).max(1);
+        let mut extra = Map::new();
+        extra.insert("max".to_string(), json!(max));
+        extra.insert("windowSeconds".to_string(), json!(window_seconds));
+        extra.insert("retry_after_seconds".to_string(), json!(retry_after));
+        extra.insert(
+            "store".to_string(),
+            Value::String(
+                constraint
+                    .get("store")
+                    .and_then(Value::as_str)
+                    .unwrap_or("local")
+                    .to_string(),
+            ),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "credential_rate_limit_exceeded",
+            "credential use rate limit exceeded",
+            extra,
+        ));
+    }
+    if consume {
+        counter.count += 1;
+    }
+    Ok(())
+}
+
+fn enforce_operation_policy(constraint: &Value, operation: &Value) -> Result<(), Value> {
+    let operation_name = operation_name(operation);
+    let denied = constraint
+        .get("deniedOperations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    let allowed = constraint
+        .get("allowedOperations")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    if denied.contains(operation_name) {
+        let mut extra = Map::new();
+        extra.insert(
+            "operation".to_string(),
+            Value::String(operation_name.to_string()),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "credential_operation_denied",
+            "credential operation denied by policy",
+            extra,
+        ));
+    }
+    if !allowed.is_empty() && !allowed.contains(operation_name) {
+        let mut extra = Map::new();
+        extra.insert(
+            "operation".to_string(),
+            Value::String(operation_name.to_string()),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "credential_operation_not_allowed",
+            "credential operation is not allowed by policy",
+            extra,
+        ));
+    }
+    Ok(())
+}
+
+fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
+    let year = year - if month <= 2 { 1 } else { 0 };
+    let era = if year >= 0 { year } else { year - 399 } / 400;
+    let yoe = year - era * 400;
+    let month = month as i64;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day as i64 - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146097 + doe - 719468
+}
+
+fn parse_datetime_ms(value: &Value) -> Option<i128> {
+    if let Some(number) = value.as_i64() {
+        return Some(if number > 10_000_000_000 {
+            number as i128
+        } else {
+            number as i128 * 1000
+        });
+    }
+    if let Some(number) = value.as_u64() {
+        return Some(if number > 10_000_000_000 {
+            number as i128
+        } else {
+            number as i128 * 1000
+        });
+    }
+    let text = value.as_str()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    if text.chars().all(|ch| ch.is_ascii_digit()) {
+        let number = text.parse::<i128>().ok()?;
+        return Some(if number > 10_000_000_000 {
+            number
+        } else {
+            number * 1000
+        });
+    }
+    parse_datetime_text_ms(text)
+}
+
+fn parse_datetime_text_ms(text: &str) -> Option<i128> {
+    if text.len() < 10 {
+        return None;
+    }
+    let year = text.get(0..4)?.parse::<i64>().ok()?;
+    let month = text.get(5..7)?.parse::<u32>().ok()?;
+    let day = text.get(8..10)?.parse::<u32>().ok()?;
+    if text.as_bytes().get(4) != Some(&b'-') || text.as_bytes().get(7) != Some(&b'-') {
+        return None;
+    }
+    let mut hour = 0_i128;
+    let mut minute = 0_i128;
+    let mut second = 0_i128;
+    if text.len() >= 19 && matches!(text.as_bytes().get(10), Some(b'T') | Some(b' ')) {
+        hour = text.get(11..13)?.parse::<i128>().ok()?;
+        minute = text.get(14..16)?.parse::<i128>().ok()?;
+        second = text.get(17..19)?.parse::<i128>().ok()?;
+    }
+    let days = days_from_civil(year, month, day) as i128;
+    Some((days * 86_400 + hour * 3600 + minute * 60 + second) * 1000)
+}
+
+fn query_values(url: &Url, parameter: &str) -> Vec<String> {
+    url.query_pairs()
+        .filter(|(key, _)| key == parameter)
+        .map(|(_, value)| value.to_string())
+        .collect()
+}
+
+fn enforce_query_date_window(constraint: &Value, url: &Url) -> Result<(), Value> {
+    let parameters = constraint
+        .get("parameters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let max_age_days = constraint
+        .get("maxAgeDays")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if parameters.is_empty() || max_age_days == 0 {
+        return Err(constraint_error(
+            constraint,
+            "constraint_invalid_query_date_window",
+            "query date-window constraint is invalid",
+        ));
+    }
+    let now = now_epoch_ms() as i128;
+    let cutoff = now - max_age_days as i128 * 86_400_000;
+    let future_skew = constraint
+        .get("allowFutureSkewSeconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(300) as i128
+        * 1000;
+    let required = constraint
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    for parameter in parameters {
+        let values = query_values(url, parameter);
+        if values.is_empty() {
+            if required {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                return Err(constraint_payload(
+                    constraint,
+                    "query_date_parameter_missing",
+                    "required query date parameter is missing",
+                    extra,
+                ));
+            }
+            continue;
+        }
+        for value in values {
+            let Some(parsed) = parse_datetime_ms(&Value::String(value.clone())) else {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                extra.insert("value".to_string(), Value::String(value));
+                return Err(constraint_payload(
+                    constraint,
+                    "query_date_parameter_invalid",
+                    "query date parameter is invalid",
+                    extra,
+                ));
+            };
+            if parsed < cutoff {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                extra.insert("value".to_string(), Value::String(value));
+                extra.insert("maxAgeDays".to_string(), json!(max_age_days));
+                return Err(constraint_payload(
+                    constraint,
+                    "query_date_window_exceeded",
+                    "query asks for data outside the allowed age window",
+                    extra,
+                ));
+            }
+            if parsed > now + future_skew {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                extra.insert("value".to_string(), Value::String(value));
+                return Err(constraint_payload(
+                    constraint,
+                    "query_date_future_denied",
+                    "query date parameter is too far in the future",
+                    extra,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn enforce_query_numeric_bounds(constraint: &Value, url: &Url) -> Result<(), Value> {
+    let parameters = constraint
+        .get("parameters")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let required = constraint
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let integer = constraint
+        .get("integer")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let minimum = constraint.get("min").and_then(Value::as_f64);
+    let maximum = constraint.get("max").and_then(Value::as_f64);
+    for parameter in parameters {
+        let values = query_values(url, parameter);
+        if values.is_empty() {
+            if required {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                return Err(constraint_payload(
+                    constraint,
+                    "query_numeric_parameter_missing",
+                    "required numeric query parameter is missing",
+                    extra,
+                ));
+            }
+            continue;
+        }
+        for value in values {
+            if integer && value.parse::<i64>().is_err() {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                extra.insert("value".to_string(), Value::String(value));
+                return Err(constraint_payload(
+                    constraint,
+                    "query_numeric_parameter_invalid",
+                    "numeric query parameter is invalid",
+                    extra,
+                ));
+            }
+            let Ok(parsed) = value.parse::<f64>() else {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                extra.insert("value".to_string(), Value::String(value));
+                return Err(constraint_payload(
+                    constraint,
+                    "query_numeric_parameter_invalid",
+                    "numeric query parameter is invalid",
+                    extra,
+                ));
+            };
+            if minimum.is_some_and(|min| parsed < min) {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                extra.insert("value".to_string(), Value::String(value));
+                return Err(constraint_payload(
+                    constraint,
+                    "query_numeric_min_exceeded",
+                    "numeric query parameter is below policy minimum",
+                    extra,
+                ));
+            }
+            if maximum.is_some_and(|max| parsed > max) {
+                let mut extra = Map::new();
+                extra.insert(
+                    "parameter".to_string(),
+                    Value::String(parameter.to_string()),
+                );
+                extra.insert("value".to_string(), Value::String(value));
+                return Err(constraint_payload(
+                    constraint,
+                    "query_numeric_max_exceeded",
+                    "numeric query parameter exceeds policy maximum",
+                    extra,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn values_at_path<'a>(value: &'a Value, path: &str) -> Vec<&'a Value> {
+    let parts = path
+        .split('.')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    let mut out = Vec::new();
+    values_at_parts(value, &parts, &mut out);
+    out
+}
+
+fn values_at_parts<'a>(value: &'a Value, parts: &[&str], out: &mut Vec<&'a Value>) {
+    if parts.is_empty() {
+        out.push(value);
+        return;
+    }
+    if let Some(items) = value.as_array() {
+        for item in items {
+            values_at_parts(item, parts, out);
+        }
+        return;
+    }
+    let Some(object) = value.as_object() else {
+        return;
+    };
+    if parts[0] == "*" {
+        for child in object.values() {
+            values_at_parts(child, &parts[1..], out);
+        }
+        return;
+    }
+    if let Some(child) = object.get(parts[0]) {
+        values_at_parts(child, &parts[1..], out);
+    }
+}
+
+fn json_leaf_paths(value: &Value, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+    if let Some(object) = value.as_object() {
+        for (key, child) in object {
+            prefix.push(key.clone());
+            json_leaf_paths(child, prefix, out);
+            prefix.pop();
+        }
+        return;
+    }
+    if let Some(items) = value.as_array() {
+        for item in items {
+            json_leaf_paths(item, prefix, out);
+        }
+        return;
+    }
+    out.push(prefix.clone());
+}
+
+fn path_allowed(path: &[String], allowed: &[Vec<String>]) -> bool {
+    allowed.iter().any(|candidate| {
+        path == candidate.as_slice()
+            || (path.len() >= candidate.len() && path[..candidate.len()] == candidate[..])
+    })
+}
+
+fn matches_json_type(value: &Value, expected: &str) -> bool {
+    match expected {
+        "string" => value.is_string(),
+        "number" => value.is_number(),
+        "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+        "boolean" => value.is_boolean(),
+        "object" => value.is_object(),
+        "array" => value.is_array(),
+        "null" => value.is_null(),
+        _ => false,
+    }
+}
+
+fn enforce_json_field_rule(
+    constraint: &Value,
+    payload: &Value,
+    field: &str,
+    rule: &Value,
+) -> Result<(), Value> {
+    let values = values_at_path(payload, field);
+    if rule
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && values.is_empty()
+    {
+        let mut extra = Map::new();
+        extra.insert("field".to_string(), Value::String(field.to_string()));
+        return Err(constraint_payload(
+            constraint,
+            "json_body_required_field_missing",
+            "JSON body is missing a required field",
+            extra,
+        ));
+    }
+    for value in values {
+        if let Some(expected) = rule.get("type").and_then(Value::as_str) {
+            if !matches_json_type(value, expected) {
+                let mut extra = Map::new();
+                extra.insert("field".to_string(), Value::String(field.to_string()));
+                extra.insert(
+                    "expectedType".to_string(),
+                    Value::String(expected.to_string()),
+                );
+                return Err(constraint_payload(
+                    constraint,
+                    "json_body_field_type_denied",
+                    "JSON body field has the wrong type",
+                    extra,
+                ));
+            }
+        }
+        if let Some(allowed) = rule.get("enum").and_then(Value::as_array) {
+            if !allowed.iter().any(|item| item == value) {
+                let mut extra = Map::new();
+                extra.insert("field".to_string(), Value::String(field.to_string()));
+                return Err(constraint_payload(
+                    constraint,
+                    "json_body_field_enum_denied",
+                    "JSON body field value is not in the allowed set",
+                    extra,
+                ));
+            }
+        }
+        if let Some(expected) = rule.get("equals") {
+            if expected != value {
+                let mut extra = Map::new();
+                extra.insert("field".to_string(), Value::String(field.to_string()));
+                return Err(constraint_payload(
+                    constraint,
+                    "json_body_field_equals_denied",
+                    "JSON body field does not match required value",
+                    extra,
+                ));
+            }
+        }
+        if let Some(text) = value.as_str() {
+            if let Some(min) = rule.get("minLength").and_then(Value::as_u64) {
+                if text.chars().count() < min as usize {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(
+                        constraint,
+                        "json_body_field_min_length",
+                        "JSON body field is too short",
+                        extra,
+                    ));
+                }
+            }
+            if let Some(max) = rule.get("maxLength").and_then(Value::as_u64) {
+                if text.chars().count() > max as usize {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(
+                        constraint,
+                        "json_body_field_max_length",
+                        "JSON body field is too long",
+                        extra,
+                    ));
+                }
+            }
+        }
+        if let Some(number) = value.as_f64() {
+            if rule
+                .get("min")
+                .and_then(Value::as_f64)
+                .is_some_and(|min| number < min)
+            {
+                let mut extra = Map::new();
+                extra.insert("field".to_string(), Value::String(field.to_string()));
+                return Err(constraint_payload(
+                    constraint,
+                    "json_body_field_min",
+                    "JSON body field is below policy minimum",
+                    extra,
+                ));
+            }
+            if rule
+                .get("max")
+                .and_then(Value::as_f64)
+                .is_some_and(|max| number > max)
+            {
+                let mut extra = Map::new();
+                extra.insert("field".to_string(), Value::String(field.to_string()));
+                return Err(constraint_payload(
+                    constraint,
+                    "json_body_field_max",
+                    "JSON body field exceeds policy maximum",
+                    extra,
+                ));
+            }
+        }
+        if let Some(items) = value.as_array() {
+            if let Some(min) = rule.get("minItems").and_then(Value::as_u64) {
+                if items.len() < min as usize {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(
+                        constraint,
+                        "json_body_field_min_items",
+                        "JSON body array has too few items",
+                        extra,
+                    ));
+                }
+            }
+            if let Some(max) = rule.get("maxItems").and_then(Value::as_u64) {
+                if items.len() > max as usize {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(
+                        constraint,
+                        "json_body_field_max_items",
+                        "JSON body array has too many items",
+                        extra,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn enforce_json_body(
+    constraint: &Value,
+    req: &DecisionRequest,
+    headers: &BTreeMap<String, String>,
+) -> Result<(), Value> {
+    let required_fields = constraint
+        .get("requiredFields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if req.body.is_empty() {
+        if required_fields.is_empty() {
+            return Ok(());
+        }
+        return Err(constraint_error(
+            constraint,
+            "json_body_missing",
+            "JSON body is required",
+        ));
+    }
+    if let Some(content_types) = constraint.get("contentTypes").and_then(Value::as_array) {
+        let allowed = content_types
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|item| item.to_ascii_lowercase())
+            .collect::<HashSet<_>>();
+        let content_type = headers
+            .get("content-type")
+            .map(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or("")
+                    .trim()
+                    .to_ascii_lowercase()
+            })
+            .unwrap_or_default();
+        if !allowed.is_empty() && !allowed.contains(content_type.as_str()) {
+            let mut extra = Map::new();
+            extra.insert("contentType".to_string(), Value::String(content_type));
+            return Err(constraint_payload(
+                constraint,
+                "json_body_content_type_denied",
+                "request content type is not allowed for JSON body policy",
+                extra,
+            ));
+        }
+    }
+    let payload = serde_json::from_str::<Value>(&req.body).map_err(|_| {
+        constraint_error(
+            constraint,
+            "json_body_invalid",
+            "request body is not valid JSON",
+        )
+    })?;
+    if let Some(allowed_fields) = constraint.get("allowedFields").and_then(Value::as_array) {
+        let allowed = allowed_fields
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|path| path.split('.').map(ToString::to_string).collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        if !allowed.is_empty() {
+            let mut leaves = Vec::new();
+            json_leaf_paths(&payload, &mut Vec::new(), &mut leaves);
+            for leaf in leaves {
+                if !path_allowed(&leaf, &allowed) {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(leaf.join(".")));
+                    return Err(constraint_payload(
+                        constraint,
+                        "json_body_field_not_allowed",
+                        "JSON body contains a field outside the allowlist",
+                        extra,
+                    ));
+                }
+            }
+        }
+    }
+    if let Some(denied_fields) = constraint.get("deniedFields").and_then(Value::as_array) {
+        for field in denied_fields.iter().filter_map(Value::as_str) {
+            if !values_at_path(&payload, field).is_empty() {
+                let mut extra = Map::new();
+                extra.insert("field".to_string(), Value::String(field.to_string()));
+                return Err(constraint_payload(
+                    constraint,
+                    "json_body_field_denied",
+                    "JSON body contains a denied field",
+                    extra,
+                ));
+            }
+        }
+    }
+    for field in required_fields {
+        if values_at_path(&payload, field).is_empty() {
+            let mut extra = Map::new();
+            extra.insert("field".to_string(), Value::String(field.to_string()));
+            return Err(constraint_payload(
+                constraint,
+                "json_body_required_field_missing",
+                "JSON body is missing a required field",
+                extra,
+            ));
+        }
+    }
+    if let Some(fields) = constraint.get("fields").and_then(Value::as_object) {
+        for (field, rule) in fields {
+            enforce_json_field_rule(constraint, &payload, field, rule)?;
+        }
+    }
+    Ok(())
+}
+
+fn evaluate_request_constraints(
+    state: &GateState,
+    route: &Route,
+    req: &DecisionRequest,
+    headers: &BTreeMap<String, String>,
+    url: &Url,
+    principal_id: &str,
+    credential_ref: Option<&str>,
+    credential_version: u64,
+    operation: &Value,
+    consume_rate_limits: bool,
+    rate_limits_only: bool,
+) -> Result<(), Value> {
+    for constraint in &route.constraints {
+        let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        if !constraint_phase_includes(constraint, "request") {
+            continue;
+        }
+        if rate_limits_only && kind != "rateLimit" {
+            continue;
+        }
+        match kind {
+            "rateLimit" => enforce_rate_limit(
+                state,
+                constraint,
+                route,
+                principal_id,
+                credential_ref,
+                credential_version,
+                operation,
+                consume_rate_limits,
+            )?,
+            "operationPolicy" => enforce_operation_policy(constraint, operation)?,
+            "queryDateWindow" => enforce_query_date_window(constraint, url)?,
+            "queryNumericBounds" => enforce_query_numeric_bounds(constraint, url)?,
+            "jsonBody" => enforce_json_body(constraint, req, headers)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), Value> {
+    let payload = serde_json::from_slice::<Value>(body).map_err(|_| {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(502));
+        constraint_payload(
+            constraint,
+            "response_json_invalid",
+            "response body is not valid JSON",
+            extra,
+        )
+    })?;
+    let max_age_days = constraint
+        .get("maxAgeDays")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    if max_age_days == 0 {
+        return Err(constraint_error(
+            constraint,
+            "constraint_invalid_response_date_window",
+            "response date-window constraint is invalid",
+        ));
+    }
+    let now = now_epoch_ms() as i128;
+    let cutoff = now - max_age_days as i128 * 86_400_000;
+    let future_skew = constraint
+        .get("allowFutureSkewSeconds")
+        .and_then(Value::as_u64)
+        .unwrap_or(300) as i128
+        * 1000;
+    let required = constraint
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    let mut items = Vec::new();
+    if let Some(item_paths) = constraint.get("items").and_then(Value::as_array) {
+        for item_path in item_paths.iter().filter_map(Value::as_str) {
+            items.extend(values_at_path(&payload, item_path));
+        }
+    } else {
+        items.push(&payload);
+    }
+    if required && items.is_empty() {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(502));
+        return Err(constraint_payload(
+            constraint,
+            "response_items_missing",
+            "response does not contain required items",
+            extra,
+        ));
+    }
+    let date_fields = constraint
+        .get("dateFields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if date_fields.is_empty() {
+        return Err(constraint_error(
+            constraint,
+            "constraint_invalid_response_date_window",
+            "response date fields are missing",
+        ));
+    }
+    for item in items {
+        for field in &date_fields {
+            let values = values_at_path(item, field);
+            if values.is_empty() {
+                if required {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String((*field).to_string()));
+                    extra.insert("status_code".to_string(), json!(502));
+                    return Err(constraint_payload(
+                        constraint,
+                        "response_date_field_missing",
+                        "response item is missing a required date field",
+                        extra,
+                    ));
+                }
+                continue;
+            }
+            for value in values {
+                let Some(parsed) = parse_datetime_ms(value) else {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String((*field).to_string()));
+                    extra.insert("value".to_string(), value.clone());
+                    extra.insert("status_code".to_string(), json!(502));
+                    return Err(constraint_payload(
+                        constraint,
+                        "response_date_field_invalid",
+                        "response date field is invalid",
+                        extra,
+                    ));
+                };
+                if parsed < cutoff {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String((*field).to_string()));
+                    extra.insert("value".to_string(), value.clone());
+                    extra.insert("maxAgeDays".to_string(), json!(max_age_days));
+                    extra.insert("status_code".to_string(), json!(502));
+                    return Err(constraint_payload(
+                        constraint,
+                        "response_date_window_exceeded",
+                        "response contains data outside the allowed age window",
+                        extra,
+                    ));
+                }
+                if parsed > now + future_skew {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String((*field).to_string()));
+                    extra.insert("value".to_string(), value.clone());
+                    extra.insert("status_code".to_string(), json!(502));
+                    return Err(constraint_payload(
+                        constraint,
+                        "response_date_future_denied",
+                        "response date field is too far in the future",
+                        extra,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_response_constraints(route: &Route, body: &[u8]) -> Result<(), Value> {
+    for constraint in &route.constraints {
+        let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        if !constraint_phase_includes(constraint, "response") {
+            continue;
+        }
+        if kind == "responseDateWindow" {
+            enforce_response_date_window(constraint, body)?;
+        }
+    }
+    Ok(())
+}
+
 fn decide(state: &GateState, req: DecisionRequest) -> Value {
     decide_internal(state, req, None)
 }
@@ -2614,6 +3674,30 @@ fn decide_internal(
             return deny(status, &reason, payload, started);
         }
     };
+    if let Err(payload) = evaluate_request_constraints(
+        state,
+        route,
+        &req,
+        &headers,
+        &url,
+        &principal.id,
+        credential_ref.as_deref(),
+        credential_version,
+        &operation,
+        false,
+        false,
+    ) {
+        let status = payload
+            .get("status_code")
+            .and_then(Value::as_u64)
+            .unwrap_or(403) as u16;
+        let reason = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("credential_constraint_denied")
+            .to_string();
+        return deny(status, &reason, payload, started);
+    }
 
     let canonical = canonical_request(
         &req,
@@ -2702,6 +3786,32 @@ fn decide_internal(
             );
         }
     }
+    if allowed {
+        if let Err(payload) = evaluate_request_constraints(
+            state,
+            route,
+            &req,
+            &headers,
+            &url,
+            &principal.id,
+            credential_ref.as_deref(),
+            credential_version,
+            &operation,
+            true,
+            true,
+        ) {
+            let status = payload
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .unwrap_or(403) as u16;
+            let reason = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("credential_constraint_denied")
+                .to_string();
+            return deny(status, &reason, payload, started);
+        }
+    }
     json!({
         "action": action,
         "allowed": allowed,
@@ -2751,7 +3861,12 @@ fn http_response(status: &str, body: Value) -> Vec<u8> {
     response
 }
 
-fn http_binary_response(status: StatusCode, content_type: Option<&str>, body: Vec<u8>) -> Vec<u8> {
+fn http_binary_response_with_headers(
+    status: StatusCode,
+    content_type: Option<&str>,
+    body: Vec<u8>,
+    headers: &[(&str, String)],
+) -> Vec<u8> {
     let reason = status.canonical_reason().unwrap_or("Status");
     let mut response = format!(
         "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -2762,6 +3877,9 @@ fn http_binary_response(status: StatusCode, content_type: Option<&str>, body: Ve
     .into_bytes();
     if let Some(content_type) = content_type {
         response.extend_from_slice(format!("Content-Type: {content_type}\r\n").as_bytes());
+    }
+    for (name, value) in headers {
+        response.extend_from_slice(format!("{name}: {value}\r\n").as_bytes());
     }
     response.extend_from_slice(b"\r\n");
     response.extend_from_slice(&body);
@@ -4912,7 +6030,39 @@ fn release_forward_response(
             }),
         ),
     );
-    http_binary_response(status, content_type, body)
+    let response_body_sha256 = sha256_prefixed(&body);
+    http_binary_response_with_headers(
+        status,
+        content_type,
+        body,
+        &[
+            (
+                "X-Serverware-Policy-Hash",
+                decision
+                    .get("policy_hash")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+            (
+                "X-Serverware-Request-Digest",
+                decision
+                    .get("request_digest")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+            (
+                "X-Serverware-Operation-Digest",
+                decision
+                    .get("operation_digest")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            ),
+            ("X-Serverware-Response-Body-SHA256", response_body_sha256),
+        ],
+    )
 }
 
 fn block_forward_response(
@@ -5863,6 +7013,11 @@ fn validate_forward_response(
                 status,
                 json!({"error":"response_body_too_large","maxBodyBytes":max_body}),
             );
+        }
+    }
+    if status.as_u16() < 400 {
+        if let Err(payload) = validate_response_constraints(route_match.route, &body) {
+            return block_forward_response(state, decision, method, url, status, payload);
         }
     }
     if route_match.route.adapter_type != "gmail.v1" {
@@ -7181,6 +8336,28 @@ fn image_signatures_digest(path: &Option<String>) -> Value {
     signed_json_digest(path, "image_signature_bundle_digest")
 }
 
+fn source_tree_digest(path: &Option<String>) -> Value {
+    let Some(path) = path else {
+        return Value::Null;
+    };
+    let Ok(bytes) = fs::read(path) else {
+        return Value::Null;
+    };
+    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+        if let Some(digest) = value
+            .get("provenance")
+            .and_then(|item| item.get("source_tree"))
+            .and_then(|item| item.get("digest"))
+            .and_then(Value::as_str)
+        {
+            if digest.starts_with("sha256:") {
+                return Value::String(digest.to_string());
+            }
+        }
+    }
+    Value::Null
+}
+
 fn signed_json_digest(path: &Option<String>, digest_field: &str) -> Value {
     let Some(path) = path else {
         return Value::Null;
@@ -7202,6 +8379,7 @@ fn runtime_manifest(state: &GateState) -> Value {
     let snapshot = current_snapshot(state);
     let provenance_digest = release_provenance_digest(&state.release_provenance_path);
     let image_signature_digest = image_signatures_digest(&state.image_signatures_path);
+    let source_digest = source_tree_digest(&state.release_provenance_path);
     json!({
         "component":"serverware-decision-gate-rs",
         "version":env!("CARGO_PKG_VERSION"),
@@ -7211,6 +8389,7 @@ fn runtime_manifest(state: &GateState) -> Value {
         "policy_trust_root_source":state.policy_trust_root_source.label(),
         "provenance_digest":provenance_digest,
         "image_signatures_digest":image_signature_digest,
+        "source_tree_digest":source_digest,
         "routes":snapshot.routes.len(),
         "credential_lease_cache":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
         "jit_grant_store": if state.grant_consume_url.is_some() {"shared"} else {"local"},
@@ -7242,6 +8421,7 @@ fn attestation(state: &GateState, nonce: Option<String>) -> Value {
     let snapshot = current_snapshot(state);
     let provenance_digest = release_provenance_digest(&state.release_provenance_path);
     let image_signature_digest = image_signatures_digest(&state.image_signatures_path);
+    let source_digest = source_tree_digest(&state.release_provenance_path);
     json!({
         "tee_platform":"none-dev",
         "quote":null,
@@ -7253,6 +8433,7 @@ fn attestation(state: &GateState, nonce: Option<String>) -> Value {
         "policy_trust_root_source":state.policy_trust_root_source.label(),
         "provenance_digest":provenance_digest,
         "image_signatures_digest":image_signature_digest,
+        "source_tree_digest":source_digest,
         "credential_generations":state.credential_generations.lock().expect("credential generation mutex poisoned").len(),
         "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
         "connect_mitm_interceptor":state.mitm_authority.is_some(),
@@ -7785,6 +8966,7 @@ fn main() -> Result<(), String> {
         policy_reload_success: AtomicU64::new(0),
         policy_reload_failed: AtomicU64::new(0),
         grants: Mutex::new(HashMap::new()),
+        constraint_rate_counters: Mutex::new(HashMap::new()),
         credential_generations: Mutex::new(HashMap::new()),
         generation_mtime: Mutex::new(None),
         generation_path,

@@ -33,6 +33,27 @@ def assert_distroless_no_shell(path: Path, expected_base: str) -> None:
         raise AssertionError(f"{path} final stage references a shell path: {final}")
 
 
+def assert_oci_traceability(path: Path) -> None:
+    final = final_stage_lines(path)
+    required = {
+        "ORG.OPENCONTAINERS.IMAGE.SOURCE",
+        "ORG.OPENCONTAINERS.IMAGE.REVISION",
+        "DEV.SERVERWARE.SOURCE_TREE_DIGEST",
+    }
+    joined = "\n".join(line.upper() for line in final)
+    missing = sorted(item for item in required if item not in joined)
+    if missing:
+        raise AssertionError(f"{path} final stage is missing OCI/source labels: {missing}")
+
+
+def assert_dockerignore() -> None:
+    ignored = set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
+    required = {".git", ".tmp", "**/target", "ops/production-readiness.env", "*.pem", "*.key"}
+    missing = sorted(required - ignored)
+    if missing:
+        raise AssertionError(f".dockerignore does not exclude local build/secrets material: {missing}")
+
+
 def run_dry_build() -> dict:
     result = subprocess.run(
         [sys.executable, "scripts/build_production_images.py", "--dry-run"],
@@ -48,15 +69,25 @@ def run_dry_build() -> dict:
 
 
 def main() -> None:
+    assert_dockerignore()
     assert_distroless_no_shell(ROOT / "Dockerfile.production", "gcr.io/distroless/python3-debian12")
+    assert_oci_traceability(ROOT / "Dockerfile.production")
     assert_distroless_no_shell(
         ROOT / "data-plane" / "decision-gate-rs" / "Dockerfile.production",
         "gcr.io/distroless/cc-debian12",
     )
+    assert_oci_traceability(ROOT / "data-plane" / "decision-gate-rs" / "Dockerfile.production")
     plan = run_dry_build()
     dockerfiles = {item["dockerfile"] for item in plan.get("commands") or []}
     if dockerfiles != {"Dockerfile.production", "data-plane/decision-gate-rs/Dockerfile.production"}:
         raise AssertionError(f"production build dry-run used the wrong Dockerfiles: {plan}")
+    metadata = plan.get("metadata") or {}
+    if not str(metadata.get("source_tree_digest", "")).startswith("sha256:"):
+        raise AssertionError(f"production build plan did not bind a source tree digest: {plan}")
+    for item in plan.get("commands") or []:
+        argv = item.get("argv") or []
+        if "SERVERWARE_SOURCE_TREE_DIGEST=" not in " ".join(argv):
+            raise AssertionError(f"production build command did not pass traceability build args: {item}")
     print(json.dumps({"ok": True, "production_image_builds": "pass"}, sort_keys=True))
 
 

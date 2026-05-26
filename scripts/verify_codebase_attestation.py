@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives import serialization
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SUFFIXES = {".py", ".sh", ".json", ".toml", ".lock", ".md", ".yml", ".yaml"}
-SOURCE_NAMES = {"Dockerfile", "Makefile", "requirements.txt"}
+SOURCE_NAMES = {"Dockerfile", "Dockerfile.production", "Makefile", "requirements.txt", ".dockerignore"}
 
 
 def canonical_json(value: Any) -> str:

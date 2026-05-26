@@ -25,7 +25,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 ROOT = Path(__file__).resolve().parent.parent
 SERVICES = ("serverware", "audit-anchor", "grant-store", "demo-upstream", "decision-gate-rs")
 SOURCE_SUFFIXES = {".py", ".sh", ".json", ".toml", ".lock", ".md", ".yml", ".yaml"}
-SOURCE_NAMES = {"Dockerfile", "Makefile", "requirements.txt"}
+SOURCE_NAMES = {"Dockerfile", "Dockerfile.production", "Makefile", "requirements.txt", ".dockerignore"}
 
 
 def canonical_json(value: Any) -> str:

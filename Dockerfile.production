@@ -6,6 +6,17 @@ RUN python -m pip install --no-cache-dir --target=/deps -r requirements.txt
 
 FROM gcr.io/distroless/python3-debian12:nonroot
 
+ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
+ARG SERVERWARE_IMAGE_REVISION="unknown"
+ARG SERVERWARE_IMAGE_CREATED="unknown"
+ARG SERVERWARE_SOURCE_TREE_DIGEST="unknown"
+
+LABEL org.opencontainers.image.title="Serverware control plane" \
+      org.opencontainers.image.source="${SERVERWARE_IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${SERVERWARE_IMAGE_REVISION}" \
+      org.opencontainers.image.created="${SERVERWARE_IMAGE_CREATED}" \
+      dev.serverware.source_tree_digest="${SERVERWARE_SOURCE_TREE_DIGEST}"
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/deps:/app \

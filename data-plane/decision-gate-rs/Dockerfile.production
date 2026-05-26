@@ -8,6 +8,17 @@ RUN cargo build --release
 
 FROM gcr.io/distroless/cc-debian12:nonroot
 
+ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
+ARG SERVERWARE_IMAGE_REVISION="unknown"
+ARG SERVERWARE_IMAGE_CREATED="unknown"
+ARG SERVERWARE_SOURCE_TREE_DIGEST="unknown"
+
+LABEL org.opencontainers.image.title="Serverware decision gate" \
+      org.opencontainers.image.source="${SERVERWARE_IMAGE_SOURCE}" \
+      org.opencontainers.image.revision="${SERVERWARE_IMAGE_REVISION}" \
+      org.opencontainers.image.created="${SERVERWARE_IMAGE_CREATED}" \
+      dev.serverware.source_tree_digest="${SERVERWARE_SOURCE_TREE_DIGEST}"
+
 COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/serverware-decision-gate
 USER nonroot:nonroot
 EXPOSE 9090

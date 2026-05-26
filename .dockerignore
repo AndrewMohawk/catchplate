@@ -1,0 +1,15 @@
+.git
+.tmp
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/target
+.DS_Store
+.env
+ops/production-readiness.env
+*.pem
+*.key
+*.crt
+*.csr
+*.p12
+node_modules

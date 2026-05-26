@@ -17,7 +17,11 @@ RUN groupadd --gid 10001 serverware \
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-RUN pip install --no-cache-dir mitmproxy==11.0.2
+ARG SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY=0
+ARG SERVERWARE_PROTOTYPE_MITMPROXY_VERSION=11.0.2
+RUN if [ "$SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY" = "1" ]; then \
+        pip install --no-cache-dir "mitmproxy==$SERVERWARE_PROTOTYPE_MITMPROXY_VERSION"; \
+    fi
 
 COPY serverware ./serverware
 COPY scripts ./scripts

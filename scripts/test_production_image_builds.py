@@ -61,6 +61,9 @@ def assert_production_dependencies() -> None:
     dockerfile = (ROOT / "Dockerfile.production").read_text(encoding="utf-8")
     if "serverware.control_plane_runner" not in dockerfile:
         raise AssertionError("production image must start the control-plane runner, not the prototype mitmproxy runner")
+    prototype = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    if "SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY=0" not in prototype:
+        raise AssertionError("prototype Dockerfile must default mitmproxy installation off")
 
 
 def run_dry_build() -> dict:

@@ -1,0 +1,27 @@
+FROM python:3.11-slim-bookworm AS python-deps
+
+WORKDIR /build
+COPY requirements.txt .
+RUN python -m pip install --no-cache-dir --target=/deps -r requirements.txt
+
+FROM gcr.io/distroless/python3-debian12:nonroot
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/deps:/app \
+    SERVERWARE_DATA_DIR=/data
+
+WORKDIR /app
+COPY --from=python-deps /deps /deps
+COPY serverware ./serverware
+COPY scripts ./scripts
+COPY schemas ./schemas
+COPY policies ./policies
+COPY security ./security
+COPY docker-compose.apparmor.yml ./docker-compose.apparmor.yml
+
+EXPOSE 3000 8080 8443
+
+USER nonroot:nonroot
+ENTRYPOINT ["/usr/bin/python3"]
+CMD ["-m", "serverware.runner"]

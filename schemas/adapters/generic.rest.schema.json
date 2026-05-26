@@ -13,7 +13,7 @@
         "allowedQueryKeys": {"type": "array", "items": {"type": "string"}},
         "allowedHeaders": {"type": "array", "items": {"type": "string"}},
         "bodyMode": {"enum": ["none", "any", "json", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
-        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
         "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxEventBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
@@ -28,7 +28,7 @@
       "additionalProperties": false,
       "properties": {
         "mode": {"enum": ["headersOnly", "json", "any", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
-        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
         "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxEventBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},

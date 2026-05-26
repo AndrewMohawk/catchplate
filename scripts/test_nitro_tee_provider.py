@@ -146,6 +146,8 @@ def main() -> None:
     tee = (verified.get("claims") or {}).get("tee") or {}
     if tee.get("verified") is not True or tee.get("pcrs") != FIXTURE_PCRS:
         raise AssertionError(f"Nitro quote was not verified with expected PCRs: {verified}")
+    if not tee.get("raw_attestation_document_b64") or not tee.get("raw_attestation_document_sha256"):
+        raise AssertionError(f"Nitro verification did not preserve KMS recipient attestation evidence: {verified}")
     release = run_provider(
         "release",
         {
@@ -175,6 +177,29 @@ def main() -> None:
         raise AssertionError(f"Nitro KMS/HSM response was not bound to the release request: {release}")
     if not ((kms_release.get("key_provider") or {}).get("key_id")):
         raise AssertionError(f"Nitro KMS/HSM response did not bind a key provider: {release}")
+    if "raw_attestation_document_b64" in (release.get("tee") or {}):
+        raise AssertionError(f"Nitro release response leaked the raw attestation document: {release}")
+    unauthorized_claims = json.loads(json.dumps(verified["claims"]))
+    unauthorized_claims["materials"] = ["broker-kek"]
+    expect_provider_failure(
+        "release",
+        {
+            "material": "decision-gate-ca",
+            "claims": unauthorized_claims,
+            "expected": {
+                "policy_bundle_digest": claims["policy_bundle_digest"],
+                "ca_intermediate_spki_sha256": claims["ca_intermediate_spki_sha256"],
+                "rollback_epoch": claims["rollback_epoch"],
+                "release_channel": claims["release_channel"],
+                "provenance_digest": claims["provenance_digest"],
+                "source_tree_digest": claims["source_tree_digest"],
+                "response_signing_key_id": claims["response_signing_key_id"],
+                "data_plane_binary_digest": claims["data_plane_binary_digest"],
+            },
+        },
+        base_env,
+        "material decision-gate-ca is not authorized by verified Nitro claims",
+    )
 
     attestation_command_env = dict(base_env)
     attestation_command_env.pop("SERVERWARE_NITRO_FIXTURE", None)

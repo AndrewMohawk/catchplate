@@ -10,6 +10,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
+from serverware import db
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import canonical_json
 
@@ -49,6 +50,7 @@ def evaluate_request_constraints(
     credential_version: int,
     operation_fields: dict[str, str],
     consume_rate_limits: bool,
+    policy_hash: str | None = None,
     rate_limits_only: bool = False,
 ) -> PolicyDecision:
     for constraint in route.constraints:
@@ -67,6 +69,7 @@ def evaluate_request_constraints(
                 principal_id=principal_id,
                 credential_ref=credential_ref,
                 credential_version=credential_version,
+                policy_hash=policy_hash,
                 operation_fields=operation_fields,
                 consume=consume_rate_limits,
             )
@@ -163,6 +166,7 @@ def _enforce_rate_limit(
     principal_id: str,
     credential_ref: str | None,
     credential_version: int,
+    policy_hash: str | None,
     operation_fields: dict[str, str],
     consume: bool,
 ) -> PolicyDecision:
@@ -180,6 +184,55 @@ def _enforce_rate_limit(
         credential_version=credential_version,
         operation_fields=operation_fields,
     )
+    store = str(constraint.get("store") or "local")
+    if store == "shared":
+        try:
+            result = db.consume_rate_limit(
+                counter_key=key,
+                principal_id=principal_id,
+                route_id=route.id,
+                credential_id=credential_ref or "",
+                credential_version=credential_version,
+                policy_hash=policy_hash or "",
+                constraint_id=str(constraint.get("id") or "unnamed"),
+                operation=operation_fields.get("operation"),
+                window_seconds=window_seconds,
+                max_count=maximum,
+                consume=consume,
+                actor_type="proxy",
+                actor_id=route.id,
+            )
+        except Exception as exc:
+            return _deny(
+                constraint,
+                "shared rate-limit store is unavailable",
+                "shared_rate_limit_store_unavailable",
+                statusCode=503,
+                detail=str(exc),
+                store=store,
+            )
+        if not result.get("allowed"):
+            return _deny(
+                constraint,
+                "credential use rate limit exceeded",
+                "credential_rate_limit_exceeded",
+                max=maximum,
+                windowSeconds=window_seconds,
+                retry_after_seconds=result.get("retry_after_seconds", 1),
+                remaining=result.get("remaining", 0),
+                count=result.get("count"),
+                store=store,
+            )
+        return PolicyDecision(True)
+
+    if store != "local":
+        return _deny(
+            constraint,
+            "rate limit constraint has an unsupported store",
+            "constraint_invalid_rate_limit_store",
+            store=store,
+        )
+
     with _RATE_LOCK:
         bucket = _RATE_BUCKETS.get(key)
         if bucket is None or now >= bucket.window_start + window_seconds:

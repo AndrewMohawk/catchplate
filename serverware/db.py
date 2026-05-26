@@ -72,6 +72,10 @@ class MetadataStoreError(RuntimeError):
     pass
 
 
+class RateLimitStoreError(RuntimeError):
+    pass
+
+
 _AUDIT_CHAIN_LOCK_KEY = 0x5357524155444348
 
 
@@ -432,6 +436,27 @@ def init_db(path: Path = DB_PATH) -> None:
                 approval_challenge_id TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS control_plane_approvals (
+                id TEXT PRIMARY KEY,
+                action TEXT NOT NULL,
+                resource_id TEXT,
+                payload_digest TEXT NOT NULL,
+                status TEXT NOT NULL,
+                requester_id TEXT NOT NULL,
+                requested_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                request_json TEXT NOT NULL DEFAULT '{}',
+                approved_by TEXT,
+                approved_at TEXT,
+                consumed_by TEXT,
+                consumed_at TEXT,
+                decision_note TEXT,
+                approval_authn TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS control_plane_approvals_pending_lookup
+                ON control_plane_approvals (action, resource_id, payload_digest, status, expires_at);
+
             CREATE TABLE IF NOT EXISTS gmail_message_cache (
                 route_id TEXT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
                 message_id TEXT NOT NULL,
@@ -494,6 +519,23 @@ def init_db(path: Path = DB_PATH) -> None:
                 created_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS rate_limit_counters (
+                counter_key TEXT PRIMARY KEY,
+                principal_id TEXT,
+                route_id TEXT,
+                credential_id TEXT,
+                credential_version INTEGER,
+                policy_hash TEXT,
+                constraint_id TEXT,
+                operation TEXT,
+                window_start_epoch_ms BIGINT NOT NULL,
+                window_seconds INTEGER NOT NULL,
+                max_count INTEGER NOT NULL,
+                count INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS webauthn_credentials (
                 id TEXT PRIMARY KEY,
                 credential_id TEXT NOT NULL UNIQUE,
@@ -545,6 +587,13 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(conn, "approval_requests", "approved_by", "TEXT")
         _ensure_column(conn, "approval_requests", "approval_authn", "TEXT")
         _ensure_column(conn, "approval_requests", "approval_challenge_id", "TEXT")
+        _ensure_column(conn, "control_plane_approvals", "request_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(conn, "control_plane_approvals", "approved_by", "TEXT")
+        _ensure_column(conn, "control_plane_approvals", "approved_at", "TEXT")
+        _ensure_column(conn, "control_plane_approvals", "consumed_by", "TEXT")
+        _ensure_column(conn, "control_plane_approvals", "consumed_at", "TEXT")
+        _ensure_column(conn, "control_plane_approvals", "decision_note", "TEXT")
+        _ensure_column(conn, "control_plane_approvals", "approval_authn", "TEXT")
         _ensure_column(conn, "approval_grants", "credential_version", "INTEGER")
         _ensure_column(conn, "credentials", "encrypted_dek", "TEXT")
         _ensure_column(conn, "credentials", "secret_nonce", "TEXT")
@@ -969,6 +1018,241 @@ def row_to_approval(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
+def row_to_control_plane_approval(row: sqlite3.Row) -> dict[str, Any]:
+    item = dict(row)
+    item["request"] = loads(item.pop("request_json", None), {})
+    item["approval_authn"] = loads(item.get("approval_authn"), None)
+    return item
+
+
+def ensure_control_plane_approval(
+    *,
+    action: str,
+    resource_id: str | None,
+    payload_digest: str,
+    requester_id: str,
+    request: dict[str, Any],
+    ttl_seconds: int,
+) -> dict[str, Any]:
+    now = utcnow()
+    now_s = now.isoformat()
+    expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
+    resource_clause = "resource_id IS NULL" if resource_id is None else "resource_id = ?"
+    resource_args: tuple[Any, ...] = () if resource_id is None else (resource_id,)
+    with connect() as conn:
+        existing = conn.execute(
+            f"""
+            SELECT * FROM control_plane_approvals
+            WHERE action = ?
+              AND {resource_clause}
+              AND payload_digest = ?
+              AND requester_id = ?
+              AND status IN ('pending', 'approved')
+              AND expires_at > ?
+            ORDER BY requested_at DESC
+            LIMIT 1
+            """,
+            (action, *resource_args, payload_digest, requester_id, now_s),
+        ).fetchone()
+        if existing:
+            return row_to_control_plane_approval(existing)
+
+        item_id = str(uuid.uuid4())
+        conn.execute(
+            """
+            INSERT INTO control_plane_approvals (
+                id, action, resource_id, payload_digest, status, requester_id,
+                requested_at, expires_at, request_json
+            )
+            VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
+            """,
+            (item_id, action, resource_id, payload_digest, requester_id, now_s, expires_at, dumps(request)),
+        )
+        append_audit_event(
+            conn,
+            event_type="control_plane.approval.requested",
+            actor_type="admin",
+            actor_id=requester_id,
+            event={
+                "approval_id": item_id,
+                "action": action,
+                "resource_id": resource_id,
+                "payload_digest": payload_digest,
+                "requester_id": requester_id,
+                "expires_at": expires_at,
+                "request": request,
+            },
+        )
+        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+    return row_to_control_plane_approval(row)
+
+
+def get_control_plane_approval(item_id: str) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+    return row_to_control_plane_approval(row) if row else None
+
+
+def approve_control_plane_approval(
+    item_id: str,
+    *,
+    actor_id: str,
+    note: str | None = None,
+    authn: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    now_s = iso_now()
+    with connect() as conn:
+        existing = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        if not existing:
+            return None
+        if existing["status"] != "pending" or existing["expires_at"] <= now_s:
+            return None
+        if existing["requester_id"] == actor_id:
+            return None
+        cur = conn.execute(
+            """
+            UPDATE control_plane_approvals
+            SET status = 'approved',
+                approved_by = ?,
+                approved_at = ?,
+                decision_note = ?,
+                approval_authn = ?
+            WHERE id = ? AND status = 'pending' AND expires_at > ?
+            """,
+            (actor_id, now_s, note, dumps(authn or {}), item_id, now_s),
+        )
+        if cur.rowcount != 1:
+            return None
+        append_audit_event(
+            conn,
+            event_type="control_plane.approval.approved",
+            actor_type="admin",
+            actor_id=actor_id,
+            event={
+                "approval_id": item_id,
+                "action": existing["action"],
+                "resource_id": existing["resource_id"],
+                "payload_digest": existing["payload_digest"],
+                "requester_id": existing["requester_id"],
+                "approved_by": actor_id,
+                "approval_authn": authn or {},
+                "note": note,
+            },
+        )
+        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+    return row_to_control_plane_approval(row) if row else None
+
+
+def consume_control_plane_approval(
+    item_id: str,
+    *,
+    action: str,
+    resource_id: str | None,
+    payload_digest: str,
+    actor_id: str,
+) -> dict[str, Any]:
+    now_s = iso_now()
+    with connect() as conn:
+        existing = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        if not existing:
+            return {"ok": False, "reason": "approval_not_found"}
+        if existing["action"] != action:
+            return {"ok": False, "reason": "action_mismatch"}
+        if existing["resource_id"] != resource_id:
+            return {"ok": False, "reason": "resource_mismatch"}
+        if existing["payload_digest"] != payload_digest:
+            return {"ok": False, "reason": "payload_digest_mismatch"}
+        if existing["requester_id"] != actor_id:
+            return {"ok": False, "reason": "requester_mismatch"}
+        if existing["approved_by"] == actor_id:
+            return {"ok": False, "reason": "self_approval_not_allowed"}
+        if existing["status"] != "approved":
+            return {"ok": False, "reason": f"approval_{existing['status']}"}
+        if existing["expires_at"] <= now_s:
+            return {"ok": False, "reason": "approval_expired"}
+        cur = conn.execute(
+            """
+            UPDATE control_plane_approvals
+            SET status = 'consumed',
+                consumed_by = ?,
+                consumed_at = ?
+            WHERE id = ? AND status = 'approved' AND expires_at > ?
+            """,
+            (actor_id, now_s, item_id, now_s),
+        )
+        if cur.rowcount != 1:
+            return {"ok": False, "reason": "approval_state_changed"}
+        append_audit_event(
+            conn,
+            event_type="control_plane.approval.consumed",
+            actor_type="admin",
+            actor_id=actor_id,
+            event={
+                "approval_id": item_id,
+                "action": action,
+                "resource_id": resource_id,
+                "payload_digest": payload_digest,
+                "requester_id": actor_id,
+                "approved_by": existing["approved_by"],
+            },
+        )
+        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+    return {"ok": True, "approval": row_to_control_plane_approval(row)}
+
+
+def deny_control_plane_approval(item_id: str, *, actor_id: str, note: str | None = None) -> dict[str, Any] | None:
+    now_s = iso_now()
+    with connect() as conn:
+        existing = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        if not existing:
+            return None
+        if existing["status"] != "pending" or existing["expires_at"] <= now_s:
+            return None
+        cur = conn.execute(
+            """
+            UPDATE control_plane_approvals
+            SET status = 'denied',
+                decision_note = ?
+            WHERE id = ? AND status = 'pending' AND expires_at > ?
+            """,
+            (note, item_id, now_s),
+        )
+        if cur.rowcount != 1:
+            return None
+        append_audit_event(
+            conn,
+            event_type="control_plane.approval.denied",
+            actor_type="admin",
+            actor_id=actor_id,
+            event={
+                "approval_id": item_id,
+                "action": existing["action"],
+                "resource_id": existing["resource_id"],
+                "payload_digest": existing["payload_digest"],
+                "requester_id": existing["requester_id"],
+                "denied_by": actor_id,
+                "note": note,
+            },
+        )
+        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+    return row_to_control_plane_approval(row) if row else None
+
+
+def list_control_plane_approvals(status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+    args: list[Any] = []
+    where = ""
+    if status:
+        where = "WHERE status = ?"
+        args.append(status)
+    args.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"SELECT * FROM control_plane_approvals {where} ORDER BY requested_at DESC LIMIT ?",
+            args,
+        ).fetchall()
+    return [row_to_control_plane_approval(row) for row in rows]
+
+
 def create_approval_request(route_id: str, method: str, url: str, ttl_seconds: int = 300) -> dict[str, Any]:
     now = utcnow()
     now_s = now.isoformat()
@@ -1356,6 +1640,491 @@ def consume_jit_grant(
     )
 
 
+def _rate_limit_retry_after(window_start_epoch_ms: int, window_seconds: int, now_epoch_ms: int) -> int:
+    reset_at = window_start_epoch_ms + window_seconds * 1000
+    return max(1, int((max(reset_at - now_epoch_ms, 0) + 999) // 1000))
+
+
+def _rate_limit_response(
+    *,
+    allowed: bool,
+    reason: str,
+    counter_key: str,
+    window_start_epoch_ms: int,
+    window_seconds: int,
+    max_count: int,
+    count: int,
+    now_epoch_ms: int,
+    consumed: bool,
+) -> dict[str, Any]:
+    remaining = max(max_count - count, 0)
+    return {
+        "allowed": allowed,
+        "consumed": consumed,
+        "reason": reason,
+        "counter_key": counter_key,
+        "window_start_epoch_ms": window_start_epoch_ms,
+        "window_seconds": window_seconds,
+        "max": max_count,
+        "count": count,
+        "remaining": remaining,
+        "retry_after_seconds": 0
+        if allowed
+        else _rate_limit_retry_after(window_start_epoch_ms, window_seconds, now_epoch_ms),
+        "rate_limit_store_backend": metadata_store_backend_name(),
+        "rate_limit_store_ha": metadata_uses_postgres(),
+    }
+
+
+def _consume_rate_limit_sqlite(
+    *,
+    counter_key: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    constraint_id: str,
+    operation: str | None,
+    window_seconds: int,
+    max_count: int,
+    consume: bool,
+    now_epoch_ms: int,
+) -> dict[str, Any]:
+    now_s = datetime.fromtimestamp(now_epoch_ms / 1000, timezone.utc).isoformat()
+    with connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute(
+            "SELECT * FROM rate_limit_counters WHERE counter_key = ?",
+            (counter_key,),
+        ).fetchone()
+        if row is None:
+            count = 1 if consume else 0
+            if consume:
+                conn.execute(
+                    """
+                    INSERT INTO rate_limit_counters (
+                        counter_key, principal_id, route_id, credential_id, credential_version,
+                        policy_hash, constraint_id, operation, window_start_epoch_ms,
+                        window_seconds, max_count, count, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        counter_key,
+                        principal_id,
+                        route_id,
+                        credential_id,
+                        credential_version,
+                        policy_hash,
+                        constraint_id,
+                        operation,
+                        now_epoch_ms,
+                        window_seconds,
+                        max_count,
+                        count,
+                        now_s,
+                        now_s,
+                    ),
+                )
+            return _rate_limit_response(
+                allowed=True,
+                reason="consumed" if consume else "available",
+                counter_key=counter_key,
+                window_start_epoch_ms=now_epoch_ms,
+                window_seconds=window_seconds,
+                max_count=max_count,
+                count=count,
+                now_epoch_ms=now_epoch_ms,
+                consumed=consume,
+            )
+
+        window_start = int(row["window_start_epoch_ms"])
+        count = int(row["count"])
+        expired = now_epoch_ms >= window_start + int(row["window_seconds"]) * 1000
+        if expired:
+            if not consume:
+                return _rate_limit_response(
+                    allowed=True,
+                    reason="available",
+                    counter_key=counter_key,
+                    window_start_epoch_ms=now_epoch_ms,
+                    window_seconds=window_seconds,
+                    max_count=max_count,
+                    count=0,
+                    now_epoch_ms=now_epoch_ms,
+                    consumed=False,
+                )
+            window_start = now_epoch_ms
+            count = 0
+        if count >= max_count:
+            if expired or int(row["window_seconds"]) != window_seconds or int(row["max_count"]) != max_count:
+                conn.execute(
+                    """
+                    UPDATE rate_limit_counters
+                    SET principal_id = ?, route_id = ?, credential_id = ?, credential_version = ?,
+                        policy_hash = ?, constraint_id = ?, operation = ?,
+                        window_start_epoch_ms = ?, window_seconds = ?, max_count = ?,
+                        count = ?, updated_at = ?
+                    WHERE counter_key = ?
+                    """,
+                    (
+                        principal_id,
+                        route_id,
+                        credential_id,
+                        credential_version,
+                        policy_hash,
+                        constraint_id,
+                        operation,
+                        window_start,
+                        window_seconds,
+                        max_count,
+                        count,
+                        now_s,
+                        counter_key,
+                    ),
+                )
+            return _rate_limit_response(
+                allowed=False,
+                reason="rate_limited",
+                counter_key=counter_key,
+                window_start_epoch_ms=window_start,
+                window_seconds=window_seconds,
+                max_count=max_count,
+                count=count,
+                now_epoch_ms=now_epoch_ms,
+                consumed=False,
+            )
+
+        if consume:
+            count += 1
+        if consume or expired or int(row["window_seconds"]) != window_seconds or int(row["max_count"]) != max_count:
+            conn.execute(
+                """
+                UPDATE rate_limit_counters
+                SET principal_id = ?, route_id = ?, credential_id = ?, credential_version = ?,
+                    policy_hash = ?, constraint_id = ?, operation = ?,
+                    window_start_epoch_ms = ?, window_seconds = ?, max_count = ?,
+                    count = ?, updated_at = ?
+                WHERE counter_key = ?
+                """,
+                (
+                    principal_id,
+                    route_id,
+                    credential_id,
+                    credential_version,
+                    policy_hash,
+                    constraint_id,
+                    operation,
+                    window_start,
+                    window_seconds,
+                    max_count,
+                    count,
+                    now_s,
+                    counter_key,
+                ),
+            )
+    return _rate_limit_response(
+        allowed=True,
+        reason="consumed" if consume else "available",
+        counter_key=counter_key,
+        window_start_epoch_ms=window_start,
+        window_seconds=window_seconds,
+        max_count=max_count,
+        count=count,
+        now_epoch_ms=now_epoch_ms,
+        consumed=consume,
+    )
+
+
+def _consume_rate_limit_postgres(
+    *,
+    counter_key: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    constraint_id: str,
+    operation: str | None,
+    window_seconds: int,
+    max_count: int,
+    consume: bool,
+    now_epoch_ms: int,
+) -> dict[str, Any]:
+    now_s = datetime.fromtimestamp(now_epoch_ms / 1000, timezone.utc).isoformat()
+    with _metadata_pg_connect_raw() as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                if consume:
+                    cur.execute(
+                        """
+                        INSERT INTO rate_limit_counters (
+                            counter_key, principal_id, route_id, credential_id, credential_version,
+                            policy_hash, constraint_id, operation, window_start_epoch_ms,
+                            window_seconds, max_count, count, created_at, updated_at
+                        )
+                        VALUES (
+                            %(counter_key)s, %(principal_id)s, %(route_id)s, %(credential_id)s,
+                            %(credential_version)s, %(policy_hash)s, %(constraint_id)s, %(operation)s,
+                            %(window_start_epoch_ms)s, %(window_seconds)s, %(max_count)s,
+                            0, %(created_at)s, %(updated_at)s
+                        )
+                        ON CONFLICT (counter_key) DO NOTHING
+                        """,
+                        {
+                            "counter_key": counter_key,
+                            "principal_id": principal_id,
+                            "route_id": route_id,
+                            "credential_id": credential_id,
+                            "credential_version": credential_version,
+                            "policy_hash": policy_hash,
+                            "constraint_id": constraint_id,
+                            "operation": operation,
+                            "window_start_epoch_ms": now_epoch_ms,
+                            "window_seconds": window_seconds,
+                            "max_count": max_count,
+                            "created_at": now_s,
+                            "updated_at": now_s,
+                        },
+                    )
+                cur.execute(
+                    """
+                    SELECT counter_key, window_start_epoch_ms, window_seconds, max_count, count
+                    FROM rate_limit_counters
+                    WHERE counter_key = %(counter_key)s
+                    FOR UPDATE
+                    """,
+                    {"counter_key": counter_key},
+                )
+                row = cur.fetchone()
+                if row is None:
+                    if consume:
+                        raise RateLimitStoreError("postgres rate limit counter insert did not create a locked row")
+                    return _rate_limit_response(
+                        allowed=True,
+                        reason="available",
+                        counter_key=counter_key,
+                        window_start_epoch_ms=now_epoch_ms,
+                        window_seconds=window_seconds,
+                        max_count=max_count,
+                        count=0,
+                        now_epoch_ms=now_epoch_ms,
+                        consumed=False,
+                    )
+
+                window_start = int(row["window_start_epoch_ms"])
+                count = int(row["count"])
+                expired = now_epoch_ms >= window_start + int(row["window_seconds"]) * 1000
+                if expired:
+                    if not consume:
+                        return _rate_limit_response(
+                            allowed=True,
+                            reason="available",
+                            counter_key=counter_key,
+                            window_start_epoch_ms=now_epoch_ms,
+                            window_seconds=window_seconds,
+                            max_count=max_count,
+                            count=0,
+                            now_epoch_ms=now_epoch_ms,
+                            consumed=False,
+                        )
+                    window_start = now_epoch_ms
+                    count = 0
+                if count >= max_count:
+                    if expired or int(row["window_seconds"]) != window_seconds or int(row["max_count"]) != max_count:
+                        cur.execute(
+                            """
+                            UPDATE rate_limit_counters
+                            SET principal_id = %(principal_id)s,
+                                route_id = %(route_id)s,
+                                credential_id = %(credential_id)s,
+                                credential_version = %(credential_version)s,
+                                policy_hash = %(policy_hash)s,
+                                constraint_id = %(constraint_id)s,
+                                operation = %(operation)s,
+                                window_start_epoch_ms = %(window_start_epoch_ms)s,
+                                window_seconds = %(window_seconds)s,
+                                max_count = %(max_count)s,
+                                count = %(count)s,
+                                updated_at = %(updated_at)s
+                            WHERE counter_key = %(counter_key)s
+                            """,
+                            {
+                                "counter_key": counter_key,
+                                "principal_id": principal_id,
+                                "route_id": route_id,
+                                "credential_id": credential_id,
+                                "credential_version": credential_version,
+                                "policy_hash": policy_hash,
+                                "constraint_id": constraint_id,
+                                "operation": operation,
+                                "window_start_epoch_ms": window_start,
+                                "window_seconds": window_seconds,
+                                "max_count": max_count,
+                                "count": count,
+                                "updated_at": now_s,
+                            },
+                        )
+                    return _rate_limit_response(
+                        allowed=False,
+                        reason="rate_limited",
+                        counter_key=counter_key,
+                        window_start_epoch_ms=window_start,
+                        window_seconds=window_seconds,
+                        max_count=max_count,
+                        count=count,
+                        now_epoch_ms=now_epoch_ms,
+                        consumed=False,
+                    )
+
+                if consume:
+                    count += 1
+                if consume or expired or int(row["window_seconds"]) != window_seconds or int(row["max_count"]) != max_count:
+                    cur.execute(
+                        """
+                        UPDATE rate_limit_counters
+                        SET principal_id = %(principal_id)s,
+                            route_id = %(route_id)s,
+                            credential_id = %(credential_id)s,
+                            credential_version = %(credential_version)s,
+                            policy_hash = %(policy_hash)s,
+                            constraint_id = %(constraint_id)s,
+                            operation = %(operation)s,
+                            window_start_epoch_ms = %(window_start_epoch_ms)s,
+                            window_seconds = %(window_seconds)s,
+                            max_count = %(max_count)s,
+                            count = %(count)s,
+                            updated_at = %(updated_at)s
+                        WHERE counter_key = %(counter_key)s
+                        """,
+                        {
+                            "counter_key": counter_key,
+                            "principal_id": principal_id,
+                            "route_id": route_id,
+                            "credential_id": credential_id,
+                            "credential_version": credential_version,
+                            "policy_hash": policy_hash,
+                            "constraint_id": constraint_id,
+                            "operation": operation,
+                            "window_start_epoch_ms": window_start,
+                            "window_seconds": window_seconds,
+                            "max_count": max_count,
+                            "count": count,
+                            "updated_at": now_s,
+                        },
+                    )
+    return _rate_limit_response(
+        allowed=True,
+        reason="consumed" if consume else "available",
+        counter_key=counter_key,
+        window_start_epoch_ms=window_start,
+        window_seconds=window_seconds,
+        max_count=max_count,
+        count=count,
+        now_epoch_ms=now_epoch_ms,
+        consumed=consume,
+    )
+
+
+def consume_rate_limit(
+    *,
+    counter_key: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    constraint_id: str,
+    operation: str | None,
+    window_seconds: int,
+    max_count: int,
+    consume: bool = True,
+    now_epoch_ms: int | None = None,
+    actor_type: str = "proxy",
+    actor_id: str | None = None,
+    audit: bool = True,
+) -> dict[str, Any]:
+    if not counter_key.startswith("sha256:") or len(counter_key) != 71:
+        raise RateLimitStoreError("rate limit counter_key must be a sha256: digest")
+    if window_seconds < 1 or max_count < 1:
+        raise RateLimitStoreError("rate limit max_count and window_seconds must be positive")
+    now_ms = int(now_epoch_ms if now_epoch_ms is not None else utcnow().timestamp() * 1000)
+    if metadata_uses_postgres():
+        result = _consume_rate_limit_postgres(
+            counter_key=counter_key,
+            principal_id=principal_id,
+            route_id=route_id,
+            credential_id=credential_id,
+            credential_version=credential_version,
+            policy_hash=policy_hash,
+            constraint_id=constraint_id,
+            operation=operation,
+            window_seconds=window_seconds,
+            max_count=max_count,
+            consume=consume,
+            now_epoch_ms=now_ms,
+        )
+    else:
+        result = _consume_rate_limit_sqlite(
+            counter_key=counter_key,
+            principal_id=principal_id,
+            route_id=route_id,
+            credential_id=credential_id,
+            credential_version=credential_version,
+            policy_hash=policy_hash,
+            constraint_id=constraint_id,
+            operation=operation,
+            window_seconds=window_seconds,
+            max_count=max_count,
+            consume=consume,
+            now_epoch_ms=now_ms,
+        )
+    if audit and (consume or not result["allowed"]):
+        try:
+            audit_event = record_audit_event(
+                "rate_limit.consumed" if result["allowed"] and consume else "rate_limit.denied",
+                {
+                    "counter_key": counter_key,
+                    "principal_id": principal_id,
+                    "route_id": route_id,
+                    "credential_id": credential_id,
+                    "credential_version": credential_version,
+                    "policy_hash": policy_hash,
+                    "constraint_id": constraint_id,
+                    "operation": operation,
+                    "consume": consume,
+                    "allowed": result["allowed"],
+                    "reason": result["reason"],
+                    "count": result["count"],
+                    "max": result["max"],
+                    "remaining": result["remaining"],
+                    "window_seconds": result["window_seconds"],
+                    "window_start_epoch_ms": result["window_start_epoch_ms"],
+                    "retry_after_seconds": result["retry_after_seconds"],
+                    "rate_limit_store_backend": result["rate_limit_store_backend"],
+                },
+                actor_type=actor_type,
+                actor_id=actor_id or route_id,
+            )
+            result["audit_event_hash"] = audit_event["event_hash"]
+        except Exception as exc:
+            result["audit_error"] = str(exc)
+    return result
+
+
+def clear_rate_limit_counters(route_ids: list[str] | tuple[str, ...] | None = None) -> int:
+    with connect() as conn:
+        if route_ids is None:
+            cur = conn.execute("DELETE FROM rate_limit_counters")
+            return int(cur.rowcount or 0)
+        deleted = 0
+        for route_id in route_ids:
+            cur = conn.execute("DELETE FROM rate_limit_counters WHERE route_id = ?", (route_id,))
+            deleted += int(cur.rowcount or 0)
+        return deleted
+
+
 def deny_request(item_id: str, note: str | None = None, actor_id: str = "admin") -> dict[str, Any] | None:
     with connect() as conn:
         existing = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
@@ -1406,6 +2175,28 @@ def list_approvals(status: str | None = None, limit: int = 50) -> list[dict[str,
     with connect() as conn:
         rows = conn.execute(
             f"SELECT * FROM approval_requests {where} ORDER BY requested_at DESC LIMIT ?",
+            args,
+        ).fetchall()
+    return [row_to_approval(row) for row in rows]
+
+
+def list_similar_approvals(approval: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
+    args: list[Any] = [approval["id"]]
+    clauses = ["id <> ?"]
+    for field in ("principal_id", "route_id", "credential_id", "policy_hash"):
+        value = approval.get(field)
+        if value is not None:
+            clauses.append(f"{field} = ?")
+            args.append(value)
+    args.append(limit)
+    with connect() as conn:
+        rows = conn.execute(
+            f"""
+            SELECT * FROM approval_requests
+            WHERE {' AND '.join(clauses)}
+            ORDER BY requested_at DESC
+            LIMIT ?
+            """,
             args,
         ).fetchall()
     return [row_to_approval(row) for row in rows]
@@ -1718,6 +2509,300 @@ def list_audit_events(limit: int = 100) -> list[dict[str, Any]]:
     return items
 
 
+def _audit_item_from_row(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    item["event"] = loads(item.pop("event_json"), {})
+    return item
+
+
+def _nested_field_values(value: Any, aliases: set[str]) -> list[Any]:
+    values: list[Any] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if str(key) in aliases:
+                values.append(item)
+            values.extend(_nested_field_values(item, aliases))
+    elif isinstance(value, list):
+        for item in value:
+            values.extend(_nested_field_values(item, aliases))
+    return values
+
+
+def _stringify_audit_value(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return dumps(value)
+    return str(value)
+
+
+def _audit_value_matches(value: Any, expected: str) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, list):
+        return any(_audit_value_matches(item, expected) for item in value)
+    if isinstance(value, dict):
+        return any(_audit_value_matches(item, expected) for item in value.values())
+    return _stringify_audit_value(value) == expected
+
+
+AUDIT_SEARCH_ALIASES: dict[str, set[str]] = {
+    "principal_id": {"principal_id", "principalId", "principal"},
+    "route_id": {"route_id", "routeId"},
+    "policy_hash": {"policy_hash", "policyHash", "policy_bundle_digest", "policyBundleDigest"},
+    "credential_id": {"credential_id", "credentialId", "credential_ref", "credentialRef"},
+    "credential_version": {"credential_version", "credentialVersion"},
+    "approval_id": {"approval_id", "approvalId", "approval_request_id", "approvalRequestId"},
+    "decision": {"decision", "action", "status", "reason", "consume_result", "result"},
+    "attestation_measurement": {
+        "attestation_measurement",
+        "attestationMeasurement",
+        "measurement",
+        "runtime_manifest_digest",
+        "runtimeManifestDigest",
+        "source_tree_digest",
+        "sourceTreeDigest",
+        "data_plane_binary_digest",
+        "dataPlaneBinaryDigest",
+        "module_id",
+        "moduleId",
+        "pcr0",
+        "pcr1",
+        "pcr2",
+    },
+}
+
+
+def _audit_item_matches(item: dict[str, Any], filters: dict[str, Any]) -> bool:
+    event = item.get("event") or {}
+    for field, expected in filters.items():
+        if expected is None or expected == "":
+            continue
+        if field == "q":
+            haystack = dumps(
+                {
+                    "event_type": item.get("event_type"),
+                    "actor_type": item.get("actor_type"),
+                    "actor_id": item.get("actor_id"),
+                    "event": event,
+                }
+            )
+            if str(expected) not in haystack:
+                return False
+            continue
+        values = _nested_field_values(event, AUDIT_SEARCH_ALIASES[field])
+        if not any(_audit_value_matches(value, str(expected)) for value in values):
+            return False
+    return True
+
+
+def search_audit_events(
+    *,
+    limit: int = 100,
+    scan_limit: int = 5000,
+    event_type: str | None = None,
+    actor_type: str | None = None,
+    actor_id: str | None = None,
+    principal_id: str | None = None,
+    route_id: str | None = None,
+    policy_hash: str | None = None,
+    credential_id: str | None = None,
+    credential_version: int | None = None,
+    approval_id: str | None = None,
+    decision: str | None = None,
+    attestation_measurement: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    q: str | None = None,
+) -> dict[str, Any]:
+    limit = max(1, min(int(limit), 10000))
+    scan_limit = max(limit, min(int(scan_limit), 50000))
+    if audit_uses_postgres():
+        conditions: list[str] = []
+        params: dict[str, Any] = {"scan_limit": scan_limit}
+        if event_type:
+            conditions.append("event_type = %(event_type)s")
+            params["event_type"] = event_type
+        if actor_type:
+            conditions.append("actor_type = %(actor_type)s")
+            params["actor_type"] = actor_type
+        if actor_id:
+            conditions.append("actor_id = %(actor_id)s")
+            params["actor_id"] = actor_id
+        if start:
+            conditions.append("created_at >= %(start)s")
+            params["start"] = start
+        if end:
+            conditions.append("created_at <= %(end)s")
+            params["end"] = end
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        with _audit_pg_connect() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT COUNT(*)::bigint AS count FROM serverware_audit_events {where}", params)
+                total_candidates = int(cur.fetchone()["count"])
+                cur.execute(
+                    f"""
+                    SELECT id, event_type, actor_type, actor_id, event_json,
+                           prev_event_hash, event_hash, created_at
+                    FROM serverware_audit_events
+                    {where}
+                    ORDER BY sequence DESC
+                    LIMIT %(scan_limit)s
+                    """,
+                    params,
+                )
+                rows = cur.fetchall()
+    else:
+        conditions = []
+        params_list: list[Any] = []
+        if event_type:
+            conditions.append("event_type = ?")
+            params_list.append(event_type)
+        if actor_type:
+            conditions.append("actor_type = ?")
+            params_list.append(actor_type)
+        if actor_id:
+            conditions.append("actor_id = ?")
+            params_list.append(actor_id)
+        if start:
+            conditions.append("created_at >= ?")
+            params_list.append(start)
+        if end:
+            conditions.append("created_at <= ?")
+            params_list.append(end)
+        where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        with connect() as conn:
+            total_candidates = int(conn.execute(f"SELECT COUNT(*) AS count FROM audit_events {where}", tuple(params_list)).fetchone()["count"])
+            rows = conn.execute(
+                f"""
+                SELECT * FROM audit_events
+                {where}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                (*params_list, scan_limit),
+            ).fetchall()
+    items = [_audit_item_from_row(row) for row in rows]
+    field_filters = {
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "policy_hash": policy_hash,
+        "credential_id": credential_id,
+        "credential_version": None if credential_version is None else str(credential_version),
+        "approval_id": approval_id,
+        "decision": decision,
+        "attestation_measurement": attestation_measurement,
+        "q": q,
+    }
+    matches = [item for item in items if _audit_item_matches(item, field_filters)]
+    return {
+        "ok": True,
+        "backend": audit_store_backend_name(),
+        "filters": {
+            "event_type": event_type,
+            "actor_type": actor_type,
+            "actor_id": actor_id,
+            "principal_id": principal_id,
+            "route_id": route_id,
+            "policy_hash": policy_hash,
+            "credential_id": credential_id,
+            "credential_version": credential_version,
+            "approval_id": approval_id,
+            "decision": decision,
+            "attestation_measurement": attestation_measurement,
+            "start": start,
+            "end": end,
+            "q": q,
+        },
+        "count": min(len(matches), limit),
+        "matched_in_scan": len(matches),
+        "scanned": len(items),
+        "total_candidates": total_candidates,
+        "complete": len(items) >= total_candidates,
+        "items": matches[:limit],
+    }
+
+
+def export_audit_events_jsonl(
+    *,
+    limit: int = 1000,
+    scan_limit: int = 50000,
+    event_type: str | None = None,
+    actor_type: str | None = None,
+    actor_id: str | None = None,
+    principal_id: str | None = None,
+    route_id: str | None = None,
+    policy_hash: str | None = None,
+    credential_id: str | None = None,
+    credential_version: int | None = None,
+    approval_id: str | None = None,
+    decision: str | None = None,
+    attestation_measurement: str | None = None,
+    start: str | None = None,
+    end: str | None = None,
+    q: str | None = None,
+) -> str:
+    result = search_audit_events(
+        limit=limit,
+        scan_limit=scan_limit,
+        event_type=event_type,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        principal_id=principal_id,
+        route_id=route_id,
+        policy_hash=policy_hash,
+        credential_id=credential_id,
+        credential_version=credential_version,
+        approval_id=approval_id,
+        decision=decision,
+        attestation_measurement=attestation_measurement,
+        start=start,
+        end=end,
+        q=q,
+    )
+    chain = verify_audit_chain()
+    header = {
+        "kind": "serverware.auditExport.v1",
+        "generated_at": iso_now(),
+        "backend": result["backend"],
+        "filters": result["filters"],
+        "count": result["count"],
+        "matched_in_scan": result["matched_in_scan"],
+        "scanned": result["scanned"],
+        "total_candidates": result["total_candidates"],
+        "complete": result["complete"],
+        "chain": {
+            "ok": chain.get("ok"),
+            "backend": chain.get("backend"),
+            "ha": chain.get("ha"),
+            "complete": chain.get("complete"),
+            "count": chain.get("count"),
+            "total": chain.get("total"),
+            "head": chain.get("head"),
+        },
+    }
+    lines = [dumps(header)]
+    for index, item in enumerate(result["items"]):
+        lines.append(
+            dumps(
+                {
+                    "kind": "serverware.auditEvent.v1",
+                    "export_index": index,
+                    "event": item,
+                }
+            )
+        )
+    lines.append(
+        dumps(
+            {
+                "kind": "serverware.auditExportEnd.v1",
+                "count": result["count"],
+                "complete": result["complete"],
+                "chain_head": chain.get("head"),
+            }
+        )
+    )
+    return "\n".join(lines) + "\n"
+
+
 def _verify_audit_rows(
     rows: list[Any],
     *,
@@ -1850,10 +2935,12 @@ def metadata_store_status() -> dict[str, Any]:
         "credentials",
         "routes",
         "approval_requests",
+        "control_plane_approvals",
         "webauthn_credentials",
         "webauthn_challenges",
         "gmail_message_cache",
         "request_logs",
+        "rate_limit_counters",
     ]
     counts: dict[str, int] = {}
     with connect() as conn:

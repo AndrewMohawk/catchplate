@@ -225,6 +225,35 @@ def statement_for_image(
     }
 
 
+def image_refs_from_env() -> list[str]:
+    return [item.strip() for item in os.getenv("SERVERWARE_PRODUCTION_IMAGES", "").split(",") if item.strip()]
+
+
+def service_name_from_ref(ref: str) -> str:
+    name = ref.split("@", 1)[0].rstrip("/").split("/")[-1]
+    return name.replace(":", "-") or "production-image"
+
+
+def production_image_inventory(refs: list[str]) -> dict[str, dict[str, Any]]:
+    images: dict[str, dict[str, Any]] = {}
+    for index, ref in enumerate(refs):
+        if "@sha256:" not in ref:
+            raise ValueError(f"production image ref must be immutable and digest-pinned: {ref}")
+        digest = "sha256:" + ref.rsplit("@sha256:", 1)[1]
+        service = service_name_from_ref(ref)
+        if service in images:
+            service = f"{service}-{index + 1}"
+        images[service] = {
+            "image_id": digest,
+            "repo_tags": [],
+            "repo_digests": [ref],
+            "created": None,
+            "os": "linux",
+            "architecture": None,
+        }
+    return images
+
+
 def write_container_file(service: str, path: str, data: bytes) -> None:
     command = f"cat > {shlex.quote(path)}"
     subprocess.run(
@@ -248,6 +277,7 @@ def main() -> None:
     parser.add_argument("--signature-provider", default=os.getenv("SERVERWARE_IMAGE_SIGNATURE_PROVIDER", "dev-ed25519"))
     parser.add_argument("--image-sign-command", default=os.getenv("SERVERWARE_IMAGE_SIGN_COMMAND", ""))
     parser.add_argument("--image-verify-command", default=os.getenv("SERVERWARE_IMAGE_VERIFY_COMMAND", ""))
+    parser.add_argument("--production-image", action="append", default=[], help="Digest-pinned production image ref to sign instead of Compose image inventory.")
     parser.add_argument(
         "--require-sigstore-transparency",
         action="store_true",
@@ -260,7 +290,8 @@ def main() -> None:
     verify_release_provenance(document)
     provenance = document["provenance"]
     provenance_digest = document["provenance_digest"]
-    images = provenance.get("images") or {}
+    production_refs = args.production_image or image_refs_from_env()
+    images = production_image_inventory(production_refs) if production_refs else provenance.get("images") or {}
     if not images:
         raise ValueError("release provenance contains no image inventory")
 

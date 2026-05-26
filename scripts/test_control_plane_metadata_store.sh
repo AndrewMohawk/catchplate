@@ -34,10 +34,12 @@ SELECT json_build_object(
   'credentials', (SELECT COUNT(*) FROM credentials),
   'routes', (SELECT COUNT(*) FROM routes),
   'approval_requests', (SELECT COUNT(*) FROM approval_requests),
+  'control_plane_approvals', (SELECT COUNT(*) FROM control_plane_approvals),
   'webauthn_credentials', (SELECT COUNT(*) FROM webauthn_credentials),
   'webauthn_challenges', (SELECT COUNT(*) FROM webauthn_challenges),
   'gmail_message_cache', (SELECT COUNT(*) FROM gmail_message_cache),
-  'request_logs', (SELECT COUNT(*) FROM request_logs)
+  'request_logs', (SELECT COUNT(*) FROM request_logs),
+  'rate_limit_counters', (SELECT COUNT(*) FROM rate_limit_counters)
 )::text;
 """
 raw = subprocess.check_output(

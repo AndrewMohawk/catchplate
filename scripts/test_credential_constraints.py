@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -9,6 +11,19 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+tmpdir = tempfile.TemporaryDirectory()
+os.environ["SERVERWARE_DATA_DIR"] = tmpdir.name
+os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
+os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
+os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+for name in (
+    "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
+    "SERVERWARE_AUDIT_STORE_POSTGRES_DSN",
+    "SERVERWARE_GRANT_STORE_POSTGRES_DSN",
+):
+    os.environ.pop(name, None)
+
+from serverware import db
 from serverware.constraints import (
     evaluate_request_constraints,
     evaluate_response_constraints,
@@ -53,6 +68,7 @@ def request_decision(route_policy, item, operation: str, *, consume: bool = Fals
         credential_version=1,
         operation_fields={"operation": operation},
         consume_rate_limits=consume,
+        policy_hash="sha256:" + "1" * 64,
         rate_limits_only=consume,
     )
 
@@ -79,6 +95,7 @@ def schema_validation_available() -> bool:
 
 
 def main() -> None:
+    db.init_db()
     validate_schema = schema_validation_available()
     demo = compile_policy_bundle(demo_policy_bundle("cred-demo-bearer"), validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
@@ -94,6 +111,7 @@ def main() -> None:
         "credential_rate_limit_exceeded",
     )
 
+    db.clear_rate_limit_counters(("demo.x.tweet.one_per_day",))
     reset_local_constraint_state()
     tweet_with_media = flow("POST", "https://demo-upstream:8443/2/tweets", {"text": "ship it", "media": {"ids": ["1"]}})
     assert_denied(request_decision(tweet_route, tweet_with_media, "tweets.write"), "json_body_field_not_allowed")
@@ -134,4 +152,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        tmpdir.cleanup()

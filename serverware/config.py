@@ -8,6 +8,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATA_DIR = Path(os.getenv("SERVERWARE_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "serverware.sqlite3"
 MITMPROXY_CONF_DIR = DATA_DIR / "mitmproxy"
+CA_INSTALL_SESSIONS_PATH = Path(os.getenv("SERVERWARE_CA_INSTALL_SESSIONS", str(DATA_DIR / "ca-install-sessions.json")))
 MASTER_KEY_PATH = DATA_DIR / "master.key"
 KEY_RELEASE_STATE_PATH = Path(os.getenv("SERVERWARE_KEY_RELEASE_STATE", str(DATA_DIR / "key-release-state.json")))
 TEE_QUOTE_SIGNING_KEY_PATH = Path(os.getenv("SERVERWARE_TEE_QUOTE_SIGNING_KEY", str(DATA_DIR / "dev-tee-quote-ed25519.pem")))
@@ -17,9 +18,12 @@ TEE_QUOTE_COMMAND = os.getenv("SERVERWARE_TEE_QUOTE_COMMAND", "").strip()
 TEE_QUOTE_VERIFY_COMMAND = os.getenv("SERVERWARE_TEE_QUOTE_VERIFY_COMMAND", "").strip()
 TEE_PLATFORM = os.getenv("SERVERWARE_TEE_PLATFORM", "none-dev").strip()
 POLICY_BUNDLE_PATH = Path(os.getenv("SERVERWARE_POLICY_BUNDLE", str(DATA_DIR / "policy-bundle.json")))
+POLICY_CANARY_STATE_PATH = Path(os.getenv("SERVERWARE_POLICY_CANARY_STATE", str(DATA_DIR / "policy-canary-state.json")))
+POLICY_CANARY_BUNDLE_PATH = Path(os.getenv("SERVERWARE_POLICY_CANARY_BUNDLE", str(DATA_DIR / "policy-canary-bundle.json")))
 POLICY_SIGNING_KEY_PATH = Path(os.getenv("SERVERWARE_POLICY_SIGNING_KEY", str(DATA_DIR / "policy-signing-ed25519.pem")))
 POLICY_SIGNING_PUBLIC_KEY_PATH = Path(os.getenv("SERVERWARE_POLICY_SIGNING_PUBLIC_KEY", str(DATA_DIR / "policy-signing-ed25519.pub.pem")))
 ADMIN_TOKEN_PATH = DATA_DIR / "admin.token"
+RBAC_BINDINGS_PATH = Path(os.getenv("SERVERWARE_RBAC_BINDINGS", str(DATA_DIR / "rbac-bindings.json")))
 CREDENTIAL_GENERATIONS_PATH = DATA_DIR / "credential-generations.json"
 CREDENTIAL_LEASES_PATH = DATA_DIR / "credential-leases.json"
 RELEASE_PROVENANCE_PATH = Path(os.getenv("SERVERWARE_RELEASE_PROVENANCE", str(DATA_DIR / "release-provenance.json")))
@@ -36,9 +40,25 @@ PUBLIC_URL = os.getenv("SERVERWARE_PUBLIC_URL", f"http://localhost:{WEB_PORT}")
 ADMIN_USER_ID = os.getenv("SERVERWARE_ADMIN_USER", "user:admin")
 ADMIN_ROLES = tuple(
     role.strip()
-    for role in os.getenv("SERVERWARE_ADMIN_ROLES", "admin,approver,auditor,policy_author").split(",")
+    for role in os.getenv(
+        "SERVERWARE_ADMIN_ROLES",
+        "admin,approver,auditor,policy_author,policy_publisher,credential_owner",
+    ).split(",")
     if role.strip()
 )
+OIDC_ENABLED = os.getenv("SERVERWARE_OIDC_ENABLED", "0") == "1"
+OIDC_ISSUER = os.getenv("SERVERWARE_OIDC_ISSUER", "").strip()
+OIDC_AUDIENCE = os.getenv("SERVERWARE_OIDC_AUDIENCE", "").strip()
+OIDC_JWKS_JSON = os.getenv("SERVERWARE_OIDC_JWKS_JSON", "").strip()
+OIDC_JWKS_PATH = Path(os.getenv("SERVERWARE_OIDC_JWKS_PATH", str(DATA_DIR / "oidc-jwks.json")))
+OIDC_ROLE_CLAIM = os.getenv("SERVERWARE_OIDC_ROLE_CLAIM", "serverware_roles").strip() or "serverware_roles"
+OIDC_SUBJECT_CLAIM = os.getenv("SERVERWARE_OIDC_SUBJECT_CLAIM", "sub").strip() or "sub"
+OIDC_ALLOWED_ALGORITHMS = tuple(
+    item.strip()
+    for item in os.getenv("SERVERWARE_OIDC_ALLOWED_ALGORITHMS", "RS256,ES256,EdDSA").split(",")
+    if item.strip()
+)
+OIDC_LEEWAY_SECONDS = int(os.getenv("SERVERWARE_OIDC_LEEWAY_SECONDS", "60"))
 WEBAUTHN_RP_ID = os.getenv("SERVERWARE_WEBAUTHN_RP_ID", "localhost")
 WEBAUTHN_ORIGIN = os.getenv("SERVERWARE_WEBAUTHN_ORIGIN", PUBLIC_URL)
 WEBAUTHN_RP_NAME = os.getenv("SERVERWARE_WEBAUTHN_RP_NAME", "Serverware")
@@ -54,6 +74,32 @@ WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY_PATH = Path(
     os.getenv("SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY", str(DATA_DIR / "webauthn-trust-signing-ed25519.pub.pem"))
 )
 DEV_AUTHENTICATOR_ENABLED = os.getenv("SERVERWARE_DEV_AUTHENTICATOR", "0") == "1"
+CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED = os.getenv("SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED", "0") == "1"
+CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION = (
+    os.getenv("SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION", "0") == "1"
+)
+CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES = tuple(
+    item.strip()
+    for item in os.getenv("SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES", "").split(",")
+    if item.strip()
+)
+CONTROL_PLANE_TWO_PERSON_REQUIRED = os.getenv("SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED", "0") == "1"
+CONTROL_PLANE_TWO_PERSON_TTL_SECONDS = int(os.getenv("SERVERWARE_CONTROL_PLANE_TWO_PERSON_TTL_SECONDS", "300"))
+CONTROL_PLANE_TWO_PERSON_ACTIONS = tuple(
+    item.strip()
+    for item in os.getenv(
+        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS",
+        "credential.create,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
+    ).split(",")
+    if item.strip()
+)
+DIRECT_CA_DOWNLOAD_ENABLED = os.getenv("SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED", "1") == "1"
+CA_INSTALL_SESSION_TTL_SECONDS = int(os.getenv("SERVERWARE_CA_INSTALL_SESSION_TTL_SECONDS", "300"))
+POLICY_PUBLISH_DRY_RUN_REQUIRED = os.getenv("SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED", "0") == "1"
+POLICY_CANARY_REQUIRED = os.getenv("SERVERWARE_POLICY_CANARY_REQUIRED", "0") == "1"
+POLICY_CANARY_MIN_OBSERVATION_SECONDS = int(os.getenv("SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS", "0"))
+POLICY_CANARY_MIN_AUDIT_EVENTS = int(os.getenv("SERVERWARE_POLICY_CANARY_MIN_AUDIT_EVENTS", "0"))
+POLICY_CANARY_MAX_DENIALS = int(os.getenv("SERVERWARE_POLICY_CANARY_MAX_DENIALS", "0"))
 SECRET_LEASE_TTL_SECONDS = float(os.getenv("SERVERWARE_SECRET_LEASE_TTL_SECONDS", "5"))
 CREDENTIAL_GENERATION_POLL_SECONDS = float(os.getenv("SERVERWARE_CREDENTIAL_GENERATION_POLL_SECONDS", "0.25"))
 AUDIT_QUEUE_MAX = int(os.getenv("SERVERWARE_AUDIT_QUEUE_MAX", "10000"))

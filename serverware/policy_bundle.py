@@ -406,6 +406,9 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
         phase = constraint.get("phase", "request")
         if phase not in {"request", "response", "both"}:
             raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has invalid phase {phase}")
+        store = constraint.get("store", "local")
+        if store not in {"local", "shared"}:
+            raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has invalid store {store}")
         if constraint_type == "rateLimit":
             if int(constraint.get("max") or 0) < 1:
                 raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} must define max >= 1")
@@ -1038,15 +1041,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                 },
                 "constraints": [
                     {
-                        "id": "gmail-max-results",
-                        "type": "queryNumericBounds",
-                        "description": "Agents may not widen Gmail list pages beyond the configured recent-mail window.",
-                        "parameters": ["maxResults"],
-                        "min": 1,
-                        "max": 10,
-                        "integer": True,
-                    },
-                    {
                         "id": "gmail-list-response-30d",
                         "type": "responseDateWindow",
                         "phase": "response",
@@ -1102,7 +1096,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "description": "A principal can publish at most one tweet per day with this credential.",
                         "max": 1,
                         "windowSeconds": 86400,
-                        "store": "local",
+                        "store": "shared",
                         "key": {
                             "scope": ["principal", "credential", "route", "operation"],
                         },

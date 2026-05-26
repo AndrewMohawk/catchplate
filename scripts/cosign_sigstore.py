@@ -156,6 +156,9 @@ def transparency_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
                 ),
             )
         )
+    expected_log_id = os.getenv("SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()
+    if expected_log_id and log_id != expected_log_id:
+        raise SystemExit("cosign transparency log ID does not match SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID")
     return {
         "log_id": log_id,
         "entry_uuid": entry_uuid,

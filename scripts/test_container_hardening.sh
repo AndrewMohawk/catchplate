@@ -71,6 +71,19 @@ for service in services:
         raise AssertionError(f"{service}: expected seccomp filter mode 2, got {seccomp_mode!r}")
     if int(host.get("PidsLimit") or 0) <= 0:
         raise AssertionError(f"{service}: pids_limit is not set")
+    if int(host.get("Memory") or 0) <= 0:
+        raise AssertionError(f"{service}: memory limit is not set")
+    ulimits = {item.get("Name"): item for item in host.get("Ulimits") or []}
+    core_limit = ulimits.get("core")
+    if (
+        not core_limit
+        or int(core_limit.get("Soft", -1)) != 0
+        or int(core_limit.get("Hard", -1)) != 0
+    ):
+        raise AssertionError(f"{service}: core dump ulimit is not disabled")
+    core_runtime = command(["docker", "compose", "exec", "-T", service, "sh", "-c", "ulimit -c"])
+    if core_runtime != "0":
+        raise AssertionError(f"{service}: runtime core dump limit is not zero, got {core_runtime!r}")
     tmpfs = host.get("Tmpfs") or {}
     tmp_options = tmpfs.get("/tmp", "")
     for option in ("noexec", "nosuid", "nodev"):
@@ -113,6 +126,8 @@ print(
             "seccomp_profile": str(seccomp_profile),
             "seccomp_profile_sha256": seccomp_digest,
             "seccomp_syscall_probe": "pass",
+            "core_dumps": "disabled",
+            "memory_limits": "configured",
         },
         sort_keys=True,
     )

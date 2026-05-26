@@ -1,0 +1,126 @@
+services:
+  serverware:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - apparmor=serverware-docker
+    pids_limit: 256
+    mem_limit: 768m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    environment:
+      SERVERWARE_DATA_DIR: /data
+      SERVERWARE_RELEASE_CHANNEL: ${SERVERWARE_RELEASE_CHANNEL:?set production release channel}
+      SERVERWARE_PUBLIC_URL: ${SERVERWARE_PUBLIC_URL:?set public URL}
+      SERVERWARE_ADMIN_TOKEN: ${SERVERWARE_ADMIN_TOKEN:?set admin token}
+      SERVERWARE_OIDC_ENABLED: "1"
+      SERVERWARE_OIDC_ISSUER: ${SERVERWARE_OIDC_ISSUER:?set OIDC issuer}
+      SERVERWARE_OIDC_AUDIENCE: ${SERVERWARE_OIDC_AUDIENCE:?set OIDC audience}
+      SERVERWARE_OIDC_JWKS_JSON: ${SERVERWARE_OIDC_JWKS_JSON:?set pinned JWKS}
+      SERVERWARE_OIDC_ROLE_CLAIM: ${SERVERWARE_OIDC_ROLE_CLAIM:-serverware_roles}
+      SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED: "0"
+      SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED: "1"
+      SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED: "1"
+      SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED: "1"
+      SERVERWARE_POLICY_CANARY_REQUIRED: "1"
+      SERVERWARE_AUDIT_STORE_BACKEND: postgres
+      SERVERWARE_AUDIT_STORE_POSTGRES_DSN: ${SERVERWARE_AUDIT_STORE_POSTGRES_DSN:?set audit DSN}
+      SERVERWARE_METADATA_STORE_BACKEND: postgres
+      SERVERWARE_METADATA_STORE_POSTGRES_DSN: ${SERVERWARE_METADATA_STORE_POSTGRES_DSN:?set metadata DSN}
+      SERVERWARE_GRANT_STORE_BACKEND: postgres
+      SERVERWARE_GRANT_STORE_POSTGRES_DSN: ${SERVERWARE_GRANT_STORE_POSTGRES_DSN:?set grant DSN}
+      SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9090
+      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: ${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:?set data-plane token}
+      SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
+      SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
+      SERVERWARE_KEY_RELEASE_REQUIRED: "1"
+    ports:
+      - "3000:3000"
+      - "8080:8080"
+    volumes:
+      - serverware-data:/data
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+
+  audit-anchor:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - apparmor=serverware-docker
+    pids_limit: 128
+    mem_limit: 256m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    command: ["scripts/audit_anchor_sink.py"]
+    environment:
+      SERVERWARE_AUDIT_ANCHOR_TOKEN: ${SERVERWARE_AUDIT_ANCHOR_TOKEN:?set anchor token}
+      SERVERWARE_AUDIT_ANCHOR_PATH: /anchors/transparency-log.jsonl
+      SERVERWARE_TRANSPARENCY_LOG_SIGNING_KEY: /anchors/transparency-log-ed25519.pem
+      SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND: ${SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND:?set transparency checkpoint command}
+      SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED: "1"
+    volumes:
+      - serverware-audit-anchors:/anchors
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+
+  decision-gate-rs:
+    build:
+      context: .
+      dockerfile: data-plane/decision-gate-rs/Dockerfile.production
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - apparmor=serverware-docker
+    pids_limit: 256
+    mem_limit: 512m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    environment:
+      SERVERWARE_POLICY_BUNDLE: /data/policy-bundle.json
+      SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL: http://serverware:3000/attestation
+      SERVERWARE_CREDENTIAL_GENERATIONS: /data/credential-generations.json
+      SERVERWARE_CREDENTIAL_LEASES: /data/credential-leases.json
+      SERVERWARE_MITM_CA_CERT: /data/decision-gate-ca-cert.pem
+      SERVERWARE_MITM_CA_KEY: /data/decision-gate-ca-key.pem
+      SERVERWARE_CONTROL_PLANE_AUDIT_URL: http://serverware:3000/api/data-plane/audit
+      SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL: http://serverware:3000/api/data-plane/grants/consume
+      SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL: ${SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL:?set shared rate-limit URL}
+      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: ${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:?set data-plane token}
+      SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
+      SERVERWARE_DECISION_GATE_PORT: "9090"
+      SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
+      SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
+    ports:
+      - "9090:9090"
+    volumes:
+      - serverware-data:/data:ro
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=32m
+
+volumes:
+  serverware-data:
+  serverware-audit-anchors:

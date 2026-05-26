@@ -191,6 +191,7 @@ struct GateState {
     audit_url: Option<String>,
     audit_token: Option<String>,
     grant_consume_url: Option<String>,
+    rate_limit_consume_url: Option<String>,
     audit_queue: Mutex<VecDeque<AuditEvent>>,
     audit_queue_max: usize,
     audit_batch_max: usize,
@@ -2535,7 +2536,9 @@ fn constraint_payload(
         );
     }
     if let Some(status) = constraint.get("statusCode").and_then(Value::as_u64) {
-        extra.insert("status_code".to_string(), json!(status));
+        extra
+            .entry("status_code".to_string())
+            .or_insert(json!(status));
     }
     Value::Object(extra)
 }
@@ -2653,6 +2656,7 @@ fn enforce_rate_limit(
     principal_id: &str,
     credential_ref: Option<&str>,
     credential_version: u64,
+    policy_hash: &str,
     operation: &Value,
     consume: bool,
 ) -> Result<(), Value> {
@@ -2678,6 +2682,36 @@ fn enforce_rate_limit(
         credential_version,
         operation,
     );
+    let store = constraint
+        .get("store")
+        .and_then(Value::as_str)
+        .unwrap_or("local");
+    if store == "shared" {
+        return enforce_shared_rate_limit(
+            state,
+            constraint,
+            route,
+            principal_id,
+            credential_ref,
+            credential_version,
+            policy_hash,
+            operation,
+            consume,
+            &key,
+            max,
+            window_seconds,
+        );
+    }
+    if store != "local" {
+        let mut extra = Map::new();
+        extra.insert("store".to_string(), Value::String(store.to_string()));
+        return Err(constraint_payload(
+            constraint,
+            "constraint_invalid_rate_limit_store",
+            "rate limit constraint has an unsupported store",
+            extra,
+        ));
+    }
     let mut counters = state
         .constraint_rate_counters
         .lock()
@@ -2715,6 +2749,190 @@ fn enforce_rate_limit(
     }
     if consume {
         counter.count += 1;
+    }
+    Ok(())
+}
+
+fn enforce_shared_rate_limit(
+    state: &GateState,
+    constraint: &Value,
+    route: &Route,
+    principal_id: &str,
+    credential_ref: Option<&str>,
+    credential_version: u64,
+    policy_hash: &str,
+    operation: &Value,
+    consume: bool,
+    key: &str,
+    max: u64,
+    window_seconds: u64,
+) -> Result<(), Value> {
+    let mut unavailable = Map::new();
+    unavailable.insert("status_code".to_string(), json!(503));
+    unavailable.insert("store".to_string(), Value::String("shared".to_string()));
+    let Some(url) = state.rate_limit_consume_url.as_ref() else {
+        unavailable.insert(
+            "detail".to_string(),
+            Value::String("shared rate-limit consume URL is not configured".to_string()),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "shared_rate_limit_store_unavailable",
+            "shared rate-limit store is unavailable",
+            unavailable,
+        ));
+    };
+    let Some(token) = state.audit_token.as_ref() else {
+        unavailable.insert(
+            "detail".to_string(),
+            Value::String("data-plane token is not configured".to_string()),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "shared_rate_limit_store_unavailable",
+            "shared rate-limit store is unavailable",
+            unavailable,
+        ));
+    };
+    let body = serde_json::to_vec(&json!({
+        "counterKey": key,
+        "principalId": principal_id,
+        "routeId": route.id,
+        "credentialRef": credential_ref.unwrap_or_default(),
+        "credentialVersion": credential_version,
+        "policyHash": policy_hash,
+        "constraintId": constraint.get("id").and_then(Value::as_str).unwrap_or("unnamed"),
+        "operation": operation_name(operation),
+        "max": max,
+        "windowSeconds": window_seconds,
+        "consume": consume,
+        "actorId": "decision-gate-rs",
+    }))
+    .map_err(|err| {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(503));
+        extra.insert("store".to_string(), Value::String("shared".to_string()));
+        extra.insert(
+            "detail".to_string(),
+            Value::String(format!("serialize shared rate-limit request: {err}")),
+        );
+        constraint_payload(
+            constraint,
+            "shared_rate_limit_store_unavailable",
+            "shared rate-limit store is unavailable",
+            extra,
+        )
+    })?;
+    let response = state
+        .audit_client
+        .post(url)
+        .header("X-Serverware-Data-Plane-Token", token.as_str())
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .map_err(|err| {
+            let mut extra = Map::new();
+            extra.insert("status_code".to_string(), json!(503));
+            extra.insert("store".to_string(), Value::String("shared".to_string()));
+            extra.insert(
+                "detail".to_string(),
+                Value::String(format!("send shared rate-limit request: {err}")),
+            );
+            constraint_payload(
+                constraint,
+                "shared_rate_limit_store_unavailable",
+                "shared rate-limit store is unavailable",
+                extra,
+            )
+        })?;
+    let status = response.status();
+    let text = response.text().map_err(|err| {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(503));
+        extra.insert("store".to_string(), Value::String("shared".to_string()));
+        extra.insert(
+            "detail".to_string(),
+            Value::String(format!("read shared rate-limit response: {err}")),
+        );
+        constraint_payload(
+            constraint,
+            "shared_rate_limit_store_unavailable",
+            "shared rate-limit store is unavailable",
+            extra,
+        )
+    })?;
+    if !status.is_success() {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(503));
+        extra.insert("store".to_string(), Value::String("shared".to_string()));
+        extra.insert(
+            "detail".to_string(),
+            Value::String(format!(
+                "shared rate-limit endpoint returned {status}: {text}"
+            )),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "shared_rate_limit_store_unavailable",
+            "shared rate-limit store is unavailable",
+            extra,
+        ));
+    }
+    let value: Value = serde_json::from_str(&text).map_err(|err| {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(503));
+        extra.insert("store".to_string(), Value::String("shared".to_string()));
+        extra.insert(
+            "detail".to_string(),
+            Value::String(format!("parse shared rate-limit response: {err}: {text}")),
+        );
+        constraint_payload(
+            constraint,
+            "shared_rate_limit_store_unavailable",
+            "shared rate-limit store is unavailable",
+            extra,
+        )
+    })?;
+    if value.get("ok").and_then(Value::as_bool) != Some(true) {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(503));
+        extra.insert("store".to_string(), Value::String("shared".to_string()));
+        extra.insert(
+            "detail".to_string(),
+            Value::String(format!("shared rate-limit response was not ok: {value}")),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "shared_rate_limit_store_unavailable",
+            "shared rate-limit store is unavailable",
+            extra,
+        ));
+    }
+    if value.get("allowed").and_then(Value::as_bool) != Some(true) {
+        let mut extra = Map::new();
+        extra.insert("max".to_string(), json!(max));
+        extra.insert("windowSeconds".to_string(), json!(window_seconds));
+        extra.insert(
+            "retry_after_seconds".to_string(),
+            value
+                .get("retry_after_seconds")
+                .cloned()
+                .unwrap_or_else(|| json!(1)),
+        );
+        extra.insert(
+            "remaining".to_string(),
+            value.get("remaining").cloned().unwrap_or_else(|| json!(0)),
+        );
+        if let Some(count) = value.get("count").cloned() {
+            extra.insert("count".to_string(), count);
+        }
+        extra.insert("store".to_string(), Value::String("shared".to_string()));
+        return Err(constraint_payload(
+            constraint,
+            "credential_rate_limit_exceeded",
+            "credential use rate limit exceeded",
+            extra,
+        ));
     }
     Ok(())
 }
@@ -3373,6 +3591,7 @@ fn evaluate_request_constraints(
     principal_id: &str,
     credential_ref: Option<&str>,
     credential_version: u64,
+    policy_hash: &str,
     operation: &Value,
     consume_rate_limits: bool,
     rate_limits_only: bool,
@@ -3395,6 +3614,7 @@ fn evaluate_request_constraints(
                 principal_id,
                 credential_ref,
                 credential_version,
+                policy_hash,
                 operation,
                 consume_rate_limits,
             )?,
@@ -3683,6 +3903,7 @@ fn decide_internal(
         &principal.id,
         credential_ref.as_deref(),
         credential_version,
+        &snapshot.hash,
         &operation,
         false,
         false,
@@ -3796,6 +4017,7 @@ fn decide_internal(
             &principal.id,
             credential_ref.as_deref(),
             credential_version,
+            &snapshot.hash,
             &operation,
             true,
             true,
@@ -8393,6 +8615,7 @@ fn runtime_manifest(state: &GateState) -> Value {
         "routes":snapshot.routes.len(),
         "credential_lease_cache":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
         "jit_grant_store": if state.grant_consume_url.is_some() {"shared"} else {"local"},
+        "shared_rate_limit_store": state.rate_limit_consume_url.is_some(),
         "absolute_form_forwarder":true,
         "absolute_form_request_body_streaming":true,
         "connect_request_body_streaming":true,
@@ -8826,6 +9049,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>) {
                         "credential_generations":state.credential_generations.lock().expect("credential generation mutex poisoned").len(),
                         "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
                         "jit_grant_store": if state.grant_consume_url.is_some() {"shared"} else {"local"},
+                        "shared_rate_limit_store":state.rate_limit_consume_url.is_some(),
                         "leaf_config_cache":state.leaf_configs.lock().expect("leaf config cache mutex poisoned").len(),
                             "connect_preflight":true,
                             "connect_mitm_interceptor":state.mitm_authority.is_some(),
@@ -8933,6 +9157,16 @@ fn main() -> Result<(), String> {
                 .to_string(),
         );
     }
+    let rate_limit_consume_url = env::var("SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    if rate_limit_consume_url.is_some() && audit_token.is_none() {
+        return Err(
+            "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL requires SERVERWARE_DATA_PLANE_AUDIT_TOKEN"
+                .to_string(),
+        );
+    }
     let audit_queue_max = env::var("SERVERWARE_DATA_PLANE_AUDIT_QUEUE_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -8978,6 +9212,7 @@ fn main() -> Result<(), String> {
         audit_url,
         audit_token,
         grant_consume_url,
+        rate_limit_consume_url,
         audit_queue: Mutex::new(VecDeque::new()),
         audit_queue_max,
         audit_batch_max,

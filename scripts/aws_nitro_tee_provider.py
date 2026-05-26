@@ -548,7 +548,10 @@ def verify() -> None:
     claims = quote_doc.get("claims")
     if not isinstance(raw_b64, str) or not isinstance(claims, dict):
         raise SystemExit("Nitro quote missing raw attestation document or claims")
-    nitro = verify_nitro_document(b64d(raw_b64), claims)
+    raw = b64d(raw_b64)
+    nitro = verify_nitro_document(raw, claims)
+    nitro["raw_attestation_document_b64"] = raw_b64
+    nitro["raw_attestation_document_sha256"] = sha256_prefixed(raw)
     enriched_claims = json.loads(json.dumps(claims))
     enriched_claims["tee"] = nitro
     print(canonical_json({"ok": True, "provider": PROVIDER, "tee_platform": TEE_PLATFORM, "claims": enriched_claims, "nitro": nitro}))
@@ -633,6 +636,12 @@ def invoke_kms_release_command(command: str, request: dict[str, Any]) -> dict[st
     return response
 
 
+def redacted_release_tee(tee: dict[str, Any]) -> dict[str, Any]:
+    copied = json.loads(json.dumps(tee))
+    copied.pop("raw_attestation_document_b64", None)
+    return copied
+
+
 def release() -> None:
     payload = read_stdin()
     claims = payload.get("claims") or {}
@@ -652,6 +661,13 @@ def release() -> None:
     }
     if material not in allowed:
         raise SystemExit(f"material {material} is not allowed by Nitro release policy")
+    claim_materials = {
+        str(item)
+        for item in (claims.get("materials") or [])
+        if isinstance(item, str)
+    }
+    if material not in claim_materials:
+        raise SystemExit(f"material {material} is not authorized by verified Nitro claims")
     expected_field_checks(claims, expected)
     for index, expected_pcr in expected_pcrs().items():
         if (tee.get("pcrs") or {}).get(str(index)) != expected_pcr.hex():
@@ -684,7 +700,7 @@ def release() -> None:
                 "kms_command_required": kms_required,
                 "kms_request_digest": kms_request.get("request_digest") if kms_request else None,
                 "kms_release": kms_release,
-                "tee": tee,
+                "tee": redacted_release_tee(tee),
             }
         )
     )

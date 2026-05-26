@@ -81,7 +81,8 @@ assert_gmail_redaction(payload, "validated")
 
 status, payload = request("/gmail/v1/users/me/messages?oldInternalDate=1")
 assert status == 502, payload
-assert payload["error"] == "gmail_response_too_old", payload
+assert payload["error"] == "response_date_window_exceeded", payload
+assert payload["constraint_id"] == "gmail-list-response-30d", payload
 
 print(json.dumps({"ok": True, "response_validation": "pass"}, sort_keys=True))
 PY

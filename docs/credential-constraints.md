@@ -10,7 +10,7 @@ The route-level `constraints` array is the shared customization layer. Provider 
   "type": "rateLimit",
   "max": 1,
   "windowSeconds": 86400,
-  "store": "local",
+  "store": "shared",
   "key": {"scope": ["principal", "credential", "route", "operation"]}
 }
 ```
@@ -32,7 +32,7 @@ If any step fails, the request or response is blocked. Unknown routes are never 
 
 `operationPolicy`: allow or deny normalized adapter operations. Use this to block writes for one app while allowing reads, or to make a broad route safe even if SDKs choose unexpected endpoints.
 
-`rateLimit`: fixed-window credential use limits keyed by principal, credential, route, operation, credential version, or selected operation fields. Examples: one tweet per day, five Slack posts per hour, ten object-store writes per hour.
+`rateLimit`: fixed-window credential use limits keyed by principal, credential, route, operation, credential version, or selected operation fields. Examples: one tweet per day, five Slack posts per hour, ten object-store writes per hour. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas.
 
 `queryDateWindow`: bounds query parameters such as `start_time`, `end_time`, or `since` to a maximum lookback. Formats supported: RFC3339, date, epoch seconds, and epoch milliseconds.
 
@@ -56,7 +56,7 @@ The demo policy includes:
 
 ## Production Store Semantics
 
-`rateLimit.store` is part of the schema. This Docker implementation enforces `local` counters in the data-plane process and Python proxy path. For multi-replica production, policies that need global quotas should use `store: "shared"` and the production readiness gate should reject local-only quota policies. The key design is already explicit, so a shared Redis/Postgres counter can preserve the same policy semantics without changing agent code or SDKs.
+`rateLimit.store` is enforced. `local` counters are process-local and exist for development throttles or single-instance deployments. `shared` counters use the metadata store, acquire a row lock or SQLite immediate transaction, and update by `counter_key` before credential injection. The Rust gate calls `POST /api/data-plane/rate-limits/consume` when `SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL` is configured; the Python proxy calls the same store directly. If a shared store is requested but unavailable, credential release fails closed with `shared_rate_limit_store_unavailable`.
 
 ## Response Validation
 

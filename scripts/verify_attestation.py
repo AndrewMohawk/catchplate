@@ -6,7 +6,6 @@ import base64
 import hashlib
 import json
 import os
-import secrets
 import shlex
 import subprocess
 import sys
@@ -28,20 +27,36 @@ def b64d(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def request_json(url: str, admin_token: str | None = None) -> dict[str, Any]:
-    headers = {}
+def request_json(
+    url: str,
+    admin_token: str | None = None,
+    *,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    request_headers = dict(headers or {})
     if admin_token:
-        headers["X-Serverware-Admin-Token"] = admin_token
-    request = urllib.request.Request(url, headers=headers)
+        request_headers["X-Serverware-Admin-Token"] = admin_token
+    data = None
+    if body is not None:
+        data = canonical_json(body).encode("utf-8")
+        request_headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.loads(response.read())
 
 
-def request_bytes(url: str, admin_token: str | None = None) -> bytes:
-    headers = {}
+def request_bytes(
+    url: str,
+    admin_token: str | None = None,
+    *,
+    headers: dict[str, str] | None = None,
+) -> bytes:
+    request_headers = dict(headers or {})
     if admin_token:
-        headers["X-Serverware-Admin-Token"] = admin_token
-    request = urllib.request.Request(url, headers=headers)
+        request_headers["X-Serverware-Admin-Token"] = admin_token
+    request = urllib.request.Request(url, headers=request_headers)
     with urllib.request.urlopen(request, timeout=10) as response:
         return response.read()
 
@@ -180,7 +195,20 @@ def main() -> None:
         raise SystemExit("--admin-token or SERVERWARE_ADMIN_TOKEN is required")
 
     base = args.base.rstrip("/")
-    nonce = secrets.token_urlsafe(24)
+    install_session_response = request_json(f"{base}/api/ca/install-sessions", args.admin_token, method="POST", body={})
+    install_session = install_session_response.get("session")
+    if not isinstance(install_session, dict):
+        raise ValueError("CA install session endpoint did not return a session")
+    nonce = install_session.get("nonce")
+    if not isinstance(nonce, str) or not nonce:
+        raise ValueError("CA install session did not return a nonce")
+    install_token = install_session.get("token")
+    if not isinstance(install_token, str) or not install_token:
+        raise ValueError("CA install session did not return a token")
+    download_url = install_session.get("downloadUrl")
+    if not isinstance(download_url, str) or not download_url.startswith("/"):
+        raise ValueError("CA install session did not return a relative downloadUrl")
+
     attestation = request_json(f"{base}/attestation?nonce={nonce}")
     if attestation.get("nonce") != nonce:
         raise ValueError("attestation nonce mismatch")
@@ -214,7 +242,11 @@ def main() -> None:
     if (bundle.get("metadata") or {}).get("signature") != attestation.get("policy_bundle_signature"):
         raise ValueError("attestation policy signature mismatch")
 
-    ca_pem = request_bytes(f"{base}/ca.pem", args.admin_token)
+    ca_pem = request_bytes(
+        f"{base}{download_url}",
+        args.admin_token,
+        headers={str(install_session.get("tokenHeader") or "X-Serverware-CA-Install-Token"): install_token},
+    )
     ca_spki = spki_hash_from_cert_pem(ca_pem)
     if ca_spki != attestation.get("ca_intermediate_spki_sha256"):
         raise ValueError("CA SPKI hash mismatch")
@@ -236,6 +268,8 @@ def main() -> None:
                 "source_tree_digest": attestation.get("source_tree_digest"),
                 "response_signing_key_id": attestation.get("response_signing_key_id"),
                 "rollback_epoch": attestation.get("rollback_epoch"),
+                "ca_install_session_id": install_session.get("id"),
+                "ca_install_method": install_session.get("installMethod"),
                 "ca_out": str(ca_out),
             },
             indent=2,

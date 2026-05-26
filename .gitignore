@@ -20,4 +20,7 @@ data-plane/decision-gate-rs/target/
 .env
 .env.*
 !.env.example
+ops/production-readiness.env
+ops/*.local.env
+ops/aws-kms-materials.spec.json
 *.log

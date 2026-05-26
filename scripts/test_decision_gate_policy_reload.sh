@@ -27,12 +27,12 @@ payload = {
 }
 health = request_json("/healthz")
 decision = request_json("/v1/decide", payload)
-assert health["routes"] == 12, health
+assert int(health["routes"]) > 0, health
 assert decision["action"] == "allow" and decision["route_id"] == "demo.echo", decision
 print(json.dumps({"ok": True, "stage": "initial", "policy_hash": health["policy_hash"]}, sort_keys=True))
 PY
 
-docker compose exec -T serverware python - <<'PY'
+reduced_hash="$(docker compose exec -T serverware python - <<'PY'
 import os
 import time
 
@@ -47,14 +47,16 @@ now = time.time()
 os.utime(POLICY_BUNDLE_PATH, (now, now))
 print(snapshot.hash)
 PY
+)"
 
-python3 - "$GATE" <<'PY'
+python3 - "$GATE" "$reduced_hash" <<'PY'
 import json
 import sys
 import time
 import urllib.request
 
 gate = sys.argv[1].rstrip("/")
+expected_hash = sys.argv[2]
 
 
 def request_json(path: str, payload: dict | None = None) -> dict:
@@ -73,7 +75,7 @@ payload = {
 deadline = time.time() + 15
 while time.time() < deadline:
     health = request_json("/healthz")
-    if health["routes"] == 11:
+    if health["policy_hash"] == expected_hash:
         break
     time.sleep(0.25)
 else:
@@ -108,7 +110,7 @@ now = time.time()
 os.utime(POLICY_BUNDLE_PATH, (now, now))
 PY
 
-python3 - "$GATE" "$failed_before" "$BASE" <<'PY'
+python3 - "$GATE" "$failed_before" "$BASE" "$reduced_hash" <<'PY'
 import json
 import sys
 import time
@@ -117,6 +119,7 @@ import urllib.request
 gate = sys.argv[1].rstrip("/")
 failed_before = int(sys.argv[2])
 base = sys.argv[3].rstrip("/")
+expected_hash = sys.argv[4]
 
 
 def request_json(path: str, payload: dict | None = None) -> dict:
@@ -142,7 +145,7 @@ while time.time() < deadline:
 else:
     raise SystemExit("Rust gate did not observe invalid policy reload")
 
-assert health["routes"] == 11, health
+assert health["policy_hash"] == expected_hash, health
 decision = request_json("/v1/decide", payload)
 assert decision["action"] == "deny", decision
 assert decision["payload"]["error"] == "unknown_route_denied", decision
@@ -153,7 +156,7 @@ assert control_health["policy_ready"] is False, control_health
 print(json.dumps({"ok": True, "stage": "invalid-policy-retained-last-good", "failed": failed}, sort_keys=True))
 PY
 
-docker compose exec -T serverware python - <<'PY'
+restored_hash="$(docker compose exec -T serverware python - <<'PY'
 import os
 import time
 
@@ -167,14 +170,16 @@ now = time.time()
 os.utime(POLICY_BUNDLE_PATH, (now, now))
 print(snapshot.hash)
 PY
+)"
 
-python3 - "$GATE" <<'PY'
+python3 - "$GATE" "$restored_hash" <<'PY'
 import json
 import sys
 import time
 import urllib.request
 
 gate = sys.argv[1].rstrip("/")
+expected_hash = sys.argv[2]
 
 
 def request_json(path: str, payload: dict | None = None) -> dict:
@@ -193,7 +198,7 @@ payload = {
 deadline = time.time() + 15
 while time.time() < deadline:
     health = request_json("/healthz")
-    if health["routes"] == 12:
+    if health["policy_hash"] == expected_hash:
         break
     time.sleep(0.25)
 else:

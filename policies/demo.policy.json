@@ -508,17 +508,6 @@
       "credentialRef": "cred-demo-bearer",
       "constraints": [
         {
-          "description": "Agents may not widen Gmail list pages beyond the configured recent-mail window.",
-          "id": "gmail-max-results",
-          "integer": true,
-          "max": 10,
-          "min": 1,
-          "parameters": [
-            "maxResults"
-          ],
-          "type": "queryNumericBounds"
-        },
-        {
           "dateFields": [
             "internalDate"
           ],
@@ -597,7 +586,7 @@
             ]
           },
           "max": 1,
-          "store": "local",
+          "store": "shared",
           "type": "rateLimit",
           "windowSeconds": 86400
         },

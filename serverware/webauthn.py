@@ -562,6 +562,48 @@ def approval_options(approval: dict[str, Any], user_id: str, authn_policy: dict[
     }
 
 
+def control_plane_mutation_options(
+    *,
+    user_id: str,
+    action: str,
+    resource_id: str | None,
+    payload_digest: str,
+    authn_policy: dict[str, Any],
+) -> dict[str, Any]:
+    payload = {
+        "v": 1,
+        "type": "serverware.control_plane_mutation",
+        "user_id": user_id,
+        "action": action,
+        "resource_id": resource_id,
+        "payload_digest": payload_digest,
+        "nonce": b64u(os.urandom(24)),
+    }
+    challenge = b64u(_sha256(canonical_json(payload).encode("utf-8")))
+    challenge_row = db.create_webauthn_challenge(
+        challenge=challenge,
+        challenge_type="control-plane-mutation",
+        user_id=user_id,
+        payload=payload,
+        ttl_seconds=120,
+    )
+    credentials = [_credential_descriptor(item) for item in db.list_webauthn_credentials(user_id)]
+    return {
+        "publicKey": {
+            "challenge": challenge,
+            "rpId": WEBAUTHN_RP_ID,
+            "allowCredentials": credentials,
+            "timeout": 120000,
+            "userVerification": authn_policy.get("userVerification", "required"),
+        },
+        "serverware": {
+            "challenge_id": challenge_row["id"],
+            "payload": payload,
+            "payload_digest": "sha256:" + hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest(),
+        },
+    }
+
+
 def _allowed_authenticator(credential: dict[str, Any], authn_policy: dict[str, Any]) -> None:
     allowed = set(authn_policy.get("allowedAuthenticatorClasses") or [])
     credential_classes = {credential["authenticator_class"]}
@@ -571,6 +613,23 @@ def _allowed_authenticator(credential: dict[str, Any], authn_policy: dict[str, A
         raise WebAuthnError(f"authenticator class {credential['authenticator_class']} is not allowed")
     if authn_policy.get("requireHardwareAttestation") and not credential.get("attestation_trusted"):
         raise WebAuthnError("trusted hardware attestation required")
+
+
+def _verify_assertion_signature(credential: dict[str, Any], response: dict[str, Any], authn_policy: dict[str, Any]) -> dict[str, Any]:
+    client_data, client_data_raw = _parse_client_data(response["clientDataJSON"], "webauthn.get")
+    auth_data = b64ud(response["authenticatorData"])
+    parsed = _parse_authenticator_data(auth_data)
+    if authn_policy.get("userVerification") == "required" and not parsed["user_verified"]:
+        raise WebAuthnError("user verification required")
+    public_key = _public_key_from_cose(b64ud(credential["public_key_cose"]))
+    signed = auth_data + _sha256(client_data_raw)
+    try:
+        public_key.verify(b64ud(response["signature"]), signed, ec.ECDSA(hashes.SHA256()))
+    except InvalidSignature as exc:
+        raise WebAuthnError("WebAuthn assertion signature invalid") from exc
+    if parsed["sign_count"] and credential["sign_count"] and parsed["sign_count"] <= credential["sign_count"]:
+        raise WebAuthnError("authenticator sign counter did not advance")
+    return {"client_data": client_data, "parsed": parsed}
 
 
 def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_policy: dict[str, Any], assertion: dict[str, Any]) -> dict[str, Any]:
@@ -583,7 +642,9 @@ def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_poli
     _allowed_authenticator(credential, authn_policy)
 
     response = assertion.get("response") or {}
-    client_data, client_data_raw = _parse_client_data(response["clientDataJSON"], "webauthn.get")
+    verified = _verify_assertion_signature(credential, response, authn_policy)
+    client_data = verified["client_data"]
+    parsed = verified["parsed"]
     challenge = db.get_unused_webauthn_challenge(client_data["challenge"])
     if not challenge or challenge["challenge_type"] != "approval" or challenge["approval_request_id"] != approval["id"]:
         raise WebAuthnError("approval challenge not found or expired")
@@ -617,18 +678,6 @@ def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_poli
     if payload.get("redacted_display_digest") != expected_display_digest:
         raise WebAuthnError("approval challenge redacted_display_digest mismatch")
 
-    auth_data = b64ud(response["authenticatorData"])
-    parsed = _parse_authenticator_data(auth_data)
-    if authn_policy.get("userVerification") == "required" and not parsed["user_verified"]:
-        raise WebAuthnError("user verification required")
-    public_key = _public_key_from_cose(b64ud(credential["public_key_cose"]))
-    signed = auth_data + _sha256(client_data_raw)
-    try:
-        public_key.verify(b64ud(response["signature"]), signed, ec.ECDSA(hashes.SHA256()))
-    except InvalidSignature as exc:
-        raise WebAuthnError("WebAuthn assertion signature invalid") from exc
-    if parsed["sign_count"] and credential["sign_count"] and parsed["sign_count"] <= credential["sign_count"]:
-        raise WebAuthnError("authenticator sign counter did not advance")
     db.update_webauthn_sign_count(credential_id, parsed["sign_count"])
     db.mark_webauthn_challenge_used(challenge["id"])
     return {
@@ -644,6 +693,63 @@ def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_poli
         "user_verified": parsed["user_verified"],
         "sign_count": parsed["sign_count"],
         "challenge_id": challenge["id"],
+    }
+
+
+def verify_control_plane_mutation_assertion(
+    *,
+    user_id: str,
+    action: str,
+    resource_id: str | None,
+    payload_digest: str,
+    authn_policy: dict[str, Any],
+    assertion: dict[str, Any],
+) -> dict[str, Any]:
+    credential_id = assertion.get("id") or assertion.get("rawId")
+    credential = db.get_webauthn_credential(credential_id)
+    if not credential:
+        raise WebAuthnError("registered WebAuthn credential not found")
+    if credential["user_id"] != user_id:
+        raise WebAuthnError("WebAuthn credential belongs to a different user")
+    _allowed_authenticator(credential, authn_policy)
+
+    response = assertion.get("response") or {}
+    verified = _verify_assertion_signature(credential, response, authn_policy)
+    client_data = verified["client_data"]
+    parsed = verified["parsed"]
+    challenge = db.get_unused_webauthn_challenge(client_data["challenge"])
+    if not challenge or challenge["challenge_type"] != "control-plane-mutation" or challenge["user_id"] != user_id:
+        raise WebAuthnError("control-plane mutation challenge not found or expired")
+    payload = challenge["payload"]
+    expected = {
+        "type": "serverware.control_plane_mutation",
+        "user_id": user_id,
+        "action": action,
+        "resource_id": resource_id,
+        "payload_digest": payload_digest,
+    }
+    for field, expected_value in expected.items():
+        if payload.get(field) != expected_value:
+            raise WebAuthnError(f"control-plane mutation challenge {field} mismatch")
+
+    db.update_webauthn_sign_count(credential_id, parsed["sign_count"])
+    db.mark_webauthn_challenge_used(challenge["id"])
+    return {
+        "method": "webauthn",
+        "user_id": user_id,
+        "credential_id": credential_id,
+        "credential_record_id": credential["id"],
+        "authenticator_class": credential["authenticator_class"],
+        "aaguid": credential.get("aaguid"),
+        "attestation_trusted": bool(credential.get("attestation_trusted")),
+        "attestation_root_sha256": credential.get("attestation_root_sha256"),
+        "user_present": parsed["user_present"],
+        "user_verified": parsed["user_verified"],
+        "sign_count": parsed["sign_count"],
+        "challenge_id": challenge["id"],
+        "control_plane_action": action,
+        "resource_id": resource_id,
+        "payload_digest": payload_digest,
     }
 
 

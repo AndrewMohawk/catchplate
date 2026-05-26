@@ -3,10 +3,25 @@
   "$id": "https://serverware.local/schemas/adapters/x.v2.schema.json",
   "title": "Serverware X v2 adapter config",
   "type": "object",
-  "required": ["mode", "blockWrites", "allowedReadOperations"],
+  "required": ["mode", "blockWrites"],
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {"properties": {"mode": {"enum": ["readOnly", "recentSearchOnly"]}}, "required": ["mode"]},
+      "then": {
+        "required": ["allowedReadOperations"],
+        "properties": {"blockWrites": {"const": true}}
+      }
+    },
+    {
+      "if": {"properties": {"mode": {"const": "controlledWrite"}}, "required": ["mode"]},
+      "then": {
+        "properties": {"blockWrites": {"const": false}}
+      }
+    }
+  ],
   "properties": {
-    "mode": {"enum": ["readOnly"]},
+    "mode": {"enum": ["readOnly", "recentSearchOnly", "controlledWrite"]},
     "blockWrites": {"type": "boolean"},
     "appIds": {"type": "array", "items": {"type": "string"}},
     "allowedReadOperations": {

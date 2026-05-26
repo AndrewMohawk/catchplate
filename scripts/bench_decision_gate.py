@@ -177,10 +177,10 @@ def main() -> None:
             "gmail_message_age_not_proven",
         )
         assert_decision(
-            "x write blocked",
+            "x write missing body denied",
             decide(args.gate, {**base_payload, "method": "POST", "url": "https://demo-upstream:8443/2/tweets"}),
             "deny",
-            "x_write_blocked",
+            "json_body_missing",
         )
         assert_decision(
             "npm publish missing fields",

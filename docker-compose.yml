@@ -9,6 +9,11 @@ services:
       - no-new-privileges:true
       - seccomp=./security/seccomp/serverware-deny-dangerous.json
     pids_limit: 256
+    mem_limit: 768m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     environment:
       SERVERWARE_DATA_DIR: /data
       SERVERWARE_PUBLIC_URL: http://localhost:3000
@@ -32,7 +37,7 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:29294553bd661e075ef21482c965d80f4f634fef59f55f2c98c363debe408506
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:14d93f989b83d731f3ff36d6e96d01e27259d0f5d0537cbf88dae405b8f4ef88
     ports:
       - "3000:3000"
       - "8080:8080"
@@ -61,6 +66,11 @@ services:
       - no-new-privileges:true
       - seccomp=./security/seccomp/serverware-deny-dangerous.json
     pids_limit: 128
+    mem_limit: 256m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     command: ["python", "scripts/audit_anchor_sink.py"]
     environment:
       SERVERWARE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
@@ -93,6 +103,11 @@ services:
       - no-new-privileges:true
       - seccomp=./security/seccomp/serverware-deny-dangerous.json
     pids_limit: 128
+    mem_limit: 512m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     environment:
       POSTGRES_DB: serverware
       POSTGRES_USER: serverware
@@ -121,6 +136,11 @@ services:
       - no-new-privileges:true
       - seccomp=./security/seccomp/serverware-deny-dangerous.json
     pids_limit: 128
+    mem_limit: 256m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     command: ["python", "scripts/demo_upstream.py"]
     expose:
       - "8443"
@@ -141,6 +161,11 @@ services:
       - no-new-privileges:true
       - seccomp=./security/seccomp/serverware-deny-dangerous.json
     pids_limit: 256
+    mem_limit: 512m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
     environment:
       SERVERWARE_POLICY_BUNDLE: /data/policy-bundle.json
       SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL: http://serverware:3000/attestation
@@ -153,6 +178,7 @@ services:
       SERVERWARE_POLICY_POLL_SECONDS: "0.25"
       SERVERWARE_CONTROL_PLANE_AUDIT_URL: http://serverware:3000/api/data-plane/audit
       SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL: http://serverware:3000/api/data-plane/grants/consume
+      SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL: http://serverware:3000/api/data-plane/rate-limits/consume
       SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-data-plane-audit-token
       SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
       SERVERWARE_DECISION_GATE_PORT: "9090"

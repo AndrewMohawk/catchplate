@@ -557,6 +557,10 @@ class XV2Adapter(ApiAdapter):
             )
         return PolicyDecision(allowed=True)
 
+    def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
+        operation = self._operation(flow)
+        return {"operation": operation or ""}
+
 
 class NpmRegistryAdapter(ApiAdapter):
     id = "npm.registry"

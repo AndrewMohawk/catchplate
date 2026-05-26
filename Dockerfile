@@ -22,6 +22,8 @@ COPY serverware ./serverware
 COPY scripts ./scripts
 COPY schemas ./schemas
 COPY policies ./policies
+COPY security ./security
+COPY docker-compose.apparmor.yml ./docker-compose.apparmor.yml
 
 EXPOSE 3000 8080 8443
 

@@ -73,6 +73,8 @@ assert data["policy_hash"].startswith("sha256:"), data
 assert data["policy_signing_key_id"].startswith("sha256:"), data
 assert data["ca_intermediate_spki_sha256"].startswith("sha256:"), data
 assert data["data_plane_binary_digest"].startswith("sha256:"), data
+assert data["ca_install_session_id"], data
+assert data["ca_install_method"] == "verifier-mediated-attestation", data
 assert data["ca_out"] == "/tmp/serverware-verified-ca.pem", data
 assert data["host_ca_out"] == sys.argv[2], data
 PY

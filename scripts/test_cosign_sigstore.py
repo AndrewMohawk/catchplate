@@ -110,6 +110,14 @@ def main() -> None:
     verified = run_adapter("verify", verify_request(sign_payload, signature_response), env)
     if verified.get("ok") is not True or verified.get("verified_transparency") is not True:
         raise AssertionError(f"cosign verification failed: {verified}")
+    pinned_env = dict(env)
+    pinned_env["SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"] = transparency["log_id"]
+    pinned_signature = run_adapter("sign", sign_payload, pinned_env)
+    if (pinned_signature.get("transparency") or {}).get("log_id") != transparency["log_id"]:
+        raise AssertionError(f"cosign adapter did not preserve pinned Rekor log ID: {pinned_signature}")
+    wrong_rekor_env = dict(env)
+    wrong_rekor_env["SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"] = "sha256:" + "0" * 64
+    expect_failure("sign", sign_payload, wrong_rekor_env, "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID")
 
     tampered_payload = verify_request(sign_payload, signature_response)
     tampered_payload["statement"] = dict(tampered_payload["statement"])

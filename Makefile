@@ -1,4 +1,24 @@
-.PHONY: up down logs e2e bench bench-gate-rs release-provenance image-signatures install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-transparency-checkpoint verify-production-config verify-production-readiness verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs release-provenance image-signatures build-production-images publish-production-images prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+
+PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
+PRODUCTION_READINESS_CLAIMS_ARGS ?=
+PRODUCTION_READINESS_OUT ?= .tmp/production-readiness.json
+PRODUCTION_READINESS_CONFIG_OUT ?= .tmp/production-readiness-config.json
+PRODUCTION_READINESS_ENV ?= ops/production-readiness.env
+PRODUCTION_COMPLETION_PROOF_OUT ?= .tmp/serverware-completion-proof.json
+NITRO_KMS_EVIDENCE_OUT ?= .tmp/nitro-kms-evidence.json
+PRODUCTION_IMAGES_BUILD_FILE ?= .tmp/production-images-build.json
+PRODUCTION_IMAGES_PUBLISHED_FILE ?= .tmp/production-images-published.json
+PRODUCTION_IMAGES_ENV_OUT ?= .tmp/production-images.env
+PRODUCTION_IMAGE_REGISTRY_PREFIX ?=
+PRODUCTION_IMAGE_TAG ?= production-candidate
+AWS_KMS_MATERIALS_SPEC ?= ops/aws-kms-materials.spec.json
+AWS_KMS_MATERIALS_OUT ?= .tmp/kms-materials.json
+RELEASE_PROVENANCE_SUMMARY_FILE ?= .tmp/release-provenance-summary.json
+RELEASE_PROVENANCE_FILE ?= .tmp/release-provenance.json
+IMAGE_SIGNATURES_SUMMARY_FILE ?= .tmp/image-signatures-summary.json
+IMAGE_SIGNATURES_FILE ?= .tmp/image-signatures.json
+DECISION_GATE_BENCH_FILE ?= .tmp/decision-gate-rs-bench.json
 
 up:
 	docker compose up -d --build serverware demo-upstream audit-anchor
@@ -61,11 +81,30 @@ bench-gate-rs:
 		./scripts/test_decision_gate_audit.sh
 		./scripts/test_control_plane_audit_store.sh
 		./scripts/test_control_plane_metadata_store.sh
+		docker compose exec -T serverware python scripts/test_ca_install_sessions.py
+		docker compose exec -T serverware python scripts/test_control_plane_csrf.py
+		docker compose exec -T serverware python scripts/test_control_plane_oidc.py
+		docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
+		docker compose exec -T serverware python scripts/test_control_plane_two_person.py
+		docker compose exec -T serverware python scripts/test_control_plane_rbac_audit.py
+		docker compose exec -T serverware python scripts/test_break_glass_grants.py
+		docker compose exec -T serverware python scripts/test_approval_denial_reason.py
+		docker compose exec -T serverware python scripts/test_approval_review.py
+		docker compose exec -T serverware python scripts/test_policy_publish_workflow.py
+		docker compose exec -T serverware python scripts/test_policy_canary_workflow.py
+		docker compose exec -T serverware python scripts/test_audit_search.py
+		docker compose exec -T serverware python scripts/test_audit_export.py
+		python3 scripts/test_agent_enrollment.py
 		python3 scripts/test_transparency_checkpoint.py
+		python3 scripts/test_nitro_nsm_attest.py
+		python3 scripts/test_aws_kms_recipient_release.py
+		python3 scripts/test_prepare_aws_kms_materials.py
+		python3 scripts/test_production_readiness_claims.py
 		python3 scripts/test_production_readiness.py
 		./scripts/test_audit_anchor.sh
 	python3 scripts/bench_decision_gate.py --self-test > .tmp/decision-gate-rs-bench.json
 	cat .tmp/decision-gate-rs-bench.json
+	./scripts/test_decision_gate_shared_rate_limits.sh
 	./scripts/generate_release_provenance.py > .tmp/release-provenance-summary.json
 	cat .tmp/release-provenance-summary.json
 	SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command \
@@ -93,6 +132,24 @@ image-signatures:
 	SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1 \
 	python3 scripts/sign_release_images.py
 
+build-production-images:
+	python3 scripts/build_production_images.py --out "$(PRODUCTION_IMAGES_BUILD_FILE)"
+
+publish-production-images:
+	@if [ -z "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" ]; then echo "PRODUCTION_IMAGE_REGISTRY_PREFIX is required, for example registry.example/serverware" >&2; exit 2; fi
+	python3 scripts/publish_production_images.py \
+		--build-file "$(PRODUCTION_IMAGES_BUILD_FILE)" \
+		--registry-prefix "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" \
+		--tag "$(PRODUCTION_IMAGE_TAG)" \
+		--out "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" \
+		--env-out "$(PRODUCTION_IMAGES_ENV_OUT)"
+
+prepare-aws-kms-materials:
+	python3 scripts/prepare_aws_kms_materials.py \
+		--spec "$(AWS_KMS_MATERIALS_SPEC)" \
+		--out "$(AWS_KMS_MATERIALS_OUT)" \
+		--allow-overwrite
+
 install-apparmor:
 	./scripts/install_apparmor_profile.sh
 
@@ -105,14 +162,136 @@ verify-apparmor-runtime:
 verify-cosign-sigstore:
 	python3 scripts/test_cosign_sigstore.py
 
+verify-release-image-signing:
+	python3 scripts/test_sign_release_images.py
+
+verify-production-image-publish:
+	python3 scripts/test_publish_production_images.py
+
 verify-transparency-checkpoint:
 	python3 scripts/test_transparency_checkpoint.py
+
+verify-nitro-nsm-attest:
+	python3 scripts/test_nitro_nsm_attest.py
+
+verify-aws-kms-recipient-release:
+	python3 scripts/test_aws_kms_recipient_release.py
+
+verify-prepare-aws-kms-materials:
+	python3 scripts/test_prepare_aws_kms_materials.py
+
+verify-ca-install-sessions:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_ca_install_sessions.py
+
+verify-control-plane-csrf:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_control_plane_csrf.py
+
+verify-control-plane-oidc:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_control_plane_oidc.py
+
+verify-control-plane-mutation-mfa:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
+
+verify-control-plane-two-person:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_control_plane_two_person.py
+
+verify-control-plane-rbac-audit:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_control_plane_rbac_audit.py
+
+verify-break-glass-grants:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_break_glass_grants.py
+
+verify-approval-denial-reason:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_approval_denial_reason.py
+
+verify-approval-review:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_approval_review.py
+
+verify-policy-publish-workflow:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_policy_publish_workflow.py
+
+verify-policy-canary-workflow:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_policy_canary_workflow.py
+
+verify-audit-search:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_audit_search.py
+
+verify-audit-export:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_audit_export.py
+
+verify-agent-enrollment:
+	python3 scripts/test_agent_enrollment.py
+
+verify-production-images-no-shell:
+	python3 scripts/test_production_images_no_shell.py
+
+scan-production-images-no-shell:
+	python3 scripts/verify_production_images_no_shell.py
+
+verify-production-image-builds:
+	python3 scripts/test_production_image_builds.py
+
+generate-production-readiness-claims:
+	mkdir -p .tmp
+	python3 scripts/generate_production_readiness_claims.py --out "$(PRODUCTION_READINESS_CLAIMS_FILE)" $(PRODUCTION_READINESS_CLAIMS_ARGS)
+
+verify-production-readiness-claims:
+	python3 scripts/test_production_readiness_claims.py
+
+verify-production-readiness-runner:
+	python3 scripts/test_run_production_readiness.py
+
+verify-release-completion:
+	python3 scripts/test_release_completion.py
 
 verify-production-config:
 	python3 scripts/verify_production_readiness.py --mode config
 
+run-production-readiness:
+	python3 scripts/run_production_readiness.py \
+		--env-file "$(PRODUCTION_READINESS_ENV)" \
+		--config-out "$(PRODUCTION_READINESS_CONFIG_OUT)" \
+		--claims-file "$(PRODUCTION_READINESS_CLAIMS_FILE)" \
+		--nitro-evidence-out "$(NITRO_KMS_EVIDENCE_OUT)" \
+		--readiness-out "$(PRODUCTION_READINESS_OUT)" \
+		--completion-proof-out "$(PRODUCTION_COMPLETION_PROOF_OUT)" \
+		--release-provenance-summary "$(RELEASE_PROVENANCE_SUMMARY_FILE)" \
+		--release-provenance "$(RELEASE_PROVENANCE_FILE)" \
+		--image-signatures-summary "$(IMAGE_SIGNATURES_SUMMARY_FILE)" \
+		--image-signatures "$(IMAGE_SIGNATURES_FILE)" \
+		--bench "$(DECISION_GATE_BENCH_FILE)"
+
 verify-production-readiness:
-	python3 scripts/verify_production_readiness.py --mode live
+	if [ -f "$(PRODUCTION_READINESS_CLAIMS_FILE)" ]; then \
+		python3 scripts/verify_production_readiness.py --mode live --claims-file "$(PRODUCTION_READINESS_CLAIMS_FILE)" --out "$(PRODUCTION_READINESS_OUT)"; \
+	else \
+		python3 scripts/verify_production_readiness.py --mode live --out "$(PRODUCTION_READINESS_OUT)"; \
+	fi
+
+collect-nitro-kms-evidence:
+	mkdir -p .tmp
+	if [ -f "$(PRODUCTION_READINESS_CLAIMS_FILE)" ]; then \
+		python3 scripts/collect_nitro_kms_evidence.py --claims-file "$(PRODUCTION_READINESS_CLAIMS_FILE)" --out "$(NITRO_KMS_EVIDENCE_OUT)"; \
+	else \
+		python3 scripts/collect_nitro_kms_evidence.py --out "$(NITRO_KMS_EVIDENCE_OUT)"; \
+	fi
+
+verify-nitro-kms-evidence:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_nitro_kms_evidence.py
 
 verify-nitro-tee:
 	docker compose up -d --build serverware

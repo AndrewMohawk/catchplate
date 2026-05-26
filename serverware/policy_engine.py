@@ -283,6 +283,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         credential_version=credential_version_int,
         operation_fields=operation_fields,
         consume_rate_limits=False,
+        policy_hash=snapshot.hash,
     )
     if not constraint_decision.allowed:
         runtime.log_request(
@@ -429,6 +430,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         credential_version=credential_version_int,
         operation_fields=operation_fields,
         consume_rate_limits=True,
+        policy_hash=snapshot.hash,
         rate_limits_only=True,
     )
     if not rate_limit_decision.allowed:

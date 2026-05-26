@@ -54,6 +54,15 @@ def assert_dockerignore() -> None:
         raise AssertionError(f".dockerignore does not exclude local build/secrets material: {missing}")
 
 
+def assert_production_dependencies() -> None:
+    requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
+    if "mitmproxy" in requirements:
+        raise AssertionError("production requirements must not include mitmproxy")
+    dockerfile = (ROOT / "Dockerfile.production").read_text(encoding="utf-8")
+    if "serverware.control_plane_runner" not in dockerfile:
+        raise AssertionError("production image must start the control-plane runner, not the prototype mitmproxy runner")
+
+
 def run_dry_build() -> dict:
     result = subprocess.run(
         [sys.executable, "scripts/build_production_images.py", "--dry-run"],
@@ -70,6 +79,7 @@ def run_dry_build() -> dict:
 
 def main() -> None:
     assert_dockerignore()
+    assert_production_dependencies()
     assert_distroless_no_shell(ROOT / "Dockerfile.production", "gcr.io/distroless/python3-debian12")
     assert_oci_traceability(ROOT / "Dockerfile.production")
     assert_distroless_no_shell(

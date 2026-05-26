@@ -55,7 +55,7 @@ make bench-gate-rs
 
 The smoke test proves:
 
-- CA-backed HTTPS interception through mitmproxy.
+- CA-backed HTTPS interception through mitmproxy in the local prototype path and through the Rust decision gate in the production path.
 - Fail-closed blocking for unknown routes.
 - Principal access control using source CIDRs, required trusted identity headers, and hashed `Proxy-Authorization` bearer tokens bound to agent ID, source CIDR, and expiry.
 - Bearer token injection from the encrypted credential vault.
@@ -335,7 +335,7 @@ make build-production-images
 make publish-production-images PRODUCTION_IMAGE_REGISTRY_PREFIX=registry.example/serverware PRODUCTION_IMAGE_TAG=2026-05-25
 ```
 
-[Dockerfile.production](Dockerfile.production) builds the Python control-plane/audit-anchor image on a distroless Python nonroot base, and [data-plane/decision-gate-rs/Dockerfile.production](data-plane/decision-gate-rs/Dockerfile.production) builds the Rust data plane on a distroless cc nonroot base. `.dockerignore` keeps local VCS data, build outputs, caches, production env files, and key material out of the Docker context. `make build-production-images` stamps OCI source/revision labels plus `dev.serverware.source_tree_digest`, writes `.tmp/production-images-build.json`, and scans the locally built image IDs for forbidden shell paths. `make publish-production-images` tags and pushes those image IDs to `PRODUCTION_IMAGE_REGISTRY_PREFIX`, recovers the immutable `repo@sha256` refs from Docker, writes `.tmp/production-images-published.json`, and writes `.tmp/production-images.env` containing `SERVERWARE_PRODUCTION_IMAGES=...`. Merge that env fragment into `ops/production-readiness.env`, then run `make run-production-readiness`; local image IDs are only a build-time check and are not accepted by the live production readiness config.
+[Dockerfile.production](Dockerfile.production) builds the Python control-plane/audit-anchor image on a distroless Python nonroot base, and [data-plane/decision-gate-rs/Dockerfile.production](data-plane/decision-gate-rs/Dockerfile.production) builds the Rust data plane on a distroless cc nonroot base. Production installs only the control-plane requirements and starts `serverware.control_plane_runner`; mitmproxy is installed only by the local prototype Dockerfile. `.dockerignore` keeps local VCS data, build outputs, caches, production env files, and key material out of the Docker context. `make build-production-images` stamps OCI source/revision labels plus `dev.serverware.source_tree_digest`, writes `.tmp/production-images-build.json`, and scans the locally built image IDs for forbidden shell paths. `make publish-production-images` tags and pushes those image IDs to `PRODUCTION_IMAGE_REGISTRY_PREFIX`, recovers the immutable `repo@sha256` refs from Docker, writes `.tmp/production-images-published.json`, and writes `.tmp/production-images.env` containing `SERVERWARE_PRODUCTION_IMAGES=...`. Merge that env fragment into `ops/production-readiness.env`, then run `make run-production-readiness`; local image IDs are only a build-time check and are not accepted by the live production readiness config.
 
 Set the same `SERVERWARE_PRODUCTION_IMAGES` value when running `image-signatures` or `scripts/sign_release_images.py`. When present, the image-signature bundle signs those production digest refs instead of the local Compose image inventory, and `scripts/verify_release_completion.py` rejects completion proofs whose signed image digest set differs from the no-shell production image set verified by readiness.
 
@@ -434,10 +434,10 @@ Latest post-gate Docker benchmark, after 100 warmups and 1000 measured decision 
 
 ```json
 {
-  "p50_ms": 1.476,
-  "p95_ms": 3.501,
-  "p99_ms": 5.704,
-  "mean_ms": 1.766
+  "p50_ms": 1.433,
+  "p95_ms": 2.502,
+  "p99_ms": 4.091,
+  "mean_ms": 1.591
 }
 ```
 

@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import uvicorn
+from serverware.ca_material import ensure_mitm_ca_material
 from serverware.config import (
     DATA_PLANE_GID,
     DATA_PLANE_UID,
@@ -74,6 +75,7 @@ def publish_decision_gate_ca_cert() -> None:
 
 def main() -> None:
     ensure_data_dirs()
+    ensure_mitm_ca_material()
     init_db()
     mitm = start_mitmdump()
     time.sleep(1)

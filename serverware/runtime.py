@@ -15,6 +15,7 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 
 from serverware import db
+from serverware.ca_material import ensure_mitm_ca_material
 from serverware.config import (
     AUDIT_ANCHOR_INTERVAL_SECONDS,
     AUDIT_ANCHOR_TOKEN,
@@ -29,7 +30,6 @@ from serverware.config import (
     DECISION_GATE_CA_KEY_PATH,
     DECISION_GATE_BASE,
     DECISION_GATE_TIMEOUT_SECONDS,
-    MITMPROXY_CONF_DIR,
     SECRET_LEASE_TTL_SECONDS,
     ensure_data_dirs,
 )
@@ -167,8 +167,7 @@ def _write_owned(path: Path, data: bytes, *, mode: int) -> None:
 
 
 def _publish_decision_gate_ca_after_key_release() -> bool:
-    ca_key_path = MITMPROXY_CONF_DIR / "mitmproxy-ca.pem"
-    ca_cert_path = MITMPROXY_CONF_DIR / "mitmproxy-ca-cert.pem"
+    ca_key_path, ca_cert_path = ensure_mitm_ca_material()
     if not ca_key_path.exists() or not ca_cert_path.exists():
         return False
     if not (CREDENTIAL_GENERATIONS_PATH.exists() or db.list_credentials()):

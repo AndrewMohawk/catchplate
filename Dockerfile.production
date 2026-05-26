@@ -31,8 +31,8 @@ COPY policies ./policies
 COPY security ./security
 COPY docker-compose.apparmor.yml ./docker-compose.apparmor.yml
 
-EXPOSE 3000 8080 8443
+EXPOSE 3000
 
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/bin/python3"]
-CMD ["-m", "serverware.runner"]
+CMD ["-m", "serverware.control_plane_runner"]

@@ -57,6 +57,17 @@ def expect_provider_failure(mode: str, payload: dict[str, Any], env: dict[str, s
 def run_serverware_integration(env: dict[str, str]) -> dict[str, Any]:
     code = r'''
 import json
+import os
+from pathlib import Path
+from serverware.policy_bundle import write_policy_bundle
+from serverware.ca_material import ensure_mitm_ca_material
+from serverware.db import init_db
+
+policy_source = Path(os.environ["SERVERWARE_POLICY_BUNDLE_SOURCE"])
+write_policy_bundle(json.loads(policy_source.read_text()))
+ensure_mitm_ca_material()
+init_db()
+
 from serverware.attestation import attestation_document, verify_attestation_quote
 from serverware.key_release import release_material
 
@@ -198,7 +209,51 @@ def main() -> None:
             },
         },
         base_env,
-        "material decision-gate-ca is not authorized by verified Nitro claims",
+        "verified Nitro claims must authorize exactly broker-kek and decision-gate-ca",
+    )
+
+    extra_material_claims = json.loads(json.dumps(verified["claims"]))
+    extra_material_claims["materials"] = ["broker-kek", "decision-gate-ca", "debug-material"]
+    expect_provider_failure(
+        "release",
+        {
+            "material": "decision-gate-ca",
+            "claims": extra_material_claims,
+            "expected": {
+                "policy_bundle_digest": claims["policy_bundle_digest"],
+                "ca_intermediate_spki_sha256": claims["ca_intermediate_spki_sha256"],
+                "rollback_epoch": claims["rollback_epoch"],
+                "release_channel": claims["release_channel"],
+                "provenance_digest": claims["provenance_digest"],
+                "source_tree_digest": claims["source_tree_digest"],
+                "response_signing_key_id": claims["response_signing_key_id"],
+                "data_plane_binary_digest": claims["data_plane_binary_digest"],
+            },
+        },
+        base_env,
+        "verified Nitro claims must authorize exactly broker-kek and decision-gate-ca",
+    )
+
+    extra_allowed_env = dict(base_env)
+    extra_allowed_env["SERVERWARE_NITRO_ALLOWED_MATERIALS"] = "broker-kek,decision-gate-ca,debug-material"
+    expect_provider_failure(
+        "release",
+        {
+            "material": "decision-gate-ca",
+            "claims": verified["claims"],
+            "expected": {
+                "policy_bundle_digest": claims["policy_bundle_digest"],
+                "ca_intermediate_spki_sha256": claims["ca_intermediate_spki_sha256"],
+                "rollback_epoch": claims["rollback_epoch"],
+                "release_channel": claims["release_channel"],
+                "provenance_digest": claims["provenance_digest"],
+                "source_tree_digest": claims["source_tree_digest"],
+                "response_signing_key_id": claims["response_signing_key_id"],
+                "data_plane_binary_digest": claims["data_plane_binary_digest"],
+            },
+        },
+        extra_allowed_env,
+        "allowed materials must be exactly broker-kek and decision-gate-ca",
     )
 
     attestation_command_env = dict(base_env)
@@ -217,9 +272,12 @@ def main() -> None:
         {
             "SERVERWARE_TEE_QUOTE_PROVIDER": "aws-nitro-enclaves",
             "SERVERWARE_TEE_PLATFORM": "aws-nitro",
-            "SERVERWARE_TEE_QUOTE_COMMAND": "python scripts/aws_nitro_tee_provider.py quote",
-            "SERVERWARE_TEE_QUOTE_VERIFY_COMMAND": "python scripts/aws_nitro_tee_provider.py verify",
-            "SERVERWARE_KEY_RELEASE_COMMAND": "python scripts/aws_nitro_tee_provider.py release",
+            "SERVERWARE_TEE_QUOTE_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py quote",
+            "SERVERWARE_TEE_QUOTE_VERIFY_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py verify",
+            "SERVERWARE_KEY_RELEASE_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py release",
+            "SERVERWARE_POLICY_BUNDLE": str((fixture_dir / "policy-bundle.json").resolve()),
+            "SERVERWARE_POLICY_BUNDLE_SOURCE": str(Path("policies/demo.policy.json").resolve()),
+            "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": claims["data_plane_binary_digest"],
         }
     )
     integration = run_serverware_integration(integration_env)

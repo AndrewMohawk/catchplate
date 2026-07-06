@@ -52,14 +52,14 @@ def main() -> None:
         assert code != 0 and parsed["ok"] is False, parsed
         assert "/bin/sh" in json.dumps(parsed), parsed
 
-        good_image = "registry.example/serverware/control@sha256:" + "a" * 64
+        good_image = "registry.prod.serverware.dev/serverware/control@sha256:" + "a" * 64
         code, parsed = run(["--validate-refs-only", "--image", good_image])
         assert code == 0 and parsed["ok"] is True, parsed
 
         code, parsed = run(["--local-image-id", "sha256:" + "b" * 64])
         assert code != 0 and "image is not available locally" in json.dumps(parsed), parsed
 
-        mutable = "registry.example/serverware/control:latest"
+        mutable = "registry.prod.serverware.dev/serverware/control:latest"
         code, parsed = run(["--validate-refs-only", "--image", mutable])
         assert code != 0 and "immutable" in json.dumps(parsed), parsed
 

@@ -21,11 +21,10 @@ from typing import Any
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+import serverware_source_tree
 
 ROOT = Path(__file__).resolve().parent.parent
 SERVICES = ("serverware", "audit-anchor", "grant-store", "demo-upstream", "decision-gate-rs")
-SOURCE_SUFFIXES = {".py", ".sh", ".json", ".toml", ".lock", ".md", ".yml", ".yaml"}
-SOURCE_NAMES = {"Dockerfile", "Dockerfile.production", "Makefile", "requirements.txt", ".dockerignore"}
 
 
 def canonical_json(value: Any) -> str:
@@ -87,23 +86,9 @@ def public_key_info(key: Ed25519PrivateKey) -> dict[str, str]:
 
 
 def source_tree() -> dict[str, Any]:
-    files = []
-    for path in sorted(ROOT.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(ROOT)
-        if any(part in {".git", ".tmp", "__pycache__", "target"} for part in rel.parts):
-            continue
-        if path.suffix not in SOURCE_SUFFIXES and path.name not in SOURCE_NAMES and (not rel.parts or rel.parts[0] != "security"):
-            continue
-        raw = path.read_bytes()
-        files.append({"path": str(rel), "bytes": len(raw), "sha256": sha256_prefixed_bytes(raw)})
-    return {
-        "files": files,
-        "digest": sha256_prefixed_json(files),
-        "git": git_source_info(),
-        "exclusions": [".git", ".tmp", "__pycache__", "target"],
-    }
+    summary = serverware_source_tree.source_tree_summary(ROOT)
+    summary["git"] = git_source_info()
+    return summary
 
 
 def git_source_info() -> dict[str, Any]:

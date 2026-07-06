@@ -58,6 +58,14 @@ def main() -> None:
         plan = json.loads(dry_run.stdout.decode("utf-8"))
         if plan.get("ok") is not True or len(plan.get("commands") or []) != 5:
             raise AssertionError(f"runner dry-run did not return the full command plan: {plan}")
+        completion_argv = plan["commands"][-1]["argv"]
+        if (
+            "--production-readiness-config" not in completion_argv
+            or "--production-readiness-env" not in completion_argv
+            or "--production-images-env" not in completion_argv
+            or "/etc/serverware/kms-materials.json" not in completion_argv
+        ):
+            raise AssertionError(f"runner completion command does not bind current env files: {completion_argv}")
         if "prod-admin-token-32-bytes-minimum-value" in dry_run.stdout.decode("utf-8"):
             raise AssertionError(f"runner dry-run leaked environment values: {plan}")
 
@@ -66,6 +74,12 @@ def main() -> None:
         rejected = run_runner("--env-file", str(placeholder_env), "--dry-run")
         if rejected.returncode == 0 or "placeholder" not in detail(rejected):
             raise AssertionError(f"runner accepted a placeholder env file: {detail(rejected)}")
+
+        example_domain_env = tmp / "example-domain.env"
+        example_domain_env.write_text("SERVERWARE_PUBLIC_URL=https://serverware.example\n", encoding="utf-8")
+        rejected_example = run_runner("--env-file", str(example_domain_env), "--dry-run")
+        if rejected_example.returncode == 0 or "example placeholder domain" not in detail(rejected_example):
+            raise AssertionError(f"runner accepted an example-domain env file: {detail(rejected_example)}")
 
         config_env = tmp / "config.env"
         production_env = {

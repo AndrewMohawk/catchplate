@@ -33,7 +33,9 @@ def read_stdin() -> dict[str, Any]:
 
 
 def key_path() -> Path:
-    default = Path(os.getenv("SERVERWARE_DATA_DIR", "/data")) / "nitro-kms-fixture-ed25519.pem"
+    fixture_dir = os.getenv("SERVERWARE_NITRO_FIXTURE_DIR")
+    default_root = Path(fixture_dir) if fixture_dir else Path(os.getenv("SERVERWARE_DATA_DIR", "/data"))
+    default = default_root / "nitro-kms-fixture-ed25519.pem"
     return Path(os.getenv("SERVERWARE_NITRO_KMS_FIXTURE_KEY", str(default)))
 
 

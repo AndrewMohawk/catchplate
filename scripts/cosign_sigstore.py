@@ -93,7 +93,7 @@ def artifact_paths(base: Path, request: dict[str, Any]) -> dict[str, Path]:
 
 
 def write_statement(path: Path, statement: dict[str, Any]) -> None:
-    path.write_text(canonical_json(statement) + "\n", encoding="utf-8")
+    path.write_text(canonical_json(statement), encoding="utf-8")
 
 
 def load_bundle(path: Path) -> dict[str, Any]:

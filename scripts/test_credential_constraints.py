@@ -100,6 +100,15 @@ def main() -> None:
     demo = compile_policy_bundle(demo_policy_bundle("cred-demo-bearer"), validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     compile_policy_bundle(examples, validate_schema=validate_schema)
+    if validate_schema:
+        invalid_field = json.loads(json.dumps(examples))
+        invalid_field["credentials"][0]["injection"]["field"] = "*.access_token"
+        try:
+            compile_policy_bundle(invalid_field, validate_schema=True)
+        except Exception:
+            pass
+        else:
+            raise AssertionError("schema accepted wildcard credential injection field")
 
     reset_local_constraint_state()
     tweet_route = route(demo, "demo.x.tweet.one_per_day")

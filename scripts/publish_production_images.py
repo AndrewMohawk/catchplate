@@ -48,10 +48,36 @@ def service_repo_name(service: str) -> str:
     return name or "image"
 
 
-def target_repo(registry_prefix: str, service: str) -> str:
-    prefix = registry_prefix.rstrip("/")
+def registry_host(registry_prefix: str) -> str:
+    prefix = registry_prefix.strip().rstrip("/")
     if not prefix:
         raise ValueError("--registry-prefix is required")
+    if "://" in prefix or any(char.isspace() for char in prefix) or "@" in prefix:
+        raise ValueError("--registry-prefix must be a registry/repository prefix, not a URL, tag, or digest ref")
+    parts = prefix.split("/")
+    if any(not part for part in parts):
+        raise ValueError("--registry-prefix contains an empty path segment")
+    host = parts[0]
+    if host.startswith("["):
+        return host.strip("[]").lower()
+    return host.split(":", 1)[0].lower()
+
+
+def placeholder_hostname(hostname: str) -> bool:
+    lowered = hostname.rstrip(".").lower()
+    return lowered == "example" or lowered.endswith(".example")
+
+
+def validate_registry_prefix(registry_prefix: str) -> str:
+    prefix = registry_prefix.strip().rstrip("/")
+    host = registry_host(prefix)
+    if placeholder_hostname(host):
+        raise ValueError(f"--registry-prefix must not use a placeholder .example registry domain: {registry_prefix}")
+    return prefix
+
+
+def target_repo(registry_prefix: str, service: str) -> str:
+    prefix = validate_registry_prefix(registry_prefix)
     return f"{prefix}/{service_repo_name(service)}"
 
 
@@ -144,7 +170,7 @@ def write_env(path: Path, production_images: list[str]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Push shell-free production image candidates and emit digest-pinned refs.")
     parser.add_argument("--build-file", default=".tmp/production-images-build.json")
-    parser.add_argument("--registry-prefix", required=True, help="Registry/repository prefix, for example registry.example/serverware")
+    parser.add_argument("--registry-prefix", required=True, help="Registry/repository prefix, for example registry.prod.serverware.dev/serverware")
     parser.add_argument("--tag", default="production-candidate")
     parser.add_argument("--out", default=".tmp/production-images-published.json")
     parser.add_argument("--env-out", default=".tmp/production-images.env")

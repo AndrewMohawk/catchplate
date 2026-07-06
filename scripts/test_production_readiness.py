@@ -121,15 +121,15 @@ def good_env() -> dict[str, str]:
     env.update(
         {
             "SERVERWARE_RELEASE_CHANNEL": "prod",
-            "SERVERWARE_PUBLIC_URL": "https://serverware.example",
+            "SERVERWARE_PUBLIC_URL": "https://serverware.prod.acme-corp.net",
             "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
             "SERVERWARE_ADMIN_ROLES": "admin,approver,auditor,policy_author,policy_publisher,credential_owner",
             "SERVERWARE_OIDC_ENABLED": "1",
-            "SERVERWARE_OIDC_ISSUER": "https://idp.example",
+            "SERVERWARE_OIDC_ISSUER": "https://idp.prod.acme-corp.net",
             "SERVERWARE_OIDC_AUDIENCE": "serverware-control-plane",
             "SERVERWARE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kty": "RSA", "kid": "prod-key", "n": "AA", "e": "AQAB"}]}),
             "SERVERWARE_OIDC_ROLE_CLAIM": "serverware_roles",
-            "SERVERWARE_WEBAUTHN_ORIGIN": "https://serverware.example",
+            "SERVERWARE_WEBAUTHN_ORIGIN": "https://serverware.prod.acme-corp.net",
             "SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "1",
             "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "0",
             "SERVERWARE_CA_INSTALL_SESSION_TTL_SECONDS": "300",
@@ -162,7 +162,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED": "1",
             "SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND": "python3 scripts/transparency_checkpoint.py checkpoint",
             "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE": "http",
-            "SERVERWARE_TRANSPARENCY_LOG_URL": "https://transparency.example/checkpoints",
+            "SERVERWARE_TRANSPARENCY_LOG_URL": "https://transparency.prod.acme-corp.net/checkpoints",
             "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER": "managed-prod-log",
             "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID": "sha256:" + "d" * 64,
             "SERVERWARE_APPARMOR_EXPECTED_PROFILE": "serverware-docker",
@@ -182,8 +182,8 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_PRODUCTION_IMAGE_NO_SHELL_REQUIRED": "1",
             "SERVERWARE_PRODUCTION_IMAGES": ",".join(
                 [
-                    "registry.example/serverware/control@sha256:" + "a" * 64,
-                    "registry.example/serverware/decision-gate@sha256:" + "b" * 64,
+                    "registry.prod.acme-corp.net/serverware/control@sha256:" + "a" * 64,
+                    "registry.prod.acme-corp.net/serverware/decision-gate@sha256:" + "b" * 64,
                 ]
             ),
         }
@@ -350,6 +350,18 @@ def main() -> None:
     localhost_oidc_env["SERVERWARE_OIDC_ISSUER"] = "http://localhost:8080"
     expect_failure(localhost_oidc_env, "OIDC_ISSUER")
 
+    example_public_url_env = good_env()
+    example_public_url_env["SERVERWARE_PUBLIC_URL"] = "https://serverware.example"
+    expect_failure(example_public_url_env, "PUBLIC_URL")
+
+    example_oidc_env = good_env()
+    example_oidc_env["SERVERWARE_OIDC_ISSUER"] = "https://idp.example"
+    expect_failure(example_oidc_env, "OIDC_ISSUER")
+
+    example_transparency_env = good_env()
+    example_transparency_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = "https://transparency.example/checkpoints"
+    expect_failure(example_transparency_env, "TRANSPARENCY_LOG_URL")
+
     no_mutation_mfa_env = good_env()
     no_mutation_mfa_env.pop("SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED", None)
     expect_failure(no_mutation_mfa_env, "WebAuthn MFA")
@@ -393,8 +405,16 @@ def main() -> None:
     expect_failure(local_quota_env, "shared rate-limit consume URL")
 
     mutable_image_env = good_env()
-    mutable_image_env["SERVERWARE_PRODUCTION_IMAGES"] = "registry.example/serverware/control:latest"
+    mutable_image_env["SERVERWARE_PRODUCTION_IMAGES"] = "registry.prod.acme-corp.net/serverware/control:latest"
     expect_failure(mutable_image_env, "pinned by digest")
+
+    example_registry_env = good_env()
+    example_registry_env["SERVERWARE_PRODUCTION_IMAGES"] = "registry.example/serverware/control@sha256:" + "a" * 64
+    expect_failure(example_registry_env, "placeholder registry")
+
+    extra_nitro_material_env = good_env()
+    extra_nitro_material_env["SERVERWARE_NITRO_ALLOWED_MATERIALS"] = "broker-kek,decision-gate-ca,debug-material"
+    expect_failure(extra_nitro_material_env, "exactly broker-kek and decision-gate-ca")
 
     missing_no_shell_env = good_env()
     missing_no_shell_env.pop("SERVERWARE_PRODUCTION_IMAGE_NO_SHELL_REQUIRED", None)

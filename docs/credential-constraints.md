@@ -52,7 +52,29 @@ The demo policy includes:
 - X broad route guarded by an operation allowlist so write operations stay blocked.
 - npm publish/dist-tag writes guarded by operation allowlists and per-operation JIT approval.
 
-[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting, GitHub issue listing, Stripe customer read-only access, and bounded object-store writes.
+[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting, GitHub issue listing, Stripe customer read-only access, tokenized checkout creation with amount caps and hardware-backed JIT approval, and bounded object-store writes.
+
+## OAuth Credentials
+
+Portal OAuth login stores the provider token response as one encrypted credential secret:
+
+```json
+{
+  "access_token": "provider-access-token",
+  "refresh_token": "provider-refresh-token",
+  "token_type": "Bearer",
+  "scope": "tweet.read users.read offline.access",
+  "expires_at_epoch_ms": 1780000000000
+}
+```
+
+Policies should inject only the needed field:
+
+```json
+{"type": "bearer", "header": "Authorization", "field": "access_token"}
+```
+
+Credential `field` selectors are strict dotted object paths such as `access_token` or `nested.token`. Wildcards, array fan-out, empty path components, and non-string selected values fail closed before forwarding the request. The agent never receives the OAuth token JSON or the refresh token.
 
 ## Production Store Semantics
 

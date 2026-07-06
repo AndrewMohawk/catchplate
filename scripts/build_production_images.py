@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import subprocess
 import sys
@@ -11,9 +10,9 @@ import time
 from pathlib import Path
 from typing import Any
 
+import serverware_source_tree
+
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE_SUFFIXES = {".py", ".sh", ".json", ".toml", ".lock", ".md", ".yml", ".yaml"}
-SOURCE_NAMES = {"Dockerfile", "Dockerfile.production", "Makefile", "requirements.txt", ".dockerignore"}
 DEFAULT_IMAGES = (
     ("serverware-control", "Dockerfile.production", "serverware/control:production-local"),
     ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", "serverware/decision-gate:production-local"),
@@ -22,10 +21,6 @@ DEFAULT_IMAGES = (
 
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-
-
-def sha256_prefixed(value: bytes) -> str:
-    return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
 def run(command: list[str]) -> str:
@@ -48,18 +43,7 @@ def maybe_run(command: list[str]) -> str | None:
 
 
 def source_tree_digest() -> str:
-    files: list[dict[str, Any]] = []
-    for path in sorted(ROOT.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(ROOT)
-        if any(part in {".git", ".tmp", "__pycache__", "target"} for part in rel.parts):
-            continue
-        if path.suffix not in SOURCE_SUFFIXES and path.name not in SOURCE_NAMES and (not rel.parts or rel.parts[0] != "security"):
-            continue
-        raw = path.read_bytes()
-        files.append({"path": str(rel), "bytes": len(raw), "sha256": sha256_prefixed(raw)})
-    return sha256_prefixed(canonical_json(files).encode("utf-8"))
+    return serverware_source_tree.source_tree_digest(ROOT)
 
 
 def build_metadata() -> dict[str, str]:

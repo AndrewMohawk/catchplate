@@ -1,4 +1,4 @@
-FROM rust:1.86-slim AS build
+FROM rust:1.88-slim-bookworm AS build
 
 WORKDIR /src
 COPY data-plane/decision-gate-rs/Cargo.toml ./Cargo.toml

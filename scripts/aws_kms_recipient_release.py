@@ -23,6 +23,7 @@ SECRET_FIELD_NAMES = {
     "unwrapped_key",
     "decrypted_key",
 }
+AUTHORIZED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 
 
 def canonical_json(value: Any) -> str:
@@ -33,12 +34,19 @@ def sha256_prefixed(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
-def b64d(value: str) -> bytes:
-    return base64.b64decode(value + "=" * (-len(value) % 4), validate=False)
+def b64d(value: str, label: str = "base64 value") -> bytes:
+    try:
+        return base64.b64decode(value + "=" * (-len(value) % 4), validate=True)
+    except Exception as exc:
+        raise SystemExit(f"{label} is invalid base64") from exc
 
 
-def b64url_d(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+def b64url_d(value: str, label: str = "base64url value") -> bytes:
+    translated = value.replace("-", "+").replace("_", "/")
+    try:
+        return base64.b64decode(translated + "=" * (-len(translated) % 4), validate=True)
+    except Exception as exc:
+        raise SystemExit(f"{label} is invalid base64url") from exc
 
 
 def read_stdin() -> dict[str, Any]:
@@ -99,7 +107,7 @@ def ciphertext_blob(config: dict[str, Any]) -> bytes:
     raw_b64 = config.get("ciphertext_blob_b64") or config.get("ciphertextBlobB64")
     if not isinstance(raw_b64, str) or not raw_b64:
         raise SystemExit("AWS KMS material missing ciphertext blob")
-    return b64d(raw_b64)
+    return b64d(raw_b64, "AWS KMS material ciphertext_blob_b64")
 
 
 def attestation_document_from_request(payload: dict[str, Any]) -> bytes:
@@ -112,7 +120,7 @@ def attestation_document_from_request(payload: dict[str, Any]) -> bytes:
     raw_b64 = tee.get("raw_attestation_document_b64")
     if not isinstance(raw_b64, str) or not raw_b64:
         raise SystemExit("AWS KMS release request missing raw_attestation_document_b64")
-    raw = b64url_d(raw_b64)
+    raw = b64url_d(raw_b64, "AWS KMS release request raw_attestation_document_b64")
     expected = tee.get("raw_attestation_document_sha256")
     if expected and expected != sha256_prefixed(raw):
         raise SystemExit("AWS KMS release request attestation document digest mismatch")
@@ -134,6 +142,8 @@ def validate_request(payload: dict[str, Any]) -> None:
     material = payload.get("material")
     if not isinstance(material, str) or not material:
         raise SystemExit("missing material")
+    if material not in AUTHORIZED_MATERIALS:
+        raise SystemExit(f"unauthorized material: {material}")
 
 
 def run_aws_kms_decrypt(
@@ -203,7 +213,7 @@ def release(args: argparse.Namespace) -> None:
         region=args.region,
         timeout=args.timeout,
     )
-    recipient_ciphertext = b64d(str(response["CiphertextForRecipient"]))
+    recipient_ciphertext = b64d(str(response["CiphertextForRecipient"]), "AWS KMS CiphertextForRecipient")
     tee = payload.get("tee") if isinstance(payload.get("tee"), dict) else {}
     output = {
         "ok": True,
@@ -211,6 +221,8 @@ def release(args: argparse.Namespace) -> None:
         "material": material,
         "request_digest": payload["request_digest"],
         "release_handle": payload.get("release_handle"),
+        "ciphertext_blob_sha256": sha256_prefixed(ciphertext),
+        "encryption_context_sha256": sha256_prefixed(canonical_json(context or {}).encode("utf-8")),
         "material_handle": sha256_prefixed(recipient_ciphertext),
         "recipient_ciphertext_sha256": sha256_prefixed(recipient_ciphertext),
         "attestation_document_sha256": sha256_prefixed(attestation_document),
@@ -223,6 +235,7 @@ def release(args: argparse.Namespace) -> None:
             "tee_platform": payload.get("tee_platform"),
             "pcrs": sorted((tee.get("pcrs") or {}).keys()) if isinstance(tee.get("pcrs"), dict) else [],
             "encryption_context_sha256": sha256_prefixed(canonical_json(context or {}).encode("utf-8")),
+            "ciphertext_blob_sha256": sha256_prefixed(ciphertext),
         },
     }
     print(canonical_json(output))

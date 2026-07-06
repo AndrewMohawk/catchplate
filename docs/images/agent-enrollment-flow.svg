@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="620" viewBox="0 0 1120 620" role="img" aria-labelledby="title desc">
+  <title id="title">Serverware agent enrollment flow</title>
+  <desc id="desc">A screenshot-style diagram showing attestation verification, CA installation, proxy environment variables, egress control, and normal agent SDK calls through Serverware.</desc>
+  <rect width="1120" height="620" fill="#f5f7f5"/>
+  <text x="40" y="54" font-family="Arial, sans-serif" font-size="24" font-weight="700" fill="#17211d">Agent Enrollment Packet</text>
+  <rect x="40" y="92" width="300" height="420" rx="8" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="66" y="132" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17211d">1. Verify Serverware</text>
+  <text x="66" y="166" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Nonce-bound attestation</text>
+  <text x="66" y="194" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Policy signing key pin</text>
+  <text x="66" y="222" font-family="Arial, sans-serif" font-size="13" fill="#17211d">CA SPKI hash</text>
+  <text x="66" y="250" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Source/provenance digest</text>
+  <rect x="66" y="286" width="248" height="48" rx="6" fill="#ecfdf5" stroke="#86efac"/>
+  <text x="88" y="316" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#166534">CA copied only after proof</text>
+  <rect x="410" y="92" width="300" height="420" rx="8" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="436" y="132" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17211d">2. Run Agent Through Proxy</text>
+  <rect x="436" y="160" width="248" height="92" rx="6" fill="#f8fafc" stroke="#d9dfd8"/>
+  <text x="454" y="190" font-family="Arial, sans-serif" font-size="12" fill="#17211d">HTTPS_PROXY=http://serverware:8080</text>
+  <text x="454" y="216" font-family="Arial, sans-serif" font-size="12" fill="#17211d">HTTP_PROXY=http://serverware:8080</text>
+  <text x="454" y="242" font-family="Arial, sans-serif" font-size="12" fill="#17211d">SSL_CERT_FILE=/serverware/ca.pem</text>
+  <rect x="436" y="286" width="248" height="58" rx="6" fill="#fff7ed" stroke="#fed7aa"/>
+  <text x="454" y="320" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#9a3412">Egress only to Serverware</text>
+  <rect x="780" y="92" width="300" height="420" rx="8" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="806" y="132" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17211d">3. Normal SDK Calls</text>
+  <text x="806" y="166" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Gmail client lists messages</text>
+  <text x="806" y="194" font-family="Arial, sans-serif" font-size="13" fill="#17211d">npm publish retries after JIT</text>
+  <text x="806" y="222" font-family="Arial, sans-serif" font-size="13" fill="#17211d">X search stays read-only</text>
+  <text x="806" y="250" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Stripe checkout requires approval</text>
+  <rect x="806" y="286" width="248" height="82" rx="6" fill="#fee2e2" stroke="#fecaca"/>
+  <text x="828" y="318" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#991b1b">Unknown routes fail closed</text>
+  <text x="828" y="346" font-family="Arial, sans-serif" font-size="12" fill="#991b1b">No credential is released to the agent</text>
+  <path d="M340 300 L410 300" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+  <path d="M710 300 L780 300" stroke="#0f766e" stroke-width="4" marker-end="url(#arrow)"/>
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#0f766e"/>
+    </marker>
+  </defs>
+</svg>

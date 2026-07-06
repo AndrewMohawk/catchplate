@@ -171,12 +171,36 @@ def main() -> None:
             raise AssertionError(f"AWS KMS adapter did not bind request digest: {output}")
         if not ((output.get("key_provider") or {}).get("key_id")):
             raise AssertionError(f"AWS KMS adapter did not bind key identity: {output}")
-        if "recipient_ciphertext_sha256" not in output or "Plaintext" in canonical_json(output):
+        if "recipient_ciphertext_sha256" not in output or "ciphertext_blob_sha256" not in output or "Plaintext" in canonical_json(output):
             raise AssertionError(f"AWS KMS adapter leaked or omitted material evidence: {output}")
+        if output.get("ciphertext_blob_sha256") != sha256_prefixed(b"kms-encrypted-dek"):
+            raise AssertionError(f"AWS KMS adapter did not bind the input ciphertext digest: {output}")
+        if output.get("encryption_context_sha256") != sha256_prefixed(canonical_json({"material": "decision-gate-ca", "service": "serverware"}).encode("utf-8")):
+            raise AssertionError(f"AWS KMS adapter did not bind the encryption context digest: {output}")
+
+        invalid_materials = tmp / "invalid-materials.json"
+        invalid_materials.write_text(
+            canonical_json(
+                {
+                    "decision-gate-ca": {
+                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/serverware",
+                        "ciphertext_blob_b64": "not-valid-@@@@",
+                        "encryption_context": {"service": "serverware", "material": "decision-gate-ca"},
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        expect_failure(payload, invalid_materials, aws, "ciphertext_blob_b64 is invalid base64")
 
         bad_digest = json.loads(json.dumps(payload))
         bad_digest["request_digest"] = "sha256:" + "0" * 64
         expect_failure(bad_digest, materials_file, aws, "request digest mismatch")
+
+        unauthorized = json.loads(json.dumps(payload))
+        unauthorized["material"] = "debug-material"
+        unauthorized["request_digest"] = sha256_prefixed(canonical_json(request_without_digest(unauthorized)).encode("utf-8"))
+        expect_failure(unauthorized, materials_file, aws, "unauthorized material")
 
         missing_doc = json.loads(json.dumps(payload))
         missing_doc["tee"].pop("raw_attestation_document_b64", None)

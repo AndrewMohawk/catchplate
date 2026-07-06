@@ -52,13 +52,13 @@ def main() -> None:
     if publisher.service_repo_name("serverware-decision-gate") != "decision-gate":
         raise AssertionError("service repo mapping did not strip serverware prefix")
     ref = publisher.repo_digest_from_inspect(
-        "registry.example/serverware/control",
+        "registry.prod.serverware.dev/serverware/control",
         [
-            "other.example/control@sha256:" + "0" * 64,
-            "registry.example/serverware/control@sha256:" + "1" * 64,
+            "registry.other.serverware.dev/control@sha256:" + "0" * 64,
+            "registry.prod.serverware.dev/serverware/control@sha256:" + "1" * 64,
         ],
     )
-    if ref != "registry.example/serverware/control@sha256:" + "1" * 64:
+    if ref != "registry.prod.serverware.dev/serverware/control@sha256:" + "1" * 64:
         raise AssertionError(f"repo digest extraction failed: {ref}")
 
     with tempfile.TemporaryDirectory() as tmp_raw:
@@ -69,7 +69,7 @@ def main() -> None:
             "--build-file",
             str(build_file),
             "--registry-prefix",
-            "registry.example/serverware",
+            "registry.prod.serverware.dev/serverware",
             "--tag",
             "2026-05-25",
             "--dry-run",
@@ -79,8 +79,8 @@ def main() -> None:
         plan = json.loads(result.stdout.decode("utf-8"))
         tags = [item["tag"] for item in plan.get("commands") or []]
         if tags != [
-            "registry.example/serverware/control:2026-05-25",
-            "registry.example/serverware/decision-gate:2026-05-25",
+            "registry.prod.serverware.dev/serverware/control:2026-05-25",
+            "registry.prod.serverware.dev/serverware/decision-gate:2026-05-25",
         ]:
             raise AssertionError(f"publish dry-run planned wrong tags: {plan}")
 
@@ -88,9 +88,13 @@ def main() -> None:
         bad = build_artifact()
         bad["no_shell"] = {"ok": False}
         bad_file.write_text(json.dumps(bad, sort_keys=True) + "\n", encoding="utf-8")
-        rejected = run_script("--build-file", str(bad_file), "--registry-prefix", "registry.example/serverware", "--dry-run")
+        rejected = run_script("--build-file", str(bad_file), "--registry-prefix", "registry.prod.serverware.dev/serverware", "--dry-run")
         if rejected.returncode == 0 or "no-shell" not in detail(rejected):
             raise AssertionError(f"publisher accepted an unverified build artifact: {detail(rejected)}")
+
+        placeholder = run_script("--build-file", str(build_file), "--registry-prefix", "registry.example/serverware", "--dry-run")
+        if placeholder.returncode == 0 or "placeholder .example registry" not in detail(placeholder):
+            raise AssertionError(f"publisher accepted a placeholder registry prefix: {detail(placeholder)}")
 
     print(json.dumps({"ok": True, "publish_production_images": "pass"}, sort_keys=True))
 

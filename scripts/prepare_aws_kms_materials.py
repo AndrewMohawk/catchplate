@@ -21,6 +21,7 @@ SECRET_FIELD_NAMES = {
     "unwrapped_key",
     "decrypted_key",
 }
+REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 
 
 def canonical_json(value: Any) -> str:
@@ -35,6 +36,13 @@ def load_spec(path: Path, *, require_plaintext_files: bool = True) -> dict[str, 
     parsed = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(parsed, dict) or not parsed:
         raise ValueError("AWS KMS materials spec must be a non-empty JSON object")
+    material_names = set(parsed)
+    missing = sorted(REQUIRED_MATERIALS - material_names)
+    unexpected = sorted(material_names - REQUIRED_MATERIALS)
+    if missing:
+        raise ValueError(f"AWS KMS materials spec is missing required materials: {missing}")
+    if unexpected:
+        raise ValueError(f"AWS KMS materials spec contains unauthorized materials: {unexpected}")
     for material, config in parsed.items():
         if not isinstance(material, str) or not material or "," in material:
             raise ValueError(f"invalid material name: {material!r}")

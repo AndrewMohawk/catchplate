@@ -111,6 +111,10 @@ def main() -> None:
                     "broker-kek": {
                         "key_id": "arn:aws:kms:us-east-1:111122223333:key/broker",
                         "plaintext_path": str(tmp / "missing.bin"),
+                    },
+                    "decision-gate-ca": {
+                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/ca",
+                        "plaintext_path": str(ca),
                     }
                 }
             ),
@@ -121,13 +125,54 @@ def main() -> None:
             raise AssertionError(f"dry-run should allow missing plaintext files: {detail(missing_dry)}")
         missing_dry_plan = json.loads(missing_dry.stdout.decode("utf-8"))
         missing_materials = missing_dry_plan.get("materials") or []
-        if len(missing_materials) != 1 or missing_materials[0].get("plaintext_path_exists") is not False:
+        missing_entry = next((item for item in missing_materials if item.get("material") == "broker-kek"), None)
+        if len(missing_materials) != 2 or not missing_entry or missing_entry.get("plaintext_path_exists") is not False:
             raise AssertionError(f"dry-run did not report missing plaintext file state: {missing_dry_plan}")
-        if missing_materials[0].get("plaintext_bytes") is not None:
+        if missing_entry.get("plaintext_bytes") is not None:
             raise AssertionError(f"dry-run reported bytes for missing plaintext: {missing_dry_plan}")
         missing_real = run_helper("--spec", str(missing_spec), "--aws-binary", str(aws), "--out", str(tmp / "missing.json"))
         if missing_real.returncode == 0 or "plaintext_path is not a file" not in detail(missing_real):
             raise AssertionError(f"real run accepted a missing plaintext file: {detail(missing_real)}")
+
+        partial_spec = tmp / "partial-spec.json"
+        partial_spec.write_text(
+            canonical_json(
+                {
+                    "broker-kek": {
+                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/broker",
+                        "plaintext_path": str(broker),
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        partial = run_helper("--spec", str(partial_spec), "--aws-binary", str(aws), "--dry-run")
+        if partial.returncode == 0 or "missing required materials" not in detail(partial):
+            raise AssertionError(f"materials helper accepted a partial material spec: {detail(partial)}")
+
+        extra_spec = tmp / "extra-spec.json"
+        extra_spec.write_text(
+            canonical_json(
+                {
+                    "broker-kek": {
+                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/broker",
+                        "plaintext_path": str(broker),
+                    },
+                    "decision-gate-ca": {
+                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/ca",
+                        "plaintext_path": str(ca),
+                    },
+                    "debug-material": {
+                        "key_id": "arn:aws:kms:us-east-1:111122223333:key/debug",
+                        "plaintext_path": str(broker),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        extra = run_helper("--spec", str(extra_spec), "--aws-binary", str(aws), "--dry-run")
+        if extra.returncode == 0 or "unauthorized materials" not in detail(extra):
+            raise AssertionError(f"materials helper accepted an unauthorized material spec: {detail(extra)}")
 
         out = tmp / "kms-materials.json"
         result = run_helper("--spec", str(spec), "--aws-binary", str(aws), "--out", str(out))

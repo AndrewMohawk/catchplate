@@ -159,11 +159,16 @@
             "additionalProperties": true,
             "properties": {
               "type": {"enum": ["bearer", "basic", "header", "query", "cookie"]},
-              "header": {"type": "string"},
-              "name": {"type": "string"},
-              "field": {"type": "string"},
-              "prefix": {"type": "string"},
-              "username": {"type": "string"}
+              "header": {"type": "string", "minLength": 1, "maxLength": 128},
+              "name": {"type": "string", "minLength": 1, "maxLength": 128},
+              "field": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+              },
+              "prefix": {"type": "string", "maxLength": 128},
+              "username": {"type": "string", "minLength": 1, "maxLength": 256}
             }
           }
         }

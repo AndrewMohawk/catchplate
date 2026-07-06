@@ -144,6 +144,31 @@ def main() -> None:
         if missing_material.returncode == 0 or "do not authorize" not in output_text(missing_material):
             raise AssertionError(f"collector accepted a material absent from the quote claims: {output_text(missing_material)}")
 
+        extra_claims_file = tmp / "claims-extra-material.json"
+        extra_claims_file.write_text(
+            json.dumps(claims(["broker-kek", "decision-gate-ca", "debug-material"]), sort_keys=True),
+            encoding="utf-8",
+        )
+        extra_claims = run_collector(env, extra_claims_file, "--allow-fixtures-for-test")
+        if extra_claims.returncode == 0 or "claims authorize unauthorized materials" not in output_text(extra_claims):
+            raise AssertionError(f"collector accepted unauthorized claim materials: {output_text(extra_claims)}")
+
+        unauthorized_material = run_collector(
+            env,
+            claims_file,
+            "--allow-fixtures-for-test",
+            "--material",
+            "debug-material",
+        )
+        if unauthorized_material.returncode == 0 or "unauthorized requested materials" not in output_text(unauthorized_material):
+            raise AssertionError(f"collector accepted an unauthorized requested material: {output_text(unauthorized_material)}")
+
+        bad_b64_env = dict(env)
+        bad_b64_env["SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_B64"] = "1"
+        bad_b64 = run_collector(bad_b64_env, claims_file, "--allow-fixtures-for-test")
+        if bad_b64.returncode == 0 or "attestation_document_b64 is invalid base64url" not in output_text(bad_b64):
+            raise AssertionError(f"collector accepted malformed Nitro attestation base64: {output_text(bad_b64)}")
+
         secret_env = dict(env)
         secret_env["SERVERWARE_NITRO_KMS_FIXTURE_SECRET_RESPONSE"] = "1"
         secret_result = run_collector(secret_env, claims_file, "--allow-fixtures-for-test")

@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 ROOT = Path(__file__).resolve().parent.parent
+FIXTURE_COMMAND_MARKERS = ("fixture", "cosign_fixture.py", "sigstore_fixture.py")
 
 
 def canonical_json(value: Any) -> str:
@@ -138,6 +139,57 @@ def run_json_command(command: str, payload: dict[str, Any], *, timeout: int = 60
     return response
 
 
+def command_mentions(raw: str, *needles: str) -> bool:
+    try:
+        words = shlex.split(raw)
+    except ValueError:
+        words = raw.split()
+    lowered = " ".join(words).lower()
+    return any(needle.lower() in lowered for needle in needles)
+
+
+def validate_production_sigstore_configuration(
+    *,
+    production_refs: bool,
+    signature_provider: str,
+    image_sign_command: str,
+    image_verify_command: str,
+    require_transparency: bool,
+    cosign_binary: str | None = None,
+) -> None:
+    if not production_refs:
+        return
+    if signature_provider != "sigstore-command":
+        raise ValueError("production image refs must be signed with SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command")
+    if not image_sign_command.strip():
+        raise ValueError("production image refs require SERVERWARE_IMAGE_SIGN_COMMAND")
+    if not image_verify_command.strip():
+        raise ValueError("production image refs require SERVERWARE_IMAGE_VERIFY_COMMAND")
+    if not require_transparency:
+        raise ValueError("production image refs require SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1")
+    if command_mentions(image_sign_command, *FIXTURE_COMMAND_MARKERS):
+        raise ValueError("production image signing command must not use fixture helpers")
+    if command_mentions(image_verify_command, *FIXTURE_COMMAND_MARKERS):
+        raise ValueError("production image verification command must not use fixture helpers")
+    selected_cosign = cosign_binary if cosign_binary is not None else os.getenv("SERVERWARE_COSIGN_BINARY", "cosign")
+    if command_mentions(selected_cosign, *FIXTURE_COMMAND_MARKERS):
+        raise ValueError("production image signing must not use fixture cosign helpers")
+
+
+def preload_env_file(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--env-file", default="")
+    args, _ = parser.parse_known_args(argv)
+    if not args.env_file:
+        return
+
+    import run_production_readiness
+
+    loaded = run_production_readiness.load_env_file(ROOT / args.env_file)
+    for key, value in loaded.items():
+        os.environ.setdefault(key, value)
+
+
 def validate_sigstore_response(response: dict[str, Any], *, statement_digest: str, require_transparency: bool) -> None:
     if response.get("statement_digest") != statement_digest:
         raise RuntimeError(f"external signature statement digest mismatch: {response}")
@@ -151,6 +203,29 @@ def validate_sigstore_response(response: dict[str, Any], *, statement_digest: st
         missing = sorted(required - set(transparency))
         if missing:
             raise RuntimeError(f"external signature is missing transparency fields {missing}: {response}")
+
+
+def validate_sigstore_verify_response(
+    verify: dict[str, Any],
+    *,
+    signature_response: dict[str, Any],
+    statement_digest: str,
+    require_transparency: bool,
+) -> None:
+    if verify.get("ok") is not True:
+        raise RuntimeError(f"external signature verification failed: {verify}")
+    if verify.get("statement_digest") != statement_digest:
+        raise RuntimeError(f"external signature verifier returned a different statement digest: {verify}")
+    if verify.get("key_provider") != signature_response.get("key_provider"):
+        raise RuntimeError(f"external signature verifier returned a different key provider: {verify}")
+    if require_transparency:
+        if verify.get("verified_transparency") is not True:
+            raise RuntimeError(f"external signature verifier did not prove transparency: {verify}")
+        verified_transparency = verify.get("transparency") if isinstance(verify.get("transparency"), dict) else {}
+        signed_transparency = signature_response.get("transparency") if isinstance(signature_response.get("transparency"), dict) else {}
+        for key in ("log_id", "entry_uuid", "integrated_time", "log_index", "inclusion_proof"):
+            if signed_transparency.get(key) != verified_transparency.get(key):
+                raise RuntimeError(f"external signature verifier returned different transparency {key}: {verify}")
 
 
 def external_sign_statement(
@@ -187,8 +262,12 @@ def external_sign_statement(
                 "signature_response": response,
             },
         )
-        if verify.get("ok") is not True:
-            raise RuntimeError(f"external signature verification failed: {verify}")
+        validate_sigstore_verify_response(
+            verify,
+            signature_response=response,
+            statement_digest=statement_digest,
+            require_transparency=require_transparency,
+        )
     return response
 
 
@@ -198,6 +277,7 @@ def statement_for_image(
     image: dict[str, Any],
     provenance: dict[str, Any],
     provenance_digest: str,
+    release_signing_key_id: str,
 ) -> dict[str, Any]:
     sbom = provenance["sbom"]["cyclonedx"]
     return {
@@ -217,6 +297,7 @@ def statement_for_image(
             "architecture": image.get("architecture"),
             "created": image.get("created"),
             "provenance_digest": provenance_digest,
+            "release_signing_key_id": release_signing_key_id,
             "source_tree_digest": provenance["source_tree"]["digest"],
             "compose_config_sha256": provenance["compose_config_sha256"],
             "sbom_cyclonedx_sha256": sbom["sha256"],
@@ -227,6 +308,13 @@ def statement_for_image(
 
 def image_refs_from_env() -> list[str]:
     return [item.strip() for item in os.getenv("SERVERWARE_PRODUCTION_IMAGES", "").split(",") if item.strip()]
+
+
+def image_refs_from_env_file(path: Path) -> list[str]:
+    import merge_production_images_env
+
+    raw = merge_production_images_env.load_images_fragment(path)
+    return [item["ref"] for item in merge_production_images_env.validate_production_images(raw)]
 
 
 def service_name_from_ref(ref: str) -> str:
@@ -265,7 +353,9 @@ def write_container_file(service: str, path: str, data: bytes) -> None:
 
 
 def main() -> None:
+    preload_env_file()
     parser = argparse.ArgumentParser(description="Sign release Docker images and publish signatures to the transparency log.")
+    parser.add_argument("--env-file", default="", help="Strict production readiness env file to load before resolving signer defaults.")
     parser.add_argument("--provenance", default=".tmp/release-provenance.json")
     parser.add_argument("--out", default=".tmp/image-signatures.json")
     parser.add_argument("--key", default=".tmp/image-signing-ed25519.pem")
@@ -278,6 +368,7 @@ def main() -> None:
     parser.add_argument("--image-sign-command", default=os.getenv("SERVERWARE_IMAGE_SIGN_COMMAND", ""))
     parser.add_argument("--image-verify-command", default=os.getenv("SERVERWARE_IMAGE_VERIFY_COMMAND", ""))
     parser.add_argument("--production-image", action="append", default=[], help="Digest-pinned production image ref to sign instead of Compose image inventory.")
+    parser.add_argument("--production-images-env", default="", help="Strict env fragment containing SERVERWARE_PRODUCTION_IMAGES refs to sign.")
     parser.add_argument(
         "--require-sigstore-transparency",
         action="store_true",
@@ -290,7 +381,13 @@ def main() -> None:
     verify_release_provenance(document)
     provenance = document["provenance"]
     provenance_digest = document["provenance_digest"]
-    production_refs = args.production_image or image_refs_from_env()
+    env_production_refs = image_refs_from_env()
+    if args.production_images_env:
+        if args.production_image or env_production_refs:
+            raise ValueError("--production-images-env cannot be combined with --production-image or SERVERWARE_PRODUCTION_IMAGES")
+        production_refs = image_refs_from_env_file(ROOT / args.production_images_env)
+    else:
+        production_refs = args.production_image or env_production_refs
     images = production_image_inventory(production_refs) if production_refs else provenance.get("images") or {}
     if not images:
         raise ValueError("release provenance contains no image inventory")
@@ -300,6 +397,13 @@ def main() -> None:
         raise ValueError(f"unsupported image signature provider: {signature_provider}")
     if signature_provider == "sigstore-command" and not args.image_sign_command.strip():
         raise ValueError("sigstore-command image signing requires SERVERWARE_IMAGE_SIGN_COMMAND or --image-sign-command")
+    validate_production_sigstore_configuration(
+        production_refs=bool(production_refs),
+        signature_provider=signature_provider,
+        image_sign_command=args.image_sign_command,
+        image_verify_command=args.image_verify_command,
+        require_transparency=args.require_sigstore_transparency,
+    )
     key = None
     key_info = {"spki_sha256": None, "pem": None}
     if signature_provider == "dev-ed25519":
@@ -313,6 +417,7 @@ def main() -> None:
             image=images[service],
             provenance=provenance,
             provenance_digest=provenance_digest,
+            release_signing_key_id=document["release_signing_key_id"],
         )
         statement_digest = sha256_prefixed_json(statement)
         entry = {
@@ -453,6 +558,7 @@ def main() -> None:
                 "image_signature_provider": signature_provider,
                 "images": len(image_entries),
                 "provenance_digest": provenance_digest,
+                "release_signing_key_id": document["release_signing_key_id"],
                 "transparency_mode": anchor_response.get("mode"),
                 "inclusion_verified": inclusion.get("verified") is True,
             },

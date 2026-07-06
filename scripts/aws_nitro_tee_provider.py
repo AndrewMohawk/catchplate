@@ -27,6 +27,7 @@ PROVIDER = "aws-nitro-enclaves"
 TEE_PLATFORM = "aws-nitro"
 COSE_ALG_ES384 = -35
 USER_DATA_PREFIX = b"serverware:nitro-claims:v1:"
+AUTHORIZED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 DEFAULT_FIXTURE_PCRS = {
     0: "11" * 48,
     1: "22" * 48,
@@ -43,8 +44,11 @@ def b64e(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
-def b64d(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+def b64d(value: str, label: str = "base64url value") -> bytes:
+    try:
+        return base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+    except Exception as exc:
+        raise SystemExit(f"{label} is invalid base64url") from exc
 
 
 def sha256_prefixed(value: bytes) -> str:
@@ -121,7 +125,7 @@ def attestation_document_from_command(command: str, claims: dict[str, Any]) -> b
     raw_b64 = response.get("attestation_document_b64") or response.get("raw_attestation_document_b64")
     if not isinstance(raw_b64, str) or not raw_b64:
         raise SystemExit("external Nitro attestation command missing attestation_document_b64")
-    return b64d(raw_b64)
+    return b64d(raw_b64, "external Nitro attestation command attestation_document_b64")
 
 
 def cert_not_before(cert: x509.Certificate) -> datetime:
@@ -548,7 +552,7 @@ def verify() -> None:
     claims = quote_doc.get("claims")
     if not isinstance(raw_b64, str) or not isinstance(claims, dict):
         raise SystemExit("Nitro quote missing raw attestation document or claims")
-    raw = b64d(raw_b64)
+    raw = b64d(raw_b64, "Nitro quote raw_attestation_document_b64")
     nitro = verify_nitro_document(raw, claims)
     nitro["raw_attestation_document_b64"] = raw_b64
     nitro["raw_attestation_document_sha256"] = sha256_prefixed(raw)
@@ -659,6 +663,8 @@ def release() -> None:
         for item in os.getenv("SERVERWARE_NITRO_ALLOWED_MATERIALS", "broker-kek,decision-gate-ca").split(",")
         if item.strip()
     }
+    if allowed != AUTHORIZED_MATERIALS:
+        raise SystemExit("Nitro release policy allowed materials must be exactly broker-kek and decision-gate-ca")
     if material not in allowed:
         raise SystemExit(f"material {material} is not allowed by Nitro release policy")
     claim_materials = {
@@ -666,6 +672,8 @@ def release() -> None:
         for item in (claims.get("materials") or [])
         if isinstance(item, str)
     }
+    if claim_materials != AUTHORIZED_MATERIALS:
+        raise SystemExit("verified Nitro claims must authorize exactly broker-kek and decision-gate-ca")
     if material not in claim_materials:
         raise SystemExit(f"material {material} is not authorized by verified Nitro claims")
     expected_field_checks(claims, expected)

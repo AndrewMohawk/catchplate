@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -26,6 +27,7 @@ from serverware.policy_bundle import (
 
 
 SENSITIVE_QUERY_KEYS = {"access_token", "api_key", "apikey", "key", "token", "auth", "authorization"}
+SECRET_FIELD_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 VOLATILE_DIGEST_HEADERS = {"date", "user-agent", "content-length", "connection", "authorization", "proxy-authorization"}
 
 
@@ -161,10 +163,31 @@ def _strip_identity_headers(flow: http.HTTPFlow, principal: PrincipalPolicy) -> 
         del flow.request.headers["Proxy-Authorization"]
 
 
+def _secret_for_injection(secret: str, injection: dict[str, Any]) -> str:
+    field = injection.get("field")
+    if not field:
+        return secret
+    if not isinstance(field, str) or not SECRET_FIELD_PATH_RE.fullmatch(field):
+        raise ValueError("credential injection field must be a dotted object path")
+    try:
+        value: Any = json.loads(secret)
+    except Exception as exc:
+        raise ValueError(f"credential secret is not JSON for field {field}") from exc
+    for part in str(field).split("."):
+        if not part:
+            continue
+        if not isinstance(value, dict) or part not in value:
+            raise ValueError(f"credential secret missing field {field}")
+        value = value[part]
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"credential secret field {field} is not a non-empty string")
+    return value
+
+
 def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy, credential: dict[str, Any]) -> str:
-    secret = credential["secret"]
     injection = credential_policy.injection or {"type": credential.get("kind", "bearer")}
     injection_type = injection.get("type", credential.get("kind", "bearer"))
+    secret = _secret_for_injection(str(credential["secret"]), injection)
 
     if injection_type == "bearer":
         header = injection.get("header", "Authorization")

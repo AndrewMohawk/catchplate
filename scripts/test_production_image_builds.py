@@ -6,6 +6,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import build_production_images
+import generate_release_provenance
+import verify_codebase_attestation
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -64,6 +68,11 @@ def assert_production_dependencies() -> None:
     prototype = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     if "SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY=0" not in prototype:
         raise AssertionError("prototype Dockerfile must default mitmproxy installation off")
+    compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    if "SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY" in compose:
+        raise AssertionError("default docker-compose.yml must not enable the mitmproxy prototype")
+    if '"8080:9090"' not in compose:
+        raise AssertionError("default docker-compose.yml must expose the Rust decision gate on the agent proxy port")
 
 
 def run_dry_build() -> dict:
@@ -80,9 +89,36 @@ def run_dry_build() -> dict:
     return json.loads(result.stdout.decode("utf-8"))
 
 
+def assert_source_tree_digest_covers_untracked_source() -> None:
+    probe = ROOT / "scripts" / "__source_digest_probe__.py"
+    if probe.exists():
+        raise AssertionError(f"unexpected source digest probe already exists: {probe}")
+    before = build_production_images.source_tree_digest()
+    try:
+        probe.write_text("# source digest coverage probe\nVALUE = 1\n", encoding="utf-8")
+        after = build_production_images.source_tree_digest()
+    finally:
+        probe.unlink(missing_ok=True)
+    if before == after:
+        raise AssertionError("source_tree_digest did not change for a new untracked source file")
+
+
+def assert_release_source_tree_digest_callers_agree() -> None:
+    build_digest = build_production_images.source_tree_digest()
+    provenance_digest = generate_release_provenance.source_tree()["digest"]
+    attestation_digest = verify_codebase_attestation.source_tree_digest(ROOT)
+    if len({build_digest, provenance_digest, attestation_digest}) != 1:
+        raise AssertionError(
+            "release source-tree digest callers disagree: "
+            f"build={build_digest} provenance={provenance_digest} attestation={attestation_digest}"
+        )
+
+
 def main() -> None:
     assert_dockerignore()
     assert_production_dependencies()
+    assert_source_tree_digest_covers_untracked_source()
+    assert_release_source_tree_digest_callers_agree()
     assert_distroless_no_shell(ROOT / "Dockerfile.production", "gcr.io/distroless/python3-debian12")
     assert_oci_traceability(ROOT / "Dockerfile.production")
     assert_distroless_no_shell(

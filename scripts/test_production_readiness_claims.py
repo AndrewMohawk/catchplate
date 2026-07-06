@@ -186,7 +186,10 @@ def main() -> None:
         raise AssertionError(f"debug opt-in did not preserve debug claim: {allowed_debug}")
 
     missing_material_attestation, missing_material_policy = fixture(materials=["broker-kek"])
-    expect_failure(missing_material_attestation, missing_material_policy, "broker-kek and decision-gate-ca")
+    expect_failure(missing_material_attestation, missing_material_policy, "exactly broker-kek and decision-gate-ca")
+
+    extra_material_attestation, extra_material_policy = fixture(materials=["broker-kek", "decision-gate-ca", "debug-material"])
+    expect_failure(extra_material_attestation, extra_material_policy, "exactly broker-kek and decision-gate-ca")
 
     bad_policy = copy.deepcopy(policy_status)
     bad_policy["policy_hash"] = "sha256:" + "0" * 64

@@ -17,10 +17,9 @@ from typing import Any
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 
+import serverware_source_tree
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE_SUFFIXES = {".py", ".sh", ".json", ".toml", ".lock", ".md", ".yml", ".yaml"}
-SOURCE_NAMES = {"Dockerfile", "Dockerfile.production", "Makefile", "requirements.txt", ".dockerignore"}
 
 
 def canonical_json(value: Any) -> str:
@@ -40,18 +39,7 @@ def b64d(value: str) -> bytes:
 
 
 def source_tree_digest(root: Path) -> str:
-    files = []
-    for path in sorted(root.rglob("*")):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root)
-        if any(part in {".git", ".tmp", "__pycache__", "target"} for part in rel.parts):
-            continue
-        if path.suffix not in SOURCE_SUFFIXES and path.name not in SOURCE_NAMES and (not rel.parts or rel.parts[0] != "security"):
-            continue
-        raw = path.read_bytes()
-        files.append({"path": str(rel), "bytes": len(raw), "sha256": sha256_prefixed(raw)})
-    return sha256_prefixed_json(files)
+    return serverware_source_tree.source_tree_digest(root)
 
 
 def request_bytes(url: str, *, headers: dict[str, str] | None = None) -> tuple[bytes, dict[str, str]]:

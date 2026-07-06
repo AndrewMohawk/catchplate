@@ -12,6 +12,7 @@ from serverware.config import PUBLIC_URL
 
 
 SENSITIVE_QUERY_KEYS = {"access_token", "api_key", "apikey", "key", "token", "auth", "authorization"}
+SECRET_FIELD_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 GMAIL_LIST_RE = re.compile(r"^/gmail/v1/users/[^/]+/messages/?$")
 GMAIL_GET_RE = re.compile(r"^/gmail/v1/users/[^/]+/messages/([^/?#]+)$")
 OLDER_THAN_RE = re.compile(r"\bolder_than:(\d+)([dmy])\b", re.IGNORECASE)
@@ -159,6 +160,25 @@ def remember_gmail_response(flow: Any, route: dict[str, Any]) -> None:
     )
 
 
+def _secret_for_injection(secret: str, injection: dict[str, Any]) -> str:
+    field = injection.get("field")
+    if not field:
+        return secret
+    if not isinstance(field, str) or not SECRET_FIELD_PATH_RE.fullmatch(field):
+        raise ValueError("credential injection field must be a dotted object path")
+    try:
+        value: Any = json.loads(secret)
+    except Exception:
+        return ""
+    for part in str(field).split("."):
+        if not part:
+            continue
+        if not isinstance(value, dict) or part not in value:
+            return ""
+        value = value[part]
+    return value if isinstance(value, str) else ""
+
+
 def inject_credential(flow: Any, route: dict[str, Any]) -> str:
     credential_id = route.get("credential_id")
     if not credential_id:
@@ -167,9 +187,11 @@ def inject_credential(flow: Any, route: dict[str, Any]) -> str:
     if not credential:
         return "credential missing"
 
-    secret = credential["secret"]
     injection = route.get("injection") or {}
     injection_type = injection.get("type") or credential.get("kind") or "bearer"
+    secret = _secret_for_injection(str(credential["secret"]), injection)
+    if not secret:
+        return f"credential secret missing field {injection.get('field')}"
 
     if injection_type == "bearer":
         header = injection.get("header", "Authorization")

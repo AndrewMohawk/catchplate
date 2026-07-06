@@ -179,6 +179,8 @@ struct GateState {
     policy_reload_success: AtomicU64,
     policy_reload_failed: AtomicU64,
     grants: Mutex<HashMap<String, Grant>>,
+    gmail_proofs: Mutex<HashMap<(String, String, String), u128>>,
+    gmail_proof_cache_max: usize,
     constraint_rate_counters: Mutex<HashMap<String, ConstraintRateCounter>>,
     credential_generations: Mutex<HashMap<String, Option<u64>>>,
     generation_mtime: Mutex<Option<SystemTime>>,
@@ -296,6 +298,11 @@ struct GrantCreate {
 struct ConsumedGrant {
     id: String,
     approval_id: Option<String>,
+}
+
+struct PendingApproval {
+    id: String,
+    expires_at: Option<String>,
 }
 
 fn default_grant_uses() -> u64 {
@@ -1100,6 +1107,11 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 .lock()
                 .expect("grant cache mutex poisoned")
                 .clear();
+            state
+                .gmail_proofs
+                .lock()
+                .expect("gmail proof cache mutex poisoned")
+                .clear();
             state.policy_reload_success.fetch_add(1, Ordering::Relaxed);
             enqueue_audit(
                 state,
@@ -1111,6 +1123,7 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     "policy_signing_key_id":next.policy_signing_key_id.clone(),
                     "routes":next.routes.len(),
                     "grants_cleared":true,
+                    "gmail_proofs_cleared":true,
                 }),
             );
             Ok(true)
@@ -1962,8 +1975,12 @@ fn consume_shared_grant(
     request_digest: &str,
     operation_digest: &str,
     flow_id: &str,
-) -> Result<Option<ConsumedGrant>, String> {
-    let url = state
+    method: &str,
+    request_url: &str,
+    canonical_request: &Value,
+    redacted_display: &Value,
+) -> Result<(Option<ConsumedGrant>, Option<PendingApproval>), String> {
+    let grant_consume_url = state
         .grant_consume_url
         .as_ref()
         .ok_or("shared grant consume URL is not configured")?;
@@ -1980,11 +1997,15 @@ fn consume_shared_grant(
         "requestDigest":request_digest,
         "operationDigest":operation_digest,
         "flowId":flow_id,
+        "method":method,
+        "url":request_url,
+        "canonicalRequest":canonical_request,
+        "redactedDisplay":redacted_display,
     }))
     .map_err(|err| format!("serialize shared grant consume request: {err}"))?;
     let response = state
         .audit_client
-        .post(url)
+        .post(grant_consume_url)
         .header("X-Serverware-Data-Plane-Token", token.as_str())
         .header("Content-Type", "application/json")
         .body(body)
@@ -2003,7 +2024,19 @@ fn consume_shared_grant(
         return Err(format!("shared grant consume response was not ok: {value}"));
     }
     if value.get("consumed").and_then(Value::as_bool) != Some(true) {
-        return Ok(None);
+        let pending = value
+            .get("approval_id")
+            .or_else(|| value.get("approval_request_id"))
+            .and_then(Value::as_str)
+            .map(|id| PendingApproval {
+                id: id.to_string(),
+                expires_at: value
+                    .get("expires_at")
+                    .or_else(|| value.get("expiresAt"))
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            });
+        return Ok((None, pending));
     }
     let id = value
         .get("grant_id")
@@ -2015,7 +2048,7 @@ fn consume_shared_grant(
         .or_else(|| value.get("approval_request_id"))
         .and_then(Value::as_str)
         .map(str::to_string);
-    Ok(Some(ConsumedGrant { id, approval_id }))
+    Ok((Some(ConsumedGrant { id, approval_id }), None))
 }
 
 fn consume_grant(
@@ -2028,9 +2061,13 @@ fn consume_grant(
     request_digest: &str,
     operation_digest: &str,
     flow_id: &str,
-) -> Result<(Option<ConsumedGrant>, &'static str), String> {
+    method: &str,
+    url: &str,
+    canonical_request: &Value,
+    redacted_display: &Value,
+) -> Result<(Option<ConsumedGrant>, &'static str, Option<PendingApproval>), String> {
     if state.grant_consume_url.is_some() {
-        return consume_shared_grant(
+        let (consumed, pending) = consume_shared_grant(
             state,
             principal_id,
             route_id,
@@ -2040,8 +2077,12 @@ fn consume_grant(
             request_digest,
             operation_digest,
             flow_id,
-        )
-        .map(|grant| (grant, "shared"));
+            method,
+            url,
+            canonical_request,
+            redacted_display,
+        )?;
+        return Ok((consumed, "shared", pending));
     }
     Ok((
         consume_local_grant(
@@ -2055,6 +2096,7 @@ fn consume_grant(
             operation_digest,
         ),
         "local",
+        None,
     ))
 }
 
@@ -3818,6 +3860,9 @@ fn decide_internal(
         );
     };
     let route = route_match.route;
+    if route.adapter_type == "gmail.v1" {
+        merge_gmail_proofs(state, &mut req, &principal.id, &route.id);
+    }
     let credential_ref = route.credential_ref.clone();
     let injection = if let Some(credential_id) = credential_ref.as_ref() {
         let Some(credential) = snapshot.credentials.get(credential_id) else {
@@ -3939,6 +3984,18 @@ fn decide_internal(
         "operation_digest":operation_digest,
         "now_ms":now_epoch_ms(),
     }));
+    let redacted_display = json!({
+        "method": req.method.clone(),
+        "url": url.as_str(),
+        "route_id": route.id.clone(),
+        "principal": principal.id.clone(),
+        "operation": operation.clone(),
+        "body_sha256": canonical
+            .get("request")
+            .and_then(|request| request.get("body_sha256"))
+            .cloned()
+            .unwrap_or(Value::Null),
+    });
     let jit_required = route
         .jit
         .get("required")
@@ -3952,7 +4009,7 @@ fn decide_internal(
             started,
         );
     }
-    let (consumed_grant, grant_store) = if jit_required {
+    let (consumed_grant, grant_store, pending_approval) = if jit_required {
         match consume_grant(
             state,
             &principal.id,
@@ -3963,6 +4020,10 @@ fn decide_internal(
             &request_digest,
             &operation_digest,
             &flow_id,
+            &req.method,
+            url.as_str(),
+            &canonical,
+            &redacted_display,
         ) {
             Ok(result) => result,
             Err(err) => {
@@ -3975,7 +4036,7 @@ fn decide_internal(
             }
         }
     } else {
-        (None, "none")
+        (None, "none", None)
     };
     let allowed = !jit_required || consumed_grant.is_some();
     let action = if allowed { "allow" } else { "jit_required" };
@@ -4051,11 +4112,20 @@ fn decide_internal(
         "jit": if jit_required {
             match consumed_grant {
                 Some(ref grant) => json!({"required":true,"grant_consumed":true,"grant_id":grant.id,"approval_id":grant.approval_id,"grant_store":grant_store}),
-                None => json!({"required":true,"grant_consumed":false,"grant_store":grant_store,"retry_after_seconds":3}),
+                None => json!({
+                    "required":true,
+                    "grant_consumed":false,
+                    "grant_store":grant_store,
+                    "approval_id":pending_approval.as_ref().map(|approval| approval.id.clone()),
+                    "expires_at":pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
+                    "retry_after_seconds":3
+                }),
             }
         } else {
             json!({"required":false})
         },
+        "approval_id": pending_approval.as_ref().map(|approval| approval.id.clone()),
+        "expires_at": pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
         "injection": if allowed {
             json!({
                 "credential_ref":route.credential_ref,
@@ -4417,6 +4487,55 @@ fn insert_header(headers: &mut HeaderMap, name: &str, value: String) -> Result<(
     Ok(())
 }
 
+fn secret_field_path_parts(field: &str) -> Result<Vec<&str>, String> {
+    let parts = field.split('.').collect::<Vec<_>>();
+    if parts.is_empty() {
+        return Err("credential injection field must be a dotted object path".to_string());
+    }
+    for part in &parts {
+        let mut bytes = part.bytes();
+        let Some(first) = bytes.next() else {
+            return Err("credential injection field must be a dotted object path".to_string());
+        };
+        if !(first == b'_' || first.is_ascii_alphabetic()) {
+            return Err("credential injection field must be a dotted object path".to_string());
+        }
+        if !bytes.all(|item| item == b'_' || item.is_ascii_alphanumeric()) {
+            return Err("credential injection field must be a dotted object path".to_string());
+        }
+    }
+    Ok(parts)
+}
+
+fn secret_for_injection(lease: &SecretLease, injection: &Value) -> Result<String, String> {
+    let Some(field) = injection.get("field").and_then(Value::as_str) else {
+        return Ok(lease.secret.clone());
+    };
+    let payload: Value = serde_json::from_str(&lease.secret)
+        .map_err(|err| format!("credential secret is not JSON for field {field}: {err}"))?;
+    let mut value = &payload;
+    for part in secret_field_path_parts(field)? {
+        let Some(object) = value.as_object() else {
+            return Err(format!("credential secret missing field {field}"));
+        };
+        let Some(next) = object.get(part) else {
+            return Err(format!("credential secret missing field {field}"));
+        };
+        value = next;
+    }
+    let Some(value) = value.as_str() else {
+        return Err(format!(
+            "credential secret field {field} is not a non-empty string"
+        ));
+    };
+    if value.is_empty() {
+        return Err(format!(
+            "credential secret field {field} is not a non-empty string"
+        ));
+    }
+    Ok(value.to_string())
+}
+
 fn apply_credential_injection(
     headers: &mut HeaderMap,
     url: &mut Url,
@@ -4427,6 +4546,7 @@ fn apply_credential_injection(
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or("bearer");
+    let secret = secret_for_injection(lease, injection)?;
     match injection_type {
         "bearer" => {
             let header = injection
@@ -4437,7 +4557,7 @@ fn apply_credential_injection(
                 .get("prefix")
                 .and_then(Value::as_str)
                 .unwrap_or("Bearer ");
-            insert_header(headers, header, format!("{prefix}{}", lease.secret))
+            insert_header(headers, header, format!("{prefix}{secret}"))
         }
         "header" => {
             let header = injection
@@ -4448,14 +4568,14 @@ fn apply_credential_injection(
                 .get("prefix")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            insert_header(headers, header, format!("{prefix}{}", lease.secret))
+            insert_header(headers, header, format!("{prefix}{secret}"))
         }
         "query" => {
             let name = injection
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("access_token");
-            url.query_pairs_mut().append_pair(name, &lease.secret);
+            url.query_pairs_mut().append_pair(name, &secret);
             Ok(())
         }
         "cookie" => {
@@ -4473,7 +4593,7 @@ fn apply_credential_injection(
             }
             value.push_str(name);
             value.push('=');
-            value.push_str(&lease.secret);
+            value.push_str(&secret);
             insert_header(headers, "cookie", value)
         }
         "basic" => {
@@ -4482,7 +4602,7 @@ fn apply_credential_injection(
                 .and_then(Value::as_str)
                 .or_else(|| lease.metadata.get("username").map(String::as_str))
                 .ok_or("basic credential missing username")?;
-            let token = general_purpose::STANDARD.encode(format!("{username}:{}", lease.secret));
+            let token = general_purpose::STANDARD.encode(format!("{username}:{secret}"));
             insert_header(headers, "authorization", format!("Basic {token}"))
         }
         other => Err(format!("unknown injection type {other}")),
@@ -4515,6 +4635,80 @@ fn validate_gmail_internal_date_value(raw_value: Option<&Value>, days: u64) -> R
         return Err(json!({"error":"gmail_response_too_old","max_days":days}));
     }
     Ok(())
+}
+
+fn prune_gmail_proofs(cache: &mut HashMap<(String, String, String), u128>, now: u128) {
+    cache.retain(|_, expires_at_ms| *expires_at_ms > now);
+}
+
+fn active_gmail_proofs(state: &GateState, principal_id: &str, route_id: &str) -> Vec<String> {
+    let now = now_epoch_ms();
+    let mut cache = state
+        .gmail_proofs
+        .lock()
+        .expect("gmail proof cache mutex poisoned");
+    prune_gmail_proofs(&mut cache, now);
+    cache
+        .iter()
+        .filter_map(|((principal, route, message_id), expires_at_ms)| {
+            if principal == principal_id && route == route_id && *expires_at_ms > now {
+                Some(message_id.clone())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+fn merge_gmail_proofs(
+    state: &GateState,
+    req: &mut DecisionRequest,
+    principal_id: &str,
+    route_id: &str,
+) {
+    let mut proofs = active_gmail_proofs(state, principal_id, route_id);
+    proofs.extend(req.gmail_proofs.iter().cloned());
+    proofs.sort();
+    proofs.dedup();
+    req.gmail_proofs = proofs;
+}
+
+fn gmail_proof_ttl_ms(route: &Route) -> u128 {
+    config_u64(&route.adapter_config, "cacheTtlSeconds", 1800).clamp(1, 86_400) as u128 * 1000
+}
+
+fn remember_gmail_proofs(
+    state: &GateState,
+    principal_id: &str,
+    route_id: &str,
+    route: &Route,
+    message_ids: Vec<String>,
+) {
+    if message_ids.is_empty() {
+        return;
+    }
+    let now = now_epoch_ms();
+    let expires_at_ms = now.saturating_add(gmail_proof_ttl_ms(route));
+    let mut cache = state
+        .gmail_proofs
+        .lock()
+        .expect("gmail proof cache mutex poisoned");
+    prune_gmail_proofs(&mut cache, now);
+    for message_id in message_ids {
+        if message_id.is_empty() || message_id.len() > 512 {
+            continue;
+        }
+        while cache.len() >= state.gmail_proof_cache_max {
+            let Some(key) = cache.keys().next().cloned() else {
+                break;
+            };
+            cache.remove(&key);
+        }
+        cache.insert(
+            (principal_id.to_string(), route_id.to_string(), message_id),
+            expires_at_ms,
+        );
+    }
 }
 
 fn allowed_field_paths(response_config: &Value) -> Vec<Vec<String>> {
@@ -7302,6 +7496,7 @@ fn validate_forward_response(
     };
     let days = config_u64(&route_match.route.adapter_config, "maxAgeDays", 30);
     let is_list_response = !route_match.params.contains_key("message_id");
+    let mut validated_message_ids = Vec::new();
     if validate_internal_date {
         if !is_list_response {
             if let Err(payload) = validate_gmail_internal_date(&payload, days) {
@@ -7341,6 +7536,7 @@ fn validate_forward_response(
                         "serverwareAgeProof".to_string(),
                         Value::String("validated".to_string()),
                     );
+                    validated_message_ids.push(id);
                 }
             }
             if !pending.is_empty() {
@@ -7352,6 +7548,15 @@ fn validate_forward_response(
                 }
             }
         }
+    }
+    if is_list_response {
+        remember_gmail_proofs(
+            state,
+            principal_id,
+            route_id,
+            route_match.route,
+            validated_message_ids,
+        );
     }
     let redacted = apply_gmail_allowed_fields(&mut payload, response_config, is_list_response);
     match serde_json::to_vec(&payload) {
@@ -9177,6 +9382,11 @@ fn main() -> Result<(), String> {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .clamp(1, 200);
+    let gmail_proof_cache_max = env::var("SERVERWARE_GMAIL_PROOF_CACHE_MAX")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(10_000)
+        .max(1);
     let audit_flush_ms = env::var("SERVERWARE_DATA_PLANE_AUDIT_FLUSH_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
@@ -9200,6 +9410,8 @@ fn main() -> Result<(), String> {
         policy_reload_success: AtomicU64::new(0),
         policy_reload_failed: AtomicU64::new(0),
         grants: Mutex::new(HashMap::new()),
+        gmail_proofs: Mutex::new(HashMap::new()),
+        gmail_proof_cache_max,
         constraint_rate_counters: Mutex::new(HashMap::new()),
         credential_generations: Mutex::new(HashMap::new()),
         generation_mtime: Mutex::new(None),

@@ -1320,6 +1320,7 @@ def ensure_jit_approval_request(
         if existing:
             return row_to_approval(existing)
 
+        _ensure_policy_route_reference(conn, route_id)
         item_id = str(uuid.uuid4())
         conn.execute(
             """
@@ -1351,6 +1352,29 @@ def ensure_jit_approval_request(
         )
         row = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
     return row_to_approval(row)
+
+
+def _ensure_policy_route_reference(conn: Any, route_id: str) -> None:
+    existing = conn.execute("SELECT id FROM routes WHERE id = ?", (route_id,)).fetchone()
+    if existing:
+        return
+    now_s = iso_now()
+    conn.execute(
+        """
+        INSERT INTO routes (
+            id, name, enabled, match_host, match_path_prefix,
+            credential_id, injection, policies, created_at, updated_at
+        )
+        VALUES (?, ?, 0, ?, '/', NULL, '{}', '[]', ?, ?)
+        """,
+        (
+            route_id,
+            f"Policy bundle route {route_id}",
+            "__policy_bundle__",
+            now_s,
+            now_s,
+        ),
+    )
 
 
 def get_approval_request(item_id: str) -> dict[str, Any] | None:

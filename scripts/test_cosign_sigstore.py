@@ -101,6 +101,9 @@ def main() -> None:
         raise AssertionError(f"unexpected provider: {signature_response}")
     if signature_response.get("statement_digest") != sign_payload["statement_digest"]:
         raise AssertionError(f"signature response digest mismatch: {signature_response}")
+    bundle_digest = (((signature_response.get("bundle") or {}).get("messageSignature") or {}).get("messageDigest") or {}).get("digest")
+    if bundle_digest != sign_payload["statement_digest"].split(":", 1)[1]:
+        raise AssertionError(f"cosign bundle did not sign the canonical statement digest: {signature_response}")
     if (signature_response.get("key_provider") or {}).get("key_id") != env["SERVERWARE_COSIGN_KEY_ID"]:
         raise AssertionError(f"signature response did not bind configured key ID: {signature_response}")
     transparency = signature_response.get("transparency") or {}

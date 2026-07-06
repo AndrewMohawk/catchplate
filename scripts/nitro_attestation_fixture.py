@@ -62,6 +62,8 @@ def attest() -> None:
         "request_digest": payload["request_digest"],
         "attestation_document_b64": b64e(make_fixture_attestation_document(document_claims)),
     }
+    if os.getenv("SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_B64"):
+        response["attestation_document_b64"] = "not-valid-@@@@"
     if os.getenv("SERVERWARE_NITRO_ATTESTATION_FIXTURE_BAD_DIGEST"):
         response["request_digest"] = "sha256:" + "0" * 64
     print(canonical_json(response))

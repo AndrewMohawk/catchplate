@@ -118,8 +118,8 @@ def readiness_claims_from_attestation(
     if not isinstance(claims.get("release_channel"), str) or not claims.get("release_channel"):
         raise ValueError("claim release_channel is required")
     materials = {str(item) for item in (claims.get("materials") or []) if isinstance(item, str)}
-    if not REQUIRED_MATERIALS.issubset(materials):
-        raise ValueError("claims must authorize broker-kek and decision-gate-ca")
+    if materials != REQUIRED_MATERIALS:
+        raise ValueError("claims must authorize exactly broker-kek and decision-gate-ca")
     if claims.get("debug") and not allow_debug_claims:
         raise ValueError("production readiness claims must not be debug claims")
     return claims

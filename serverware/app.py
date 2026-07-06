@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hmac
+import html
 import hashlib
 import json
 import secrets
@@ -48,6 +49,7 @@ from serverware import db, grants, runtime
 from serverware.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, AdminIdentity, admin_status, issue_csrf_cookie, require_admin, require_role, rotate_generated_admin_token, validate_csrf_request
 from serverware.enrollment import AgentEnrollmentError, build_agent_enrollment
 from serverware.key_release import KeyReleaseError, release_material, status as key_release_status
+from serverware.oauth import OAuthError, create_authorization_url, exchange_authorization_code, provider_status
 from serverware.policy_bundle import (
     PolicyBundleError,
     compile_policy_bundle,
@@ -133,6 +135,14 @@ class CredentialUpdate(BaseModel):
     kind: str | None = None
     secret: str | None = None
     metadata: dict[str, Any] | None = None
+    mfa: dict[str, Any] | None = None
+
+
+class OAuthStartRequest(BaseModel):
+    provider: str = Field(min_length=1)
+    credential_name: str | None = Field(default=None, alias="credentialName")
+    scopes: list[str] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     mfa: dict[str, Any] | None = None
 
 
@@ -306,6 +316,10 @@ class DataPlaneGrantConsume(BaseModel):
     request_digest: str = Field(alias="requestDigest", min_length=1)
     operation_digest: str | None = Field(default=None, alias="operationDigest")
     flow_id: str = Field(alias="flowId", min_length=1)
+    method: str = Field(default="UNKNOWN", min_length=1)
+    url: str = Field(default="serverware://data-plane/jit", min_length=1)
+    canonical_request: dict[str, Any] = Field(default_factory=dict, alias="canonicalRequest")
+    redacted_display: dict[str, Any] = Field(default_factory=dict, alias="redactedDisplay")
 
 
 class DataPlaneRateLimitConsume(BaseModel):
@@ -378,14 +392,18 @@ def healthz() -> dict[str, Any]:
 
 
 def _approval_jit_policy(approval: dict[str, Any]) -> dict[str, Any]:
+    route = _active_route_by_id(str(approval.get("route_id") or ""))
+    return route.jit or {}
+
+
+def _active_route_by_id(route_id: str) -> Any:
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
-    route_id = approval.get("route_id")
     route = next((item for item in snapshot.routes if item.id == route_id), None)
     if not route:
         raise HTTPException(status_code=409, detail="approval route is not in the active policy")
-    return route.jit or {}
+    return route
 
 
 def _approval_authn_policy(jit: dict[str, Any]) -> dict[str, Any]:
@@ -1424,6 +1442,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "policy_signature": metadata.get("signature") if isinstance(metadata, dict) else None,
         "policy_signing_key_id": metadata.get("signingKeyId") if isinstance(metadata, dict) else None,
         "policy_path": str(POLICY_BUNDLE_PATH),
+        "oauthProviders": provider_status(),
         **admin_status(),
     }
     db.record_audit_event(
@@ -1940,6 +1959,135 @@ def agent_enrollment(
         )
     except AgentEnrollmentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/oauth/providers")
+def oauth_providers(_: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner"))) -> dict[str, Any]:
+    return {"providers": provider_status()}
+
+
+@app.post("/api/oauth/start")
+def oauth_start(
+    payload: OAuthStartRequest,
+    identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner")),
+) -> dict[str, Any]:
+    mutation_payload = payload.model_dump(exclude={"mfa"})
+    payload_digest = _control_plane_payload_digest(mutation_payload)
+    mfa = _require_control_plane_mutation_mfa(
+        action="credential.create",
+        resource_id=None,
+        payload_digest=payload_digest,
+        mfa=payload.mfa,
+        identity=identity,
+    )
+    two_person = _require_control_plane_two_person(
+        action="credential.create",
+        resource_id=None,
+        payload_digest=payload_digest,
+        mfa=payload.mfa,
+        identity=identity,
+        request={
+            "credential_type": "oauth2",
+            "provider": payload.provider,
+            "credential_name": payload.credential_name,
+            "scopes": payload.scopes or [],
+            "metadata_keys": sorted(payload.metadata),
+        },
+    )
+    try:
+        started = create_authorization_url(
+            provider_id=payload.provider,
+            credential_name=payload.credential_name,
+            scopes=payload.scopes,
+            metadata=payload.metadata,
+            actor_id=identity.user_id,
+            control_plane_mfa=mfa,
+            control_plane_approval=two_person,
+        )
+    except OAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.record_audit_event(
+        "credential.oauth_authorization_started",
+        {
+            "provider": started["provider"],
+            "credential_name": payload.credential_name,
+            "scopes": started["scopes"],
+            "state_hash": "sha256:" + hashlib.sha256(started["state"].encode("ascii")).hexdigest(),
+            "expires_at_epoch": started["expiresAtEpoch"],
+            "control_plane_mfa": mfa,
+            "control_plane_approval": two_person,
+            "payload_digest": payload_digest,
+        },
+        actor_id=identity.user_id,
+    )
+    return started
+
+
+@app.get("/api/oauth/callback/{provider_id}")
+def oauth_callback(
+    provider_id: str,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+    error_description: str | None = None,
+) -> HTMLResponse:
+    if error:
+        detail = html.escape(error_description or error)
+        return HTMLResponse(
+            f"<h1>OAuth denied</h1><p>{detail}</p>",
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    if not code or not state:
+        return HTMLResponse(
+            "<h1>OAuth failed</h1><p>Missing code or state.</p>",
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    try:
+        exchanged = exchange_authorization_code(provider_id=provider_id, code=code, state=state)
+    except OAuthError as exc:
+        detail = html.escape(str(exc))
+        return HTMLResponse(
+            f"<h1>OAuth failed</h1><p>{detail}</p>",
+            status_code=400,
+            headers={"Cache-Control": "no-store"},
+        )
+    credential = db.create_credential(
+        exchanged["name"],
+        exchanged["kind"],
+        exchanged["secret"],
+        exchanged["metadata"],
+    )
+    runtime.publish_credential_generation(credential["id"], int(credential["credential_version"]))
+    runtime.publish_credential_lease_from_db(credential["id"])
+    actor_id = exchanged.get("createdBy") or "oauth-callback"
+    db.record_audit_event(
+        "credential.oauth_connected",
+        {
+            "credential_id": credential["id"],
+            "name": credential["name"],
+            "kind": credential["kind"],
+            "credential_version": credential.get("credential_version"),
+            "secret_kek_id": credential.get("secret_kek_id"),
+            "provider": exchanged["provider"],
+            "scopes": exchanged["scopes"],
+            "expires_at_epoch_ms": exchanged.get("expiresAtEpochMs"),
+            "control_plane_mfa": exchanged.get("controlPlaneMfa"),
+            "control_plane_approval": exchanged.get("controlPlaneApproval"),
+        },
+        actor_id=actor_id,
+    )
+    return HTMLResponse(
+        """
+        <h1>OAuth credential connected</h1>
+        <p>The credential is encrypted in Serverware and can now be assigned to a policy route.</p>
+        <script>
+          setTimeout(() => { window.location.href = "/"; }, 1200);
+        </script>
+        """,
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/credentials")
@@ -2696,7 +2844,54 @@ def data_plane_grant_consume(
         operation_digest=payload.operation_digest,
         flow_id=payload.flow_id,
     )
-    return {"ok": True, **result}
+    if result.get("consumed"):
+        return {"ok": True, **result}
+    snapshot = get_policy_snapshot()
+    if not snapshot:
+        raise HTTPException(status_code=503, detail="policy bundle missing")
+    if snapshot.hash != payload.policy_hash:
+        raise HTTPException(status_code=409, detail="data-plane policy hash is not active")
+    route = _active_route_by_id(payload.route_id)
+    if route.credential_ref and route.credential_ref != payload.credential_ref:
+        raise HTTPException(status_code=409, detail="data-plane credential reference does not match active route")
+    jit = route.jit or {}
+    if not jit.get("required"):
+        return {"ok": True, **result}
+    pending_ttl = max(1, min(int(jit.get("pendingTtlSeconds", 300)), 3600))
+    grant_ttl = max(1, min(int(jit.get("ttlSeconds", 30)), 3600))
+    max_uses = max(1, int(jit.get("maxUses", 1)))
+    redacted_display = payload.redacted_display or {
+        "method": payload.method,
+        "url": payload.url,
+        "route_id": payload.route_id,
+        "principal": payload.principal_id,
+        "operation": payload.canonical_request.get("operation"),
+        "body_sha256": (payload.canonical_request.get("request") or {}).get("body_sha256"),
+    }
+    approval = db.ensure_jit_approval_request(
+        route_id=payload.route_id,
+        method=payload.method,
+        url=payload.url,
+        principal_id=payload.principal_id,
+        credential_id=payload.credential_ref,
+        credential_version=payload.credential_version,
+        policy_hash=payload.policy_hash,
+        request_digest=payload.request_digest,
+        operation_digest=payload.operation_digest,
+        canonical_request=payload.canonical_request,
+        redacted_display=redacted_display,
+        pending_ttl_seconds=pending_ttl,
+        grant_ttl_seconds=grant_ttl,
+        grant_max_uses=max_uses,
+    )
+    return {
+        "ok": True,
+        **result,
+        "approval_id": approval["id"],
+        "approval_request_id": approval["id"],
+        "expires_at": approval["expires_at"],
+        "retry_after_seconds": 3,
+    }
 
 
 @app.post("/api/data-plane/rate-limits/consume")
@@ -3033,6 +3228,7 @@ UI_HTML = r"""
     .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
     .main-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
     .json { max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .hint { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
     @media (max-width: 980px) {
       main { grid-template-columns: 1fr; }
       aside { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -3077,6 +3273,22 @@ UI_HTML = r"""
           </form>
         </section>
         <section>
+          <h2>OAuth Login</h2>
+          <form id="oauth-form">
+            <label>Provider</label>
+            <select name="provider" id="oauth-provider"></select>
+            <label>Credential name</label>
+            <input name="credentialName" placeholder="Gmail OAuth - Andrew">
+            <label>Scopes</label>
+            <textarea name="scopes" id="oauth-scopes"></textarea>
+            <label>Metadata JSON</label>
+            <textarea name="metadata">{}</textarea>
+            <p class="hint" id="oauth-status"></p>
+            <label></label>
+            <button type="submit">Login with OAuth</button>
+          </form>
+        </section>
+        <section>
           <h2>Route</h2>
           <form id="route-form">
             <label>Name</label>
@@ -3101,6 +3313,10 @@ UI_HTML = r"""
             <textarea name="injection">{"type":"bearer"}</textarea>
             <label>Policies JSON</label>
             <textarea name="policies">[{"type":"gmail_recent","days":30},{"type":"approval","ttl_seconds":30}]</textarea>
+            <div class="row">
+              <div><label>Template</label><select id="route-template"></select></div>
+              <div><label></label><button type="button" class="secondary" onclick="applyRouteTemplate()">Apply template</button></div>
+            </div>
             <label></label>
             <button type="submit">Create route</button>
           </form>
@@ -3145,11 +3361,53 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], routes: [], approvals: [], logs: [], ca_ready: false};
+    let state = {credentials: [], routes: [], approvals: [], logs: [], ca_ready: false, oauthProviders: []};
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const json = (value) => esc(JSON.stringify(value, null, 2));
     const tokenKey = 'serverware.adminToken';
+    const routeTemplates = {
+      gmail_recent: {
+        label: 'Gmail last 30 days',
+        name: 'Gmail recent mailbox',
+        host: 'gmail.googleapis.com',
+        path: '/gmail/v1',
+        injection: {"type":"bearer","field":"access_token"},
+        policies: [{"type":"gmail_recent","days":30,"max_results":10,"cache_ttl_seconds":1800}]
+      },
+      x_read_recent: {
+        label: 'X recent search read',
+        name: 'X recent search',
+        host: 'api.x.com',
+        path: '/2/tweets/search/recent',
+        injection: {"type":"bearer","field":"access_token"},
+        policies: [{"type":"operationPolicy","allowedOperations":["search.read"]},{"type":"queryDateWindow","parameters":["start_time","end_time"],"maxAgeDays":7},{"type":"queryNumericBounds","parameters":["max_results"],"min":1,"max":100,"integer":true}]
+      },
+      x_one_post_daily: {
+        label: 'X one post daily',
+        name: 'X one tweet per day',
+        host: 'api.x.com',
+        path: '/2/tweets',
+        injection: {"type":"bearer","field":"access_token"},
+        policies: [{"type":"operationPolicy","allowedOperations":["tweets.write"]},{"type":"rateLimit","max":1,"windowSeconds":86400,"store":"shared","key":{"scope":["principal","credential","route","operation"]}},{"type":"jsonBody","contentTypes":["application/json"],"allowedFields":["text","reply_settings"],"requiredFields":["text"],"deniedFields":["media","poll","direct_message_deep_link"],"fields":{"text":{"type":"string","minLength":1,"maxLength":280}}}]
+      },
+      npm_write_mfa: {
+        label: 'npm write requires MFA',
+        name: 'npm publish with JIT',
+        host: 'registry.npmjs.org',
+        path: '/',
+        injection: {"type":"bearer"},
+        policies: [{"type":"approval","ttl_seconds":30,"scope":"request_digest"}]
+      },
+      stripe_readonly: {
+        label: 'Stripe customer read-only',
+        name: 'Stripe read-only customers',
+        host: 'api.stripe.com',
+        path: '/v1/customers',
+        injection: {"type":"bearer"},
+        policies: [{"type":"queryNumericBounds","parameters":["limit"],"min":1,"max":25,"integer":true}]
+      }
+    };
 
     function adminToken() {
       return $('admin-token').value.trim();
@@ -3245,6 +3503,9 @@ UI_HTML = r"""
       $('ca-status').textContent = state.ca_ready ? 'CA ready' : 'CA pending';
       $('ca-status').className = state.ca_ready ? 'pill good' : 'pill warn';
       $('route-credential').innerHTML = '<option value="">None</option>' + state.credentials.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
+      $('route-template').innerHTML = Object.entries(routeTemplates).map(([key, item]) => `<option value="${esc(key)}">${esc(item.label)}</option>`).join('');
+      $('oauth-provider').innerHTML = (state.oauthProviders || []).map((item) => `<option value="${esc(item.id)}">${esc(item.displayName)}${item.configured ? '' : ' (not configured)'}</option>`).join('');
+      renderOAuthDefaults();
       $('credentials').innerHTML = state.credentials.map((item) => `
         <tr>
           <td><strong>${esc(item.name)}</strong><br><code>${esc(item.id)}</code></td>
@@ -3283,6 +3544,16 @@ UI_HTML = r"""
         </tr>`).join('') || '<tr><td colspan="6" class="muted">No traffic</td></tr>';
     }
 
+    function renderOAuthDefaults() {
+      const provider = (state.oauthProviders || []).find((item) => item.id === $('oauth-provider').value) || (state.oauthProviders || [])[0];
+      if (!provider) {
+        $('oauth-status').textContent = 'No OAuth providers configured.';
+        return;
+      }
+      if (!$('oauth-scopes').value.trim()) $('oauth-scopes').value = (provider.defaultScopes || []).join('\\n');
+      $('oauth-status').textContent = provider.configured ? `Redirect URI: ${provider.redirectUri}` : `Set OAuth client env vars for ${provider.displayName}.`;
+    }
+
     $('credential-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = new FormData(event.target);
@@ -3295,6 +3566,24 @@ UI_HTML = r"""
       event.target.reset();
       event.target.metadata.value = '{}';
       await refresh();
+    });
+
+    $('oauth-provider').addEventListener('change', () => {
+      $('oauth-scopes').value = '';
+      renderOAuthDefaults();
+    });
+
+    $('oauth-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const scopes = String(form.get('scopes') || '').split(/[\\s,]+/).map((item) => item.trim()).filter(Boolean);
+      const started = await api('/api/oauth/start', {method: 'POST', body: JSON.stringify({
+        provider: form.get('provider'),
+        credentialName: form.get('credentialName') || null,
+        scopes,
+        metadata: JSON.parse(form.get('metadata') || '{}')
+      })});
+      window.location.href = started.authorizationUrl;
     });
 
     $('route-form').addEventListener('submit', async (event) => {
@@ -3317,6 +3606,18 @@ UI_HTML = r"""
       event.target.policies.value = '[{"type":"gmail_recent","days":30},{"type":"approval","ttl_seconds":30}]';
       await refresh();
     });
+
+    function applyRouteTemplate() {
+      const item = routeTemplates[$('route-template').value];
+      if (!item) return;
+      const form = $('route-form');
+      form.name.value = item.name;
+      form.match_host.value = item.host;
+      form.match_path_prefix.value = item.path;
+      form.injection_type.value = item.injection.type || 'bearer';
+      form.injection.value = JSON.stringify(item.injection, null, 2);
+      form.policies.value = JSON.stringify(item.policies, null, 2);
+    }
 
     async function deleteCredential(id) { await api(`/api/credentials/${id}`, {method: 'DELETE'}); await refresh(); }
     async function deleteRoute(id) { await api(`/api/routes/${id}`, {method: 'DELETE'}); await refresh(); }

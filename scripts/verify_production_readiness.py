@@ -67,6 +67,17 @@ def sha256_prefixed_json(value: Any) -> str:
     return sha256_prefixed_bytes(canonical_json(value).encode("utf-8"))
 
 
+def redacted_environment_summary(env: dict[str, str]) -> dict[str, Any]:
+    return {
+        "env_keys": sorted(key for key in env if key.startswith("SERVERWARE_")),
+        "production_readiness_env_path": env.get("SERVERWARE_PRODUCTION_READINESS_ENV_PATH"),
+        "production_readiness_env_sha256": env.get("SERVERWARE_PRODUCTION_READINESS_ENV_SHA256"),
+        "production_images_env_path": env.get("SERVERWARE_PRODUCTION_IMAGES_ENV_PATH"),
+        "production_images_env_sha256": env.get("SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"),
+        "secret_values_redacted": True,
+    }
+
+
 def env_bool(env: dict[str, str], name: str, default: bool = False) -> bool:
     raw = env.get(name)
     if raw is None:
@@ -94,6 +105,20 @@ def command_words(raw: str) -> list[str]:
 def command_mentions(raw: str, *needles: str) -> bool:
     lowered = " ".join(command_words(raw)).lower()
     return any(needle.lower() in lowered for needle in needles)
+
+
+def placeholder_hostname(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    lowered = hostname.rstrip(".").lower()
+    return lowered == "example" or lowered.endswith(".example")
+
+
+def image_ref_hostname(image: str) -> str | None:
+    repo = image.split("@", 1)[0]
+    if "/" not in repo:
+        return None
+    return repo.split("/", 1)[0]
 
 
 def add(failures: list[str], condition: bool, message: str) -> None:
@@ -128,6 +153,7 @@ def check_no_dev_or_fixture(env: dict[str, str], failures: list[str]) -> None:
         parsed = urllib.parse.urlparse(public_url)
         add(failures, parsed.scheme == "https", "SERVERWARE_PUBLIC_URL must use https in production")
         add(failures, parsed.hostname not in {"localhost", "127.0.0.1", "::1"}, "SERVERWARE_PUBLIC_URL must not be localhost")
+        add(failures, not placeholder_hostname(parsed.hostname), "SERVERWARE_PUBLIC_URL must not use .example placeholder domains")
 
 
 def check_control_plane_security(env: dict[str, str], failures: list[str]) -> None:
@@ -158,6 +184,11 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         failures,
         parsed_issuer.hostname not in {"localhost", "127.0.0.1", "::1"},
         "SERVERWARE_OIDC_ISSUER must not be localhost",
+    )
+    add(
+        failures,
+        not placeholder_hostname(parsed_issuer.hostname),
+        "SERVERWARE_OIDC_ISSUER must not use .example placeholder domains",
     )
     add(failures, bool(env.get("SERVERWARE_OIDC_AUDIENCE", "").strip()), "SERVERWARE_OIDC_AUDIENCE must be configured")
     add(
@@ -251,6 +282,7 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         parsed = urllib.parse.urlparse(origin)
         add(failures, parsed.scheme == "https", "SERVERWARE_WEBAUTHN_ORIGIN must use https in production")
         add(failures, parsed.hostname not in {"localhost", "127.0.0.1", "::1"}, "SERVERWARE_WEBAUTHN_ORIGIN must not be localhost")
+        add(failures, not placeholder_hostname(parsed.hostname), "SERVERWARE_WEBAUTHN_ORIGIN must not use .example placeholder domains")
 
 
 def check_nitro(env: dict[str, str], failures: list[str]) -> None:
@@ -299,8 +331,12 @@ def check_nitro(env: dict[str, str], failures: list[str]) -> None:
         kms_command and not command_mentions(kms_command, "fixture", "nitro_kms_fixture.py"),
         "SERVERWARE_NITRO_KMS_RELEASE_COMMAND must not use fixture helpers",
     )
-    materials = {item.strip() for item in env.get("SERVERWARE_NITRO_ALLOWED_MATERIALS", ",".join(REQUIRED_MATERIALS)).split(",") if item.strip()}
-    add(failures, REQUIRED_MATERIALS.issubset(materials), "Nitro allowed materials must include broker-kek and decision-gate-ca")
+    materials = {
+        item.strip()
+        for item in env.get("SERVERWARE_NITRO_ALLOWED_MATERIALS", ",".join(sorted(REQUIRED_MATERIALS))).split(",")
+        if item.strip()
+    }
+    add(failures, materials == REQUIRED_MATERIALS, "Nitro allowed materials must be exactly broker-kek and decision-gate-ca")
 
 
 def check_cosign(env: dict[str, str], failures: list[str]) -> None:
@@ -375,6 +411,11 @@ def check_transparency(env: dict[str, str], failures: list[str]) -> None:
     url = env.get("SERVERWARE_TRANSPARENCY_LOG_URL", "").strip()
     parsed = urllib.parse.urlparse(url)
     add(failures, parsed.scheme == "https" and bool(parsed.netloc), "SERVERWARE_TRANSPARENCY_LOG_URL must be an https URL")
+    add(
+        failures,
+        not placeholder_hostname(parsed.hostname),
+        "SERVERWARE_TRANSPARENCY_LOG_URL must not use .example placeholder domains",
+    )
     add(
         failures,
         not env_bool(env, "SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP"),
@@ -470,6 +511,11 @@ def check_production_images(env: dict[str, str], failures: list[str]) -> None:
             failures,
             all(marker not in lowered for marker in ("fixture", ":dev", ":local", ":test")),
             f"production image ref must not use fixture/dev/local/test markers: {image}",
+        )
+        add(
+            failures,
+            not placeholder_hostname(image_ref_hostname(image)),
+            f"production image ref must not use .example placeholder registry domains: {image}",
         )
 
 
@@ -777,6 +823,7 @@ def main() -> None:
                 "production_readiness": "fail",
                 "mode": args.mode,
                 "checks": READINESS_CHECKS,
+                "environment": redacted_environment_summary(env),
                 "failures": failures,
             },
             args.out,
@@ -794,6 +841,7 @@ def main() -> None:
                     "production_readiness": "fail",
                     "mode": "live",
                     "checks": READINESS_CHECKS,
+                    "environment": redacted_environment_summary(env),
                     "failures": [str(exc)],
                 },
                 args.out,
@@ -805,6 +853,7 @@ def main() -> None:
         "production_readiness": "pass",
         "mode": args.mode,
         "checks": READINESS_CHECKS,
+        "environment": redacted_environment_summary(env),
         "live": live,
     }
     emit_result(result, args.out)

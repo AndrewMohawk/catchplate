@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="700" viewBox="0 0 1120 700" role="img" aria-labelledby="title desc">
+  <title id="title">Serverware portal OAuth login</title>
+  <desc id="desc">A screenshot-style diagram of the Serverware portal with OAuth login and credential assignment controls.</desc>
+  <rect width="1120" height="700" fill="#f5f7f5"/>
+  <rect x="0" y="0" width="1120" height="64" fill="#ffffff" stroke="#d9dfd8"/>
+  <rect x="24" y="17" width="30" height="30" rx="7" fill="#0f766e"/>
+  <text x="66" y="39" font-family="Arial, sans-serif" font-size="20" font-weight="700" fill="#17211d">Serverware</text>
+  <rect x="742" y="18" width="90" height="28" rx="14" fill="#fef3c7"/>
+  <text x="760" y="37" font-family="Arial, sans-serif" font-size="12" font-weight="700" fill="#92400e">CA pending</text>
+  <rect x="844" y="16" width="140" height="32" rx="6" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="862" y="37" font-family="Arial, sans-serif" font-size="12" fill="#66746d">Admin token</text>
+  <rect x="0" y="64" width="360" height="636" fill="#fbfcfa" stroke="#d9dfd8"/>
+  <rect x="18" y="82" width="324" height="190" rx="7" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="34" y="112" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#17211d">Credential</text>
+  <rect x="34" y="132" width="292" height="30" rx="6" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="46" y="152" font-family="Arial, sans-serif" font-size="12" fill="#66746d">Manual bearer, header, basic, query, or cookie</text>
+  <rect x="18" y="286" width="324" height="250" rx="7" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="34" y="316" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#17211d">OAuth Login</text>
+  <text x="34" y="345" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#66746d">Provider</text>
+  <rect x="34" y="354" width="292" height="32" rx="6" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="46" y="375" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Google</text>
+  <text x="34" y="410" font-family="Arial, sans-serif" font-size="11" font-weight="700" fill="#66746d">Scopes</text>
+  <rect x="34" y="420" width="292" height="58" rx="6" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="46" y="444" font-family="Arial, sans-serif" font-size="12" fill="#17211d">https://www.googleapis.com/auth/gmail.readonly</text>
+  <rect x="34" y="492" width="292" height="32" rx="6" fill="#0f766e"/>
+  <text x="128" y="513" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#ffffff">Login with OAuth</text>
+  <rect x="384" y="88" width="704" height="150" rx="7" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="406" y="118" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#17211d">Credentials</text>
+  <line x1="406" y1="142" x2="1064" y2="142" stroke="#d9dfd8"/>
+  <text x="406" y="170" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#17211d">Gmail OAuth - Andrew</text>
+  <text x="406" y="194" font-family="Arial, sans-serif" font-size="12" fill="#66746d">kind: oauth2</text>
+  <text x="600" y="194" font-family="Arial, sans-serif" font-size="12" fill="#66746d">provider: google.oauth2</text>
+  <text x="830" y="194" font-family="Arial, sans-serif" font-size="12" fill="#66746d">secret: encrypted</text>
+  <rect x="384" y="260" width="704" height="250" rx="7" fill="#ffffff" stroke="#d9dfd8"/>
+  <text x="406" y="290" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#17211d">Routes</text>
+  <line x1="406" y1="314" x2="1064" y2="314" stroke="#d9dfd8"/>
+  <text x="406" y="344" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#17211d">Gmail recent mailbox</text>
+  <text x="406" y="368" font-family="Arial, sans-serif" font-size="12" fill="#66746d">gmail.googleapis.com/gmail/v1</text>
+  <text x="406" y="400" font-family="Arial, sans-serif" font-size="12" fill="#17211d">Injection: {"type":"bearer","field":"access_token"}</text>
+  <text x="406" y="430" font-family="Arial, sans-serif" font-size="12" fill="#17211d">Policy: Gmail messages from the last 30 days, response age proof required</text>
+</svg>

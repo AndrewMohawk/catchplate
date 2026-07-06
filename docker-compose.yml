@@ -2,8 +2,7 @@ services:
   serverware:
     build:
       context: .
-      args:
-        SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY: "1"
+    command: ["python", "-m", "serverware.control_plane_runner"]
     init: true
     read_only: true
     cap_drop:
@@ -40,10 +39,9 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:14d93f989b83d731f3ff36d6e96d01e27259d0f5d0537cbf88dae405b8f4ef88
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:49e057bbd951126b732b1a1ee502be1760d62b04183ede8d5d35c0771a8cfe91
     ports:
       - "3000:3000"
-      - "8080:8080"
     volumes:
       - serverware-data:/data
     tmpfs:
@@ -188,6 +186,7 @@ services:
       SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
       SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
     ports:
+      - "8080:9090"
       - "9090:9090"
     volumes:
       - serverware-data:/data:ro

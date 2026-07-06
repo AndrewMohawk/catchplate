@@ -16,6 +16,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_MATERIALS = ("broker-kek", "decision-gate-ca")
+AUTHORIZED_MATERIALS = set(REQUIRED_MATERIALS)
 SAFE_CLAIM_FIELDS = (
     "nonce",
     "runtime_manifest_digest",
@@ -56,8 +57,11 @@ def sha256_prefixed_json(value: Any) -> str:
     return sha256_prefixed(canonical_json(value).encode("utf-8"))
 
 
-def b64d(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+def b64d(value: str, label: str = "base64url value") -> bytes:
+    try:
+        return base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+    except Exception as exc:
+        raise RuntimeError(f"{label} is invalid base64url") from exc
 
 
 def env_bool(env: dict[str, str], name: str, default: bool = False) -> bool:
@@ -165,7 +169,13 @@ def requested_materials(claims: dict[str, Any], materials: list[str] | None) -> 
     requested = materials or list(REQUIRED_MATERIALS)
     if not requested:
         raise RuntimeError("at least one material is required")
+    unauthorized_requested = sorted(set(requested) - AUTHORIZED_MATERIALS)
+    if unauthorized_requested:
+        raise RuntimeError(f"unauthorized requested materials: {', '.join(unauthorized_requested)}")
     authorized = {str(item) for item in (claims.get("materials") or []) if isinstance(item, str)}
+    unexpected_authorized = sorted(authorized - AUTHORIZED_MATERIALS)
+    if unexpected_authorized:
+        raise RuntimeError(f"claims authorize unauthorized materials: {', '.join(unexpected_authorized)}")
     missing = [material for material in requested if material not in authorized]
     if missing:
         raise RuntimeError(f"claims do not authorize requested materials: {', '.join(missing)}")
@@ -198,7 +208,11 @@ def redacted_kms_release(value: Any) -> dict[str, Any]:
         "material": value.get("material"),
         "request_digest": value.get("request_digest"),
         "release_handle": value.get("release_handle"),
+        "ciphertext_blob_sha256": value.get("ciphertext_blob_sha256"),
+        "encryption_context_sha256": value.get("encryption_context_sha256"),
         "material_handle": value.get("material_handle"),
+        "recipient_ciphertext_sha256": value.get("recipient_ciphertext_sha256"),
+        "attestation_document_sha256": value.get("attestation_document_sha256"),
         "key_provider": redacted_key_provider(value.get("key_provider")),
         "audit": value.get("audit") if isinstance(value.get("audit"), dict) else None,
     }
@@ -212,7 +226,11 @@ def redacted_kms_release(value: Any) -> dict[str, Any]:
         "material",
         "request_digest",
         "release_handle",
+        "ciphertext_blob_sha256",
+        "encryption_context_sha256",
         "material_handle",
+        "recipient_ciphertext_sha256",
+        "attestation_document_sha256",
         "key_provider",
         "audit",
         "signature",
@@ -284,7 +302,7 @@ def collect_evidence(
     ]
 
     raw_b64 = quote.get("raw_attestation_document_b64")
-    raw_attestation = b64d(raw_b64) if isinstance(raw_b64, str) and raw_b64 else b""
+    raw_attestation = b64d(raw_b64, "Nitro quote raw_attestation_document_b64") if isinstance(raw_b64, str) and raw_b64 else b""
     attestation_command = env.get("SERVERWARE_NITRO_ATTESTATION_COMMAND", "").strip()
     kms_command = env.get("SERVERWARE_NITRO_KMS_RELEASE_COMMAND", "").strip()
     expected_pcrs = env.get("SERVERWARE_NITRO_EXPECTED_PCRS", "").strip()

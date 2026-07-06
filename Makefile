@@ -1,19 +1,22 @@
-.PHONY: up down logs e2e bench bench-gate-rs release-provenance image-signatures build-production-images publish-production-images prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-host-preflight production-release-proof prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-host-preflight verify-production-release-proof verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
 PRODUCTION_READINESS_OUT ?= .tmp/production-readiness.json
 PRODUCTION_READINESS_CONFIG_OUT ?= .tmp/production-readiness-config.json
 PRODUCTION_READINESS_ENV ?= ops/production-readiness.env
+PRODUCTION_READINESS_PREFLIGHT ?= 1
 PRODUCTION_COMPLETION_PROOF_OUT ?= .tmp/serverware-completion-proof.json
 NITRO_KMS_EVIDENCE_OUT ?= .tmp/nitro-kms-evidence.json
 PRODUCTION_IMAGES_BUILD_FILE ?= .tmp/production-images-build.json
 PRODUCTION_IMAGES_PUBLISHED_FILE ?= .tmp/production-images-published.json
 PRODUCTION_IMAGES_ENV_OUT ?= .tmp/production-images.env
+PRODUCTION_HANDOFF_OUT ?= .tmp/production-handoff.json
+PRODUCTION_HOST_PREFLIGHT_OUT ?= .tmp/production-host-preflight.json
 PRODUCTION_IMAGE_REGISTRY_PREFIX ?=
 PRODUCTION_IMAGE_TAG ?= production-candidate
 AWS_KMS_MATERIALS_SPEC ?= ops/aws-kms-materials.spec.json
-AWS_KMS_MATERIALS_OUT ?= .tmp/kms-materials.json
+AWS_KMS_MATERIALS_OUT ?= /etc/serverware/kms-materials.json
 RELEASE_PROVENANCE_SUMMARY_FILE ?= .tmp/release-provenance-summary.json
 RELEASE_PROVENANCE_FILE ?= .tmp/release-provenance.json
 IMAGE_SIGNATURES_SUMMARY_FILE ?= .tmp/image-signatures-summary.json
@@ -31,6 +34,7 @@ logs:
 
 e2e:
 	docker compose up -d --build serverware demo-upstream
+	docker compose build decision-gate-rs
 	SERVERWARE_HARDENING_SERVICES=serverware,audit-anchor,grant-store,demo-upstream ./scripts/test_container_hardening.sh
 	SERVERWARE_APPARMOR_DRY_RUN=1 ./scripts/test_apparmor_runtime.sh
 	docker compose exec -T serverware python scripts/test_webauthn_attestation.py
@@ -43,6 +47,8 @@ bench:
 	./scripts/wait_for_serverware.sh
 	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
 	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
+	docker compose up -d --force-recreate decision-gate-rs
+	./scripts/wait_for_decision_gate.sh
 	python3 scripts/bench.py
 
 bench-gate-rs:
@@ -84,6 +90,7 @@ bench-gate-rs:
 		docker compose exec -T serverware python scripts/test_ca_install_sessions.py
 		docker compose exec -T serverware python scripts/test_control_plane_csrf.py
 		docker compose exec -T serverware python scripts/test_control_plane_oidc.py
+		docker compose exec -T serverware python scripts/test_oauth_credentials.py
 		docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
 		docker compose exec -T serverware python scripts/test_control_plane_two_person.py
 		docker compose exec -T serverware python scripts/test_control_plane_rbac_audit.py
@@ -107,42 +114,98 @@ bench-gate-rs:
 	./scripts/test_decision_gate_shared_rate_limits.sh
 	./scripts/generate_release_provenance.py > .tmp/release-provenance-summary.json
 	cat .tmp/release-provenance-summary.json
-	SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command \
-	SERVERWARE_IMAGE_SIGN_COMMAND="python3 scripts/cosign_sigstore.py sign" \
-	SERVERWARE_IMAGE_VERIFY_COMMAND="python3 scripts/cosign_sigstore.py verify" \
-	SERVERWARE_COSIGN_BINARY="python3 scripts/cosign_fixture.py" \
-	SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1 \
+	SERVERWARE_IMAGE_SIGNATURE_PROVIDER="$${SERVERWARE_IMAGE_SIGNATURE_PROVIDER:-sigstore-command}" \
+	SERVERWARE_IMAGE_SIGN_COMMAND="$${SERVERWARE_IMAGE_SIGN_COMMAND:-python3 scripts/cosign_sigstore.py sign}" \
+	SERVERWARE_IMAGE_VERIFY_COMMAND="$${SERVERWARE_IMAGE_VERIFY_COMMAND:-python3 scripts/cosign_sigstore.py verify}" \
+	SERVERWARE_COSIGN_BINARY="$${SERVERWARE_COSIGN_BINARY:-python3 scripts/cosign_fixture.py}" \
+	SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY="$${SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY:-1}" \
 	python3 scripts/sign_release_images.py > .tmp/image-signatures-summary.json
 	cat .tmp/image-signatures-summary.json
 
+decision-gate-bench-evidence:
+	docker compose up -d --build serverware demo-upstream
+	mkdir -p .tmp
+	./scripts/wait_for_serverware.sh
+	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
+	./scripts/wait_for_demo_upstream.sh
+	./scripts/wait_for_decision_gate_ca.sh
+	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
+	docker compose up -d --build decision-gate-rs
+	./scripts/wait_for_decision_gate.sh
+	python3 scripts/bench_decision_gate.py --self-test > "$(DECISION_GATE_BENCH_FILE)"
+	cat "$(DECISION_GATE_BENCH_FILE)"
+
 release-provenance:
-	./scripts/generate_release_provenance.py
-	SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command \
-	SERVERWARE_IMAGE_SIGN_COMMAND="python3 scripts/cosign_sigstore.py sign" \
-	SERVERWARE_IMAGE_VERIFY_COMMAND="python3 scripts/cosign_sigstore.py verify" \
-	SERVERWARE_COSIGN_BINARY="python3 scripts/cosign_fixture.py" \
-	SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1 \
-	python3 scripts/sign_release_images.py
+	./scripts/generate_release_provenance.py \
+		--out "$(RELEASE_PROVENANCE_FILE)" > "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
+	cat "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 
 image-signatures:
-	SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command \
-	SERVERWARE_IMAGE_SIGN_COMMAND="python3 scripts/cosign_sigstore.py sign" \
-	SERVERWARE_IMAGE_VERIFY_COMMAND="python3 scripts/cosign_sigstore.py verify" \
-	SERVERWARE_COSIGN_BINARY="python3 scripts/cosign_fixture.py" \
-	SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1 \
-	python3 scripts/sign_release_images.py
+	SERVERWARE_IMAGE_SIGNATURE_PROVIDER="$${SERVERWARE_IMAGE_SIGNATURE_PROVIDER:-sigstore-command}" \
+	SERVERWARE_IMAGE_SIGN_COMMAND="$${SERVERWARE_IMAGE_SIGN_COMMAND:-python3 scripts/cosign_sigstore.py sign}" \
+	SERVERWARE_IMAGE_VERIFY_COMMAND="$${SERVERWARE_IMAGE_VERIFY_COMMAND:-python3 scripts/cosign_sigstore.py verify}" \
+	SERVERWARE_COSIGN_BINARY="$${SERVERWARE_COSIGN_BINARY:-python3 scripts/cosign_fixture.py}" \
+	SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY="$${SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY:-1}" \
+	python3 scripts/sign_release_images.py \
+		--provenance "$(RELEASE_PROVENANCE_FILE)" \
+		--out "$(IMAGE_SIGNATURES_FILE)" > "$(IMAGE_SIGNATURES_SUMMARY_FILE)"
+	cat "$(IMAGE_SIGNATURES_SUMMARY_FILE)"
+
+sign-production-images:
+	python3 scripts/sign_release_images.py \
+		--env-file "$(PRODUCTION_READINESS_ENV)" \
+		--provenance "$(RELEASE_PROVENANCE_FILE)" \
+		--production-images-env "$(PRODUCTION_IMAGES_ENV_OUT)" \
+		--out "$(IMAGE_SIGNATURES_FILE)" > "$(IMAGE_SIGNATURES_SUMMARY_FILE)"
+	cat "$(IMAGE_SIGNATURES_SUMMARY_FILE)"
 
 build-production-images:
 	python3 scripts/build_production_images.py --out "$(PRODUCTION_IMAGES_BUILD_FILE)"
 
 publish-production-images:
-	@if [ -z "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" ]; then echo "PRODUCTION_IMAGE_REGISTRY_PREFIX is required, for example registry.example/serverware" >&2; exit 2; fi
+	@if [ -z "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" ]; then echo "PRODUCTION_IMAGE_REGISTRY_PREFIX is required, for example registry.prod.serverware.dev/serverware" >&2; exit 2; fi
 	python3 scripts/publish_production_images.py \
 		--build-file "$(PRODUCTION_IMAGES_BUILD_FILE)" \
 		--registry-prefix "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" \
 		--tag "$(PRODUCTION_IMAGE_TAG)" \
 		--out "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" \
 		--env-out "$(PRODUCTION_IMAGES_ENV_OUT)"
+
+merge-production-images-env:
+	python3 scripts/merge_production_images_env.py \
+		--images-env "$(PRODUCTION_IMAGES_ENV_OUT)" \
+		--env-file "$(PRODUCTION_READINESS_ENV)"
+
+production-handoff:
+	python3 scripts/generate_production_handoff.py \
+		--production-images-build "$(PRODUCTION_IMAGES_BUILD_FILE)" \
+		--registry-prefix "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" \
+		--tag "$(PRODUCTION_IMAGE_TAG)" \
+		--out "$(PRODUCTION_HANDOFF_OUT)"
+
+production-host-preflight:
+	python3 scripts/production_host_preflight.py \
+		--env-file "$(PRODUCTION_READINESS_ENV)" \
+		--production-images-env "$(PRODUCTION_IMAGES_ENV_OUT)" \
+		--production-images-published "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" \
+		--production-images-build "$(PRODUCTION_IMAGES_BUILD_FILE)" \
+		--release-provenance-summary "$(RELEASE_PROVENANCE_SUMMARY_FILE)" \
+		--release-provenance "$(RELEASE_PROVENANCE_FILE)" \
+		--image-signatures-summary "$(IMAGE_SIGNATURES_SUMMARY_FILE)" \
+		--image-signatures "$(IMAGE_SIGNATURES_FILE)" \
+		--bench "$(DECISION_GATE_BENCH_FILE)" \
+		--kms-materials "$(AWS_KMS_MATERIALS_OUT)" \
+		--out "$(PRODUCTION_HOST_PREFLIGHT_OUT)"
+
+production-release-proof:
+	$(MAKE) build-production-images
+	$(MAKE) decision-gate-bench-evidence
+	$(MAKE) release-provenance
+	$(MAKE) publish-production-images
+	$(MAKE) sign-production-images
+	$(MAKE) merge-production-images-env
+	$(MAKE) prepare-aws-kms-materials
+	$(MAKE) run-production-readiness
 
 prepare-aws-kms-materials:
 	python3 scripts/prepare_aws_kms_materials.py \
@@ -168,6 +231,18 @@ verify-release-image-signing:
 verify-production-image-publish:
 	python3 scripts/test_publish_production_images.py
 
+verify-production-images-env-merge:
+	python3 scripts/test_merge_production_images_env.py
+
+verify-production-handoff:
+	python3 scripts/test_production_handoff.py
+
+verify-production-host-preflight:
+	python3 scripts/test_production_host_preflight.py
+
+verify-production-release-proof:
+	python3 scripts/test_production_release_proof_target.py
+
 verify-transparency-checkpoint:
 	python3 scripts/test_transparency_checkpoint.py
 
@@ -191,6 +266,10 @@ verify-control-plane-csrf:
 verify-control-plane-oidc:
 	docker compose up -d --build serverware
 	docker compose exec -T serverware python scripts/test_control_plane_oidc.py
+
+verify-oauth-credentials:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_oauth_credentials.py
 
 verify-control-plane-mutation-mfa:
 	docker compose up -d --build serverware
@@ -261,6 +340,7 @@ verify-production-config:
 	python3 scripts/verify_production_readiness.py --mode config
 
 run-production-readiness:
+	@if [ "$(PRODUCTION_READINESS_PREFLIGHT)" != "0" ]; then $(MAKE) production-host-preflight; fi
 	python3 scripts/run_production_readiness.py \
 		--env-file "$(PRODUCTION_READINESS_ENV)" \
 		--config-out "$(PRODUCTION_READINESS_CONFIG_OUT)" \
@@ -268,11 +348,16 @@ run-production-readiness:
 		--nitro-evidence-out "$(NITRO_KMS_EVIDENCE_OUT)" \
 		--readiness-out "$(PRODUCTION_READINESS_OUT)" \
 		--completion-proof-out "$(PRODUCTION_COMPLETION_PROOF_OUT)" \
+		--production-host-preflight "$(PRODUCTION_HOST_PREFLIGHT_OUT)" \
+		--production-images-build "$(PRODUCTION_IMAGES_BUILD_FILE)" \
+		--production-images-env "$(PRODUCTION_IMAGES_ENV_OUT)" \
+		--production-images-published "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" \
 		--release-provenance-summary "$(RELEASE_PROVENANCE_SUMMARY_FILE)" \
 		--release-provenance "$(RELEASE_PROVENANCE_FILE)" \
 		--image-signatures-summary "$(IMAGE_SIGNATURES_SUMMARY_FILE)" \
 		--image-signatures "$(IMAGE_SIGNATURES_FILE)" \
-		--bench "$(DECISION_GATE_BENCH_FILE)"
+		--bench "$(DECISION_GATE_BENCH_FILE)" \
+		--kms-materials "$(AWS_KMS_MATERIALS_OUT)"
 
 verify-production-readiness:
 	if [ -f "$(PRODUCTION_READINESS_CLAIMS_FILE)" ]; then \
@@ -309,6 +394,8 @@ install-ca:
 	./scripts/wait_for_serverware.sh
 	curl -fsS -H "X-Serverware-Admin-Token: $${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" -X POST http://localhost:3000/api/demo/seed >/dev/null
 	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh
+	docker compose up -d --force-recreate decision-gate-rs
+	./scripts/wait_for_decision_gate.sh
 
 verify-attestation: install-ca
 

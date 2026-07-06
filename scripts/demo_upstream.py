@@ -26,6 +26,37 @@ KEY_PATH = CERT_DIR / "key.pem"
 app = FastAPI(title="Serverware demo upstream")
 
 
+def _epoch_millis(value: datetime) -> str:
+    return str(int(value.timestamp() * 1000))
+
+
+def _recent_gmail_internal_date() -> str:
+    return _epoch_millis(datetime.now(timezone.utc) - timedelta(days=2))
+
+
+def _old_gmail_internal_date() -> str:
+    return _epoch_millis(datetime.now(timezone.utc) - timedelta(days=90))
+
+
+def _cert_not_valid_after(cert: x509.Certificate) -> datetime:
+    expires = getattr(cert, "not_valid_after_utc", None)
+    if expires is not None:
+        return expires
+    return cert.not_valid_after.replace(tzinfo=timezone.utc)
+
+
+def _existing_cert_is_fresh() -> bool:
+    if not (CA_CERT_PATH.exists() and CERT_PATH.exists() and KEY_PATH.exists()):
+        return False
+    try:
+        ca_cert = x509.load_pem_x509_certificate(CA_CERT_PATH.read_bytes())
+        cert = x509.load_pem_x509_certificate(CERT_PATH.read_bytes())
+    except Exception:
+        return False
+    renewal_cutoff = datetime.now(timezone.utc) + timedelta(days=1)
+    return _cert_not_valid_after(ca_cert) > renewal_cutoff and _cert_not_valid_after(cert) > renewal_cutoff
+
+
 def gmail_message_view(message_id: str, *, internal_date: str | None) -> dict[str, Any]:
     item: dict[str, Any] = {
         "id": message_id,
@@ -50,7 +81,7 @@ def gmail_message_view(message_id: str, *, internal_date: str | None) -> dict[st
 
 def ensure_cert() -> None:
     CERT_DIR.mkdir(parents=True, exist_ok=True)
-    if CA_CERT_PATH.exists() and CERT_PATH.exists() and KEY_PATH.exists():
+    if _existing_cert_is_fresh():
         return
     ca_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     ca_subject = x509.Name(
@@ -504,12 +535,12 @@ async def gmail_messages(request: Request) -> dict[str, Any]:
         ]
     elif request.query_params.get("oldInternalDate") == "1":
         view["messages"] = [
-            gmail_message_view("old-list-message-1", internal_date="1600000000000"),
+            gmail_message_view("old-list-message-1", internal_date=_old_gmail_internal_date()),
         ]
     else:
         view["messages"] = [
-            gmail_message_view("recent-message-1", internal_date="1779500000000"),
-            gmail_message_view("recent-message-2", internal_date="1779500000000"),
+            gmail_message_view("recent-message-1", internal_date=_recent_gmail_internal_date()),
+            gmail_message_view("recent-message-2", internal_date=_recent_gmail_internal_date()),
         ]
     return view
 
@@ -520,7 +551,7 @@ async def gmail_message(message_id: str, request: Request) -> dict[str, Any]:
     view.update(
         gmail_message_view(
             message_id,
-            internal_date="1600000000000" if message_id.startswith("old") else "1779500000000",
+            internal_date=_old_gmail_internal_date() if message_id.startswith("old") else _recent_gmail_internal_date(),
         )
     )
     return view

@@ -18,10 +18,17 @@ PLACEHOLDER_RE = re.compile(
     r"(<[^>]+>|\$\{[^}]+\}|CHANGE[_-]?ME|REPLACE[_-]?ME|FILL[_-]?ME|TODO|TBD)",
     re.IGNORECASE,
 )
+EXAMPLE_DOMAIN_RE = re.compile(r"(^|[/:@,])([A-Za-z0-9-]+\.)*example([/:,]|$)", re.IGNORECASE)
 
 
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def sha256_prefixed_file(path: Path) -> str:
+    import hashlib
+
+    return "sha256:" + hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def parse_env_assignment(raw: str, lineno: int) -> tuple[str, str] | None:
@@ -60,6 +67,8 @@ def load_env_file(path: Path) -> dict[str, str]:
             raise ValueError(f"line {lineno}: duplicate environment key {key}")
         if PLACEHOLDER_RE.search(value):
             raise ValueError(f"line {lineno}: {key} still contains a placeholder value")
+        if EXAMPLE_DOMAIN_RE.search(value):
+            raise ValueError(f"line {lineno}: {key} still contains an example placeholder domain")
         loaded[key] = value
     if not loaded:
         raise ValueError(f"production readiness env file is empty: {path}")
@@ -135,8 +144,20 @@ def command_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "scripts/verify_release_completion.py",
                     "--production-readiness",
                     readiness_out,
+                    "--production-readiness-config",
+                    config_out,
+                    "--production-readiness-env",
+                    args.env_file,
+                    "--production-host-preflight",
+                    args.production_host_preflight,
                     "--nitro-evidence",
                     nitro_evidence_out,
+                    "--production-images-build",
+                    args.production_images_build,
+                    "--production-images-env",
+                    args.production_images_env,
+                    "--production-images-published",
+                    args.production_images_published,
                     "--release-provenance-summary",
                     args.release_provenance_summary,
                     "--release-provenance",
@@ -147,6 +168,8 @@ def command_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
                     args.image_signatures,
                     "--bench",
                     args.bench,
+                    "--kms-materials",
+                    args.kms_materials,
                     "--out",
                     completion_proof_out,
                 ],
@@ -175,11 +198,16 @@ def main() -> None:
     parser.add_argument("--nitro-evidence-out", default=".tmp/nitro-kms-evidence.json")
     parser.add_argument("--readiness-out", default=".tmp/production-readiness.json")
     parser.add_argument("--completion-proof-out", default=".tmp/serverware-completion-proof.json")
+    parser.add_argument("--production-host-preflight", default=".tmp/production-host-preflight.json")
+    parser.add_argument("--production-images-build", default=".tmp/production-images-build.json")
+    parser.add_argument("--production-images-env", default=".tmp/production-images.env")
+    parser.add_argument("--production-images-published", default=".tmp/production-images-published.json")
     parser.add_argument("--release-provenance-summary", default=".tmp/release-provenance-summary.json")
     parser.add_argument("--release-provenance", default=".tmp/release-provenance.json")
     parser.add_argument("--image-signatures-summary", default=".tmp/image-signatures-summary.json")
     parser.add_argument("--image-signatures", default=".tmp/image-signatures.json")
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
+    parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
     parser.add_argument("--config-only", action="store_true")
     parser.add_argument("--use-existing-claims", action="store_true")
     parser.add_argument("--dry-run", action="store_true", help="load and validate the env file, then print the command plan")
@@ -200,6 +228,13 @@ def main() -> None:
 
     env = os.environ.copy()
     env.update(loaded)
+    env_file = Path(args.env_file)
+    images_env = Path(args.production_images_env)
+    env["SERVERWARE_PRODUCTION_READINESS_ENV_PATH"] = str(env_file)
+    env["SERVERWARE_PRODUCTION_READINESS_ENV_SHA256"] = sha256_prefixed_file(env_file)
+    env["SERVERWARE_PRODUCTION_IMAGES_ENV_PATH"] = str(images_env)
+    if images_env.exists():
+        env["SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"] = sha256_prefixed_file(images_env)
     commands = command_plan(args)
     if args.dry_run:
         print(

@@ -108,6 +108,7 @@ bench-gate-rs:
 		python3 scripts/test_prepare_aws_kms_materials.py
 		python3 scripts/test_production_readiness_claims.py
 		python3 scripts/test_production_readiness.py
+		python3 scripts/test_portal_agent_enrollment_ui.py
 		./scripts/test_audit_anchor.sh
 	python3 scripts/bench_decision_gate.py --self-test > .tmp/decision-gate-rs-bench.json
 	cat .tmp/decision-gate-rs-bench.json
@@ -313,6 +314,7 @@ verify-audit-export:
 
 verify-agent-enrollment:
 	python3 scripts/test_agent_enrollment.py
+	python3 scripts/test_portal_agent_enrollment_ui.py
 
 verify-production-images-no-shell:
 	python3 scripts/test_production_images_no_shell.py

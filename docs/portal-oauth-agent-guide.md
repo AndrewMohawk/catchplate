@@ -111,7 +111,14 @@ Agents do not need provider tokens, OAuth refresh tokens, npm tokens, or API key
 
 ![Serverware agent enrollment flow](images/agent-enrollment-flow.svg)
 
-Generate an enrollment packet:
+Generate an enrollment packet from the portal:
+
+1. Open `http://localhost:3000` or the production control-plane URL.
+2. In **Agent Enrollment**, choose the policy principal that will run the agent.
+3. Enter the Serverware proxy URL, control-plane URL, proxy egress CIDR, namespace, CA mount path, and optional pod selector JSON.
+4. Click **Generate enrollment**, then copy or download the packet JSON.
+
+The same packet can be generated from the CLI for automation:
 
 ```bash
 python3 scripts/generate_agent_enrollment.py \

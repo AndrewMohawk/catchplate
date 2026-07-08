@@ -77,6 +77,32 @@ def _principal_routes(snapshot: PolicySnapshot, principal_id: str) -> list[dict[
     return routes
 
 
+def policy_principal_summaries(snapshot: PolicySnapshot) -> list[dict[str, Any]]:
+    raw_principals = {
+        principal.get("id"): principal
+        for principal in (snapshot.raw.get("principals") or [])
+        if isinstance(principal, dict) and isinstance(principal.get("id"), str)
+    }
+    summaries = []
+    for principal_id in sorted(snapshot.principals):
+        raw_principal = raw_principals.get(principal_id) or {}
+        route_count = sum(
+            1
+            for route in snapshot.routes
+            if principal_id in route.principals or "*" in route.principals
+        )
+        summaries.append(
+            {
+                "id": principal_id,
+                "routeCount": route_count,
+                "requiredHeaders": dict(raw_principal.get("requiredHeaders") or {}),
+                "sourceCidrs": list(raw_principal.get("sourceCidrs") or []),
+                "proxyAuthorizationConfigured": bool(raw_principal.get("proxyAuthorization")),
+            }
+        )
+    return summaries
+
+
 def _identity_block(raw_principal: dict[str, Any]) -> dict[str, Any]:
     proxy_auth = raw_principal.get("proxyAuthorization")
     safe_proxy_auth = None

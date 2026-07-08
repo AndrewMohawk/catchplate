@@ -47,7 +47,7 @@ from serverware.config import (
 )
 from serverware import db, grants, runtime
 from serverware.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, AdminIdentity, admin_status, issue_csrf_cookie, require_admin, require_role, rotate_generated_admin_token, validate_csrf_request
-from serverware.enrollment import AgentEnrollmentError, build_agent_enrollment
+from serverware.enrollment import AgentEnrollmentError, build_agent_enrollment, policy_principal_summaries
 from serverware.key_release import KeyReleaseError, release_material, status as key_release_status
 from serverware.oauth import OAuthError, create_authorization_url, exchange_authorization_code, provider_status
 from serverware.policy_bundle import (
@@ -1431,6 +1431,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
     routes = db.list_routes()
     approvals = db.list_approvals(limit=100)
     logs = db.list_logs(limit=150)
+    policy_principals = policy_principal_summaries(snapshot) if snapshot is not None else []
     result = {
         "credentials": credentials,
         "routes": routes,
@@ -1442,6 +1443,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "policy_signature": metadata.get("signature") if isinstance(metadata, dict) else None,
         "policy_signing_key_id": metadata.get("signingKeyId") if isinstance(metadata, dict) else None,
         "policy_path": str(POLICY_BUNDLE_PATH),
+        "policyPrincipals": policy_principals,
         "oauthProviders": provider_status(),
         **admin_status(),
     }
@@ -3141,6 +3143,7 @@ UI_HTML = r"""
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
   <title>Serverware</title>
   <style>
     :root {
@@ -3229,11 +3232,36 @@ UI_HTML = r"""
     .main-grid { display: grid; grid-template-columns: minmax(0, 1fr); }
     .json { max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .hint { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
+    .output { min-height: 190px; }
     @media (max-width: 980px) {
       main { grid-template-columns: 1fr; }
       aside { border-right: 0; border-bottom: 1px solid var(--line); }
       header { padding: 0 14px; }
       section { padding: 16px 14px; overflow-x: auto; }
+    }
+    @media (max-width: 620px) {
+      header {
+        display: grid;
+        grid-template-columns: 1fr;
+        align-items: stretch;
+        gap: 10px;
+        padding: 10px 14px;
+      }
+      .status {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        align-items: stretch;
+      }
+      .status .token-field {
+        grid-column: 1 / -1;
+        width: 100%;
+      }
+      .status button,
+      .status .pill {
+        width: 100%;
+      }
+      .brand { min-height: 30px; }
     }
   </style>
 </head>
@@ -3287,6 +3315,33 @@ UI_HTML = r"""
             <label></label>
             <button type="submit">Login with OAuth</button>
           </form>
+        </section>
+        <section>
+          <h2>Agent Enrollment</h2>
+          <form id="agent-enrollment-form">
+            <label>Principal</label>
+            <select name="principalId" id="enrollment-principal"></select>
+            <label>Proxy URL</label>
+            <input name="proxyUrl" value="http://localhost:8080">
+            <label>Control plane URL</label>
+            <input name="controlPlaneUrl" value="http://localhost:3000">
+            <label>Proxy egress CIDRs</label>
+            <textarea name="proxyEgressCidrs">127.0.0.1/32</textarea>
+            <label>Namespace</label>
+            <input name="namespace" value="serverware-agents">
+            <label>CA path</label>
+            <input name="caMountPath" value="/etc/serverware/serverware-ca.pem">
+            <label>Pod selector JSON</label>
+            <textarea name="podSelector">{}</textarea>
+            <label></label>
+            <button type="submit">Generate enrollment</button>
+          </form>
+          <label>Packet JSON</label>
+          <textarea id="enrollment-output" class="output" readonly></textarea>
+          <div class="toolbar" style="margin-top:8px">
+            <button class="secondary" type="button" onclick="copyEnrollment()">Copy</button>
+            <button class="secondary" type="button" onclick="downloadEnrollment()">Download</button>
+          </div>
         </section>
         <section>
           <h2>Route</h2>
@@ -3361,7 +3416,7 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], routes: [], approvals: [], logs: [], ca_ready: false, oauthProviders: []};
+    let state = {credentials: [], routes: [], approvals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null};
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const json = (value) => esc(JSON.stringify(value, null, 2));
@@ -3479,7 +3534,9 @@ UI_HTML = r"""
         return;
       }
       try {
+        const enrollmentPacket = state.enrollmentPacket;
         state = await api('/api/bootstrap');
+        state.enrollmentPacket = enrollmentPacket;
         render();
       } catch (error) {
         console.warn(error.message);
@@ -3505,7 +3562,9 @@ UI_HTML = r"""
       $('route-credential').innerHTML = '<option value="">None</option>' + state.credentials.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
       $('route-template').innerHTML = Object.entries(routeTemplates).map(([key, item]) => `<option value="${esc(key)}">${esc(item.label)}</option>`).join('');
       $('oauth-provider').innerHTML = (state.oauthProviders || []).map((item) => `<option value="${esc(item.id)}">${esc(item.displayName)}${item.configured ? '' : ' (not configured)'}</option>`).join('');
+      $('enrollment-principal').innerHTML = (state.policyPrincipals || []).map((item) => `<option value="${esc(item.id)}">${esc(item.id)} (${esc(item.routeCount)} routes)</option>`).join('');
       renderOAuthDefaults();
+      renderEnrollmentOutput();
       $('credentials').innerHTML = state.credentials.map((item) => `
         <tr>
           <td><strong>${esc(item.name)}</strong><br><code>${esc(item.id)}</code></td>
@@ -3586,6 +3645,23 @@ UI_HTML = r"""
       window.location.href = started.authorizationUrl;
     });
 
+    $('agent-enrollment-form').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const proxyEgressCidrs = String(form.get('proxyEgressCidrs') || '').split(/[\\s,]+/).map((item) => item.trim()).filter(Boolean);
+      const packet = await api('/api/agents/enrollment', {method: 'POST', body: JSON.stringify({
+        principalId: form.get('principalId'),
+        proxyUrl: form.get('proxyUrl'),
+        controlPlaneUrl: form.get('controlPlaneUrl'),
+        proxyEgressCidrs,
+        namespace: form.get('namespace') || 'serverware-agents',
+        caMountPath: form.get('caMountPath') || '/etc/serverware/serverware-ca.pem',
+        podSelector: JSON.parse(form.get('podSelector') || '{}')
+      })});
+      state.enrollmentPacket = packet;
+      renderEnrollmentOutput();
+    });
+
     $('route-form').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = new FormData(event.target);
@@ -3617,6 +3693,29 @@ UI_HTML = r"""
       form.injection_type.value = item.injection.type || 'bearer';
       form.injection.value = JSON.stringify(item.injection, null, 2);
       form.policies.value = JSON.stringify(item.policies, null, 2);
+    }
+
+    function renderEnrollmentOutput() {
+      $('enrollment-output').value = state.enrollmentPacket ? JSON.stringify(state.enrollmentPacket, null, 2) : '';
+    }
+
+    async function copyEnrollment() {
+      if (!state.enrollmentPacket) return;
+      await navigator.clipboard.writeText(JSON.stringify(state.enrollmentPacket, null, 2));
+    }
+
+    function downloadEnrollment() {
+      if (!state.enrollmentPacket) return;
+      const principal = String(state.enrollmentPacket.principalId || 'agent').replace(/[^a-zA-Z0-9_.-]+/g, '-');
+      const blob = new Blob([JSON.stringify(state.enrollmentPacket, null, 2) + '\n'], {type: 'application/json'});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `serverware-enrollment-${principal}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
     }
 
     async function deleteCredential(id) { await api(`/api/credentials/${id}`, {method: 'DELETE'}); await refresh(); }

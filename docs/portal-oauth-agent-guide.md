@@ -21,7 +21,7 @@ Google:
 ```bash
 export SERVERWARE_PUBLIC_URL=https://serverware.example.com
 export SERVERWARE_GOOGLE_OAUTH_CLIENT_ID=...
-export SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET=...
+export SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE=/etc/serverware/secrets/google-oauth-client-secret
 export SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI=https://serverware.example.com/api/oauth/callback/google
 ```
 
@@ -30,17 +30,23 @@ X/Twitter:
 ```bash
 export SERVERWARE_PUBLIC_URL=https://serverware.example.com
 export SERVERWARE_X_OAUTH_CLIENT_ID=...
-export SERVERWARE_X_OAUTH_CLIENT_SECRET=...
+export SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE=/etc/serverware/secrets/x-oauth-client-secret
 export SERVERWARE_X_OAUTH_REDIRECT_URI=https://serverware.example.com/api/oauth/callback/x
 ```
 
-The portal uses OAuth 2.0 Authorization Code with PKCE. The start endpoint requires an authenticated Serverware operator and, when production controls are enabled, the same WebAuthn and two-person approval gates as normal credential creation. OAuth state is server-side, one-use, TTL-bound, and size-bounded before it is written to disk. The callback consumes the state value, exchanges the code, fetches the account from Google's user-info endpoint or X's `/2/users/me`, and refuses to create a credential when that identity lookup cannot be verified. It then encrypts the token response, records the provider subject and display account, creates a new credential version, invalidates any cached lease, and audits the provider, scopes, identity, version, and approval evidence without logging token material. If the initial token response omits `scope`, Serverware follows OAuth semantics and binds the requested scopes; an explicit response may narrow but never expand them. A v2 lease is issued later, on data-plane demand.
+Production secret files must be regular non-symlink files owned by the distroless control-plane UID `65532`, use mode `0400` or `0600`, and be readable to the privileged host preflight. Plaintext `SERVERWARE_*_OAUTH_CLIENT_SECRET` variables remain a local-development convenience and are rejected by production readiness.
+
+The portal uses OAuth 2.0 Authorization Code with PKCE. The start endpoint requires an authenticated Serverware operator and, when production controls are enabled, the same WebAuthn and two-person approval gates as normal credential creation. OAuth state is server-side, one-use, TTL-bound, and size-bounded before it is written to disk. Each state stores only the SHA-256 digest of a separate browser nonce; the raw nonce is held in a state-specific `__Host-serverware-oauth-<state>` `Secure`, `HttpOnly`, `SameSite=Lax` cookie and must match at callback. Multiple provider flows can therefore finish out of order without overwriting each other's browser binding. A callback from another browser fails without consuming the legitimate state, while a matching provider-denial callback consumes it. The successful callback exchanges the code, fetches the account from Google's user-info endpoint or X's `/2/users/me`, and refuses to create a credential when that identity lookup cannot be verified. It then encrypts the token response, records the provider subject and display account, creates a new credential version, invalidates any cached lease, and audits the provider, scopes, identity, version, and approval evidence without logging token material. If the initial token response omits `scope`, Serverware follows OAuth semantics and binds the requested scopes; an explicit response may narrow but never expand them. A v2 lease is issued later, on data-plane demand.
+
+Current limitation: the credential-create two-person approval happens before provider identity discovery, so it binds provider and requested scopes but not the eventual provider subject/account. A workflow that requires the reviewer to approve one exact Google or X account must treat this as a production blocker until callback identity creates a pending credential and a second approval binds that subject before activation.
 
 `provider_identity_verified` means the provider account lookup succeeded. Google's `provider_email_verified` and X's `provider_profile_verified` are separate facts; do not conflate an identified account with a provider-verified email or X profile badge.
 
 Refresh does not repeat the provider identity lookup. It preserves the callback-verified subject/account metadata and requires the refreshed scope set to equal the stored canonical set; an explicit expansion or reduction fails closed, while an omitted refresh `scope` retains the existing binding. Provider revocation or account reassignment therefore still requires reconnecting and re-verifying the account.
 
-For X, the callback also stores the OAuth client ID as `x_app_id`. X route assignment requires that binding and replaces the template's `adapter.config.appIds` with the selected credential's stored app ID. A credential from another provider, an X credential without an app ID, or an incompatible injection shape is rejected before candidate creation.
+The current credential-delete endpoint removes only Serverware's encrypted local record. It does not call Google or X token revocation, so operators must revoke provider consent separately. Provider-aware **Disconnect and revoke** semantics, durable terminal-refresh health/backoff, and deterministic reconnect selection remain required lifecycle work.
+
+For X, the callback also stores the OAuth client ID as `x_app_id`. X route assignment requires that binding and replaces the template's `adapter.config.appIds` with the selected credential's stored app ID. Typed templates declare required OAuth scopes. The one-post-per-day template requires `tweet.write` in addition to its read/user/offline scopes, so a default read-only X credential is disabled in the selector until the operator reconnects with write consent. A credential from another provider, an X credential without an app ID, a scope-incomplete OAuth credential, or an incompatible injection shape is rejected before candidate creation.
 
 ## Connect A Provider Credential
 
@@ -133,7 +139,7 @@ Generate an enrollment packet from the portal:
 1. Open `http://localhost:3000` or the production control-plane URL.
 2. In **Agent Enrollment**, choose the policy principal that will run the agent.
 3. Enter the Serverware proxy URL, control-plane URL, proxy egress CIDR, namespace, CA mount path, and optional pod selector JSON.
-4. Click **Generate enrollment**, then copy or download the packet JSON.
+4. Click **Generate enrollment**, then **Download + copy verifier command**. The portal downloads the exact signed packet and copies a fail-closed command that verifies that file before any CA installation step.
 
 The same packet can be generated from the CLI for automation:
 
@@ -147,16 +153,37 @@ python3 scripts/generate_agent_enrollment.py \
 
 The portal generates a fresh 32-byte browser challenge and requests a five-minute packet. The server signs the packet digest, principal, challenge, validity window, policy hash, and runtime-manifest digest with the response key named by the packet's attestation pins. Do not use a packet after `expiresAtEpochMs` or if its `nonce` is not the challenge you requested.
 
-The portal returns a signed packet but does not independently verify it or add `verificationReceipt`. For production, pass that packet through the CLI or an equivalent independent verifier before use. The CLI fetches `/attestation` with the same nonce, verifies the quote and runtime digest, compares every measurement pin, verifies the Ed25519 packet signature, and only then adds `verificationReceipt` to its output. A missing receipt, failed check, stale packet, changed principal, or altered egress rule is a hard failure.
+The portal returns a signed packet but does not independently verify it or add `verificationReceipt`. Verify the downloaded file itself; do not run generation mode again and treat the newly generated packet as proof of the portal packet:
 
-Install the CA through the verifier:
+```bash
+ENROLLMENT_PACKET=serverware-enrollment-agent-mail-reader.json
+VERIFIED_ENROLLMENT_PACKET=serverware-enrollment-agent-mail-reader.verified.json
+EXPECTED_PACKET_SHA256=sha256:<value-copied-from-the-portal-command>
+EXPECTED_PRINCIPAL=agent:mail-reader
+EXPECTED_NONCE=<value-copied-from-the-portal-command>
+python3 scripts/generate_agent_enrollment.py \
+  --base https://serverware.example.com \
+  --verify-packet "$ENROLLMENT_PACKET" \
+  --expected-packet-sha256 "$EXPECTED_PACKET_SHA256" \
+  --expected-principal "$EXPECTED_PRINCIPAL" \
+  --expected-nonce "$EXPECTED_NONCE" \
+  > "$VERIFIED_ENROLLMENT_PACKET"
+```
+
+Use the digest, principal, and nonce from the separately copied portal command; do not recompute the expected digest from a file you are trying to authenticate. This mode first checks the exact raw downloaded bytes against that precommit. The digest covers principal, proxy/control-plane URLs, egress CIDRs, selectors, CA location, and every attestation pin. It then reads the bounded JSON object with duplicate-key rejection, rejects any preexisting untrusted receipt, obtains `/attestation` using the expected packet nonce, verifies the nonce-bound quote and runtime digest, compares every measurement pin, checks packet validity and expiry, and verifies the Ed25519 packet signature. Only then does it emit the same packet fields with a new `verificationReceipt`. A substituted file, unexpected principal or nonce, failed check, stale packet, altered egress rule, duplicate key, oversized input, or existing receipt is a hard failure.
+
+After exact packet verification succeeds, install the CA through the independent CA verifier:
 
 ```bash
 export SERVERWARE_ADMIN_TOKEN=...
-make install-ca
+python3 scripts/verify_attestation.py \
+  --base https://serverware.example.com \
+  --admin-token "$SERVERWARE_ADMIN_TOKEN" \
+  --ca-out .tmp/serverware-ca.pem
+install -D -m 0644 .tmp/serverware-ca.pem /etc/serverware/serverware-ca.pem
 ```
 
-The verifier writes `.tmp/serverware-ca.pem`. The enrollment packet's `agentHandoff.caInstall.command` installs that verified file at the packet's configured `ca.installPath`; run it in the agent image, VM, or sidecar filesystem before starting the agent. The packet enumerates every allowed route URL, not just the first path, and exposes the exact proxy environment and required CONNECT/provider headers. Proxy-authorization secret material is deliberately absent and must be provisioned separately when `agentHandoff.proxyAuthorization.required` is true.
+The copied portal command performs these steps in this order with shell error handling, defaults to the downloaded packet under `$HOME/Downloads`, and reads the admin token only from `SERVERWARE_ADMIN_TOKEN`; it does not embed the token. Set `SERVERWARE_ENROLLMENT_PACKET` first when the browser saves downloads elsewhere. The verifier writes `.tmp/serverware-ca.pem`. The enrollment packet's `agentHandoff.caInstall.command` installs that verified file at the packet's configured `ca.installPath`; run it in the agent image or VM before starting the agent. The packet enumerates every allowed route URL, not just the first path, and exposes the exact proxy environment and required CONNECT/provider headers. Proxy-authorization secret material is deliberately absent and must be provisioned separately when `agentHandoff.proxyAuthorization.required` is true.
 
 Run the agent with only proxy configuration:
 
@@ -225,7 +252,7 @@ Production completion still requires `make production-release-proof` on the real
 
 ## Current Local Evidence
 
-The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:acee67a8ef6ff450f8a5cebcc91a766b3fc29fb718cb66848fee33dd30463b14`. It records p50 `0.392 ms`, p95 `0.547 ms`, p99 `0.706 ms`, mean `0.411 ms`, and maximum `2.620 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
+The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:ebbe0a015186da1cdcbf92cfe2afe639984ce388a2ef91cf6805cf3fb14e96b4`. It records p50 `0.413 ms`, p95 `0.618 ms`, p99 `0.795 ms`, mean `0.439 ms`, and maximum `2.676 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
 
 The local provenance and image-signature records are explicitly development fixtures, and no current hardware-bound production image/quote set exists for this checkout. They cannot be combined with this benchmark as production release evidence; rebuild every source-, image-, binary-, signature-, benchmark-, and quote-bound artifact from one exact checkout on the target host.
 

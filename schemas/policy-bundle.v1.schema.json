@@ -19,9 +19,15 @@
         "max": {"type": "number"},
         "minItems": {"type": "integer", "minimum": 0},
         "maxItems": {"type": "integer", "minimum": 0},
-        "enum": {"type": "array"},
+        "enum": {"type": "array", "minItems": 1, "uniqueItems": true},
         "equals": {}
-      }
+      },
+      "allOf": [
+        {
+          "if": {"required": ["pattern"]},
+          "then": {"required": ["maxLength"], "properties": {"maxLength": {"maximum": 4096}}}
+        }
+      ]
     },
     "credentialConstraint": {
       "type": "object",
@@ -39,7 +45,8 @@
             "requestTimeWindow",
             "jsonBody",
             "formBody",
-            "responseDateWindow"
+            "responseDateWindow",
+            "responseJson"
           ]
         },
         "phase": {"enum": ["request", "response"]},
@@ -111,7 +118,7 @@
           "type": "object",
           "additionalProperties": {"$ref": "#/$defs/fieldRule"}
         },
-        "items": {"type": "array", "items": {"type": "string"}},
+        "items": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
         "dateFields": {"type": "array", "items": {"type": "string"}},
         "operations": {
           "type": "array",
@@ -125,7 +132,7 @@
         {
           "if": {
             "required": ["type"],
-            "properties": {"type": {"const": "responseDateWindow"}}
+            "properties": {"type": {"enum": ["responseDateWindow", "responseJson"]}}
           },
           "then": {
             "required": ["phase"],
@@ -176,6 +183,10 @@
         {
           "if": {"properties": {"type": {"const": "responseDateWindow"}}, "required": ["type"]},
           "then": {"required": ["phase", "dateFields", "formats", "maxAgeDays"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "responseJson"}}, "required": ["type"]},
+          "then": {"required": ["phase", "fields"]}
         }
       ]
     }

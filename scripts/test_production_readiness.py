@@ -16,6 +16,16 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import verify_production_readiness as readiness  # noqa: E402
 
 
+OAUTH_SECRET_TEMP_DIR = tempfile.TemporaryDirectory(prefix="serverware-oauth-readiness-")
+
+
+def oauth_secret_file(name: str, value: str, mode: int = 0o600) -> Path:
+    path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
+    path.write_text(value + "\n", encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -148,6 +158,18 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
             "SERVERWARE_AUDIT_ANCHOR_TOKEN": "prod-anchor-token-32-bytes-minimum-value",
             "SERVERWARE_ADMIN_ROLES": "admin,approver,auditor,policy_author,policy_publisher,credential_owner",
+            "SERVERWARE_OAUTH_STATE_TTL_SECONDS": "600",
+            "SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES": "1000000",
+            "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "test-google-client-id",
+            "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(
+                oauth_secret_file("google-client-secret", "test-google-oauth-secret-0123456789")
+            ),
+            "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://serverware.prod.acme-corp.net/api/oauth/callback/google",
+            "SERVERWARE_X_OAUTH_CLIENT_ID": "test-x-client-id",
+            "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE": str(
+                oauth_secret_file("x-client-secret", "test-x-oauth-secret-0123456789")
+            ),
+            "SERVERWARE_X_OAUTH_REDIRECT_URI": "https://serverware.prod.acme-corp.net/api/oauth/callback/x",
             "SERVERWARE_OIDC_ENABLED": "1",
             "SERVERWARE_OIDC_ISSUER": "https://idp.prod.acme-corp.net",
             "SERVERWARE_OIDC_AUDIENCE": "serverware-control-plane",
@@ -259,6 +281,11 @@ def good_env() -> dict[str, str]:
         "SERVERWARE_NITRO_ATTESTATION_DOCUMENT",
         "SERVERWARE_NITRO_ATTESTATION_DOCUMENT_B64",
         "SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP",
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_X_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_TWITTER_OAUTH_CLIENT_ID",
+        "SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_TWITTER_OAUTH_REDIRECT_URI",
     ):
         env.pop(name, None)
     return env
@@ -375,6 +402,78 @@ def main() -> None:
     run_readiness_output(good_env())
     run_live_probe_helpers()
     run_shared_store_probe_helper()
+
+    missing_google_env = good_env()
+    for name in (
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
+    ):
+        missing_google_env.pop(name, None)
+    expect_failure(missing_google_env, "Google OAuth provider configuration")
+
+    incomplete_x_env = good_env()
+    incomplete_x_env.pop("SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE", None)
+    expect_failure(incomplete_x_env, "X OAuth provider configuration")
+
+    http_callback_env = good_env()
+    http_callback_env["SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI"] = (
+        "http://serverware.prod.acme-corp.net/api/oauth/callback/google"
+    )
+    expect_failure(http_callback_env, "exact HTTPS callback")
+
+    wrong_origin_callback_env = good_env()
+    wrong_origin_callback_env["SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI"] = (
+        "https://accounts.prod.acme-corp.net/api/oauth/callback/google"
+    )
+    expect_failure(wrong_origin_callback_env, "exact HTTPS callback")
+
+    wrong_path_callback_env = good_env()
+    wrong_path_callback_env["SERVERWARE_X_OAUTH_REDIRECT_URI"] = (
+        "https://serverware.prod.acme-corp.net/oauth/callback/x"
+    )
+    expect_failure(wrong_path_callback_env, "exact HTTPS callback")
+
+    unbounded_oauth_state_env = good_env()
+    unbounded_oauth_state_env["SERVERWARE_OAUTH_STATE_TTL_SECONDS"] = "901"
+    expect_failure(unbounded_oauth_state_env, "between 60 and 900 seconds")
+
+    undersized_lease_replay_env = good_env()
+    undersized_lease_replay_env["SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES"] = "9999"
+    expect_failure(undersized_lease_replay_env, "between 10000 and 10000000")
+
+    weak_oauth_secret_env = good_env()
+    weak_oauth_secret = "weak"
+    weak_oauth_secret_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"] = str(
+        oauth_secret_file("weak-google-client-secret", weak_oauth_secret)
+    )
+    expect_failure_without_secret(weak_oauth_secret_env, "strong OAuth client secret", weak_oauth_secret)
+
+    unsafe_oauth_secret_mode_env = good_env()
+    unsafe_oauth_secret_mode_env["SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE"] = str(
+        oauth_secret_file("unsafe-x-client-secret", "test-x-oauth-secret-unsafe-0123456789", 0o644)
+    )
+    expect_failure(unsafe_oauth_secret_mode_env, "mode 0400 or 0600")
+
+    relative_oauth_secret_path_env = good_env()
+    relative_oauth_secret_path_env["SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE"] = "relative/x-client-secret"
+    expect_failure(relative_oauth_secret_path_env, "must be an absolute path")
+
+    symlink_oauth_secret_env = good_env()
+    symlink_path = Path(OAUTH_SECRET_TEMP_DIR.name) / "google-client-secret-link"
+    symlink_path.unlink(missing_ok=True)
+    symlink_path.symlink_to(oauth_secret_file("symlink-target", "test-google-oauth-secret-link-0123456789"))
+    symlink_oauth_secret_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"] = str(symlink_path)
+    expect_failure(symlink_oauth_secret_env, "regular, non-symlink file")
+
+    plaintext_oauth_secret_env = good_env()
+    plaintext_oauth_secret = "test-plaintext-oauth-secret-0123456789"
+    plaintext_oauth_secret_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET"] = plaintext_oauth_secret
+    expect_failure_without_secret(
+        plaintext_oauth_secret_env,
+        "must not be set in production",
+        plaintext_oauth_secret,
+    )
 
     fixture_env = good_env()
     fixture_env["SERVERWARE_NITRO_FIXTURE"] = "1"

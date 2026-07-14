@@ -4,6 +4,7 @@ import base64
 import contextlib
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -37,12 +38,20 @@ MAX_OAUTH_TOKEN_RESPONSE_BYTES = 256 * 1024
 MAX_OAUTH_REFRESH_TOKEN_BYTES = 128 * 1024
 MAX_OAUTH_TOKEN_LIFETIME_SECONDS = 366 * 24 * 60 * 60
 OAUTH_REFRESH_SKEW_SECONDS = 60
+OAUTH_BROWSER_COOKIE_PREFIX = "__Host-serverware-oauth-"
 _OAUTH_STATE_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
+_OAUTH_BROWSER_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _oauth_state_thread_lock = threading.RLock()
 
 
 class OAuthError(RuntimeError):
     pass
+
+
+def browser_cookie_name(state: str) -> str:
+    if not isinstance(state, str) or _OAUTH_STATE_RE.fullmatch(state) is None:
+        raise OAuthError("OAuth state is malformed")
+    return OAUTH_BROWSER_COOKIE_PREFIX + state
 
 
 @dataclass(frozen=True)
@@ -62,7 +71,7 @@ class OAuthProvider:
 
     @property
     def configured(self) -> bool:
-        return bool(self.client_id and self.redirect_uri)
+        return bool(self.client_id and self.client_secret and self.redirect_uri)
 
 
 def _providers() -> dict[str, OAuthProvider]:
@@ -261,6 +270,7 @@ def create_authorization_url(
     scopes: list[str] | None,
     metadata: dict[str, Any] | None,
     actor_id: str,
+    browser_nonce: str,
     control_plane_mfa: dict[str, Any] | None = None,
     control_plane_approval: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -273,6 +283,8 @@ def create_authorization_url(
         f"{provider.display_name} OAuth credential",
     )
     metadata_value = _bounded_metadata(metadata)
+    if not isinstance(browser_nonce, str) or _OAUTH_BROWSER_NONCE_RE.fullmatch(browser_nonce) is None:
+        raise OAuthError("OAuth browser binding is malformed")
 
     verifier = _code_verifier()
     state = _b64url(secrets.token_bytes(32))
@@ -283,6 +295,7 @@ def create_authorization_url(
         "scopes": requested_scopes,
         "metadata": metadata_value,
         "actor_id": actor_id,
+        "browser_nonce_sha256": "sha256:" + hashlib.sha256(browser_nonce.encode("ascii")).hexdigest(),
         "control_plane_mfa": control_plane_mfa,
         "control_plane_approval": control_plane_approval,
         "code_verifier": verifier,
@@ -316,21 +329,34 @@ def create_authorization_url(
     }
 
 
-def consume_state(*, provider_id: str, state: str) -> dict[str, Any]:
+def consume_state(*, provider_id: str, state: str, browser_nonce: str) -> dict[str, Any]:
     provider = provider_for(provider_id)
     if not isinstance(state, str) or _OAUTH_STATE_RE.fullmatch(state) is None:
         raise OAuthError("OAuth state is malformed")
+    if not isinstance(browser_nonce, str) or _OAUTH_BROWSER_NONCE_RE.fullmatch(browser_nonce) is None:
+        raise OAuthError("OAuth browser binding is missing or malformed")
+    expected_browser_hash = "sha256:" + hashlib.sha256(browser_nonce.encode("ascii")).hexdigest()
     with _oauth_state_lock():
         payload = _read_states()
         _prune_expired(payload)
-        record = payload["states"].pop(state, None)
+        record = payload["states"].get(state)
+        if not isinstance(record, dict):
+            _write_states(payload)
+            raise OAuthError("OAuth state is unknown or expired")
+        if record.get("provider") != provider.id:
+            raise OAuthError("OAuth state provider mismatch")
+        if int(record.get("expires_at_epoch", 0)) <= _now():
+            payload["states"].pop(state, None)
+            _write_states(payload)
+            raise OAuthError("OAuth state expired")
+        stored_browser_hash = record.get("browser_nonce_sha256")
+        if not isinstance(stored_browser_hash, str) or not hmac.compare_digest(
+            stored_browser_hash,
+            expected_browser_hash,
+        ):
+            raise OAuthError("OAuth browser binding mismatch")
+        payload["states"].pop(state, None)
         _write_states(payload)
-    if not isinstance(record, dict):
-        raise OAuthError("OAuth state is unknown or expired")
-    if record.get("provider") != provider.id:
-        raise OAuthError("OAuth state provider mismatch")
-    if int(record.get("expires_at_epoch", 0)) <= _now():
-        raise OAuthError("OAuth state expired")
     return record
 
 
@@ -435,11 +461,19 @@ def _fetch_provider_identity(provider: OAuthProvider, access_token: str) -> dict
     }
 
 
-def exchange_authorization_code(*, provider_id: str, code: str, state: str) -> dict[str, Any]:
+def exchange_authorization_code(
+    *,
+    provider_id: str,
+    code: str,
+    state: str,
+    browser_nonce: str,
+) -> dict[str, Any]:
     provider = provider_for(provider_id)
+    if not provider.configured:
+        raise OAuthError(f"{provider.display_name} OAuth is not configured")
     if not isinstance(code, str) or not code or len(code.encode("utf-8")) > MAX_OAUTH_CODE_BYTES:
         raise OAuthError("OAuth authorization code is empty or too large")
-    record = consume_state(provider_id=provider.id, state=state)
+    record = consume_state(provider_id=provider.id, state=state, browser_nonce=browser_nonce)
     token_response = _post_token_request(
         provider,
         _token_request_body(provider, record, code),

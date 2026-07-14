@@ -29,7 +29,7 @@ For each request:
 6. Stateful request constraints, currently rate limits, are committed immediately before credential use.
 7. The Rust gate obtains the route's one-credential scoped lease, checks its version, policy generation, and expiry, injects only the selected credential field, and strips Serverware-only identity headers.
 8. Immediately before the upstream send, the gate rechecks that the lease and policy snapshot are still current, synchronously submits `data_plane.credential.release_started`, and requires the control plane to acknowledge its durable hash-chain append. If audit is unavailable or rejects the event, the upstream request is not sent.
-9. The upstream status selects the success or error response profile. Response size, syntax, field projection, semantic constraints, and released headers are validated before buffered bytes are released.
+9. The upstream status selects the success or error response profile. Response size and syntax are checked first; whole-body semantic constraints are then evaluated before field projection and released-header validation. No buffered bytes are released until every applicable check passes.
 10. After adapter and constraint projection, the credential-reflection guard scans the final body, content type, and released semantic headers. A match blocks the response.
 
 If any step fails, the request or response is blocked. Unknown routes are never proxied.
@@ -53,6 +53,8 @@ For streaming responses, validation and projection happen incrementally. Serverw
 `formBody`: applies the same allowlist, required/denied field, scalar duplicate, type, length, numeric, enum, exact-value, and safe-pattern rules to bounded `application/x-www-form-urlencoded` bodies. Bracketed keys such as `metadata[agent_request_id]` normalize to `metadata.agent_request_id`. Malformed UTF-8, malformed percent encoding, ambiguous duplicate scalar fields, and more than 256 pairs fail closed.
 
 `responseDateWindow`: validates JSON responses before release. It supports nested arrays through dot paths, so `data.created_at` checks every item in a `data` array.
+
+`responseJson`: validates the semantic contract of a buffered JSON success response before release. It can apply to every normalized operation or only named operations, validate the root value or objects selected through explicit item paths, and apply the shared `fieldRule` assertions to every selected item. It validates data; it does not select or redact fields.
 
 ## Common Patterns Already Modeled
 
@@ -121,6 +123,78 @@ This prevents an ordinary restart or stale signed bundle from silently re-enabli
 ## Response Validation
 
 Request constraints are not enough. Many APIs can accept a bounded query and still return old or over-broad data through bugs, aliases, pagination cursors, or endpoint drift. Response constraints are therefore first-class. Gmail and X examples validate response age, and generic REST examples can validate timestamps such as `updated_at` or `created`.
+
+### JSON response contracts
+
+`responseJson` is a whole-body response constraint with this shape:
+
+```json
+{
+  "id": "typed-results",
+  "type": "responseJson",
+  "phase": "response",
+  "operations": ["widgets.read"],
+  "items": ["data"],
+  "required": true,
+  "fields": {
+    "status": {"required": true, "type": "string", "enum": ["ready", "done"]},
+    "score": {"type": "number", "min": 0, "max": 1},
+    "tags": {"type": "array", "maxItems": 3}
+  }
+}
+```
+
+`phase` is required and must be `response`. `operations` is optional; when present, the constraint runs only for those normalized adapter operations. A matching response without operation context fails closed, while a known non-matching operation skips the constraint.
+
+`items` is an optional, non-empty list of unique explicit dotted paths. Wildcards and empty path segments are not allowed. Without `items`, the response root is validated as one item. With `items`, each resolved array is expanded and every element is validated; a resolved non-array value is validated as one item. The constraint-level `required` controls whether at least one configured item path must exist and defaults to `true`. `required: false` permits all item paths to be absent. A present empty array proves that the item path exists and contains no elements to validate.
+
+`fields` is required and must be a non-empty map of dotted paths, relative to each selected item, to non-empty `fieldRule` objects. Arrays encountered while resolving a field path fan out, and every resolved value must pass. A field rule supports:
+
+- `required`: require that field on every selected item.
+- `type`: `string`, `number`, `integer`, `boolean`, `object`, `array`, or `null`. Booleans are not numbers.
+- `enum` or `equals`: constrain the exact JSON value.
+- `minLength`, `maxLength`, and a bounded safe `pattern`: constrain strings. Patterns use only the anchored form `^<literal-prefix>[<ASCII class>]{min,max}$`; `max` cannot exceed 4096 and a pattern requires `maxLength`.
+- `min` and `max`: constrain finite numeric values.
+- `minItems` and `maxItems`: constrain arrays.
+
+An absent field is allowed unless its own field rule has `required: true`. `responseJson` does not reject unmentioned siblings, remove fields, or define the release shape. Those are redaction responsibilities of the adapter response profile.
+
+Both the Python policy engine and production Rust gate evaluate `responseJson` against the bounded, parsed upstream success body before applying `allowedFields`. This ordering lets a contract validate a provider field even when that field is not released. API-specific projection then runs, `responseDateWindow` evaluates the canonicalized response where required, structural projection removes unlisted fields, response headers are normalized, and the final credential-reflection guard scans the projected output.
+
+Policy admission rejects `responseJson` with the wrong phase, missing or empty `fields`, invalid or duplicate operation/item paths, wildcard paths, empty or unsupported field rules, unsafe patterns, or inconsistent bounds. Whole-body response constraints cannot be combined with a streaming response mode. At runtime, invalid JSON, missing operation context, absent required items or fields, and any type/value/bound violation block the response with a synthetic `502`; errors use the `response_json_*` family and no upstream body bytes are released.
+
+Validation is not redaction. Every credential-bearing `generic.rest` or `x.v2` response profile using `mode: "json"` must also define a non-empty, unique `allowedFields` projection, including any configured JSON error profile. A `responseJson` constraint never satisfies this requirement. Missing, empty, duplicate, wildcard, or malformed projections reject policy activation; the runtime check independently blocks with `response_allowed_fields_missing` and `502` if an invalid profile reaches response handling.
+
+The bounded object-store write in [policies/credential-limits.examples.json](../policies/credential-limits.examples.json) combines both controls:
+
+```json
+{
+  "adapter": {
+    "type": "generic.rest",
+    "config": {
+      "response": {
+        "mode": "json",
+        "maxBodyBytes": 65536,
+        "allowedFields": ["ok", "id", "sha256"]
+      }
+    }
+  },
+  "constraints": [
+    {
+      "id": "object-store-response-contract",
+      "type": "responseJson",
+      "phase": "response",
+      "fields": {
+        "ok": {"required": true, "type": "boolean", "equals": true},
+        "id": {"required": true, "type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9._-]{1,128}$"},
+        "sha256": {"required": true, "type": "string", "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64,64}$"}
+      }
+    }
+  ]
+}
+```
+
+Here `responseJson` proves that the provider reported success and returned a bounded object ID and SHA-256 digest. `allowedFields` separately guarantees that only those three fields can reach the agent.
 
 Every response profile has an explicit `maxBodyBytes`. A `2xx` status uses the success profile. Redirects are always blocked with `response_redirect_not_allowed`; Serverware never follows or releases an upstream `Location`. A `4xx` or `5xx` status uses the nested `error` profile, and fails closed with `response_error_policy_missing` if that profile is absent. Gmail and npm require bounded JSON error profiles at policy admission. Generic REST and X permit an omitted error profile at admission for compatibility, but an actual error response is still blocked when no profile exists. Other status classes are invalid.
 

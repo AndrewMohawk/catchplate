@@ -1,10 +1,74 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RELEASE_CHANNEL = os.getenv("SERVERWARE_RELEASE_CHANNEL", "dev")
+_DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
+MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
+
+
+def _production_release() -> bool:
+    return RELEASE_CHANNEL.strip().lower() not in _DEVELOPMENT_RELEASE_CHANNELS
+
+
+def _read_oauth_client_secret_file(path: Path, *, setting_name: str) -> str:
+    if not path.is_absolute():
+        raise RuntimeError(f"{setting_name} must be an absolute path")
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RuntimeError(f"{setting_name} must reference a readable, non-symlink secret file") from exc
+    try:
+        file_stat = os.fstat(descriptor)
+        mode = stat.S_IMODE(file_stat.st_mode)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise RuntimeError(f"{setting_name} must reference a regular file")
+        if mode not in {0o400, 0o600}:
+            raise RuntimeError(f"{setting_name} must use owner-readable mode 0400 or 0600")
+        if not 1 <= file_stat.st_size <= MAX_OAUTH_CLIENT_SECRET_FILE_BYTES:
+            raise RuntimeError(
+                f"{setting_name} must contain between 1 and {MAX_OAUTH_CLIENT_SECRET_FILE_BYTES} bytes"
+            )
+        chunks: list[bytes] = []
+        remaining = MAX_OAUTH_CLIENT_SECRET_FILE_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        if len(payload) != file_stat.st_size:
+            raise RuntimeError(f"{setting_name} changed while it was being read")
+    finally:
+        os.close(descriptor)
+    try:
+        secret = payload.decode("utf-8").rstrip("\r\n")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"{setting_name} must contain UTF-8 text") from exc
+    if not secret or secret != secret.strip() or any(character in secret for character in ("\x00", "\r", "\n")):
+        raise RuntimeError(f"{setting_name} must contain one non-empty secret without surrounding whitespace")
+    return secret
+
+
+def _oauth_client_secret(*, value_name: str, file_name: str) -> tuple[str, Path | None]:
+    direct_value = os.getenv(value_name, "").strip()
+    raw_path = os.getenv(file_name, "").strip()
+    secret_path = Path(raw_path) if raw_path else None
+    if _production_release() and direct_value and secret_path is not None:
+        raise RuntimeError(f"production must not set both {value_name} and {file_name}")
+    if direct_value:
+        return direct_value, secret_path
+    if secret_path is None:
+        return "", None
+    return _read_oauth_client_secret_file(secret_path, setting_name=file_name), secret_path
+
+
 DATA_DIR = Path(os.getenv("SERVERWARE_DATA_DIR", "/data"))
 DB_PATH = DATA_DIR / "serverware.sqlite3"
 MITMPROXY_CONF_DIR = DATA_DIR / "mitmproxy"
@@ -31,6 +95,18 @@ DECISION_GATE_CA_KEY_PATH = Path(os.getenv("SERVERWARE_DECISION_GATE_CA_KEY", st
 SCHEMA_DIR = Path(os.getenv("SERVERWARE_SCHEMA_DIR", str(PROJECT_ROOT / "schemas")))
 OAUTH_STATE_PATH = Path(os.getenv("SERVERWARE_OAUTH_STATE_PATH", str(DATA_DIR / "oauth-states.json")))
 OAUTH_STATE_TTL_SECONDS = int(os.getenv("SERVERWARE_OAUTH_STATE_TTL_SECONDS", "600"))
+if OAUTH_STATE_TTL_SECONDS <= 0:
+    raise RuntimeError("SERVERWARE_OAUTH_STATE_TTL_SECONDS must be positive")
+if _production_release() and not 60 <= OAUTH_STATE_TTL_SECONDS <= 900:
+    raise RuntimeError("production SERVERWARE_OAUTH_STATE_TTL_SECONDS must be between 60 and 900 seconds")
+
+CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES = int(
+    os.getenv("SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES", "1000000")
+)
+if not 10_000 <= CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES <= 10_000_000:
+    raise RuntimeError(
+        "SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES must be between 10000 and 10000000"
+    )
 
 WEB_HOST = os.getenv("SERVERWARE_WEB_HOST", "0.0.0.0")
 WEB_PORT = int(os.getenv("SERVERWARE_WEB_PORT", "3000"))
@@ -38,12 +114,26 @@ WEB_TLS_CERT_FILE = os.getenv("SERVERWARE_WEB_TLS_CERT_FILE", "").strip()
 WEB_TLS_KEY_FILE = os.getenv("SERVERWARE_WEB_TLS_KEY_FILE", "").strip()
 PROXY_HOST = os.getenv("SERVERWARE_PROXY_HOST", "0.0.0.0")
 PROXY_PORT = int(os.getenv("SERVERWARE_PROXY_PORT", "8080"))
-PUBLIC_URL = os.getenv("SERVERWARE_PUBLIC_URL", f"http://localhost:{WEB_PORT}")
+PUBLIC_URL = os.getenv("SERVERWARE_PUBLIC_URL", f"http://localhost:{WEB_PORT}").strip()
 GOOGLE_OAUTH_CLIENT_ID = os.getenv("SERVERWARE_GOOGLE_OAUTH_CLIENT_ID", "").strip()
-GOOGLE_OAUTH_CLIENT_SECRET = os.getenv("SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET", "").strip()
+GOOGLE_OAUTH_CLIENT_SECRET, GOOGLE_OAUTH_CLIENT_SECRET_FILE = _oauth_client_secret(
+    value_name="SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
+    file_name="SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+)
 GOOGLE_OAUTH_REDIRECT_URI = os.getenv("SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI", f"{PUBLIC_URL}/api/oauth/callback/google").strip()
 X_OAUTH_CLIENT_ID = os.getenv("SERVERWARE_X_OAUTH_CLIENT_ID", os.getenv("SERVERWARE_TWITTER_OAUTH_CLIENT_ID", "")).strip()
-X_OAUTH_CLIENT_SECRET = os.getenv("SERVERWARE_X_OAUTH_CLIENT_SECRET", os.getenv("SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET", "")).strip()
+_X_OAUTH_LEGACY_CLIENT_SECRET = os.getenv("SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET", "").strip()
+if _production_release() and _X_OAUTH_LEGACY_CLIENT_SECRET and os.getenv("SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE", "").strip():
+    raise RuntimeError(
+        "production must not set both SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET and "
+        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE"
+    )
+X_OAUTH_CLIENT_SECRET, X_OAUTH_CLIENT_SECRET_FILE = _oauth_client_secret(
+    value_name="SERVERWARE_X_OAUTH_CLIENT_SECRET",
+    file_name="SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
+)
+if not X_OAUTH_CLIENT_SECRET and not X_OAUTH_CLIENT_SECRET_FILE:
+    X_OAUTH_CLIENT_SECRET = _X_OAUTH_LEGACY_CLIENT_SECRET
 X_OAUTH_REDIRECT_URI = os.getenv("SERVERWARE_X_OAUTH_REDIRECT_URI", os.getenv("SERVERWARE_TWITTER_OAUTH_REDIRECT_URI", f"{PUBLIC_URL}/api/oauth/callback/x")).strip()
 ADMIN_USER_ID = os.getenv("SERVERWARE_ADMIN_USER", "user:admin")
 ADMIN_ROLES = tuple(
@@ -154,11 +244,9 @@ MASTER_KEY_UNSEAL_COMMAND = os.getenv("SERVERWARE_MASTER_KEY_UNSEAL_COMMAND", ""
 NITRO_NSM_UNSEAL_COMMAND_TEMPLATE = os.getenv("SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", "").strip()
 KEY_RELEASE_MIN_ROLLBACK_EPOCH = int(os.getenv("SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH", "1"))
 KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST = os.getenv("SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST", "1") == "1"
-RELEASE_CHANNEL = os.getenv("SERVERWARE_RELEASE_CHANNEL", "dev")
 EXPECTED_DATA_PLANE_BINARY_DIGEST = os.getenv("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") or None
 
 
-_DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
 _INTERNAL_SERVICE_TOKENS = {
     "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
     "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": DATA_PLANE_AUDIT_INGEST_TOKEN,

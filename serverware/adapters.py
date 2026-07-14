@@ -236,6 +236,13 @@ class ApiAdapter:
             self._normalize_response_headers(flow, response_cfg, mode)
             return PolicyDecision(allowed=True)
         allowed_fields = self._allowed_field_paths(response_cfg)
+        if mode == "json" and not allowed_fields:
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="JSON response projection policy is missing",
+                payload={"error": "response_allowed_fields_missing"},
+            )
         if mode in {"jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"}:
             if not allowed_fields:
                 return PolicyDecision(
@@ -765,7 +772,7 @@ class GmailV1Adapter(ApiAdapter):
                 if isinstance(nested, dict):
                     copy_path(child, nested, path[1:])
 
-        def filter_message(item: dict[str, Any]) -> dict[str, Any]:
+        def filter_message(item: dict[str, Any], *, include_age_proof: bool = False) -> dict[str, Any]:
             filtered: dict[str, Any] = {}
             for path in allowed_fields:
                 copy_path(item, filtered, path)
@@ -782,19 +789,17 @@ class GmailV1Adapter(ApiAdapter):
                     and isinstance(header.get("name"), str)
                     and header["name"].casefold() in allowed_header_names
                 ]
-            if "serverwareAgeProof" in item:
+            if include_age_proof and item.get("serverwareAgeProof") == "validated":
                 filtered["serverwareAgeProof"] = item["serverwareAgeProof"]
             return filtered
 
         if "messages" in payload and isinstance(payload["messages"], list):
             filtered_payload: dict[str, Any] = {
                 "messages": [
-                    filter_message(item) if isinstance(item, dict) else item
+                    filter_message(item, include_age_proof=True) if isinstance(item, dict) else item
                     for item in payload["messages"]
                 ]
             }
-            if "serverwarePendingAgeProof" in payload:
-                filtered_payload["serverwarePendingAgeProof"] = payload["serverwarePendingAgeProof"]
             flow.response.set_text(json.dumps(filtered_payload, separators=(",", ":"), sort_keys=True))
             return
 

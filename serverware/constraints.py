@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 from serverware import db
 from serverware.policies import PolicyDecision
-from serverware.policy_bundle import canonical_json
+from serverware.policy_bundle import bounded_pattern_matches, canonical_json
 
 
 SECONDS_PER_DAY = 86_400
@@ -26,7 +26,7 @@ SUPPORTED_REQUEST_CONSTRAINTS = {
     "jsonBody",
     "formBody",
 }
-SUPPORTED_RESPONSE_CONSTRAINTS = {"responseDateWindow"}
+SUPPORTED_RESPONSE_CONSTRAINTS = {"responseDateWindow", "responseJson"}
 
 
 @dataclass
@@ -97,10 +97,17 @@ def evaluate_request_constraints(
     return PolicyDecision(True)
 
 
-def evaluate_response_constraints(flow: Any, route: Any) -> PolicyDecision:
+def evaluate_response_constraints(
+    flow: Any,
+    route: Any,
+    *,
+    constraint_types: set[str] | None = None,
+) -> PolicyDecision:
     for constraint in route.constraints:
         constraint_type = str(constraint.get("type") or "")
         if constraint_type not in SUPPORTED_RESPONSE_CONSTRAINTS:
+            continue
+        if constraint_types is not None and constraint_type not in constraint_types:
             continue
         if not _phase_includes(constraint, "response"):
             continue
@@ -119,6 +126,8 @@ def evaluate_response_constraints(flow: Any, route: Any) -> PolicyDecision:
                 continue
         if constraint_type == "responseDateWindow":
             decision = _enforce_response_date_window(constraint, flow)
+        elif constraint_type == "responseJson":
+            decision = _enforce_response_json(constraint, flow)
         else:
             decision = PolicyDecision(True)
         if not decision.allowed:
@@ -821,6 +830,68 @@ def _enforce_response_date_window(constraint: dict[str, Any], flow: Any) -> Poli
     return PolicyDecision(True)
 
 
+def _enforce_response_json(constraint: dict[str, Any], flow: Any) -> PolicyDecision:
+    if not flow.response:
+        return PolicyDecision(True)
+    try:
+        raw = flow.response.raw_content
+        if raw is None:
+            raw = flow.response.get_content(strict=False) or b""
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return _deny(
+            constraint,
+            "response body is not valid JSON",
+            "response_json_invalid",
+            statusCode=502,
+        )
+
+    fields = constraint.get("fields")
+    if not isinstance(fields, dict) or not fields:
+        return _deny(
+            constraint,
+            "response JSON constraint is invalid",
+            "constraint_invalid_response_json",
+            statusCode=502,
+        )
+
+    item_paths = [str(item) for item in constraint.get("items") or []]
+    items: list[Any] = []
+    item_path_found = False
+    if item_paths:
+        for item_path in item_paths:
+            values = _values_at_path(payload, item_path)
+            if values:
+                item_path_found = True
+            for value in values:
+                if isinstance(value, list):
+                    items.extend(value)
+                else:
+                    items.append(value)
+        if bool(constraint.get("required", True)) and not item_path_found:
+            return _deny(
+                constraint,
+                "response does not contain required JSON items",
+                "response_json_items_missing",
+                statusCode=502,
+            )
+    else:
+        items = [payload]
+
+    for item in items:
+        for field, rule in fields.items():
+            decision = _enforce_field_rule(
+                constraint,
+                item,
+                str(field),
+                rule,
+                body_kind="response",
+            )
+            if not decision.allowed:
+                return decision
+    return PolicyDecision(True)
+
+
 def _enforce_field_rule(
     constraint: dict[str, Any],
     payload: Any,
@@ -829,60 +900,73 @@ def _enforce_field_rule(
     *,
     body_kind: str = "json",
 ) -> PolicyDecision:
-    label = "JSON" if body_kind == "json" else "form"
-    error_prefix = f"{body_kind}_body"
+    label = {"json": "JSON body", "form": "form body", "response": "response JSON"}.get(
+        body_kind, body_kind
+    )
+    error_prefix = "response_json" if body_kind == "response" else f"{body_kind}_body"
+    status = {"statusCode": 502} if body_kind == "response" else {}
     if not isinstance(rule, dict):
-        return _deny(constraint, f"{label} body field rule is invalid", f"{error_prefix}_field_rule_invalid", field=field)
+        return _deny(
+            constraint,
+            f"{label} field rule is invalid",
+            f"{error_prefix}_field_rule_invalid",
+            field=field,
+            **status,
+        )
     values = _values_at_path(payload, field)
     if rule.get("required") and not values:
         return _deny(
             constraint,
-            f"{label} body is missing a required field",
+            f"{label} is missing a required field",
             f"{error_prefix}_required_field_missing",
             field=field,
+            **status,
         )
     for value in values:
         expected_type = rule.get("type")
         if expected_type and not _matches_type(value, str(expected_type)):
             return _deny(
                 constraint,
-                f"{label} body field has the wrong type",
+                f"{label} field has the wrong type",
                 f"{error_prefix}_field_type_denied",
                 field=field,
                 expectedType=expected_type,
+                **status,
             )
         if "enum" in rule and value not in rule["enum"]:
             return _deny(
                 constraint,
-                f"{label} body field value is not in the allowed set",
+                f"{label} field value is not in the allowed set",
                 f"{error_prefix}_field_enum_denied",
                 field=field,
+                **status,
             )
         if "equals" in rule and value != rule["equals"]:
             return _deny(
                 constraint,
-                f"{label} body field does not match required value",
+                f"{label} field does not match required value",
                 f"{error_prefix}_field_equals_denied",
                 field=field,
+                **status,
             )
         if isinstance(value, str):
             if "minLength" in rule and len(value) < int(rule["minLength"]):
-                return _deny(constraint, f"{label} body field is too short", f"{error_prefix}_field_min_length", field=field)
+                return _deny(constraint, f"{label} field is too short", f"{error_prefix}_field_min_length", field=field, **status)
             if "maxLength" in rule and len(value) > int(rule["maxLength"]):
-                return _deny(constraint, f"{label} body field is too long", f"{error_prefix}_field_max_length", field=field)
+                return _deny(constraint, f"{label} field is too long", f"{error_prefix}_field_max_length", field=field, **status)
             pattern = rule.get("pattern")
-            if pattern and not re.search(str(pattern), value):
-                return _deny(constraint, f"{label} body field does not match pattern", f"{error_prefix}_field_pattern_denied", field=field)
+            if pattern and bounded_pattern_matches(str(pattern), value) is not True:
+                return _deny(constraint, f"{label} field does not match pattern", f"{error_prefix}_field_pattern_denied", field=field, **status)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if "min" in rule and value < float(rule["min"]):
-                return _deny(constraint, f"{label} body field is below policy minimum", f"{error_prefix}_field_min", field=field)
+                return _deny(constraint, f"{label} field is below policy minimum", f"{error_prefix}_field_min", field=field, **status)
             if "max" in rule and value > float(rule["max"]):
-                return _deny(constraint, f"{label} body field exceeds policy maximum", f"{error_prefix}_field_max", field=field)
+                return _deny(constraint, f"{label} field exceeds policy maximum", f"{error_prefix}_field_max", field=field, **status)
         if isinstance(value, list):
             if "minItems" in rule and len(value) < int(rule["minItems"]):
-                return _deny(constraint, f"{label} body array has too few items", f"{error_prefix}_field_min_items", field=field)
+                return _deny(constraint, f"{label} array has too few items", f"{error_prefix}_field_min_items", field=field, **status)
             if "maxItems" in rule and len(value) > int(rule["maxItems"]):
-                return _deny(constraint, f"{label} body array has too many items", f"{error_prefix}_field_max_items", field=field)
+                return _deny(constraint, f"{label} array has too many items", f"{error_prefix}_field_max_items", field=field, **status)
     return PolicyDecision(True)
 
 

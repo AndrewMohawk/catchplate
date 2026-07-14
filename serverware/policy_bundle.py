@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import math
 import os
 import re
 import tempfile
@@ -67,8 +68,9 @@ SUPPORTED_CONSTRAINTS = {
     "jsonBody",
     "formBody",
     "responseDateWindow",
+    "responseJson",
 }
-REQUEST_CONSTRAINTS = SUPPORTED_CONSTRAINTS - {"responseDateWindow"}
+REQUEST_CONSTRAINTS = SUPPORTED_CONSTRAINTS - {"responseDateWindow", "responseJson"}
 FAIL_CLOSED_DEFAULTS = {
     "action": "deny",
     "failMode": "closed",
@@ -118,6 +120,20 @@ SAFE_RESPONSE_HEADERS = frozenset(
 MAX_PROVIDER_RESPONSE_BODY_BYTES = 1024 * 1024
 MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024
 RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
+FIELD_RULE_FIELDS = {
+    "required",
+    "type",
+    "enum",
+    "equals",
+    "minLength",
+    "maxLength",
+    "pattern",
+    "min",
+    "max",
+    "minItems",
+    "maxItems",
+}
+FIELD_RULE_TYPES = {"string", "number", "integer", "boolean", "object", "array", "null"}
 CONSTRAINT_COMMON_FIELDS = {"id", "description", "type", "phase", "statusCode", "extensions"}
 CONSTRAINT_TYPE_FIELDS = {
     "rateLimit": {"store", "max", "windowSeconds", "key"},
@@ -136,6 +152,7 @@ CONSTRAINT_TYPE_FIELDS = {
         "dateFields",
         "operations",
     },
+    "responseJson": {"required", "items", "fields", "operations"},
 }
 
 
@@ -314,27 +331,125 @@ def _path_shape(template: str) -> tuple[str, ...]:
     return tuple(shape)
 
 
+def parse_bounded_pattern(pattern: str) -> tuple[str, tuple[tuple[int, int], ...], int, int] | None:
+    if len(pattern) > 256 or not pattern.isascii() or not pattern.startswith("^") or not pattern.endswith("$"):
+        return None
+    body = pattern[1:-1]
+    class_start = body.find("[")
+    if class_start < 0:
+        return None
+    class_end = body.find("]", class_start + 1)
+    if class_end < 0:
+        return None
+    prefix = body[:class_start]
+    if any(character in prefix for character in "\\[]{}"):
+        return None
+    character_class = body[class_start + 1 : class_end].encode("ascii")
+    if not character_class:
+        return None
+    quantifier = body[class_end + 1 :]
+    match = re.fullmatch(r"\{([0-9]+),([0-9]+)\}", quantifier)
+    if match is None:
+        return None
+    minimum, maximum = (int(value) for value in match.groups())
+    if minimum > maximum or maximum > 4096:
+        return None
+    ranges: list[tuple[int, int]] = []
+    index = 0
+    while index < len(character_class):
+        if index + 2 < len(character_class) and character_class[index + 1] == ord("-"):
+            start, end = character_class[index], character_class[index + 2]
+            if start > end:
+                return None
+            ranges.append((start, end))
+            index += 3
+        else:
+            ranges.append((character_class[index], character_class[index]))
+            index += 1
+    return prefix, tuple(ranges), minimum, maximum
+
+
+def bounded_pattern_matches(pattern: str, value: str) -> bool | None:
+    parsed = parse_bounded_pattern(pattern)
+    if parsed is None:
+        return None
+    prefix, ranges, minimum, maximum = parsed
+    if not value.startswith(prefix):
+        return False
+    remainder = value[len(prefix) :].encode("utf-8")
+    return minimum <= len(remainder) <= maximum and all(
+        any(start <= byte <= end for start, end in ranges) for byte in remainder
+    )
+
+
 def _validate_safe_pattern(route_id: str, constraint_id: str, field: str, rule: dict[str, Any]) -> None:
     pattern = rule.get("pattern")
     if pattern is None:
         return
-    pattern = str(pattern)
-    if len(pattern) > 256:
-        raise PolicyBundleError(f"route {route_id} constraint {constraint_id} field {field} pattern is too long")
-    if "maxLength" not in rule or int(rule["maxLength"]) > 4096:
+    if not isinstance(pattern, str) or parse_bounded_pattern(pattern) is None:
+        raise PolicyBundleError(
+            f"route {route_id} constraint {constraint_id} field {field} pattern must use the bounded runtime grammar"
+        )
+    maximum_length = rule.get("maxLength")
+    if type(maximum_length) is not int or not 0 <= maximum_length <= 4096:
         raise PolicyBundleError(
             f"route {route_id} constraint {constraint_id} field {field} pattern requires maxLength <= 4096"
         )
-    if "(" in pattern or ")" in pattern or "|" in pattern or "(?" in pattern or re.search(r"\\[1-9]", pattern):
+
+
+def _validate_field_rule(
+    route_id: str,
+    constraint_id: str,
+    field: str,
+    rule: dict[str, Any],
+    *,
+    form: bool = False,
+) -> None:
+    unknown = sorted(set(rule) - FIELD_RULE_FIELDS)
+    if unknown:
         raise PolicyBundleError(
-            f"route {route_id} constraint {constraint_id} field {field} pattern uses unsupported regex constructs"
+            f"route {route_id} constraint {constraint_id} field {field} has unsupported rules: {', '.join(unknown)}"
         )
-    try:
-        re.compile(pattern)
-    except re.error as exc:
+    if "required" in rule and not isinstance(rule["required"], bool):
+        raise PolicyBundleError(f"route {route_id} constraint {constraint_id} field {field} required must be boolean")
+    expected_type = rule.get("type")
+    allowed_types = FIELD_RULE_TYPES - ({"object", "null"} if form else set())
+    if expected_type is not None and (
+        not isinstance(expected_type, str) or expected_type not in allowed_types
+    ):
+        raise PolicyBundleError(f"route {route_id} constraint {constraint_id} field {field} has unsupported type")
+    enum = rule.get("enum")
+    if enum is not None and (
+        not isinstance(enum, list)
+        or not enum
+        or any(value in enum[:index] for index, value in enumerate(enum))
+    ):
         raise PolicyBundleError(
-            f"route {route_id} constraint {constraint_id} field {field} pattern is invalid"
-        ) from exc
+            f"route {route_id} constraint {constraint_id} field {field} enum must be non-empty and unique"
+        )
+    for minimum_name, maximum_name in (("minLength", "maxLength"), ("minItems", "maxItems")):
+        for name in (minimum_name, maximum_name):
+            if name in rule and (type(rule[name]) is not int or rule[name] < 0):
+                raise PolicyBundleError(
+                    f"route {route_id} constraint {constraint_id} field {field} {name} must be a non-negative integer"
+                )
+        if minimum_name in rule and maximum_name in rule and rule[minimum_name] > rule[maximum_name]:
+            raise PolicyBundleError(
+                f"route {route_id} constraint {constraint_id} field {field} {minimum_name} must not exceed {maximum_name}"
+            )
+    for name in ("min", "max"):
+        value = rule.get(name)
+        if value is not None and (
+            not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} constraint {constraint_id} field {field} {name} must be a finite number"
+            )
+    if rule.get("min") is not None and rule.get("max") is not None and rule["min"] > rule["max"]:
+        raise PolicyBundleError(
+            f"route {route_id} constraint {constraint_id} field {field} min must not exceed max"
+        )
+    _validate_safe_pattern(route_id, constraint_id, field, rule)
 
 
 @dataclass(frozen=True)
@@ -594,9 +709,12 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
         store = constraint.get("store", "local")
         if store not in {"local", "shared"}:
             raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has invalid store {store}")
-        if constraint.get("operations") is not None and constraint_type != "responseDateWindow":
+        if constraint.get("operations") is not None and constraint_type not in {
+            "responseDateWindow",
+            "responseJson",
+        }:
             raise PolicyBundleError(
-                f"route {route_id} constraint {constraint_id} operations are supported only for responseDateWindow"
+                f"route {route_id} constraint {constraint_id} operations are supported only for response constraints"
             )
         if constraint_type == "rateLimit":
             max_count = constraint.get("max")
@@ -731,7 +849,50 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                     raise PolicyBundleError(
                         f"route {route_id} {constraint_type} {constraint_id} field {field} rule must be an object"
                     )
-                _validate_safe_pattern(route_id, constraint_id, str(field), rule)
+                _validate_field_rule(
+                    route_id,
+                    constraint_id,
+                    str(field),
+                    rule,
+                    form=constraint_type == "formBody",
+                )
+        elif constraint_type == "responseJson":
+            if "required" in constraint and not isinstance(constraint["required"], bool):
+                raise PolicyBundleError(
+                    f"route {route_id} responseJson {constraint_id} required must be boolean"
+                )
+            fields = constraint.get("fields")
+            if not isinstance(fields, dict) or not fields:
+                raise PolicyBundleError(
+                    f"route {route_id} responseJson {constraint_id} must define non-empty fields"
+                )
+            items = constraint.get("items")
+            if items is not None and (
+                not isinstance(items, list)
+                or not items
+                or any(
+                    not isinstance(item, str)
+                    or len(item) > 256
+                    or RESPONSE_FIELD_PATH_RE.fullmatch(item) is None
+                    for item in items
+                )
+                or len(items) != len(set(items))
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} responseJson {constraint_id} has invalid items"
+                )
+            for field, rule in fields.items():
+                if (
+                    not isinstance(field, str)
+                    or len(field) > 256
+                    or RESPONSE_FIELD_PATH_RE.fullmatch(field) is None
+                    or not isinstance(rule, dict)
+                    or not rule
+                ):
+                    raise PolicyBundleError(
+                        f"route {route_id} responseJson {constraint_id} field {field} has an invalid rule"
+                    )
+                _validate_field_rule(route_id, constraint_id, field, rule)
         elif constraint_type == "responseDateWindow":
             if int(constraint.get("maxAgeDays") or 0) < 1:
                 raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} must define maxAgeDays >= 1")
@@ -747,19 +908,20 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                 or len(formats) != len(set(formats))
             ):
                 raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} has invalid formats")
+        if constraint_type in {"responseDateWindow", "responseJson"}:
             operations = constraint.get("operations")
             if operations is not None and (
                 not isinstance(operations, list)
                 or not operations
-                or len(set(operations)) != len(operations)
                 or any(
                     not isinstance(operation, str)
                     or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", operation) is None
                     for operation in operations
                 )
+                or len(set(operations)) != len(operations)
             ):
                 raise PolicyBundleError(
-                    f"route {route_id} responseDateWindow {constraint_id} has invalid operations"
+                    f"route {route_id} {constraint_type} {constraint_id} has invalid operations"
                 )
         if constraint.get("extensions"):
             raise PolicyBundleError(
@@ -853,6 +1015,8 @@ def _validate_optional_response_release_contract(
     response: dict[str, Any],
     adapter_name: str,
 ) -> None:
+    if response.get("mode") == "json":
+        _validate_response_field_paths(route_id, response, f"{adapter_name} success response")
     if "allowedHeaders" in response:
         _validate_response_headers(route_id, response, f"{adapter_name} success response")
     error = response.get("error")

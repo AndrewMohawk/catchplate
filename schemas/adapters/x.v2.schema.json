@@ -86,13 +86,21 @@
       "type": "object",
       "required": ["mode", "maxBodyBytes"],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {"properties": {"mode": {"const": "json"}}, "required": ["mode"]},
+          "then": {"required": ["allowedFields"]}
+        }
+      ],
       "properties": {
         "mode": {"enum": ["headersOnly", "json", "any", "stream"]},
         "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
         "allowedFields": {
           "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
           "uniqueItems": true,
-          "items": {"type": "string", "minLength": 1}
+          "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}
         },
         "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
         "error": {"$ref": "#/$defs/errorResponse"}

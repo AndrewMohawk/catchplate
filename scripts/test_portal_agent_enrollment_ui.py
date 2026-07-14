@@ -82,6 +82,15 @@ def main() -> None:
             "state.enrollmentPacket",
             "copyEnrollmentVerifier",
             "Generate an enrollment packet first so the verifier is bound to its pins",
+            "const packetFilename = downloadEnrollment(packetText);",
+            "crypto.subtle.digest('SHA-256'",
+            "set -euo pipefail",
+            "SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/",
+            'scripts/generate_agent_enrollment.py --verify-packet "$ENROLLMENT_PACKET"',
+            "--expected-packet-sha256",
+            "--expected-principal",
+            "--expected-nonce",
+            '> "$VERIFIED_ENROLLMENT_PACKET"',
             "pinning.policySigningKeyId",
             "pinning.rollbackEpoch",
             "scripts/verify_attestation.py --base",
@@ -91,6 +100,26 @@ def main() -> None:
         for marker in required_markup:
             if marker not in ui_html:
                 raise AssertionError(f"portal enrollment UI marker missing: {marker}")
+
+        try:
+            enrollment_verifier_fn = ui_html.split("async function copyEnrollmentVerifier()", 1)[1].split(
+                "$('admin-token').value", 1
+            )[0]
+        except IndexError as exc:
+            raise AssertionError("could not isolate enrollment verifier handoff") from exc
+        ordered_enrollment_handoff = (
+            "downloadEnrollment(packetText)",
+            "scripts/generate_agent_enrollment.py --verify-packet",
+            "scripts/verify_attestation.py --base",
+            "install -D -m 0644",
+        )
+        handoff_positions = [enrollment_verifier_fn.index(marker) for marker in ordered_enrollment_handoff]
+        if handoff_positions != sorted(handoff_positions):
+            raise AssertionError("portal must download and verify the exact enrollment packet before CA install")
+        if "dev-admin-token" in enrollment_verifier_fn:
+            raise AssertionError("portal enrollment handoff must not embed an admin secret")
+        if "JSON.stringify(packet" in enrollment_verifier_fn:
+            raise AssertionError("portal enrollment handoff must reference the downloaded packet instead of embedding it")
 
         required_approval_review_markup = (
             'id="approval-review"',
@@ -290,6 +319,7 @@ def main() -> None:
             "route.jit.approvers.users",
             "Custom route policy requires match and adapter objects",
             "belongs to ${providerId || 'an unknown provider'}, not ${template.provider}",
+            "is missing required scopes:",
             "is missing its OAuth app ID binding",
             "route.adapter.config.appIds",
             "function renderPolicyCredentialOptions(preferredCredential = '')",
@@ -550,6 +580,13 @@ for(const [credential,expected] of shapes){
   const actual=storedCredentialInjection(credential);
   for(const [key,value] of Object.entries(expected))if(actual[key]!==value)process.exit(20);
 }
+const xReadOnly={id:'x-read',kind:'oauth2',metadata:{oauth:true,provider_identity_verified:true,provider_id:'x',provider_subject:'x-user',scopes:['tweet.read','users.read']}};
+const xWriteTemplate={provider:'x',requiredScopes:['tweet.read','tweet.write','users.read'],injection:{type:'bearer',field:'access_token'}};
+let writeScopeAccepted=false;
+try{policyCredentialInjection(xReadOnly,null,xWriteTemplate);writeScopeAccepted=true}catch(_){}
+if(writeScopeAccepted)process.exit(32);
+const xWriter={...xReadOnly,metadata:{...xReadOnly.metadata,scopes:['tweet.read','tweet.write','users.read']}};
+if(policyCredentialInjection(xWriter,null,xWriteTemplate).type!=='bearer')process.exit(33);
 for(const credential of [
   {id:'header',kind:'header',metadata:{}},
   {id:'header',kind:'header',metadata:{injection_name:'authorization'}},
@@ -655,6 +692,8 @@ function credentialToJson(value){return value;}
                 "custom_json",
             }:
                 raise AssertionError(f"unexpected common PolicyBundle template set: {sorted(templates)}")
+            if "tweet.write" not in templates["x_one_post_daily"].get("requiredScopes", []):
+                raise AssertionError("X write template does not require the provider tweet.write scope")
 
             for index, (template_id, template) in enumerate(templates.items(), start=1):
                 candidate = copy.deepcopy(snapshot.raw)

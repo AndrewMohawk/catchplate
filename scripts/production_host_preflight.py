@@ -33,6 +33,8 @@ import verify_production_policy_identity  # noqa: E402
 
 REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 TEST_ONLY_BYPASS_ENV = "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"
+CONTROL_PLANE_RUNTIME_UID = 65532
+MAX_OAUTH_SECRET_BYTES = 4096
 
 
 def canonical_json(value: Any) -> str:
@@ -92,6 +94,52 @@ def host_check(*, skip_host_check: bool) -> tuple[dict[str, Any], list[str]]:
         ):
             if status[key] is not True:
                 failures.append(message)
+    status["ok"] = not failures
+    return status, failures
+
+
+def oauth_secret_mounts_check(
+    env: dict[str, str],
+    *,
+    skip_host_check: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    status: dict[str, Any] = {
+        "ok": False,
+        "skipped": skip_host_check,
+        "runtime_uid": CONTROL_PLANE_RUNTIME_UID,
+        "files": [],
+        "secret_values_redacted": True,
+    }
+    if skip_host_check:
+        status["ok"] = True
+        return status, []
+
+    failures: list[str] = []
+    for setting in (
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
+    ):
+        path = Path(env.get(setting, ""))
+        item: dict[str, Any] = {"setting": setting, "path": str(path)}
+        try:
+            file_stat = path.lstat()
+        except OSError:
+            failures.append(f"{setting} must reference an existing host secret file")
+            status["files"].append(item)
+            continue
+        mode = stat.S_IMODE(file_stat.st_mode)
+        item.update({"mode": oct(mode), "owner_uid": file_stat.st_uid, "bytes": file_stat.st_size})
+        if not path.is_absolute() or not stat.S_ISREG(file_stat.st_mode) or path.is_symlink():
+            failures.append(f"{setting} must reference an absolute regular, non-symlink host file")
+        if mode not in {0o400, 0o600}:
+            failures.append(f"{setting} must use mode 0400 or 0600")
+        if file_stat.st_uid != CONTROL_PLANE_RUNTIME_UID:
+            failures.append(
+                f"{setting} must be owned by UID {CONTROL_PLANE_RUNTIME_UID} so the production container can read it"
+            )
+        if not 1 <= file_stat.st_size <= MAX_OAUTH_SECRET_BYTES:
+            failures.append(f"{setting} must contain between 1 and {MAX_OAUTH_SECRET_BYTES} bytes")
+        status["files"].append(item)
     status["ok"] = not failures
     return status, failures
 
@@ -921,6 +969,11 @@ def main() -> None:
         skip_host_check=args.skip_host_check,
     )
     failures.extend(runtime_trust_failures)
+    oauth_secret_mounts, oauth_secret_mount_failures = oauth_secret_mounts_check(
+        loaded_env,
+        skip_host_check=args.skip_host_check,
+    )
+    failures.extend(oauth_secret_mount_failures)
     images_env, images_value, images_failures = production_images_env_check(Path(args.production_images_env))
     failures.extend(images_failures)
     merge_status, merge_failures = env_merge_check(loaded_env, images_value) if loaded_env and images_value else (
@@ -963,6 +1016,7 @@ def main() -> None:
             "host": host,
             "production_env": env,
             "runtime_trust_materials": runtime_trust,
+            "oauth_secret_mounts": oauth_secret_mounts,
             "production_images_env": images_env,
             "production_images_env_merge": merge_status,
             "production_compose": compose_status,

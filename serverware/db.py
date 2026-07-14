@@ -17,6 +17,7 @@ from serverware.config import (
     AUDIT_STORE_BACKEND,
     AUDIT_STORE_CONNECT_TIMEOUT_SECONDS,
     AUDIT_STORE_POSTGRES_DSN,
+    CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES,
     DB_PATH,
     METADATA_STORE_BACKEND,
     METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
@@ -91,7 +92,6 @@ class ManagedOAuthCredentialError(ValueError):
 
 _AUDIT_CHAIN_LOCK_KEY = 0x5357524155444348
 _CREDENTIAL_LEASE_REPLAY_LOCK_KEY = 0x5357524C45415345
-_CREDENTIAL_LEASE_REPLAY_MAX = 10_000
 _CREDENTIAL_LEASE_REPLAY_RETENTION_MS = 24 * 60 * 60 * 1000
 _CREDENTIAL_METADATA_MAX_BYTES = 16 * 1024
 _CREDENTIAL_METADATA_MAX_KEYS = 128
@@ -820,6 +820,11 @@ def init_db(path: Path = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS credential_lease_nonces_expiry
                 ON credential_lease_nonces (expires_at_epoch_ms);
 
+            CREATE TABLE IF NOT EXISTS credential_lease_replay_state (
+                scope TEXT PRIMARY KEY,
+                nonce_count BIGINT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS credential_generations (
                 credential_id TEXT PRIMARY KEY,
                 last_version BIGINT NOT NULL,
@@ -1224,12 +1229,29 @@ def reserve_credential_lease_nonce(
             conn.execute("SELECT pg_advisory_xact_lock(?)", (_CREDENTIAL_LEASE_REPLAY_LOCK_KEY,))
         elif not conn.in_transaction:
             conn.execute("BEGIN IMMEDIATE")
-        conn.execute(
+        deleted = conn.execute(
             "DELETE FROM credential_lease_nonces WHERE expires_at_epoch_ms <= ?",
             (now_epoch_ms,),
         )
-        count = conn.execute("SELECT COUNT(*) AS count FROM credential_lease_nonces").fetchone()
-        if int(count["count"]) >= _CREDENTIAL_LEASE_REPLAY_MAX:
+        state = conn.execute(
+            "SELECT nonce_count FROM credential_lease_replay_state WHERE scope = ?",
+            ("global",),
+        ).fetchone()
+        if state is None:
+            counted = conn.execute("SELECT COUNT(*) AS count FROM credential_lease_nonces").fetchone()
+            nonce_count = int(counted["count"])
+            conn.execute(
+                "INSERT INTO credential_lease_replay_state (scope, nonce_count) VALUES (?, ?)",
+                ("global", nonce_count),
+            )
+        else:
+            nonce_count = max(0, int(state["nonce_count"]) - max(0, int(deleted.rowcount)))
+            if nonce_count != int(state["nonce_count"]):
+                conn.execute(
+                    "UPDATE credential_lease_replay_state SET nonce_count = ? WHERE scope = ?",
+                    (nonce_count, "global"),
+                )
+        if nonce_count >= CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES:
             return "capacity"
         inserted = conn.execute(
             """
@@ -1243,7 +1265,32 @@ def reserve_credential_lease_nonce(
         )
         if inserted.rowcount == 0:
             return "replay"
+        conn.execute(
+            "UPDATE credential_lease_replay_state SET nonce_count = nonce_count + 1 WHERE scope = ?",
+            ("global",),
+        )
     return None
+
+
+def credential_lease_nonce_reserved(
+    recipient_key_id: str,
+    nonce_sha256: str,
+    *,
+    now_epoch_ms: int,
+) -> bool:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT 1
+            FROM credential_lease_nonces
+            WHERE recipient_key_id = ?
+              AND nonce_sha256 = ?
+              AND expires_at_epoch_ms > ?
+            LIMIT 1
+            """,
+            (recipient_key_id, nonce_sha256, now_epoch_ms),
+        ).fetchone()
+    return row is not None
 
 
 def _needs_envelope_migration(row: sqlite3.Row) -> bool:
@@ -2662,7 +2709,7 @@ def find_jit_grant_result(
     ]
     with connect() as conn:
         row = conn.execute(
-            f"""
+            """
             SELECT id, approval_request_id, uses_remaining FROM approval_grants
             WHERE state = 'active'
               AND principal_id = ?

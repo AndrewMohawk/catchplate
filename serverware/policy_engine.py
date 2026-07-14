@@ -637,8 +637,6 @@ def _evaluate_response(
             502,
             {"error": "response_policy_context_missing"},
         )
-    adapter = get_adapter(route.adapter_type)
-    decision = adapter.validate_response(flow, route, params)
     status_code = flow.response.status_code if flow.response else None
     audit_context = {
         "principal_id": flow.metadata.get("serverware_principal_id"),
@@ -649,6 +647,21 @@ def _evaluate_response(
         "operation_digest": flow.metadata.get("serverware_operation_digest"),
         "route_adapter": getattr(route, "adapter_type", None),
     }
+    if status_code is not None and 200 <= status_code < 300:
+        semantic_decision = evaluate_response_constraints(flow, route, constraint_types={"responseJson"})
+        if not semantic_decision.allowed:
+            runtime.log_request(
+                route_id,
+                flow.request.method,
+                redact_url(flow.request.pretty_url),
+                "blocked",
+                semantic_decision.status_code,
+                semantic_decision.reason,
+                audit_context,
+            )
+            return semantic_decision
+    adapter = get_adapter(route.adapter_type)
+    decision = adapter.validate_response(flow, route, params)
     if not decision.allowed:
         runtime.log_request(
             route_id,
@@ -660,7 +673,15 @@ def _evaluate_response(
             audit_context,
         )
         return decision
-    constraint_decision = evaluate_response_constraints(flow, route)
+    constraint_decision = (
+        evaluate_response_constraints(
+            flow,
+            route,
+            constraint_types={"responseDateWindow"},
+        )
+        if status_code is not None and 200 <= status_code < 300
+        else PolicyDecision(True)
+    )
     if not constraint_decision.allowed:
         runtime.log_request(
             route_id,

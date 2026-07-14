@@ -119,7 +119,7 @@ while time.time() < deadline:
     )
     response_blocked = any(
         item.get("event_type") == "data_plane.response.blocked"
-        and ((item.get("event") or {}).get("payload") or {}).get("error") == "response_date_window_exceeded"
+        and ((item.get("event") or {}).get("payload") or {}).get("error") == "gmail_response_too_old"
         for item in last_events
     )
     required_types = {

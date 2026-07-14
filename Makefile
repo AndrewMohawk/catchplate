@@ -1,4 +1,4 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-credential-policy-contracts verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
@@ -115,6 +115,7 @@ bench-gate-rs:
 		docker compose exec -T serverware python scripts/test_control_plane_csrf.py
 			docker compose exec -T serverware python scripts/test_control_plane_oidc.py
 			python3 scripts/test_http_client.py
+			python3 scripts/test_oauth_credentials.py --compose-contract-only
 			docker compose exec -T serverware python scripts/test_oauth_credentials.py
 		docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
 		docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
@@ -281,6 +282,7 @@ deploy-production:
 	$(PRODUCTION_DEPLOY_COMMAND)
 
 production-release-proof:
+	$(MAKE) verify-credential-policy-contracts
 	$(MAKE) validate-production-policy-identity
 	$(MAKE) validate-policy-activation-evidence
 	$(MAKE) validate-reproducible-builds
@@ -366,6 +368,10 @@ verify-production-host-preflight:
 verify-production-release-proof:
 	python3 scripts/test_production_release_proof_target.py
 
+verify-credential-policy-contracts:
+	uv run --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_credential_constraints.py
+	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml
+
 verify-reproducible-builds:
 	python3 scripts/test_reproducible_builds.py
 
@@ -405,6 +411,7 @@ verify-control-plane-oidc:
 verify-oauth-credentials:
 	docker compose up -d --build serverware
 	python3 scripts/test_http_client.py
+	python3 scripts/test_oauth_credentials.py --compose-contract-only
 	docker compose exec -T serverware python scripts/test_oauth_credentials.py
 
 verify-credential-lease-delivery:

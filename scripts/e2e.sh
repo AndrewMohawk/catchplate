@@ -206,17 +206,15 @@ PY
 gmail_missing_date_code="$(curl -sS -o "$TMP_DIR/gmail-pending-list.json" -w "%{http_code}" \
   --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages?q=from%3Asecurity%40example.com&omitInternalDate=1")"
-if [[ "$gmail_missing_date_code" != "502" ]]; then
-  echo "expected Gmail list without age evidence to fail with 502, got $gmail_missing_date_code" >&2
+if [[ "$gmail_missing_date_code" != "200" ]]; then
+  echo "expected Gmail list without age evidence to return an empty filtered list, got $gmail_missing_date_code" >&2
   cat "$TMP_DIR/gmail-pending-list.json" >&2
   exit 1
 fi
 python3 - "$TMP_DIR/gmail-pending-list.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
-assert data["error"] == "response_date_field_missing", data
-assert data["constraint_id"] == "gmail-list-response-30d", data
-assert data["field"] == "internalDate", data
+assert data == {"messages": []}, data
 PY
 
 pending_get_code="$(curl -sS -o "$TMP_DIR/gmail-pending-get-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \

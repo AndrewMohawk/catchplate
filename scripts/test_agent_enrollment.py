@@ -4,9 +4,13 @@ from __future__ import annotations
 import json
 import base64
 import hashlib
+import http.server
 import os
+import subprocess
 import sys
 import tempfile
+import threading
+import urllib.parse
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
@@ -27,13 +31,24 @@ def main() -> None:
         os.environ["SERVERWARE_POLICY_SIGNING_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pem")
         os.environ["SERVERWARE_POLICY_SIGNING_PUBLIC_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pub.pem")
 
+        from serverware.attestation import sign_quote
         from serverware.enrollment import AgentEnrollmentError, build_agent_enrollment
         from serverware.policy_bundle import compile_policy_bundle, demo_policy_bundle, sign_policy_bundle
         from serverware.response_identity import response_public_key_info
-        from generate_agent_enrollment import verify_packet
+        from generate_agent_enrollment import (
+            MAX_ENROLLMENT_PACKET_BYTES,
+            enrollment_nonce,
+            load_enrollment_packet,
+            verify_attestation_for_packet,
+            verify_packet,
+        )
 
         signed = sign_policy_bundle(demo_policy_bundle("cred-demo-bearer"))
         snapshot = compile_policy_bundle(signed, verify_signature=True, validate_schema=False)
+        runtime_manifest = {"binary": "serverware-test", "mode": "agent-enrollment"}
+        runtime_manifest_digest = "sha256:" + hashlib.sha256(
+            repr(sorted(runtime_manifest.items())).encode("utf-8")
+        ).hexdigest()
         attestation = {
             "policy_signing_key_id": (signed.get("metadata") or {}).get("signingKeyId"),
             "rollback_epoch": 1,
@@ -42,7 +57,7 @@ def main() -> None:
             "release_channel": "prod",
             "ca_intermediate_spki_sha256": "sha256:" + "a" * 64,
             "data_plane_binary_digest": "sha256:" + "b" * 64,
-            "runtime_manifest_digest": "sha256:" + "f" * 64,
+            "runtime_manifest_digest": runtime_manifest_digest,
             "response_signing_key_id": response_public_key_info()["spki_sha256"],
             "provenance_digest": "sha256:" + "c" * 64,
             "image_signatures_digest": "sha256:" + "d" * 64,
@@ -121,15 +136,47 @@ def main() -> None:
             base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4)),
             canonical_json(authenticity["statement"]).encode("utf-8"),
         )
-        verification_attestation = {
-            **attestation,
-            "nonce": NONCE,
-            "policy_bundle_digest": snapshot.hash,
-            "response_signing_public_key_pem": response_public_key_info()["pem"],
-        }
+        def live_attestation(nonce: str) -> dict[str, object]:
+            value: dict[str, object] = {
+                **attestation,
+                "nonce": nonce,
+                "runtime_manifest": runtime_manifest,
+                "policy_bundle_digest": snapshot.hash,
+                "response_signing_public_key_pem": response_public_key_info()["pem"],
+            }
+            quote_fields = (
+                "runtime_manifest_digest",
+                "policy_bundle_digest",
+                "policy_sequence",
+                "policy_high_water_digest",
+                "ca_intermediate_spki_sha256",
+                "data_plane_binary_digest",
+                "rollback_epoch",
+                "provenance_digest",
+                "image_signatures_digest",
+                "source_tree_digest",
+                "response_signing_key_id",
+                "release_channel",
+            )
+            claims = {field: value[field] for field in quote_fields}
+            claims["nonce"] = nonce
+            value["quote"] = sign_quote(claims)
+            return value
+
+        verification_attestation = live_attestation(NONCE)
         receipt = verify_packet(packet, verification_attestation, NONCE)
         assert receipt["packetSha256"] == packet_sha256, receipt
         assert "packet-signature" in receipt["checks"], receipt
+        full_receipt = verify_attestation_for_packet(packet, verification_attestation, NONCE, None)
+        assert full_receipt["packetSha256"] == packet_sha256, full_receipt
+        wrong_policy_key_attestation = dict(verification_attestation)
+        wrong_policy_key_attestation["policy_signing_key_id"] = "sha256:" + "0" * 64
+        try:
+            verify_packet(packet, wrong_policy_key_attestation, NONCE)
+        except ValueError as exc:
+            assert "policySigningKeyId" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted a mismatched policy signing key pin")
         tampered_packet = json.loads(json.dumps(packet))
         tampered_packet["principalId"] = "agent:tampered"
         try:
@@ -138,6 +185,247 @@ def main() -> None:
             assert "digest mismatch" in str(exc), exc
         else:
             raise AssertionError("enrollment verifier accepted a tampered signed packet")
+
+        expired_packet = json.loads(json.dumps(packet))
+        expired_packet["issuedAtEpochMs"] = 1
+        expired_packet["expiresAtEpochMs"] = 2
+        try:
+            verify_packet(expired_packet, verification_attestation, NONCE)
+        except ValueError as exc:
+            assert "not currently valid" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted an expired packet")
+
+        packet_with_receipt = json.loads(json.dumps(packet))
+        packet_with_receipt["verificationReceipt"] = {"ok": True}
+        try:
+            verify_packet(packet_with_receipt, verification_attestation, NONCE)
+        except ValueError as exc:
+            assert "untrusted verificationReceipt" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted an existing untrusted receipt")
+
+        quote_nonce_mismatch = live_attestation("different-enrollment-nonce-0123456789abcdef")
+        quote_nonce_mismatch["nonce"] = NONCE
+        try:
+            verify_attestation_for_packet(packet, quote_nonce_mismatch, NONCE, None)
+        except ValueError as exc:
+            assert "quote nonce" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted a quote for a different nonce")
+
+        missing_nonce_packet = json.loads(json.dumps(packet))
+        missing_nonce_packet.pop("nonce")
+        try:
+            enrollment_nonce(missing_nonce_packet)
+        except ValueError as exc:
+            assert "valid nonce" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted a packet without a nonce")
+
+        mismatched_attestation = live_attestation("different-enrollment-nonce-0123456789abcdef")
+        try:
+            verify_attestation_for_packet(packet, mismatched_attestation, NONCE, None)
+        except ValueError as exc:
+            assert "live attestation nonce" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted a mismatched live attestation nonce")
+
+        packet_path = Path(tmp) / "portal-enrollment.json"
+        packet_path.write_text(json.dumps(packet, indent=2) + "\n", encoding="utf-8")
+        assert load_enrollment_packet(packet_path) == packet
+
+        duplicate_path = Path(tmp) / "duplicate-enrollment.json"
+        duplicate_path.write_text('{"nonce":"first-nonce-0123456789abcdef","nonce":"second-nonce-0123456789abcdef"}\n')
+        try:
+            load_enrollment_packet(duplicate_path)
+        except ValueError as exc:
+            assert "duplicate key" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted duplicate JSON keys")
+
+        non_object_path = Path(tmp) / "array-enrollment.json"
+        non_object_path.write_text("[]\n", encoding="utf-8")
+        try:
+            load_enrollment_packet(non_object_path)
+        except ValueError as exc:
+            assert "JSON object" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted a non-object packet")
+
+        oversized_path = Path(tmp) / "oversized-enrollment.json"
+        with oversized_path.open("wb") as oversized_file:
+            oversized_file.truncate(MAX_ENROLLMENT_PACKET_BYTES + 1)
+        try:
+            load_enrollment_packet(oversized_path)
+        except ValueError as exc:
+            assert "exceeds" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted an oversized packet")
+
+        class EnrollmentHandler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, _format: str, *args: object) -> None:
+                return
+
+            def send_json(self, value: object, status: int = 200) -> None:
+                body = (json.dumps(value, sort_keys=True) + "\n").encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def do_GET(self) -> None:
+                parsed = urllib.parse.urlsplit(self.path)
+                if parsed.path != "/attestation":
+                    self.send_json({"error": "not_found"}, 404)
+                    return
+                nonce_values = urllib.parse.parse_qs(parsed.query).get("nonce", [])
+                if len(nonce_values) != 1:
+                    self.send_json({"error": "nonce_required"}, 400)
+                    return
+                self.send_json(live_attestation(nonce_values[0]))
+
+            def do_POST(self) -> None:
+                if self.path != "/api/agents/enrollment":
+                    self.send_json({"error": "not_found"}, 404)
+                    return
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length))
+                generated = build_agent_enrollment(
+                    snapshot=snapshot,
+                    principal_id=payload["principalId"],
+                    attestation=attestation,
+                    proxy_url=payload["proxyUrl"],
+                    control_plane_url=payload["controlPlaneUrl"],
+                    proxy_egress_cidrs=payload["proxyEgressCidrs"],
+                    namespace=payload["namespace"],
+                    pod_selector=payload["podSelector"],
+                    ca_mount_path=payload["caMountPath"],
+                    nonce=payload["nonce"],
+                    ttl_seconds=payload["ttlSeconds"],
+                )
+                self.send_json(generated)
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), EnrollmentHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        base = f"http://127.0.0.1:{server.server_port}"
+        try:
+            exact_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "generate_agent_enrollment.py"),
+                    "--base",
+                    base,
+                    "--verify-packet",
+                    str(packet_path),
+                    "--expected-packet-sha256",
+                    "sha256:" + hashlib.sha256(packet_path.read_bytes()).hexdigest(),
+                    "--expected-principal",
+                    str(packet["principalId"]),
+                    "--expected-nonce",
+                    NONCE,
+                ],
+                cwd=ROOT,
+                env=os.environ.copy(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if exact_result.returncode != 0:
+                raise AssertionError(f"exact packet verification failed: {exact_result.stderr}")
+            verified_packet = json.loads(exact_result.stdout)
+            verified_receipt = verified_packet.pop("verificationReceipt", None)
+            assert verified_packet == packet, (verified_packet, packet)
+            assert verified_receipt and verified_receipt["nonce"] == NONCE, verified_receipt
+            assert verified_receipt["downloadedPacketSha256"] == (
+                "sha256:" + hashlib.sha256(packet_path.read_bytes()).hexdigest()
+            ), verified_receipt
+
+            substituted_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "generate_agent_enrollment.py"),
+                    "--base",
+                    base,
+                    "--verify-packet",
+                    str(packet_path),
+                    "--expected-packet-sha256",
+                    "sha256:" + "0" * 64,
+                    "--expected-principal",
+                    str(packet["principalId"]),
+                    "--expected-nonce",
+                    NONCE,
+                ],
+                cwd=ROOT,
+                env=os.environ.copy(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert substituted_result.returncode == 1, substituted_result
+            assert "does not match the expected file" in substituted_result.stderr, substituted_result.stderr
+
+            tampered_path = Path(tmp) / "tampered-enrollment.json"
+            tampered_path.write_text(json.dumps(tampered_packet) + "\n", encoding="utf-8")
+            tampered_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "generate_agent_enrollment.py"),
+                    "--base",
+                    base,
+                    "--verify-packet",
+                    str(tampered_path),
+                    "--expected-packet-sha256",
+                    "sha256:" + hashlib.sha256(tampered_path.read_bytes()).hexdigest(),
+                    "--expected-principal",
+                    str(tampered_packet["principalId"]),
+                    "--expected-nonce",
+                    NONCE,
+                ],
+                cwd=ROOT,
+                env=os.environ.copy(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            assert tampered_result.returncode == 1, tampered_result
+            assert not tampered_result.stdout, tampered_result.stdout
+            assert "digest mismatch" in tampered_result.stderr, tampered_result.stderr
+
+            generation_result = subprocess.run(
+                [
+                    sys.executable,
+                    str(ROOT / "scripts" / "generate_agent_enrollment.py"),
+                    "--base",
+                    base,
+                    "--admin-token",
+                    "test-admin-token",
+                    "--principal-id",
+                    "agent:demo-proxy-token",
+                    "--proxy-url",
+                    "http://10.42.0.10:8080",
+                    "--proxy-egress-cidr",
+                    "10.42.0.10/32",
+                    "--selector",
+                    "app=release-bot",
+                ],
+                cwd=ROOT,
+                env=os.environ.copy(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if generation_result.returncode != 0:
+                raise AssertionError(f"generation mode compatibility failed: {generation_result.stderr}")
+            generated_packet = json.loads(generation_result.stdout)
+            assert generated_packet["principalId"] == "agent:demo-proxy-token", generated_packet
+            assert generated_packet["verificationReceipt"]["nonce"] == generated_packet["nonce"], generated_packet
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
 
         incomplete_attestation = dict(attestation)
         incomplete_attestation.pop("runtime_manifest_digest")

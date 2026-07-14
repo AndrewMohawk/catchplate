@@ -463,6 +463,35 @@ def main() -> None:
 
         ensure_mitm_ca_material()
         db.init_db()
+        original_replay_max = db.CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES
+        db.CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES = 2
+        try:
+            replay_now = 1_000_000
+            if db.reserve_credential_lease_nonce("key-a", "nonce-a", now_epoch_ms=replay_now) is not None:
+                raise AssertionError("first replay reservation failed")
+            if db.reserve_credential_lease_nonce("key-a", "nonce-a", now_epoch_ms=replay_now) != "replay":
+                raise AssertionError("duplicate replay reservation was accepted")
+            if db.reserve_credential_lease_nonce("key-b", "nonce-b", now_epoch_ms=replay_now) is not None:
+                raise AssertionError("second replay reservation failed")
+            if db.reserve_credential_lease_nonce("key-c", "nonce-c", now_epoch_ms=replay_now) != "capacity":
+                raise AssertionError("bounded replay store exceeded capacity")
+            after_retention = replay_now + db._CREDENTIAL_LEASE_REPLAY_RETENTION_MS + 1
+            if db.reserve_credential_lease_nonce("key-c", "nonce-c", now_epoch_ms=after_retention) is not None:
+                raise AssertionError("expired replay reservations did not release capacity")
+            with db.connect() as replay_conn:
+                stored = replay_conn.execute(
+                    "SELECT nonce_count FROM credential_lease_replay_state WHERE scope = ?",
+                    ("global",),
+                ).fetchone()
+                actual = replay_conn.execute(
+                    "SELECT COUNT(*) AS count FROM credential_lease_nonces"
+                ).fetchone()
+                if int(stored["nonce_count"]) != int(actual["count"]):
+                    raise AssertionError(f"replay counter drifted from stored nonces: {dict(stored)} {dict(actual)}")
+                replay_conn.execute("DELETE FROM credential_lease_nonces")
+                replay_conn.execute("DELETE FROM credential_lease_replay_state")
+        finally:
+            db.CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES = original_replay_max
         if runtime_manifest().get("credential_lease_protocol") != "serverware.credentialLeaseEnvelope/v2":
             raise AssertionError("attested credential lease protocol drifted from envelope v2")
 
@@ -881,6 +910,10 @@ def main() -> None:
         )
         if second_recipient_plaintext["credentials"] != [expected_initial_credential]:
             raise AssertionError(f"second recipient lease contents are incorrect: {second_recipient_plaintext}")
+        with db.connect() as replay_conn:
+            reserved_before_rejections = int(
+                replay_conn.execute("SELECT COUNT(*) AS count FROM credential_lease_nonces").fetchone()["count"]
+            )
 
         rejection_cases: list[tuple[str, dict[str, Any], int, str, str]] = []
         rejection_cases.append(("replay", initial_payload, 409, "already been used", DATA_PLANE_TOKEN))
@@ -984,6 +1017,15 @@ def main() -> None:
             assert_status(rejected, status_code, label, detail)
         if verifier_counter.read_text(encoding="ascii").splitlines() != ["verified"]:
             raise AssertionError("a replay invoked the recipient attestation verifier again")
+        with db.connect() as replay_conn:
+            reserved_after_rejections = replay_conn.execute(
+                "SELECT COUNT(*) AS count FROM credential_lease_nonces"
+            ).fetchone()
+        if int(reserved_after_rejections["count"]) != reserved_before_rejections:
+            raise AssertionError(
+                "invalid recipient attestations consumed replay capacity: "
+                f"before={reserved_before_rejections} after={dict(reserved_after_rejections)}"
+            )
         replay_after_lease_expiry = db.reserve_credential_lease_nonce(
             initial_payload["recipientKeyId"],
             sha256_prefixed(recipient_nonce("initial")),

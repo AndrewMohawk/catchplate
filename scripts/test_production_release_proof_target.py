@@ -2,16 +2,33 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
 def target_body(makefile: str, target: str) -> str:
-    marker = target + ":"
-    if marker not in makefile:
+    lines = makefile.splitlines()
+    declaration = re.compile(rf"^{re.escape(target)}\s*:")
+    for index, line in enumerate(lines):
+        if declaration.match(line):
+            break
+    else:
         raise AssertionError(f"Makefile is missing {target}")
-    return makefile.split(marker, 1)[1].split("\n\n", 1)[0]
+
+    body = []
+    for line in lines[index + 1 :]:
+        if line.startswith("\t") or not line.strip():
+            body.append(line)
+            continue
+        break
+    return "\n".join(body).strip()
+
+
+def recursive_make_targets(body: str) -> list[str]:
+    invocation = re.compile(r"^\s*\$\(MAKE\)\s+([^\s]+)")
+    return [match.group(1) for line in body.splitlines() if (match := invocation.match(line))]
 
 
 def main() -> None:
@@ -20,6 +37,7 @@ def main() -> None:
     if "AWS_KMS_MATERIALS_OUT ?= /etc/serverware/kms-materials.json" not in makefile:
         raise AssertionError("production release proof does not default KMS materials to the production /etc path")
     required_order = [
+        "verify-credential-policy-contracts",
         "validate-production-policy-identity",
         "validate-policy-activation-evidence",
         "validate-reproducible-builds",
@@ -35,22 +53,33 @@ def main() -> None:
         "deploy-production",
         "run-production-readiness",
     ]
+    release_targets = recursive_make_targets(body)
     positions = []
     for item in required_order:
-        index = body.find(item)
-        if index < 0:
+        if item not in release_targets:
             raise AssertionError(f"production-release-proof omits {item}")
-        positions.append(index)
+        positions.append(release_targets.index(item))
     if positions != sorted(positions):
         raise AssertionError(f"production-release-proof runs steps in the wrong order: {body}")
     if "PRODUCTION_READINESS_PREFLIGHT=0" in body:
         raise AssertionError("production-release-proof disables final preflight")
     if "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in body:
         raise AssertionError("production-release-proof enables the test-only preflight bypass")
-    if body.find("production-host-preflight") > body.find("deploy-production"):
+    if release_targets.index("production-host-preflight") > release_targets.index("deploy-production"):
         raise AssertionError("production-release-proof deploys before full host preflight")
-    if body.find("validate-production-policy-identity") > body.find("build-production-images"):
+    if release_targets.index("validate-production-policy-identity") > release_targets.index("build-production-images"):
         raise AssertionError("production-release-proof builds before validating production principal identity")
+
+    policy_contract_body = target_body(makefile, "verify-credential-policy-contracts")
+    for required in (
+        "uv run --isolated --python 3.11 --with-requirements requirements.lock",
+        "scripts/test_credential_constraints.py",
+        "cargo test",
+        "--locked",
+        "--manifest-path data-plane/decision-gate-rs/Cargo.toml",
+    ):
+        if required not in policy_contract_body:
+            raise AssertionError(f"credential policy verification omits {required}")
 
     input_preflight_body = target_body(makefile, "production-release-input-preflight")
     for required in (

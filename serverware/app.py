@@ -74,6 +74,8 @@ from serverware.key_release import KeyReleaseError, release_material, status as 
 from serverware.oauth import (
     OAUTH_REFRESH_SKEW_SECONDS,
     OAuthError,
+    browser_cookie_name,
+    consume_state,
     create_authorization_url,
     exchange_authorization_code,
     provider_status,
@@ -2335,6 +2337,7 @@ def _canonical_oauth_granted_scopes(raw_scopes: Any, *, field_name: str = "OAuth
 @app.post("/api/oauth/start")
 def oauth_start(
     payload: OAuthStartRequest,
+    response: Response,
     identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner")),
 ) -> dict[str, Any]:
     try:
@@ -2365,6 +2368,7 @@ def oauth_start(
             "metadata_keys": sorted(payload.metadata),
         },
     )
+    browser_nonce = secrets.token_urlsafe(32)
     try:
         started = create_authorization_url(
             provider_id=payload.provider,
@@ -2372,6 +2376,7 @@ def oauth_start(
             scopes=requested_scopes,
             metadata=payload.metadata,
             actor_id=identity.user_id,
+            browser_nonce=browser_nonce,
             control_plane_mfa=mfa,
             control_plane_approval=two_person,
         )
@@ -2391,24 +2396,61 @@ def oauth_start(
         },
         actor_id=identity.user_id,
     )
+    response.set_cookie(
+        browser_cookie_name(started["state"]),
+        browser_nonce,
+        max_age=max(1, started["expiresAtEpoch"] - int(time.time())),
+        path="/",
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
     return started
 
 
 @app.get("/api/oauth/callback/{provider_id}")
 def oauth_callback(
     provider_id: str,
+    request: Request,
     code: str | None = None,
     state: str | None = None,
     error: str | None = None,
     error_description: str | None = None,
 ) -> HTMLResponse:
+    oauth_cookie_name = None
+    browser_nonce = ""
+    if state:
+        try:
+            oauth_cookie_name = browser_cookie_name(state)
+        except OAuthError:
+            pass
+        else:
+            browser_nonce = request.cookies.get(oauth_cookie_name, "")
     if error:
+        if not state:
+            return HTMLResponse(
+                "<h1>OAuth failed</h1><p>Missing state.</p>",
+                status_code=400,
+                headers={"Cache-Control": "no-store"},
+            )
+        try:
+            consume_state(provider_id=provider_id, state=state, browser_nonce=browser_nonce)
+        except OAuthError as exc:
+            detail = html.escape(str(exc))
+            return HTMLResponse(
+                f"<h1>OAuth failed</h1><p>{detail}</p>",
+                status_code=400,
+                headers={"Cache-Control": "no-store"},
+            )
         detail = html.escape(error_description or error)
-        return HTMLResponse(
+        denied = HTMLResponse(
             f"<h1>OAuth denied</h1><p>{detail}</p>",
             status_code=400,
             headers={"Cache-Control": "no-store"},
         )
+        if oauth_cookie_name:
+            denied.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+        return denied
     if not code or not state:
         return HTMLResponse(
             "<h1>OAuth failed</h1><p>Missing code or state.</p>",
@@ -2416,7 +2458,12 @@ def oauth_callback(
             headers={"Cache-Control": "no-store"},
         )
     try:
-        exchanged = exchange_authorization_code(provider_id=provider_id, code=code, state=state)
+        exchanged = exchange_authorization_code(
+            provider_id=provider_id,
+            code=code,
+            state=state,
+            browser_nonce=browser_nonce,
+        )
         if not isinstance(exchanged, dict):
             raise OAuthError("OAuth token exchange result is malformed")
         granted_scopes = _canonical_oauth_granted_scopes(exchanged.get("scopes"))
@@ -2464,7 +2511,7 @@ def oauth_callback(
         },
         actor_id=actor_id,
     )
-    return HTMLResponse(
+    connected = HTMLResponse(
         """
         <h1>OAuth credential connected</h1>
         <p>The credential is encrypted in Serverware and can now be assigned to a policy route.</p>
@@ -2474,6 +2521,9 @@ def oauth_callback(
         """,
         headers={"Cache-Control": "no-store"},
     )
+    if oauth_cookie_name:
+        connected.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+    return connected
 
 
 @app.post("/api/credentials")
@@ -3566,15 +3616,13 @@ def data_plane_credential_leases(
         if not hmac.compare_digest(expected_recipient_key_id, payload.recipient_key_id):
             raise HTTPException(status_code=400, detail="recipientKeyId does not match recipientPublicKey")
         issued_at_epoch_ms = time.time_ns() // 1_000_000
-        replay_result = db.reserve_credential_lease_nonce(
+        recipient_nonce_sha256 = "sha256:" + hashlib.sha256(recipient_nonce).hexdigest()
+        if db.credential_lease_nonce_reserved(
             payload.recipient_key_id,
-            "sha256:" + hashlib.sha256(recipient_nonce).hexdigest(),
+            recipient_nonce_sha256,
             now_epoch_ms=issued_at_epoch_ms,
-        )
-        if replay_result == "replay":
+        ):
             raise HTTPException(status_code=409, detail="recipient nonce has already been used")
-        if replay_result == "capacity":
-            raise HTTPException(status_code=503, detail="credential lease replay cache is at capacity")
         _verify_credential_lease_recipient_attestation(
             payload.recipient_attestation,
             recipient_key_id=expected_recipient_key_id,
@@ -3585,6 +3633,15 @@ def data_plane_credential_leases(
             route_id=payload.route_id,
             credential_id=payload.credential_id,
         )
+        replay_result = db.reserve_credential_lease_nonce(
+            payload.recipient_key_id,
+            recipient_nonce_sha256,
+            now_epoch_ms=issued_at_epoch_ms,
+        )
+        if replay_result == "replay":
+            raise HTTPException(status_code=409, detail="recipient nonce has already been used")
+        if replay_result == "capacity":
+            raise HTTPException(status_code=503, detail="credential lease replay cache is at capacity")
         if not (SECRET_LEASE_TTL_SECONDS > 0):
             raise HTTPException(status_code=503, detail="credential lease TTL is not configured safely")
 
@@ -4584,7 +4641,7 @@ UI_HTML = r"""
       <section class="credentials-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Credentials</h2>
-          <button class="secondary" type="button" onclick="runUiAction('Copy verifier command', copyEnrollmentVerifier)">Copy verifier command</button>
+          <button class="secondary" type="button" onclick="runUiAction('Download packet and copy verifier command', copyEnrollmentVerifier)">Download + copy verifier command</button>
         </div>
         <table>
           <thead><tr><th>Name</th><th>Kind</th><th>Account / status</th><th>Metadata</th><th></th></tr></thead>
@@ -4706,6 +4763,7 @@ UI_HTML = r"""
         label: 'Gmail messages from last 30 days',
         routeId: 'gmail.messages.last-30-days',
         provider: 'google',
+        requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'gmail.googleapis.com', port: 443, methods: ['GET'], paths: ['/gmail/v1/users/{user}/messages', '/gmail/v1/users/{user}/messages/{message_id}']},
         adapter: {type: 'gmail.v1', config: {maxAgeDays: 30, maxResults: 10, forceQuery: true, allowMessageGetOnlyFromPriorSearch: true, cacheTtlSeconds: 1800, denyEquivalentEndpoints: ['threads', 'history', 'attachments', 'imap'], response: {validateInternalDate: true, validateListByMetadataFetch: true, maxBodyBytes: 1048576, allowedFields: ['id', 'threadId', 'labelIds', 'snippet', 'internalDate', 'payload.headers'], allowedHeaders: [], allowedMessageHeaderNames: ['From', 'Subject', 'Date'], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.code', 'error.status', 'error.message', 'error.errors.reason', 'error.errors.domain'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}, onViolation: 'block'}}},
@@ -4718,6 +4776,7 @@ UI_HTML = r"""
         label: 'X recent search from last 7 days',
         routeId: 'x.search.last-7-days',
         provider: 'x',
+        requiredScopes: ['tweet.read', 'users.read'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['GET'], paths: ['/2/tweets/search/recent']},
         adapter: {type: 'x.v2', config: {mode: 'recentSearchOnly', blockWrites: true, allowedReadOperations: ['search.read'], response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text', 'data.created_at', 'meta.result_count'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
@@ -4731,6 +4790,7 @@ UI_HTML = r"""
         label: 'X one text post per day',
         routeId: 'x.post.one-per-day',
         provider: 'x',
+        requiredScopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['POST'], paths: ['/2/tweets']},
         adapter: {type: 'x.v2', config: {mode: 'controlledWrite', blockWrites: false, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
@@ -5515,6 +5575,11 @@ UI_HTML = r"""
         if (!providerId || providerId !== template.provider) {
           throw new Error(`OAuth credential ${credential.id} belongs to ${providerId || 'an unknown provider'}, not ${template.provider}`);
         }
+        const grantedScopes = new Set(oauthCredentialGrantedScopes(credential));
+        const missingScopes = (template.requiredScopes || []).filter((scope) => !grantedScopes.has(scope));
+        if (missingScopes.length) {
+          throw new Error(`OAuth credential ${credential.id} is missing required scopes: ${missingScopes.join(', ')}`);
+        }
       }
       if (template.adapter?.type === 'x.v2') {
         const appId = String(credential?.metadata?.x_app_id || credential?.metadata?.app_id || '');
@@ -5905,18 +5970,28 @@ UI_HTML = r"""
       await navigator.clipboard.writeText(JSON.stringify(state.enrollmentPacket, null, 2));
     }
 
-    function downloadEnrollment() {
+    function enrollmentFilename(packet) {
+      const principal = String(packet?.principalId || 'agent').replace(/[^a-zA-Z0-9_.-]+/g, '-');
+      return `serverware-enrollment-${principal}.json`;
+    }
+
+    function enrollmentPacketText(packet) {
+      return JSON.stringify(packet, null, 2) + '\n';
+    }
+
+    function downloadEnrollment(packetText = null) {
       if (!state.enrollmentPacket) return;
-      const principal = String(state.enrollmentPacket.principalId || 'agent').replace(/[^a-zA-Z0-9_.-]+/g, '-');
-      const blob = new Blob([JSON.stringify(state.enrollmentPacket, null, 2) + '\n'], {type: 'application/json'});
+      const filename = enrollmentFilename(state.enrollmentPacket);
+      const blob = new Blob([packetText || enrollmentPacketText(state.enrollmentPacket)], {type: 'application/json'});
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `serverware-enrollment-${principal}.json`;
+      link.download = filename;
       document.body.appendChild(link);
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
+      return filename;
     }
 
     async function deleteCredential(id) {
@@ -6122,7 +6197,16 @@ UI_HTML = r"""
       if (!serverware.controlPlaneUrl || !pinning.policySigningKeyId || !pinning.rollbackEpoch || !ca.installPath) {
         throw new Error('Enrollment packet is missing required verifier bindings');
       }
+      const packetText = enrollmentPacketText(packet);
+      const packetFilename = downloadEnrollment(packetText);
+      const packetDigestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(packetText));
+      const packetSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
       const command = [
+        'set -euo pipefail',
+        'umask 077',
+        'ENROLLMENT_PACKET="${SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/' + packetFilename + '}"',
+        'VERIFIED_ENROLLMENT_PACKET="${SERVERWARE_VERIFIED_ENROLLMENT_PACKET:-${ENROLLMENT_PACKET%.json}.verified.json}"',
+        `python3 scripts/generate_agent_enrollment.py --verify-packet "$ENROLLMENT_PACKET" --expected-packet-sha256 ${shellQuote(packetSha256)} --expected-principal ${shellQuote(packet.principalId)} --expected-nonce ${shellQuote(packet.nonce)} --base ${shellQuote(serverware.controlPlaneUrl)} > "$VERIFIED_ENROLLMENT_PACKET"`,
         ': "${SERVERWARE_ADMIN_TOKEN:?Set SERVERWARE_ADMIN_TOKEN for the enrolled operator}"',
         `python3 scripts/verify_attestation.py --base ${shellQuote(serverware.controlPlaneUrl)} --admin-token "$SERVERWARE_ADMIN_TOKEN" --ca-out .tmp/serverware-ca.pem --expected-policy-key-hash ${shellQuote(pinning.policySigningKeyId)} --expected-rollback-epoch ${Number(pinning.rollbackEpoch)}`,
         `install -D -m 0644 .tmp/serverware-ca.pem ${shellQuote(ca.installPath)}`,

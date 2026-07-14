@@ -317,6 +317,39 @@ def detail(result: subprocess.CompletedProcess[bytes]) -> str:
     return result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
 
 
+def verify_oauth_secret_mounts(tmp: Path) -> None:
+    google = tmp / "google-oauth-secret"
+    x_secret = tmp / "x-oauth-secret"
+    google.write_text("google-secret-0123456789", encoding="utf-8")
+    x_secret.write_text("x-secret-0123456789", encoding="utf-8")
+    google.chmod(0o600)
+    x_secret.chmod(0o400)
+    env = {
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(google),
+        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE": str(x_secret),
+    }
+    original_uid = production_host_preflight.CONTROL_PLANE_RUNTIME_UID
+    if original_uid != 65532:
+        raise AssertionError(f"production control-plane UID drifted: {original_uid}")
+    try:
+        production_host_preflight.CONTROL_PLANE_RUNTIME_UID = os.getuid()
+        status, failures = production_host_preflight.oauth_secret_mounts_check(
+            env,
+            skip_host_check=False,
+        )
+        if failures or status.get("ok") is not True:
+            raise AssertionError(f"readable OAuth secret mounts failed: {status} {failures}")
+        production_host_preflight.CONTROL_PLANE_RUNTIME_UID = os.getuid() + 1
+        _, owner_failures = production_host_preflight.oauth_secret_mounts_check(
+            env,
+            skip_host_check=False,
+        )
+        if not any("must be owned by UID" in failure for failure in owner_failures):
+            raise AssertionError(f"unreadable OAuth secret ownership was accepted: {owner_failures}")
+    finally:
+        production_host_preflight.CONTROL_PLANE_RUNTIME_UID = original_uid
+
+
 def main() -> None:
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
     run_target = makefile.split("run-production-readiness:", 1)[1].split("\n\n", 1)[0]
@@ -325,6 +358,9 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory() as tmp_raw:
         verify_runtime_trust_materials(Path(tmp_raw))
+
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        verify_oauth_secret_mounts(Path(tmp_raw))
 
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)

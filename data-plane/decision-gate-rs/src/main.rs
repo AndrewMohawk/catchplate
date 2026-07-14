@@ -1983,6 +1983,183 @@ fn validate_response_field_allowlist(
     Ok(())
 }
 
+fn valid_response_json_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 256
+        && path.split('.').all(|segment| {
+            !segment.is_empty()
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+        })
+}
+
+fn validate_response_json_constraint(
+    route_id: &str,
+    constraint_id: &str,
+    constraint: &Map<String, Value>,
+) -> Result<(), String> {
+    if constraint
+        .get("required")
+        .is_some_and(|required| !required.is_boolean())
+    {
+        return Err(format!(
+            "route {route_id} responseJson {constraint_id} required must be a boolean"
+        ));
+    }
+    if let Some(items) = constraint.get("items") {
+        let items = items.as_array().ok_or_else(|| {
+            format!("route {route_id} responseJson {constraint_id} items must be an array")
+        })?;
+        let mut unique = HashSet::new();
+        if items.is_empty()
+            || items.iter().any(|item| {
+                item.as_str()
+                    .is_none_or(|path| !valid_response_json_path(path) || !unique.insert(path))
+            })
+        {
+            return Err(format!(
+                "route {route_id} responseJson {constraint_id} has invalid items"
+            ));
+        }
+    }
+    let fields = constraint
+        .get("fields")
+        .and_then(Value::as_object)
+        .filter(|fields| !fields.is_empty())
+        .ok_or_else(|| {
+            format!("route {route_id} responseJson {constraint_id} must define non-empty fields")
+        })?;
+    const RULE_FIELDS: [&str; 11] = [
+        "required",
+        "type",
+        "enum",
+        "equals",
+        "minLength",
+        "maxLength",
+        "pattern",
+        "min",
+        "max",
+        "minItems",
+        "maxItems",
+    ];
+    for (field, rule) in fields {
+        if !valid_response_json_path(field) {
+            return Err(format!(
+                "route {route_id} responseJson {constraint_id} field path {field:?} is invalid"
+            ));
+        }
+        let rule = rule
+            .as_object()
+            .filter(|rule| !rule.is_empty())
+            .ok_or_else(|| {
+                format!(
+                    "route {route_id} responseJson {constraint_id} field {field} must define a non-empty rule"
+                )
+            })?;
+        if let Some(unknown) = rule.keys().find(|key| !RULE_FIELDS.contains(&key.as_str())) {
+            return Err(format!(
+                "route {route_id} responseJson {constraint_id} field {field} has unsupported rule {unknown}"
+            ));
+        }
+        if rule
+            .get("required")
+            .is_some_and(|required| !required.is_boolean())
+        {
+            return Err(format!(
+                "route {route_id} responseJson {constraint_id} field {field} required must be a boolean"
+            ));
+        }
+        if rule.get("type").is_some_and(|kind| {
+            !matches!(
+                kind.as_str(),
+                Some("string" | "number" | "integer" | "boolean" | "object" | "array" | "null")
+            )
+        }) {
+            return Err(format!(
+                "route {route_id} responseJson {constraint_id} field {field} has unsupported type"
+            ));
+        }
+        if let Some(values) = rule.get("enum") {
+            let values = values.as_array().filter(|values| !values.is_empty()).ok_or_else(|| {
+                format!(
+                    "route {route_id} responseJson {constraint_id} field {field} enum must be a non-empty array"
+                )
+            })?;
+            if values
+                .iter()
+                .enumerate()
+                .any(|(index, value)| values[..index].contains(value))
+            {
+                return Err(format!(
+                    "route {route_id} responseJson {constraint_id} field {field} enum values must be unique"
+                ));
+            }
+        }
+        for key in ["minLength", "maxLength", "minItems", "maxItems"] {
+            if rule.get(key).is_some_and(|value| value.as_u64().is_none()) {
+                return Err(format!(
+                    "route {route_id} responseJson {constraint_id} field {field} {key} must be a non-negative integer"
+                ));
+            }
+        }
+        for (minimum, maximum) in [("minLength", "maxLength"), ("minItems", "maxItems")] {
+            if rule
+                .get(minimum)
+                .and_then(Value::as_u64)
+                .zip(rule.get(maximum).and_then(Value::as_u64))
+                .is_some_and(|(min, max)| min > max)
+            {
+                return Err(format!(
+                    "route {route_id} responseJson {constraint_id} field {field} {minimum} must not exceed {maximum}"
+                ));
+            }
+        }
+        for key in ["min", "max"] {
+            if rule
+                .get(key)
+                .is_some_and(|value| value.as_f64().is_none_or(|number| !number.is_finite()))
+            {
+                return Err(format!(
+                    "route {route_id} responseJson {constraint_id} field {field} {key} must be a finite number"
+                ));
+            }
+        }
+        if rule
+            .get("min")
+            .and_then(Value::as_f64)
+            .zip(rule.get("max").and_then(Value::as_f64))
+            .is_some_and(|(min, max)| min > max)
+        {
+            return Err(format!(
+                "route {route_id} responseJson {constraint_id} field {field} min must not exceed max"
+            ));
+        }
+        if let Some(pattern) = rule.get("pattern") {
+            let pattern = pattern.as_str().ok_or_else(|| {
+                format!(
+                    "route {route_id} responseJson {constraint_id} field {field} pattern must be a string"
+                )
+            })?;
+            if rule
+                .get("maxLength")
+                .and_then(Value::as_u64)
+                .is_none_or(|maximum| maximum > 4096)
+            {
+                return Err(format!(
+                    "route {route_id} responseJson {constraint_id} field {field} pattern requires maxLength <= 4096"
+                ));
+            }
+            if simple_bounded_pattern(pattern).is_none() {
+                return Err(format!(
+                    "route {route_id} responseJson {constraint_id} field {field} has a pattern unsupported by the Rust runtime"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_json_error_response_profile(
     response: &Map<String, Value>,
     label: &str,
@@ -2250,6 +2427,12 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 .ok_or_else(|| {
                     format!("route {route_id} response maxBodyBytes must be an unsigned integer")
                 })?;
+            if response_mode == "json" {
+                validate_response_field_allowlist(
+                    response,
+                    &format!("route {route_id} {adapter_type} success response"),
+                )?;
+            }
             validate_optional_response_release_contract(
                 response,
                 &format!("route {route_id} {adapter_type}"),
@@ -2721,7 +2904,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             let supported_phase = match constraint_type {
                 "rateLimit" | "operationPolicy" | "queryDateWindow" | "queryNumericBounds"
                 | "requestTimeWindow" | "jsonBody" | "formBody" => "request",
-                "responseDateWindow" => "response",
+                "responseDateWindow" | "responseJson" => "response",
                 _ => {
                     return Err(format!(
                         "route {route_id} constraint {constraint_id} type {constraint_type} is not supported by the Rust runtime"
@@ -2776,6 +2959,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     "dateFields",
                     "operations",
                 ],
+                "responseJson" => &["required", "items", "fields", "operations"],
                 _ => &[],
             };
             let common_fields = [
@@ -3043,15 +3227,18 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     ));
                 }
             }
+            if constraint_type == "responseJson" {
+                validate_response_json_constraint(route_id, constraint_id, constraint)?;
+            }
             if let Some(operations) = constraint.get("operations") {
-                if constraint_type != "responseDateWindow" {
+                if !matches!(constraint_type, "responseDateWindow" | "responseJson") {
                     return Err(format!(
-                        "route {route_id} constraint {constraint_id} operations are supported only for responseDateWindow"
+                        "route {route_id} constraint {constraint_id} operations are supported only for response constraints"
                     ));
                 }
                 let operations = operations.as_array().ok_or_else(|| {
                     format!(
-                        "route {route_id} responseDateWindow {constraint_id} operations must be an array"
+                        "route {route_id} {constraint_type} {constraint_id} operations must be an array"
                     )
                 })?;
                 let mut unique = HashSet::new();
@@ -3071,7 +3258,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     })
                 {
                     return Err(format!(
-                        "route {route_id} responseDateWindow {constraint_id} has invalid operations"
+                        "route {route_id} {constraint_type} {constraint_id} has invalid operations"
                     ));
                 }
             }
@@ -8925,6 +9112,9 @@ fn set_form_payload_value(
 type SimpleBoundedPattern = (String, Vec<(u8, u8)>, usize, usize);
 
 fn simple_bounded_pattern(pattern: &str) -> Option<SimpleBoundedPattern> {
+    if !pattern.is_ascii() || pattern.len() > 256 {
+        return None;
+    }
     let pattern = pattern.strip_prefix('^')?.strip_suffix('$')?;
     let class_start = pattern.find('[')?;
     let class_end = pattern[class_start + 1..].find(']')? + class_start + 1;
@@ -9388,14 +9578,23 @@ fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), V
         ));
     }
     let mut items = Vec::new();
+    let mut item_path_found = false;
     if let Some(item_paths) = constraint.get("items").and_then(Value::as_array) {
         for item_path in item_paths.iter().filter_map(Value::as_str) {
-            items.extend(values_at_path(&payload, item_path));
+            let selected_values = values_at_path(&payload, item_path);
+            item_path_found |= !selected_values.is_empty();
+            for selected in selected_values {
+                if let Some(selected_items) = selected.as_array() {
+                    items.extend(selected_items);
+                } else {
+                    items.push(selected);
+                }
+            }
         }
     } else {
         items.push(&payload);
     }
-    if required && items.is_empty() {
+    if required && constraint.get("items").and_then(Value::as_array).is_some() && !item_path_found {
         let mut extra = Map::new();
         extra.insert("status_code".to_string(), json!(502));
         return Err(constraint_payload(
@@ -9480,15 +9679,124 @@ fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), V
     Ok(())
 }
 
+fn enforce_response_json_field_rule(
+    constraint: &Value,
+    item: &Value,
+    field: &str,
+    rule: &Value,
+) -> Result<(), Value> {
+    enforce_json_field_rule(constraint, item, field, rule).map_err(|mut payload| {
+        let object = payload
+            .as_object_mut()
+            .expect("constraint field-rule errors are JSON objects");
+        let original = object
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("json_body_field_rule_invalid");
+        let response_error = if original == "json_body_required_field_missing" {
+            "response_json_required_field_missing".to_string()
+        } else if let Some(suffix) = original.strip_prefix("json_body_field_") {
+            format!("response_json_field_{suffix}")
+        } else {
+            "response_json_field_rule_invalid".to_string()
+        };
+        object.insert("error".to_string(), Value::String(response_error));
+        object.insert("status_code".to_string(), json!(502));
+        if let Some(Value::String(reason)) = object.get_mut("reason") {
+            *reason = reason.replace("JSON body", "response JSON item");
+        }
+        payload
+    })
+}
+
+fn enforce_response_json(constraint: &Value, body: &[u8]) -> Result<(), Value> {
+    let invalid_json = || {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(502));
+        constraint_payload(
+            constraint,
+            "response_json_invalid",
+            "response body is not valid bounded JSON",
+            extra,
+        )
+    };
+    if body.len() as u64 > MAX_BUFFERED_RESPONSE_BODY_BYTES {
+        return Err(invalid_json());
+    }
+    let payload = serde_json::from_slice::<Value>(body).map_err(|_| invalid_json())?;
+    let item_paths = constraint.get("items").and_then(Value::as_array);
+    let mut selected = Vec::new();
+    let mut item_path_found = false;
+    if let Some(item_paths) = item_paths {
+        for item_path in item_paths.iter().filter_map(Value::as_str) {
+            let values = values_at_path(&payload, item_path);
+            item_path_found |= !values.is_empty();
+            for value in values {
+                if let Some(items) = value.as_array() {
+                    selected.extend(items);
+                } else {
+                    selected.push(value);
+                }
+            }
+        }
+    } else {
+        selected.push(&payload);
+    }
+    if item_paths.is_some()
+        && constraint
+            .get("required")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+        && !item_path_found
+    {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(502));
+        return Err(constraint_payload(
+            constraint,
+            "response_json_items_missing",
+            "response does not contain required JSON items",
+            extra,
+        ));
+    }
+    let Some(fields) = constraint.get("fields").and_then(Value::as_object) else {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(502));
+        return Err(constraint_payload(
+            constraint,
+            "response_json_field_rule_invalid",
+            "response JSON field rules are invalid",
+            extra,
+        ));
+    };
+    for item in selected {
+        for (field, rule) in fields {
+            enforce_response_json_field_rule(constraint, item, field, rule)?;
+        }
+    }
+    Ok(())
+}
+
 fn validate_response_constraints(
     route: &Route,
     body: &[u8],
     operation: Option<&str>,
 ) -> Result<(), Value> {
+    validate_response_constraints_for_type(route, body, operation, None)
+}
+
+fn validate_response_constraints_for_type(
+    route: &Route,
+    body: &[u8],
+    operation: Option<&str>,
+    required_type: Option<&str>,
+) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
             continue;
         };
+        if required_type.is_some_and(|required| required != kind) {
+            continue;
+        }
         if !constraint_phase_includes(constraint, "response") {
             continue;
         }
@@ -9511,8 +9819,10 @@ fn validate_response_constraints(
                 continue;
             }
         }
-        if kind == "responseDateWindow" {
-            enforce_response_date_window(constraint, body)?;
+        match kind {
+            "responseDateWindow" => enforce_response_date_window(constraint, body)?,
+            "responseJson" => enforce_response_json(constraint, body)?,
+            _ => {}
         }
     }
     Ok(())
@@ -12307,24 +12617,18 @@ fn filter_gmail_message_fields(
     message: &Value,
     paths: &[Vec<String>],
     response_config: &Value,
+    include_age_proof: bool,
 ) -> Value {
-    if message.get("serverwareAgeProof").and_then(Value::as_str) == Some("pending") {
-        let mut pending = Map::new();
-        if let Some(id) = message.get("id") {
-            pending.insert("id".to_string(), id.clone());
-        }
-        pending.insert(
-            "serverwareAgeProof".to_string(),
-            Value::String("pending".to_string()),
-        );
-        return Value::Object(pending);
-    }
-
     let mut filtered = match redact_json_value(message, paths) {
         Value::Object(object) => object,
         _ => Map::new(),
     };
-    if let Some(proof) = message.get("serverwareAgeProof") {
+    if include_age_proof
+        && message.get("serverwareAgeProof").and_then(Value::as_str) == Some("validated")
+    {
+        let proof = message
+            .get("serverwareAgeProof")
+            .expect("validated Gmail proof is present");
         filtered.insert("serverwareAgeProof".to_string(), proof.clone());
     }
     let allowed_header_names = response_config
@@ -12372,7 +12676,7 @@ fn apply_gmail_allowed_fields(payload: &mut Value, response_config: &Value, is_l
                     .iter()
                     .map(|item| {
                         if item.is_object() {
-                            filter_gmail_message_fields(item, &paths, response_config)
+                            filter_gmail_message_fields(item, &paths, response_config, true)
                         } else {
                             item.clone()
                         }
@@ -12382,13 +12686,10 @@ fn apply_gmail_allowed_fields(payload: &mut Value, response_config: &Value, is_l
             .unwrap_or_default();
         let mut filtered = Map::new();
         filtered.insert("messages".to_string(), Value::Array(messages));
-        if let Some(pending) = payload.get("serverwarePendingAgeProof") {
-            filtered.insert("serverwarePendingAgeProof".to_string(), pending.clone());
-        }
         *payload = Value::Object(filtered);
         true
     } else {
-        *payload = filter_gmail_message_fields(payload, &paths, response_config);
+        *payload = filter_gmail_message_fields(payload, &paths, response_config, false);
         true
     }
 }
@@ -13625,6 +13926,16 @@ fn validate_policy_json_response(
         );
     }
     let paths = allowed_field_paths(response_config);
+    if mode == "json" && paths.is_empty() {
+        return block_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            json!({"error":"response_allowed_fields_missing","adapter":adapter_type}),
+        );
+    }
     let requires_json = mode == "json" || !paths.is_empty();
     if !requires_json {
         return release_forward_response(
@@ -13741,16 +14052,17 @@ fn validate_forward_response(
             json!({"error":"response_body_too_large","maxBodyBytes":max_body}),
         );
     }
-    if status.as_u16() < 400 {
-        let operation = decision
-            .get("operation")
-            .and_then(|value| value.get("operation"))
-            .and_then(Value::as_str);
-        if let Err(payload) = validate_response_constraints(route_match.route, &body, operation) {
-            return block_forward_response(state, decision, method, url, status, payload);
-        }
-    }
+    let operation = decision
+        .get("operation")
+        .and_then(|value| value.get("operation"))
+        .and_then(Value::as_str);
     if route_match.route.adapter_type != "gmail.v1" {
+        if status.as_u16() < 400 {
+            if let Err(payload) = validate_response_constraints(route_match.route, &body, operation)
+            {
+                return block_forward_response(state, decision, method, url, status, payload);
+            }
+        }
         return validate_policy_json_response(
             state,
             snapshot,
@@ -13782,6 +14094,14 @@ fn validate_forward_response(
             response_secret_guard,
         );
     }
+    if let Err(payload) = validate_response_constraints_for_type(
+        route_match.route,
+        &body,
+        operation,
+        Some("responseJson"),
+    ) {
+        return block_forward_response(state, decision, method, url, status, payload);
+    }
     let validate_internal_date = response_config
         .get("validateInternalDate")
         .and_then(Value::as_bool)
@@ -13791,6 +14111,14 @@ fn validate_forward_response(
         .and_then(Value::as_array)
         .is_some_and(|items| !items.is_empty());
     if !validate_internal_date && !has_allowed_fields {
+        if let Err(payload) = validate_response_constraints_for_type(
+            route_match.route,
+            &body,
+            operation,
+            Some("responseDateWindow"),
+        ) {
+            return block_forward_response(state, decision, method, url, status, payload);
+        }
         return release_forward_response(
             state,
             snapshot,
@@ -13831,9 +14159,10 @@ fn validate_forward_response(
                 .get("validateListByMetadataFetch")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let mut pending = Vec::new();
             if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
-                for item in messages {
+                let original_messages = std::mem::take(messages);
+                let mut released_messages = Vec::with_capacity(original_messages.len());
+                for mut item in original_messages {
                     let Some(object) = item.as_object_mut() else {
                         continue;
                     };
@@ -13842,13 +14171,6 @@ fn validate_forward_response(
                         continue;
                     };
                     if object.get("internalDate").is_none() && validate_missing_by_metadata {
-                        object.clear();
-                        object.insert("id".to_string(), Value::String(id.clone()));
-                        object.insert(
-                            "serverwareAgeProof".to_string(),
-                            Value::String("pending".to_string()),
-                        );
-                        pending.push(Value::String(id));
                         continue;
                     }
                     if let Err(payload) =
@@ -13863,17 +14185,32 @@ fn validate_forward_response(
                         Value::String("validated".to_string()),
                     );
                     validated_message_ids.push(id);
+                    released_messages.push(item);
                 }
-            }
-            if !pending.is_empty() {
-                if let Some(object) = payload.as_object_mut() {
-                    object.insert(
-                        "serverwarePendingAgeProof".to_string(),
-                        Value::Array(pending),
-                    );
-                }
+                *messages = released_messages;
             }
         }
+    }
+    let constraint_body = match serde_json::to_vec(&payload) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return block_forward_response(
+                state,
+                decision,
+                method,
+                url,
+                status,
+                json!({"error":"gmail_response_serialization_failed"}),
+            )
+        }
+    };
+    if let Err(payload) = validate_response_constraints_for_type(
+        route_match.route,
+        &constraint_body,
+        operation,
+        Some("responseDateWindow"),
+    ) {
+        return block_forward_response(state, decision, method, url, status, payload);
     }
     if is_list_response {
         let credential_ref = decision
@@ -17178,7 +17515,7 @@ mod tests {
                         "bodyMode": "none",
                         "maxBodyBytes": 0
                     },
-                    "response": {"mode":"json","maxBodyBytes":1024}
+                    "response": {"mode":"json","maxBodyBytes":1024,"allowedFields":["safe"]}
                 }),
                 constraints: Vec::new(),
                 jit: json!({"required":false}),
@@ -17425,8 +17762,23 @@ mod tests {
                         "maxBodyBytes":1024,
                         "allowedFields":["safe"]
                     },
-                    "response":{"mode":"json","maxBodyBytes":response_max_body_bytes}
+                    "response":{"mode":"json","maxBodyBytes":response_max_body_bytes,"allowedFields":["safe"]}
                 }
+            }
+        })
+    }
+
+    fn response_json_constraint() -> Value {
+        json!({
+            "id":"typed-response",
+            "type":"responseJson",
+            "phase":"response",
+            "items":["data","single"],
+            "fields":{
+                "id":{"required":true,"type":"string","maxLength":9,"pattern":"^item_[0-9]{1,4}$"},
+                "state":{"required":true,"type":"string","enum":["ready","pending"]},
+                "score":{"type":"number","min":0,"max":10},
+                "tags":{"type":"array","minItems":1,"maxItems":2}
             }
         })
     }
@@ -17958,9 +18310,282 @@ mod tests {
         assert!(validate_response_constraints(
             &route,
             list.as_bytes(),
-            Some("gmail.messages.list")
+            Some("gmail.messages.list"),
         )
         .is_ok());
+        assert!(validate_response_constraints(
+            &route,
+            br#"{"messages":[]}"#,
+            Some("gmail.messages.list"),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn gmail_date_window_never_exempts_unproven_items() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.constraints = vec![json!({
+            "id":"gmail-list-window",
+            "type":"responseDateWindow",
+            "phase":"response",
+            "operations":["gmail.messages.list"],
+            "items":["messages"],
+            "dateFields":["internalDate"],
+            "formats":["epochMillis"],
+            "maxAgeDays":30,
+            "required":true
+        })];
+        let unproven = br#"{"messages":[{"id":"unproven-1"}]}"#;
+        let error = validate_response_constraints(&route, unproven, Some("gmail.messages.list"))
+            .expect_err("released Gmail items without age evidence must fail closed");
+        assert_eq!(error["error"], "response_date_field_missing");
+    }
+
+    #[test]
+    fn response_json_validates_root_list_and_scalar_items() {
+        let root = json!({
+            "id":"item_1",
+            "state":"ready",
+            "score":0,
+            "tags":["one"]
+        });
+        let root_constraint = json!({
+            "id":"root-response",
+            "type":"responseJson",
+            "phase":"response",
+            "fields":{
+                "id":{"required":true,"type":"string"},
+                "score":{"type":"number","min":0,"max":10}
+            }
+        });
+        enforce_response_json(
+            &root_constraint,
+            &serde_json::to_vec(&root).expect("serialize root response"),
+        )
+        .expect("root response must be validated once");
+
+        let payload = json!({
+            "data":[
+                {"id":"item_1","state":"ready","score":0,"tags":["one"]},
+                {"id":"item_22","state":"pending","score":10,"tags":["one","two"]}
+            ],
+            "single":{"id":"item_3","state":"ready","score":4.5,"tags":["one"]}
+        });
+        enforce_response_json(
+            &response_json_constraint(),
+            &serde_json::to_vec(&payload).expect("serialize selected response"),
+        )
+        .expect("list elements and scalar item must all satisfy field rules");
+    }
+
+    #[test]
+    fn response_json_field_failures_are_typed_and_per_item() {
+        let invalid_json = enforce_response_json(&response_json_constraint(), br#"{"#)
+            .expect_err("invalid response JSON must fail closed");
+        assert_eq!(invalid_json["error"], "response_json_invalid");
+        assert_eq!(invalid_json["status_code"], 502);
+
+        let cases = [
+            (
+                json!({"value":"7"}),
+                json!({"value":{"type":"integer"}}),
+                "response_json_field_type_denied",
+            ),
+            (
+                json!({"value":"blocked"}),
+                json!({"value":{"enum":["ready","pending"]}}),
+                "response_json_field_enum_denied",
+            ),
+            (
+                json!({"value":11}),
+                json!({"value":{"min":0,"max":10}}),
+                "response_json_field_max",
+            ),
+            (
+                json!({"value":"other_123"}),
+                json!({"value":{"pattern":"^item_[0-9]{1,4}$"}}),
+                "response_json_field_pattern_denied",
+            ),
+        ];
+        for (item, fields, expected) in cases {
+            let constraint = json!({
+                "id":"field-vector",
+                "type":"responseJson",
+                "phase":"response",
+                "fields":fields
+            });
+            let denied = enforce_response_json(
+                &constraint,
+                &serde_json::to_vec(&item).expect("serialize response vector"),
+            )
+            .expect_err("invalid response field must fail closed");
+            assert_eq!(denied["error"], expected);
+            assert_eq!(denied["status_code"], 502);
+        }
+
+        let required_per_item = json!({
+            "id":"required-per-item",
+            "type":"responseJson",
+            "phase":"response",
+            "items":["data"],
+            "fields":{"id":{"required":true,"type":"string"}}
+        });
+        let denied = enforce_response_json(
+            &required_per_item,
+            br#"{"data":[{"id":"first"},{"name":"second"}]}"#,
+        )
+        .expect_err("required fields must be present on every selected item");
+        assert_eq!(denied["error"], "response_json_required_field_missing");
+        assert_eq!(denied["field"], "id");
+        assert_eq!(denied["status_code"], 502);
+    }
+
+    #[test]
+    fn response_json_items_and_operation_scope_fail_closed() {
+        let constraint = json!({
+            "id":"scoped-response",
+            "type":"responseJson",
+            "phase":"response",
+            "operations":["widgets.read"],
+            "items":["data"],
+            "fields":{"id":{"required":true,"type":"string"}}
+        });
+        let missing = enforce_response_json(&constraint, br#"{}"#)
+            .expect_err("an absent item path must fail closed by default");
+        assert_eq!(missing["error"], "response_json_items_missing");
+        assert_eq!(missing["status_code"], 502);
+        enforce_response_json(&constraint, br#"{"data":[]}"#)
+            .expect("an empty list still proves item-path presence");
+        let mut optional = constraint.clone();
+        optional["required"] = json!(false);
+        enforce_response_json(&optional, br#"{}"#)
+            .expect("required=false permits an absent item path");
+
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.constraints = vec![constraint];
+        let missing = validate_response_constraints(&route, br#"{"data":[]}"#, None)
+            .expect_err("operation-scoped responseJson requires operation context");
+        assert_eq!(missing["error"], "response_operation_context_missing");
+        assert_eq!(missing["status_code"], 502);
+        validate_response_constraints(&route, br#"{}"#, Some("widgets.other"))
+            .expect("non-matching operations skip the response constraint");
+        let matching = validate_response_constraints(&route, br#"{}"#, Some("widgets.read"))
+            .expect_err("matching operation enforces the response constraint");
+        assert_eq!(matching["error"], "response_json_items_missing");
+    }
+
+    #[test]
+    fn response_json_field_rules_match_python_semantics_vectors() {
+        let passing = [
+            (
+                json!({"value":7}),
+                json!({"value":{"type":"number","equals":7,"min":7,"max":7}}),
+            ),
+            (
+                json!({"value":"\u{00e9}"}),
+                json!({"value":{"type":"string","minLength":1,"maxLength":1}}),
+            ),
+            (
+                json!({"value":[1,2]}),
+                json!({"value":{"type":"array","minItems":2,"maxItems":2}}),
+            ),
+        ];
+        for (item, fields) in passing {
+            let constraint = json!({
+                "id":"python-parity",
+                "type":"responseJson",
+                "phase":"response",
+                "fields":fields
+            });
+            enforce_response_json(
+                &constraint,
+                &serde_json::to_vec(&item).expect("serialize parity vector"),
+            )
+            .expect("Rust must accept the same field-rule vector as Python");
+        }
+
+        let boolean_is_not_number = json!({
+            "id":"python-parity",
+            "type":"responseJson",
+            "phase":"response",
+            "fields":{"value":{"type":"number"}}
+        });
+        let denied = enforce_response_json(&boolean_is_not_number, br#"{"value":true}"#)
+            .expect_err("Python and Rust both exclude booleans from number semantics");
+        assert_eq!(denied["error"], "response_json_field_type_denied");
+    }
+
+    #[test]
+    fn json_response_projection_is_mandatory_and_filters_sibling_secrets() {
+        for allowed_fields in [None, Some(json!([]))] {
+            let mut route = generic_policy_route("none", json!(1024));
+            let response = route["adapter"]["config"]["response"]
+                .as_object_mut()
+                .expect("response policy");
+            match allowed_fields {
+                Some(fields) => {
+                    response.insert("allowedFields".to_string(), fields);
+                }
+                None => {
+                    response.remove("allowedFields");
+                }
+            }
+            let error = validate_policy_capabilities(&policy_with_route(route))
+                .expect_err("JSON response projection must be non-empty");
+            assert!(error.contains("allowedFields must be a non-empty array"));
+        }
+
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation"
+        });
+        let url = Url::parse("https://example.test/resource").expect("URL");
+        let body = br#"{"safe":{"id":"visible"},"provider":{"api_key":"sibling-provider-secret"}}"#
+            .to_vec();
+        let blocked = validate_policy_json_response(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            StatusCode::OK,
+            Some("application/json"),
+            &[],
+            body.clone(),
+            &json!({"mode":"json","maxBodyBytes":1024}),
+            "generic.rest",
+            &ResponseSecretGuard::default(),
+        );
+        let blocked = String::from_utf8(blocked).expect("blocked HTTP response");
+        assert!(blocked.starts_with("HTTP/1.1 502"));
+        assert!(blocked.contains("response_allowed_fields_missing"));
+        assert!(!blocked.contains("sibling-provider-secret"));
+
+        let released = validate_policy_json_response(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            StatusCode::OK,
+            Some("application/json"),
+            &[],
+            body,
+            &json!({"mode":"json","maxBodyBytes":1024,"allowedFields":["safe"]}),
+            "generic.rest",
+            &ResponseSecretGuard::default(),
+        );
+        let released = String::from_utf8(released).expect("projected HTTP response");
+        assert!(released.starts_with("HTTP/1.1 200"));
+        assert!(released.contains("visible"));
+        assert!(!released.contains("provider"));
+        assert!(!released.contains("sibling-provider-secret"));
     }
 
     #[test]
@@ -18486,7 +19111,7 @@ mod tests {
                     "formFields":["amount","currency","payment_method","confirm","metadata.agent_request_id"]
                 }
             },
-            "response":{"mode":"json","maxBodyBytes":65536}
+            "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["id"]}
         });
         let route_match = RouteMatch {
             route: &route,
@@ -18807,7 +19432,7 @@ mod tests {
                 "mode":"controlledWrite",
                 "blockWrites":false,
                 "appIds":["approved-app"],
-                "response":{"mode":"json","maxBodyBytes":65536}
+                "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["data"]}
             }},
             "constraints":[
                 {"id":"x-write-operation","type":"operationPolicy","allowedOperations":["tweets.write"]},
@@ -18816,6 +19441,16 @@ mod tests {
         });
         validate_policy_capabilities(&policy_with_route(x_write_route.clone()))
             .expect("explicit X post write");
+        let mut unprojected_x_write = x_write_route.clone();
+        unprojected_x_write["adapter"]["config"]["response"]
+            .as_object_mut()
+            .expect("X write response")
+            .remove("allowedFields");
+        assert!(
+            validate_policy_capabilities(&policy_with_route(unprojected_x_write))
+                .expect_err("X write JSON responses must define a projection")
+                .contains("allowedFields must be a non-empty array")
+        );
         let mut unsafe_x_write = x_write_route;
         unsafe_x_write["match"]["paths"] = json!(["/2/**"]);
         assert!(
@@ -18894,6 +19529,154 @@ mod tests {
             assert!(error.contains("field safe"));
             assert!(error.contains("unsupported by the Rust runtime"));
         }
+    }
+
+    #[test]
+    fn response_json_policy_admission_rejects_invalid_contracts() {
+        let valid_constraint = response_json_constraint();
+        let mut valid_route = generic_policy_route("none", json!(1024));
+        valid_route["constraints"] = json!([valid_constraint.clone()]);
+        validate_policy_capabilities(&policy_with_route(valid_route))
+            .expect("valid responseJson policy must be admitted");
+
+        let invalid_constraints = [
+            (
+                "wrong phase",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"request",
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "unknown constraint field",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response","unknown":true,
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "empty operations",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response","operations":[],
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "duplicate operations",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response",
+                    "operations":["widgets.read","widgets.read"],
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "malformed operation",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response",
+                    "operations":["bad operation"],
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "empty items",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response","items":[],
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "duplicate items",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response","items":["data","data"],
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "malformed item path",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response","items":["data..items"],
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "wildcard item path",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response","items":["data.*.items"],
+                    "fields":{"id":{"type":"string"}}
+                }),
+            ),
+            (
+                "empty fields",
+                json!({"id":"bad","type":"responseJson","phase":"response","fields":{}}),
+            ),
+            (
+                "malformed fields",
+                json!({"id":"bad","type":"responseJson","phase":"response","fields":[]}),
+            ),
+            (
+                "empty rule",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response","fields":{"id":{}}
+                }),
+            ),
+            (
+                "unknown rule",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response",
+                    "fields":{"id":{"format":"uuid"}}
+                }),
+            ),
+            (
+                "malformed rule",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response",
+                    "fields":{"id":{"required":"yes"}}
+                }),
+            ),
+            (
+                "pattern without input bound",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response",
+                    "fields":{"id":{"pattern":"^item_[0-9]+$"}}
+                }),
+            ),
+            (
+                "pattern with oversized input bound",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response",
+                    "fields":{"id":{"maxLength":4097,"pattern":"^item_[0-9]{1,4}$"}}
+                }),
+            ),
+            (
+                "pattern outside bounded runtime grammar",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response",
+                    "fields":{"id":{"maxLength":64,"pattern":"^item_[0-9]+$"}}
+                }),
+            ),
+            (
+                "inverted range",
+                json!({
+                    "id":"bad","type":"responseJson","phase":"response",
+                    "fields":{"score":{"min":10,"max":1}}
+                }),
+            ),
+        ];
+        for (label, constraint) in invalid_constraints {
+            let mut route = generic_policy_route("none", json!(1024));
+            route["constraints"] = json!([constraint]);
+            assert!(
+                validate_policy_capabilities(&policy_with_route(route)).is_err(),
+                "{label} must fail policy admission"
+            );
+        }
+
+        let mut streaming = generic_policy_route("none", json!(1024));
+        streaming["adapter"]["config"]["response"]["mode"] = json!("jsonArrayStream");
+        streaming["constraints"] = json!([valid_constraint]);
+        let error = validate_policy_capabilities(&policy_with_route(streaming))
+            .expect_err("responseJson cannot be used with streaming responses");
+        assert!(error.contains("cannot stream responses with whole-body response constraints"));
     }
 
     #[test]
@@ -19478,29 +20261,6 @@ mod tests {
     }
 
     #[test]
-    fn gmail_pending_age_proof_releases_only_opaque_id() {
-        let message = json!({
-            "id":"pending-1",
-            "snippet":"must not escape",
-            "payload":{"headers":[{"name":"Subject","value":"secret"}]},
-            "serverwareAgeProof":"pending"
-        });
-        let allowed = vec![
-            vec!["id".to_string()],
-            vec!["snippet".to_string()],
-            vec!["payload".to_string(), "headers".to_string()],
-        ];
-        assert_eq!(
-            filter_gmail_message_fields(
-                &message,
-                &allowed,
-                &json!({"allowedMessageHeaderNames":["Subject"]}),
-            ),
-            json!({"id":"pending-1","serverwareAgeProof":"pending"})
-        );
-    }
-
-    #[test]
     fn gmail_message_headers_are_filtered_case_insensitively() {
         let message = json!({
             "id":"message-1",
@@ -19519,6 +20279,7 @@ mod tests {
                 &message,
                 &allowed,
                 &json!({"allowedMessageHeaderNames":["from","Subject"]}),
+                false,
             ),
             json!({
                 "id":"message-1",
@@ -19535,6 +20296,7 @@ mod tests {
         let response = json!({
             "mode":"json",
             "maxBodyBytes":1024,
+            "allowedFields":["ok"],
             "allowedHeaders":[],
             "error":{
                 "mode":"json",

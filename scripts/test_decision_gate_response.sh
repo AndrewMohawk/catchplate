@@ -69,10 +69,8 @@ for key in ("authorization", "authorization_sha256", "proxy_authorization", "ser
     assert key not in payload, payload
 
 status, payload = request("/gmail/v1/users/me/messages?omitInternalDate=1")
-assert status == 502, payload
-assert payload["error"] == "response_date_field_missing", payload
-assert payload["constraint_id"] == "gmail-list-response-30d", payload
-assert payload["field"] == "internalDate", payload
+assert status == 200, payload
+assert payload == {"messages": []}, payload
 
 status, payload = request("/gmail/v1/users/me/messages")
 assert status == 200, payload
@@ -82,8 +80,7 @@ assert_gmail_redaction(payload, "validated")
 
 status, payload = request("/gmail/v1/users/me/messages?oldInternalDate=1")
 assert status == 502, payload
-assert payload["error"] == "response_date_window_exceeded", payload
-assert payload["constraint_id"] == "gmail-list-response-30d", payload
+assert payload == {"error": "gmail_response_too_old", "max_days": 30}, payload
 
 print(json.dumps({"ok": True, "response_validation": "pass"}, sort_keys=True))
 PY

@@ -38,6 +38,7 @@ from serverware.constraints import (
 from serverware.policy_bundle import (
     X_V2_BOUNDED_READ_OPERATIONS,
     PolicyBundleError,
+    bounded_pattern_matches,
     compile_policy_bundle,
     demo_policy_bundle,
 )
@@ -205,6 +206,14 @@ def main() -> None:
     assert_policy_rejected(
         invalid,
         "compiler accepted an opaque credential-bearing response",
+        validate_schema=validate_schema,
+    )
+    invalid = copy.deepcopy(demo_bundle)
+    x_write = next(item for item in invalid["routes"] if item["id"] == "demo.x.tweet.one_per_day")
+    x_write["adapter"]["config"]["response"].pop("allowedFields")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a credential-bearing JSON response without a projection",
         validate_schema=validate_schema,
     )
     invalid = copy.deepcopy(demo_bundle)
@@ -420,6 +429,72 @@ def main() -> None:
     response_constraint["operations"] = []
     assert_policy_rejected(invalid, "compiler accepted an empty response operation selector", validate_schema=validate_schema)
 
+    invalid = copy.deepcopy(examples)
+    response_json = next(
+        constraint
+        for item in invalid["routes"]
+        for constraint in item.get("constraints", [])
+        if constraint["type"] == "responseJson"
+    )
+    response_json["fields"] = {}
+    assert_policy_rejected(invalid, "compiler accepted responseJson without field assertions", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(examples)
+    response_json = next(
+        constraint
+        for item in invalid["routes"]
+        for constraint in item.get("constraints", [])
+        if constraint["type"] == "responseJson"
+    )
+    response_json["items"] = ["bad.*.path"]
+    assert_policy_rejected(invalid, "compiler accepted wildcard responseJson items", validate_schema=validate_schema)
+
+    for field, value, label in (
+        ("required", "yes", "non-boolean responseJson required flag"),
+        ("items", [{"path": "data"}], "non-string responseJson item path"),
+        ("operations", [{"operation": "widgets.read"}], "non-string responseJson operation"),
+    ):
+        invalid = copy.deepcopy(examples)
+        response_json = next(
+            constraint
+            for item in invalid["routes"]
+            for constraint in item.get("constraints", [])
+            if constraint["type"] == "responseJson"
+        )
+        response_json[field] = value
+        assert_policy_rejected(invalid, f"compiler accepted {label}", validate_schema=validate_schema)
+
+    invalid_response_rules = (
+        ({"type": "string", "unknown": True}, "unknown responseJson field rule"),
+        ({"required": "yes"}, "non-boolean responseJson required rule"),
+        ({"enum": []}, "empty responseJson enum"),
+        ({"enum": ["same", "same"]}, "duplicate responseJson enum"),
+        ({"minLength": 5, "maxLength": 4}, "inverted responseJson length range"),
+        ({"min": 5, "max": 4}, "inverted responseJson numeric range"),
+        ({"pattern": "^[0-9]{1,4}$"}, "unbounded responseJson pattern input"),
+        (
+            {"pattern": "^[0-9]{1,4}$", "maxLength": 4097},
+            "oversized responseJson pattern input",
+        ),
+        (
+            {"pattern": "^[0-9]+$", "maxLength": 64},
+            "responseJson pattern outside bounded runtime grammar",
+        ),
+    )
+    for rule, label in invalid_response_rules:
+        invalid = copy.deepcopy(examples)
+        response_json = next(
+            constraint
+            for item in invalid["routes"]
+            for constraint in item.get("constraints", [])
+            if constraint["type"] == "responseJson"
+        )
+        response_json["fields"]["id"] = rule
+        assert_policy_rejected(invalid, f"compiler accepted {label}", validate_schema=validate_schema)
+
+    assert bounded_pattern_matches("^v1.:[0-9]{1,2}$", "v1.:12") is True
+    assert bounded_pattern_matches("^v1.:[0-9]{1,2}$", "v1X:12") is False
+
     invalid = copy.deepcopy(demo_bundle)
     request_constraint = next(
         constraint
@@ -460,6 +535,7 @@ def main() -> None:
         {
             "id": "unsafe-pattern",
             "type": "jsonBody",
+            "allowedFields": ["name"],
             "fields": {"name": {"type": "string", "pattern": "(a+)+$", "maxLength": 100}},
         }
     ]
@@ -488,6 +564,98 @@ def main() -> None:
     assert_denied(generic_adapter.validate_request(generic_request, generic_route, {}), "request_header_not_allowed")
     generic_with_body = flow("GET", "https://api.stripe.com/v1/customers", {"unexpected": True})
     assert_denied(generic_adapter.validate_request(generic_with_body, generic_route, {}), "request_body_too_large")
+    unprojected_route = SimpleNamespace(
+        credential_ref="cred-generic",
+        adapter_config={
+            "response": {"mode": "json", "maxBodyBytes": 4096, "allowedHeaders": []}
+        },
+    )
+    unprojected = flow(
+        "GET",
+        "https://api.example.test/data",
+        response={"id": "safe", "provider_internal_secret": "must-not-release"},
+    )
+    assert_denied(
+        generic_adapter.validate_response(unprojected, unprojected_route, {}),
+        "response_allowed_fields_missing",
+    )
+
+    object_store_route = route(example_snapshot, "example.object_store.small_puts")
+    object_store_response = flow(
+        "PUT",
+        "https://objects.example.com/agent-artifacts/report-1",
+        response={"ok": True, "id": "report-1", "sha256": "sha256:" + "a" * 64},
+    )
+    assert evaluate_response_constraints(object_store_response, object_store_route).allowed
+    wrong_object_store_status = copy.deepcopy(object_store_response)
+    wrong_object_store_status.response.raw_content = json.dumps(
+        {"ok": False, "id": "report-1", "sha256": "sha256:" + "a" * 64}
+    ).encode("utf-8")
+    assert_denied(
+        evaluate_response_constraints(wrong_object_store_status, object_store_route),
+        "response_json_field_equals_denied",
+    )
+    malformed_object_store_digest = copy.deepcopy(object_store_response)
+    malformed_object_store_digest.response.raw_content = json.dumps(
+        {"ok": True, "id": "report-1", "sha256": "not-a-digest"}
+    ).encode("utf-8")
+    assert_denied(
+        evaluate_response_constraints(malformed_object_store_digest, object_store_route),
+        "response_json_field_pattern_denied",
+    )
+    missing_object_store_id = copy.deepcopy(object_store_response)
+    missing_object_store_id.response.raw_content = json.dumps(
+        {"ok": True, "sha256": "sha256:" + "a" * 64}
+    ).encode("utf-8")
+    assert_denied(
+        evaluate_response_constraints(missing_object_store_id, object_store_route),
+        "response_json_required_field_missing",
+    )
+    response_items_route = SimpleNamespace(
+        constraints=[
+            {
+                "id": "typed-results",
+                "type": "responseJson",
+                "phase": "response",
+                "items": ["data"],
+                "required": True,
+                "fields": {
+                    "status": {"required": True, "type": "string", "enum": ["ready", "done"]},
+                    "score": {"required": True, "type": "number", "min": 0, "max": 1},
+                    "tags": {"type": "array", "maxItems": 3},
+                },
+            }
+        ]
+    )
+    typed_results = flow(
+        "GET",
+        "https://api.example.test/results",
+        response={"data": [{"status": "ready", "score": 0.8, "tags": ["safe"]}]},
+    )
+    assert evaluate_response_constraints(typed_results, response_items_route).allowed
+    bad_result = flow(
+        "GET",
+        "https://api.example.test/results",
+        response={"data": [{"status": "unknown", "score": 0.8}]},
+    )
+    assert_denied(
+        evaluate_response_constraints(bad_result, response_items_route),
+        "response_json_field_enum_denied",
+    )
+    high_score = flow(
+        "GET",
+        "https://api.example.test/results",
+        response={"data": [{"status": "ready", "score": 1.1}]},
+    )
+    assert_denied(
+        evaluate_response_constraints(high_score, response_items_route),
+        "response_json_field_max",
+    )
+    missing_results = flow("GET", "https://api.example.test/results", response={"meta": {}})
+    assert_denied(
+        evaluate_response_constraints(missing_results, response_items_route),
+        "response_json_items_missing",
+    )
 
     stripe_route = route(example_snapshot, "example.stripe.payment_intent.tokenized_jit")
     stripe_adapter = get_adapter(stripe_route.adapter_type)
@@ -895,14 +1063,33 @@ def main() -> None:
                         "allowedFields": ["safe"],
                     }
                 },
-                constraints=[],
+                constraints=[
+                    {
+                        "id": "hidden-provider-status",
+                        "type": "responseJson",
+                        "phase": "response",
+                        "fields": {"provider_status": {"type": "string", "enum": ["ok"]}},
+                    }
+                ],
                 credential_ref=guard_route.credential_ref,
             )
-            redacted = guarded_response(exact_secret, {"safe": "released", "leak": exact_secret})
+            malformed_hidden = guarded_response(
+                exact_secret,
+                {"safe": "released", "provider_status": "corrupt"},
+            )
+            malformed_hidden.metadata["serverware_route"] = redacted_route
+            malformed_hidden.metadata["serverware_route_id"] = redacted_route.id
+            assert_denied(evaluate_response(malformed_hidden), "response_json_field_enum_denied")
+
+            redacted = guarded_response(
+                exact_secret,
+                {"safe": "released", "leak": exact_secret, "provider_status": "ok"},
+            )
             redacted.metadata["serverware_route"] = redacted_route
             redacted.metadata["serverware_route_id"] = redacted_route.id
             assert evaluate_response(redacted).allowed
             assert exact_secret.encode("utf-8") not in redacted.response.raw_content
+            assert json.loads(redacted.response.raw_content) == {"safe": "released"}
         finally:
             runtime.log_request = original_log_request
 

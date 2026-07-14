@@ -10,6 +10,7 @@ import os
 import platform
 import re
 import shlex
+import stat
 import subprocess
 import sys
 import time
@@ -25,6 +26,7 @@ REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 READINESS_CHECKS = [
     "no-dev-fixtures",
     "control-plane-auth",
+    "oauth-providers",
     "nitro",
     "attested-credential-delivery",
     "cosign-sigstore",
@@ -65,6 +67,7 @@ INTERNAL_SERVICE_TOKEN_NAMES = (
     "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
     "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
 )
+MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
 
 
 def canonical_json(value: Any) -> str:
@@ -314,6 +317,160 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         add(failures, parsed.scheme == "https", "SERVERWARE_WEBAUTHN_ORIGIN must use https in production")
         add(failures, parsed.hostname not in {"localhost", "127.0.0.1", "::1"}, "SERVERWARE_WEBAUTHN_ORIGIN must not be localhost")
         add(failures, not placeholder_hostname(parsed.hostname), "SERVERWARE_WEBAUTHN_ORIGIN must not use .example placeholder domains")
+
+
+def check_oauth_secret_file(env: dict[str, str], *, provider: str, setting_name: str, failures: list[str]) -> None:
+    raw_path = env.get(setting_name, "").strip()
+    add(failures, bool(raw_path), f"{provider} OAuth provider configuration must include {setting_name}")
+    if not raw_path:
+        return
+    path = Path(raw_path)
+    add(failures, path.is_absolute(), f"{setting_name} must be an absolute path")
+    if not path.is_absolute():
+        return
+    try:
+        file_stat = path.lstat()
+    except OSError:
+        failures.append(f"{setting_name} must reference a readable secret file")
+        return
+    mode = stat.S_IMODE(file_stat.st_mode)
+    add(failures, stat.S_ISREG(file_stat.st_mode), f"{setting_name} must reference a regular, non-symlink file")
+    add(failures, mode in {0o400, 0o600}, f"{setting_name} must use mode 0400 or 0600")
+    add(
+        failures,
+        1 <= file_stat.st_size <= MAX_OAUTH_CLIENT_SECRET_FILE_BYTES,
+        f"{setting_name} must contain between 1 and {MAX_OAUTH_CLIENT_SECRET_FILE_BYTES} bytes",
+    )
+    if not stat.S_ISREG(file_stat.st_mode) or mode not in {0o400, 0o600}:
+        return
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError:
+        failures.append(f"{setting_name} must reference a readable, non-symlink secret file")
+        return
+    try:
+        opened_stat = os.fstat(descriptor)
+        chunks: list[bytes] = []
+        remaining = MAX_OAUTH_CLIENT_SECRET_FILE_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+    except OSError:
+        failures.append(f"{setting_name} must contain readable UTF-8 secret text")
+        return
+    finally:
+        os.close(descriptor)
+    stable_file = (
+        stat.S_ISREG(opened_stat.st_mode)
+        and opened_stat.st_dev == file_stat.st_dev
+        and opened_stat.st_ino == file_stat.st_ino
+        and opened_stat.st_size == file_stat.st_size
+        and stat.S_IMODE(opened_stat.st_mode) == mode
+        and len(payload) == opened_stat.st_size
+    )
+    add(
+        failures,
+        stable_file and len(payload) <= MAX_OAUTH_CLIENT_SECRET_FILE_BYTES,
+        f"{setting_name} changed while it was being checked",
+    )
+    if not stable_file:
+        return
+    try:
+        secret = payload.decode("utf-8").rstrip("\r\n")
+    except UnicodeDecodeError:
+        failures.append(f"{setting_name} must contain readable UTF-8 secret text")
+        return
+    add(
+        failures,
+        bool(secret)
+        and secret == secret.strip()
+        and not any(character in secret for character in ("\x00", "\r", "\n")),
+        f"{setting_name} must contain one non-empty secret without surrounding whitespace",
+    )
+    add(
+        failures,
+        len(secret.encode("utf-8")) >= 16 and len(set(secret)) >= 8,
+        f"{setting_name} must contain a strong OAuth client secret",
+    )
+
+
+def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
+    public_url = env.get("SERVERWARE_PUBLIC_URL", "").strip()
+    parsed_public_url = urllib.parse.urlparse(public_url)
+    public_url_is_https = parsed_public_url.scheme == "https" and bool(parsed_public_url.netloc)
+    add(failures, public_url_is_https, "OAuth providers require an HTTPS SERVERWARE_PUBLIC_URL")
+
+    try:
+        state_ttl = int(env.get("SERVERWARE_OAUTH_STATE_TTL_SECONDS", ""))
+    except ValueError:
+        state_ttl = 0
+    add(
+        failures,
+        60 <= state_ttl <= 900,
+        "SERVERWARE_OAUTH_STATE_TTL_SECONDS must be between 60 and 900 seconds",
+    )
+    try:
+        replay_capacity = int(env.get("SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES", ""))
+    except ValueError:
+        replay_capacity = 0
+    add(
+        failures,
+        10_000 <= replay_capacity <= 10_000_000,
+        "SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES must be between 10000 and 10000000",
+    )
+
+    plaintext_names = (
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_X_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET",
+    )
+    for setting_name in plaintext_names:
+        add(
+            failures,
+            not env.get(setting_name, "").strip(),
+            f"{setting_name} must not be set in production; use the provider client secret file",
+        )
+
+    providers = (
+        (
+            "Google",
+            "google",
+            "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
+            "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+            "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
+        ),
+        (
+            "X",
+            "x",
+            "SERVERWARE_X_OAUTH_CLIENT_ID",
+            "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
+            "SERVERWARE_X_OAUTH_REDIRECT_URI",
+        ),
+    )
+    for provider, provider_id, client_id_name, secret_file_name, redirect_name in providers:
+        add(
+            failures,
+            bool(env.get(client_id_name, "").strip()),
+            f"{provider} OAuth provider configuration must include {client_id_name}",
+        )
+        check_oauth_secret_file(env, provider=provider, setting_name=secret_file_name, failures=failures)
+        redirect_uri = env.get(redirect_name, "").strip()
+        expected_redirect = f"{public_url.rstrip('/')}/api/oauth/callback/{provider_id}"
+        parsed_redirect = urllib.parse.urlparse(redirect_uri)
+        add(
+            failures,
+            public_url_is_https
+            and parsed_redirect.scheme == "https"
+            and redirect_uri == expected_redirect,
+            f"{redirect_name} must be the exact HTTPS callback {expected_redirect}",
+        )
 
 
 def check_nitro(env: dict[str, str], failures: list[str]) -> None:
@@ -1109,6 +1266,7 @@ def main() -> None:
     for check in (
         check_no_dev_or_fixture,
         check_control_plane_security,
+        check_oauth_providers,
         check_nitro,
         check_attested_credential_delivery,
         check_cosign,

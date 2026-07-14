@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -10,6 +11,8 @@ import time
 import types
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
+from http.cookies import SimpleCookie
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,9 +20,156 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
+def config_probe(env: dict[str, str], *, expected_error: str | None = None, redacted_value: str | None = None) -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import json; from serverware import config; "
+                "print(json.dumps({'google': bool(config.GOOGLE_OAUTH_CLIENT_SECRET), "
+                "'x': bool(config.X_OAUTH_CLIENT_SECRET)}))"
+            ),
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = completed.stdout + completed.stderr
+    if redacted_value and redacted_value in output:
+        raise AssertionError("OAuth config probe disclosed client secret material")
+    if expected_error is None:
+        if completed.returncode != 0:
+            raise AssertionError(f"valid OAuth secret-file config failed: {output}")
+        parsed = json.loads(completed.stdout)
+        if parsed != {"google": True, "x": True}:
+            raise AssertionError(f"OAuth secret files did not configure both providers: {parsed}")
+        return
+    if completed.returncode == 0 or expected_error not in output:
+        raise AssertionError(f"OAuth config probe did not fail with {expected_error!r}: {output}")
+
+
+def write_secret(path: Path, value: str, mode: int = 0o600) -> Path:
+    path.write_text(value + "\n", encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
+def run_config_secret_file_tests(tmp_path: Path) -> None:
+    relevant_names = {
+        "SERVERWARE_RELEASE_CHANNEL",
+        "SERVERWARE_PUBLIC_URL",
+        "SERVERWARE_OAUTH_STATE_TTL_SECONDS",
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
+        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
+        "SERVERWARE_X_OAUTH_CLIENT_ID",
+        "SERVERWARE_X_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE",
+        "SERVERWARE_X_OAUTH_REDIRECT_URI",
+        "SERVERWARE_TWITTER_OAUTH_CLIENT_ID",
+        "SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_TWITTER_OAUTH_REDIRECT_URI",
+    }
+    base_env = {name: value for name, value in os.environ.items() if name not in relevant_names}
+    google_secret = write_secret(tmp_path / "google-client-secret", "test-google-client-secret-0123456789")
+    x_secret = write_secret(tmp_path / "x-client-secret", "test-x-client-secret-0123456789")
+    base_env.update(
+        {
+            "SERVERWARE_RELEASE_CHANNEL": "prod",
+            "SERVERWARE_PUBLIC_URL": "https://serverware.test",
+            "SERVERWARE_OAUTH_STATE_TTL_SECONDS": "600",
+            "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "test-google-client",
+            "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(google_secret),
+            "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://serverware.test/api/oauth/callback/google",
+            "SERVERWARE_X_OAUTH_CLIENT_ID": "test-x-client",
+            "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE": str(x_secret),
+            "SERVERWARE_X_OAUTH_REDIRECT_URI": "https://serverware.test/api/oauth/callback/x",
+        }
+    )
+    config_probe(base_env)
+
+    ambiguous_env = dict(base_env)
+    ambiguous_secret = "test-ambiguous-client-secret-0123456789"
+    ambiguous_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET"] = ambiguous_secret
+    config_probe(
+        ambiguous_env,
+        expected_error="must not set both SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
+        redacted_value=ambiguous_secret,
+    )
+
+    unsafe_mode = write_secret(tmp_path / "unsafe-mode-client-secret", "test-unsafe-secret-0123456789", 0o644)
+    unsafe_mode_env = dict(base_env)
+    unsafe_mode_env["SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE"] = str(unsafe_mode)
+    config_probe(unsafe_mode_env, expected_error="mode 0400 or 0600")
+
+    oversized = write_secret(tmp_path / "oversized-client-secret", "x" * 4097)
+    oversized_env = dict(base_env)
+    oversized_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"] = str(oversized)
+    config_probe(oversized_env, expected_error="between 1 and 4096 bytes")
+
+    symlink = tmp_path / "symlink-client-secret"
+    symlink.symlink_to(google_secret)
+    symlink_env = dict(base_env)
+    symlink_env["SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE"] = str(symlink)
+    config_probe(symlink_env, expected_error="non-symlink secret file")
+
+    relative_env = dict(base_env)
+    relative_env["SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE"] = "relative-client-secret"
+    config_probe(relative_env, expected_error="must be an absolute path")
+
+
+def verify_compose_oauth_contract() -> None:
+    development = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    production = (ROOT / "docker-compose.production.yml").read_text(encoding="utf-8")
+    for setting_name in (
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
+        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
+        "SERVERWARE_X_OAUTH_CLIENT_ID",
+        "SERVERWARE_X_OAUTH_REDIRECT_URI",
+    ):
+        if f"{setting_name}: ${{{setting_name}:-" not in development:
+            raise AssertionError(f"development Compose does not forward optional {setting_name}")
+    for setting_name, container_path in (
+        ("SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE", "/run/secrets/serverware-google-oauth-client-secret"),
+        ("SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE", "/run/secrets/serverware-x-oauth-client-secret"),
+    ):
+        if f"{setting_name}: ${{{setting_name}:+{container_path}}}" not in development:
+            raise AssertionError(f"development Compose does not forward optional safe path for {setting_name}")
+        if f"${{{setting_name}:-/dev/null}}:{container_path}:ro" not in development:
+            raise AssertionError(f"development Compose does not mount optional {setting_name}")
+    for setting_name in (
+        "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
+        "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI",
+        "SERVERWARE_X_OAUTH_CLIENT_ID",
+        "SERVERWARE_X_OAUTH_REDIRECT_URI",
+    ):
+        if f"{setting_name}: ${{{setting_name}:?" not in production:
+            raise AssertionError(f"production Compose does not require {setting_name}")
+    if "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET:" in production or "SERVERWARE_X_OAUTH_CLIENT_SECRET:" in production:
+        raise AssertionError("production Compose forwards a plaintext OAuth client secret")
+    for container_path in (
+        "/run/secrets/serverware-google-oauth-client-secret:ro",
+        "/run/secrets/serverware-x-oauth-client-secret:ro",
+    ):
+        if container_path not in production:
+            raise AssertionError(f"production Compose does not mount {container_path}")
+
+
+def compose_manifests_available() -> bool:
+    return (ROOT / "docker-compose.yml").is_file() and (ROOT / "docker-compose.production.yml").is_file()
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
+        run_config_secret_file_tests(Path(tmp))
+        if compose_manifests_available():
+            verify_compose_oauth_contract()
         os.environ["SERVERWARE_DATA_DIR"] = tmp
+        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
         os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
         os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
         os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
@@ -53,6 +203,33 @@ def main() -> None:
         db.init_db()
         identity = AdminIdentity("user:operator", frozenset({"admin", "credential_owner", "policy_author"}), "test")
 
+        def oauth_request(state: str, browser_nonce: str):
+            return app_module.Request(
+                {
+                    "type": "http",
+                    "method": "GET",
+                    "path": "/api/oauth/callback/test",
+                    "headers": [
+                        (
+                            b"cookie",
+                            f"{oauth.browser_cookie_name(state)}={browser_nonce}".encode("ascii"),
+                        )
+                    ],
+                }
+            )
+
+        def start_oauth(payload: app_module.OAuthStartRequest) -> tuple[dict[str, object], str]:
+            response = app_module.Response()
+            started = app_module.oauth_start(payload, response=response, identity=identity)
+            cookies = SimpleCookie()
+            cookies.load(response.headers.get("set-cookie", ""))
+            morsel = cookies.get(oauth.browser_cookie_name(str(started["state"])))
+            if morsel is None:
+                raise AssertionError("OAuth start did not issue the browser-binding cookie")
+            if not morsel["secure"] or not morsel["httponly"] or morsel["samesite"].lower() != "lax":
+                raise AssertionError(f"OAuth browser-binding cookie attributes are unsafe: {morsel}")
+            return started, morsel.value
+
         providers = app_module.oauth_providers(identity)["providers"]
         google = next(item for item in providers if item["id"] == "google")
         if not google["configured"] or google["recommendedInjection"].get("field") != "access_token":
@@ -60,6 +237,8 @@ def main() -> None:
         x_provider = next(item for item in providers if item["id"] == "x")
         if not x_provider["configured"]:
             raise AssertionError(f"x provider status is not usable: {x_provider}")
+        if replace(oauth.provider_for("google"), client_secret="").configured:
+            raise AssertionError("OAuth provider with an incomplete client secret was marked configured")
 
         if app_module._canonical_oauth_granted_scopes(["scope.z", "scope.a"]) != ("scope.a", "scope.z"):
             raise AssertionError("OAuth granted scopes were not canonicalized")
@@ -122,6 +301,7 @@ def main() -> None:
                 scopes=None,
                 metadata={"index": index},
                 actor_id="user:operator",
+                browser_nonce=f"{index:043d}",
             )["state"]
 
         with ThreadPoolExecutor(max_workers=8) as executor:
@@ -131,7 +311,7 @@ def main() -> None:
             raise AssertionError("concurrent OAuth starts lost state records")
 
         try:
-            oauth.consume_state(provider_id="google", state="not-valid-state")
+            oauth.consume_state(provider_id="google", state="not-valid-state", browser_nonce="b" * 43)
         except oauth.OAuthError as exc:
             if "malformed" not in str(exc):
                 raise AssertionError(f"malformed state failed for the wrong reason: {exc}") from exc
@@ -145,6 +325,7 @@ def main() -> None:
                     credentialName="Gmail OAuth - Test",
                     metadata={"blob": "x" * 5000},
                 ),
+                response=app_module.Response(),
                 identity=identity,
             )
         except app_module.HTTPException as exc:
@@ -159,6 +340,7 @@ def main() -> None:
                     provider="google",
                     credentialName="x" * 300,
                 ),
+                response=app_module.Response(),
                 identity=identity,
             )
         except app_module.HTTPException as exc:
@@ -167,14 +349,13 @@ def main() -> None:
         else:
             raise AssertionError("oversized OAuth credential name was accepted")
 
-        start = app_module.oauth_start(
+        start, browser_nonce = start_oauth(
             app_module.OAuthStartRequest(
                 provider="google",
                 credentialName="Gmail OAuth - Test",
                 scopes=["https://www.googleapis.com/auth/gmail.readonly"],
                 metadata={"account": "andrew@example.test", "provider_subject": "caller-controlled"},
-            ),
-            identity=identity,
+            )
         )
         parsed = urllib.parse.urlsplit(start["authorizationUrl"])
         query = dict(urllib.parse.parse_qsl(parsed.query))
@@ -183,8 +364,23 @@ def main() -> None:
         if query.get("state") != start["state"]:
             raise AssertionError("OAuth URL state does not match returned state")
 
+        parallel_start, _parallel_browser_nonce = start_oauth(
+            app_module.OAuthStartRequest(
+                provider="x",
+                credentialName="Parallel X OAuth - Test",
+            )
+        )
+        if oauth.browser_cookie_name(str(parallel_start["state"])) == oauth.browser_cookie_name(
+            str(start["state"])
+        ):
+            raise AssertionError("parallel OAuth flows reused one browser-binding cookie")
+
         state_payload = json.loads((Path(tmp) / "oauth-states.json").read_text())
         state_record = state_payload["states"][start["state"]]
+        if browser_nonce in json.dumps(state_record, sort_keys=True):
+            raise AssertionError("raw OAuth browser binding was persisted")
+        if not str(state_record.get("browser_nonce_sha256", "")).startswith("sha256:"):
+            raise AssertionError("OAuth state did not persist a browser-binding hash")
         if state_record.get("code_verifier") in start["authorizationUrl"]:
             raise AssertionError("PKCE verifier leaked into the authorization URL")
 
@@ -193,6 +389,7 @@ def main() -> None:
                 provider_id="google",
                 code="x" * (oauth.MAX_OAUTH_CODE_BYTES + 1),
                 state=start["state"],
+                browser_nonce=browser_nonce,
             )
         except oauth.OAuthError as exc:
             if "too large" not in str(exc):
@@ -222,7 +419,22 @@ def main() -> None:
             "provider_identity_verified": True,
             "provider_email_verified": True,
         }
-        response = app_module.oauth_callback("google", code="auth-code", state=start["state"])
+        wrong_browser = app_module.oauth_callback(
+            "google",
+            oauth_request(str(start["state"]), "z" * 43),
+            code="auth-code",
+            state=start["state"],
+        )
+        if wrong_browser.status_code != 400 or b"browser binding mismatch" not in wrong_browser.body:
+            raise AssertionError(f"cross-browser OAuth callback did not fail closed: {wrong_browser.body!r}")
+        if start["state"] not in json.loads((Path(tmp) / "oauth-states.json").read_text())["states"]:
+            raise AssertionError("cross-browser callback consumed the legitimate OAuth state")
+        response = app_module.oauth_callback(
+            "google",
+            oauth_request(str(start["state"]), browser_nonce),
+            code="auth-code",
+            state=start["state"],
+        )
         if response.status_code != 200:
             raise AssertionError(f"OAuth callback failed: {response.status_code} {response.body!r}")
         if b"access-token-value" in response.body or b"refresh-token-value" in response.body:
@@ -345,20 +557,51 @@ def main() -> None:
                 raise AssertionError("unverified or non-OAuth credential satisfied a signed provider account binding")
 
         try:
-            oauth.exchange_authorization_code(provider_id="google", code="auth-code-2", state=start["state"])
+            oauth.exchange_authorization_code(
+                provider_id="google",
+                code="auth-code-2",
+                state=start["state"],
+                browser_nonce=browser_nonce,
+            )
         except oauth.OAuthError as exc:
             if "unknown or expired" not in str(exc):
                 raise AssertionError(f"state replay failed with wrong error: {exc}") from exc
         else:
             raise AssertionError("OAuth state replay was accepted")
 
-        x_start = app_module.oauth_start(
+        denied_start, denied_browser_nonce = start_oauth(
+            app_module.OAuthStartRequest(
+                provider="google",
+                credentialName="Denied Gmail OAuth",
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            )
+        )
+        denied_response = app_module.oauth_callback(
+            "google",
+            oauth_request(str(denied_start["state"]), denied_browser_nonce),
+            state=denied_start["state"],
+            error="access_denied",
+            error_description="The operator denied access",
+        )
+        if denied_response.status_code != 400 or b"OAuth denied" not in denied_response.body:
+            raise AssertionError(f"provider denial callback failed incorrectly: {denied_response.body!r}")
+        if denied_start["state"] in json.loads((Path(tmp) / "oauth-states.json").read_text())["states"]:
+            raise AssertionError("provider denial callback did not consume OAuth state")
+        denied_replay = app_module.oauth_callback(
+            "google",
+            oauth_request(str(denied_start["state"]), denied_browser_nonce),
+            state=denied_start["state"],
+            error="access_denied",
+        )
+        if denied_replay.status_code != 400 or b"unknown or expired" not in denied_replay.body:
+            raise AssertionError(f"provider denial state replay was accepted: {denied_replay.body!r}")
+
+        x_start, x_browser_nonce = start_oauth(
             app_module.OAuthStartRequest(
                 provider="twitter",
                 credentialName="X OAuth - Test",
                 scopes=["tweet.read", "users.read", "offline.access"],
-            ),
-            identity=identity,
+            )
         )
         x_state_payload = json.loads((Path(tmp) / "oauth-states.json").read_text())
         x_state_record = x_state_payload["states"][x_start["state"]]
@@ -387,7 +630,12 @@ def main() -> None:
             "provider_identity_verified": True,
             "provider_profile_verified": False,
         }
-        x_response = app_module.oauth_callback("x", code="x-auth-code", state=x_start["state"])
+        x_response = app_module.oauth_callback(
+            "x",
+            oauth_request(str(x_start["state"]), x_browser_nonce),
+            code="x-auth-code",
+            state=x_start["state"],
+        )
         if x_response.status_code != 200:
             raise AssertionError(f"X OAuth callback failed: {x_response.status_code} {x_response.body!r}")
         x_credentials = [item for item in db.list_credentials() if item["name"] == "X OAuth - Test"]
@@ -409,7 +657,12 @@ def main() -> None:
             "provider": "google",
             "scopes": ["scope.provider"],
         }
-        malformed_response = app_module.oauth_callback("google", code="malformed-code", state="malformed-state")
+        malformed_response = app_module.oauth_callback(
+            "google",
+            oauth_request(str(x_start["state"]), "m" * 43),
+            code="malformed-code",
+            state="malformed-state",
+        )
         app_module.exchange_authorization_code = original_exchange_authorization_code
         if malformed_response.status_code != 400 or b"does not match" not in malformed_response.body:
             raise AssertionError(f"mismatched provider/metadata scopes did not fail closed: {malformed_response.body!r}")
@@ -600,4 +853,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] == ["--compose-contract-only"]:
+        verify_compose_oauth_contract()
+        print(json.dumps({"oauth_compose_contract": "pass", "ok": True}, sort_keys=True))
+    else:
+        main()

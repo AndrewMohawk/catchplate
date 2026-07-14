@@ -1,4 +1,4 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-host-preflight production-release-proof prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-host-preflight verify-production-release-proof verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-host-preflight deploy-production production-release-proof prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-host-preflight verify-production-release-proof verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
@@ -22,6 +22,7 @@ RELEASE_PROVENANCE_FILE ?= .tmp/release-provenance.json
 IMAGE_SIGNATURES_SUMMARY_FILE ?= .tmp/image-signatures-summary.json
 IMAGE_SIGNATURES_FILE ?= .tmp/image-signatures.json
 DECISION_GATE_BENCH_FILE ?= .tmp/decision-gate-rs-bench.json
+PRODUCTION_DEPLOY_COMMAND ?=
 
 up:
 	docker compose up -d --build serverware demo-upstream audit-anchor
@@ -38,6 +39,7 @@ e2e:
 	SERVERWARE_HARDENING_SERVICES=serverware,audit-anchor,grant-store,demo-upstream ./scripts/test_container_hardening.sh
 	SERVERWARE_APPARMOR_DRY_RUN=1 ./scripts/test_apparmor_runtime.sh
 	docker compose exec -T serverware python scripts/test_webauthn_attestation.py
+	docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
 	./scripts/e2e.sh
 	./scripts/test_key_release_gate.py
 
@@ -77,7 +79,8 @@ bench-gate-rs:
 			./scripts/test_decision_gate_json_nested_streaming.sh
 			./scripts/test_decision_gate_form_urlencoded_streaming.sh
 			./scripts/test_decision_gate_csv_streaming.sh
-			./scripts/test_decision_gate_response.sh
+				./scripts/test_decision_gate_response.sh
+				./scripts/test_response_proof_capture.sh
 	docker compose exec -T serverware python scripts/test_webauthn_attestation.py
 	python3 scripts/verify_decision_gate_attestation.py
 	./scripts/test_key_release_gate.py
@@ -89,8 +92,10 @@ bench-gate-rs:
 		./scripts/test_control_plane_metadata_store.sh
 		docker compose exec -T serverware python scripts/test_ca_install_sessions.py
 		docker compose exec -T serverware python scripts/test_control_plane_csrf.py
-		docker compose exec -T serverware python scripts/test_control_plane_oidc.py
-		docker compose exec -T serverware python scripts/test_oauth_credentials.py
+			docker compose exec -T serverware python scripts/test_control_plane_oidc.py
+			python3 scripts/test_http_client.py
+			docker compose exec -T serverware python scripts/test_oauth_credentials.py
+		docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
 		docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
 		docker compose exec -T serverware python scripts/test_control_plane_two_person.py
 		docker compose exec -T serverware python scripts/test_control_plane_rbac_audit.py
@@ -104,13 +109,18 @@ bench-gate-rs:
 		python3 scripts/test_agent_enrollment.py
 		python3 scripts/test_transparency_checkpoint.py
 		python3 scripts/test_nitro_nsm_attest.py
-		python3 scripts/test_aws_kms_recipient_release.py
-		python3 scripts/test_prepare_aws_kms_materials.py
+		docker compose exec -T serverware python scripts/test_aws_kms_recipient_release.py
+		docker compose exec -T serverware python scripts/test_aws_nitro_kms_unseal.py
+		docker compose exec -T serverware python scripts/test_prepare_aws_kms_materials.py
 		python3 scripts/test_production_readiness_claims.py
 		python3 scripts/test_production_readiness.py
-		python3 scripts/test_portal_agent_enrollment_ui.py
+		docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
 		./scripts/test_audit_anchor.sh
-	python3 scripts/bench_decision_gate.py --self-test > .tmp/decision-gate-rs-bench.json
+	docker compose exec -T \
+		-e DECISION_GATE_BASE=http://decision-gate-rs:9091 \
+		-e PROXY=http://decision-gate-rs:9090 \
+		-e BASE=http://localhost:3000 \
+		serverware python scripts/bench_decision_gate.py --self-test > .tmp/decision-gate-rs-bench.json
 	cat .tmp/decision-gate-rs-bench.json
 	./scripts/test_decision_gate_shared_rate_limits.sh
 	./scripts/generate_release_provenance.py > .tmp/release-provenance-summary.json
@@ -133,11 +143,25 @@ decision-gate-bench-evidence:
 	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
 	docker compose up -d --build decision-gate-rs
 	./scripts/wait_for_decision_gate.sh
-	python3 scripts/bench_decision_gate.py --self-test > "$(DECISION_GATE_BENCH_FILE)"
+	docker compose exec -T \
+		-e DECISION_GATE_BASE=http://decision-gate-rs:9091 \
+		-e PROXY=http://decision-gate-rs:9090 \
+		-e BASE=http://localhost:3000 \
+		serverware python scripts/bench_decision_gate.py --self-test > "$(DECISION_GATE_BENCH_FILE)"
 	cat "$(DECISION_GATE_BENCH_FILE)"
 
 release-provenance:
 	./scripts/generate_release_provenance.py \
+		--out "$(RELEASE_PROVENANCE_FILE)" > "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
+	cat "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
+
+production-release-provenance:
+	./scripts/generate_release_provenance.py \
+		--production \
+		--env-file "$(PRODUCTION_READINESS_ENV)" \
+		--production-images-build "$(PRODUCTION_IMAGES_BUILD_FILE)" \
+		--production-images-published "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" \
+		--production-images-env "$(PRODUCTION_IMAGES_ENV_OUT)" \
 		--out "$(RELEASE_PROVENANCE_FILE)" > "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 	cat "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 
@@ -198,14 +222,19 @@ production-host-preflight:
 		--kms-materials "$(AWS_KMS_MATERIALS_OUT)" \
 		--out "$(PRODUCTION_HOST_PREFLIGHT_OUT)"
 
+deploy-production:
+	@if [ -z "$(PRODUCTION_DEPLOY_COMMAND)" ]; then echo "PRODUCTION_DEPLOY_COMMAND is required and must deploy the published digest-pinned images to the production host" >&2; exit 2; fi
+	$(PRODUCTION_DEPLOY_COMMAND)
+
 production-release-proof:
 	$(MAKE) build-production-images
 	$(MAKE) decision-gate-bench-evidence
-	$(MAKE) release-provenance
 	$(MAKE) publish-production-images
-	$(MAKE) sign-production-images
 	$(MAKE) merge-production-images-env
+	$(MAKE) production-release-provenance
+	$(MAKE) sign-production-images
 	$(MAKE) prepare-aws-kms-materials
+	$(MAKE) deploy-production
 	$(MAKE) run-production-readiness
 
 prepare-aws-kms-materials:
@@ -251,10 +280,16 @@ verify-nitro-nsm-attest:
 	python3 scripts/test_nitro_nsm_attest.py
 
 verify-aws-kms-recipient-release:
-	python3 scripts/test_aws_kms_recipient_release.py
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_aws_kms_recipient_release.py
+
+verify-aws-nitro-kms-unseal:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_aws_nitro_kms_unseal.py
 
 verify-prepare-aws-kms-materials:
-	python3 scripts/test_prepare_aws_kms_materials.py
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_prepare_aws_kms_materials.py
 
 verify-ca-install-sessions:
 	docker compose up -d --build serverware
@@ -270,7 +305,12 @@ verify-control-plane-oidc:
 
 verify-oauth-credentials:
 	docker compose up -d --build serverware
+	python3 scripts/test_http_client.py
 	docker compose exec -T serverware python scripts/test_oauth_credentials.py
+
+verify-credential-lease-delivery:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
 
 verify-control-plane-mutation-mfa:
 	docker compose up -d --build serverware
@@ -295,7 +335,7 @@ verify-approval-denial-reason:
 verify-approval-review:
 	docker compose up -d --build serverware
 	docker compose exec -T serverware python scripts/test_approval_review.py
-	python3 scripts/test_portal_agent_enrollment_ui.py
+	docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
 
 verify-policy-publish-workflow:
 	docker compose up -d --build serverware
@@ -314,8 +354,9 @@ verify-audit-export:
 	docker compose exec -T serverware python scripts/test_audit_export.py
 
 verify-agent-enrollment:
+	docker compose up -d --build serverware
 	python3 scripts/test_agent_enrollment.py
-	python3 scripts/test_portal_agent_enrollment_ui.py
+	docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
 
 verify-production-images-no-shell:
 	python3 scripts/test_production_images_no_shell.py

@@ -14,9 +14,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
+
+from serverware.http_client import request_bytes as bounded_request_bytes
 
 
 def canonical_json(value: Any) -> str:
@@ -43,8 +48,8 @@ def request_json(
         data = canonical_json(body).encode("utf-8")
         request_headers["Content-Type"] = "application/json"
     request = urllib.request.Request(url, data=data, headers=request_headers, method=method)
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return json.loads(response.read())
+    response = bounded_request_bytes(request, timeout=10, max_bytes=8 * 1024 * 1024)
+    return json.loads(response.body)
 
 
 def request_bytes(
@@ -57,8 +62,7 @@ def request_bytes(
     if admin_token:
         request_headers["X-Serverware-Admin-Token"] = admin_token
     request = urllib.request.Request(url, headers=request_headers)
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return response.read()
+    return bounded_request_bytes(request, timeout=10, max_bytes=8 * 1024 * 1024).body
 
 
 def signature_payload(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -164,6 +168,8 @@ def verify_quote(attestation: dict[str, Any], tee_verify_command: str | None = N
     for field in (
         "runtime_manifest_digest",
         "policy_bundle_digest",
+        "policy_sequence",
+        "policy_high_water_digest",
         "ca_intermediate_spki_sha256",
         "data_plane_binary_digest",
         "rollback_epoch",
@@ -177,12 +183,33 @@ def verify_quote(attestation: dict[str, Any], tee_verify_command: str | None = N
             raise ValueError(f"attestation quote claim {field} mismatch")
 
 
+def verify_policy_high_water(attestation: dict[str, Any]) -> dict[str, Any]:
+    high_water = attestation.get("policy_high_water")
+    if not isinstance(high_water, dict):
+        raise ValueError("attestation missing policy high-water evidence")
+    expected_digest = "sha256:" + hashlib.sha256(
+        canonical_json(high_water).encode("utf-8")
+    ).hexdigest()
+    if attestation.get("policy_high_water_digest") != expected_digest:
+        raise ValueError("policy high-water digest mismatch")
+    if high_water.get("policyHash") != attestation.get("policy_bundle_digest"):
+        raise ValueError("policy high-water hash mismatch")
+    if high_water.get("sequence") != attestation.get("policy_sequence"):
+        raise ValueError("policy high-water sequence mismatch")
+    if high_water.get("rollbackEpoch") != attestation.get("rollback_epoch"):
+        raise ValueError("policy high-water rollback epoch mismatch")
+    if high_water.get("store") not in {"sqlite", "postgres"}:
+        raise ValueError("policy high-water store is invalid")
+    return high_water
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify Serverware dev attestation before trusting the proxy CA.")
     parser.add_argument("--base", default="http://localhost:3000", help="Serverware control plane base URL")
     parser.add_argument("--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN"), help="admin token for protected CA/policy endpoints")
     parser.add_argument("--ca-out", default=".tmp/serverware-verified-ca.pem", help="where to write the verified CA PEM")
     parser.add_argument("--expected-policy-key-hash", help="pin the policy signing public key hash")
+    parser.add_argument("--expected-policy-sequence", type=int, help="minimum policy sequence to accept")
     parser.add_argument("--expected-rollback-epoch", type=int, help="minimum rollback epoch to accept")
     parser.add_argument(
         "--tee-verify-command",
@@ -214,6 +241,7 @@ def main() -> None:
         raise ValueError("attestation nonce mismatch")
     verify_runtime_digest(attestation)
     verify_quote(attestation, args.tee_verify_command)
+    high_water = verify_policy_high_water(attestation)
 
     public_key_pem = attestation.get("policy_signing_public_key_pem")
     if not isinstance(public_key_pem, str):
@@ -228,6 +256,10 @@ def main() -> None:
         rollback_epoch = attestation.get("rollback_epoch")
         if not isinstance(rollback_epoch, int) or rollback_epoch < args.expected_rollback_epoch:
             raise ValueError("rollback epoch is stale")
+    if args.expected_policy_sequence is not None:
+        policy_sequence = attestation.get("policy_sequence")
+        if not isinstance(policy_sequence, int) or policy_sequence < args.expected_policy_sequence:
+            raise ValueError("policy sequence is stale")
 
     policy_status = request_json(f"{base}/api/policy", args.admin_token)
     bundle = policy_status.get("bundle")
@@ -239,6 +271,19 @@ def main() -> None:
         raise ValueError("policy endpoint hash mismatch")
     if computed_policy_hash != attestation.get("policy_bundle_digest"):
         raise ValueError("attestation policy digest mismatch")
+    metadata = bundle.get("metadata") or {}
+    if metadata.get("sequence") != attestation.get("policy_sequence"):
+        raise ValueError("attestation policy sequence mismatch")
+    status_high_water = policy_status.get("high_water")
+    if not isinstance(status_high_water, dict) or {
+        "policyId": status_high_water.get("policy_id"),
+        "sequence": status_high_water.get("sequence"),
+        "rollbackEpoch": status_high_water.get("rollback_epoch"),
+        "policyHash": status_high_water.get("policy_hash"),
+        "updatedAt": status_high_water.get("updated_at"),
+        "store": high_water.get("store"),
+    } != high_water:
+        raise ValueError("policy endpoint high-water state mismatch")
     if (bundle.get("metadata") or {}).get("signature") != attestation.get("policy_bundle_signature"):
         raise ValueError("attestation policy signature mismatch")
 
@@ -262,6 +307,8 @@ def main() -> None:
                 "ok": True,
                 "tee_platform": attestation.get("tee_platform"),
                 "policy_hash": computed_policy_hash,
+                "policy_sequence": attestation.get("policy_sequence"),
+                "policy_high_water_digest": attestation.get("policy_high_water_digest"),
                 "policy_signing_key_id": key_hash,
                 "ca_intermediate_spki_sha256": ca_spki,
                 "data_plane_binary_digest": attestation.get("data_plane_binary_digest"),

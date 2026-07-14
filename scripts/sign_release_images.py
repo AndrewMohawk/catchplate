@@ -7,19 +7,25 @@ import hashlib
 import json
 import os
 import shlex
+import ssl
 import subprocess
+import sys
 import time
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from serverware.http_client import request_bytes
 
-ROOT = Path(__file__).resolve().parent.parent
 FIXTURE_COMMAND_MARKERS = ("fixture", "cosign_fixture.py", "sigstore_fixture.py")
 
 
@@ -43,13 +49,35 @@ def b64d(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
-def request_json(url: str, *, method: str = "GET", headers: dict[str, str] | None = None, payload: Any | None = None) -> dict[str, Any]:
+def request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict[str, str] | None = None,
+    payload: Any | None = None,
+    ca_bundle: Path | None = None,
+) -> dict[str, Any]:
     data = None if payload is None else canonical_json(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
     if payload is not None:
         req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=10) as response:
-        return json.loads(response.read())
+    context = ssl.create_default_context(cafile=str(ca_bundle)) if ca_bundle else None
+    return json.loads(
+        request_bytes(req, timeout=10, max_bytes=8 * 1024 * 1024, context=context).body
+    )
+
+
+def validate_production_anchor(url: str, token: str, ca_bundle: Path | None) -> None:
+    parsed = urllib.parse.urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or not hostname:
+        raise ValueError("production image transparency anchor must be an HTTPS URL")
+    if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".localhost"):
+        raise ValueError("production image transparency anchor must not be loopback")
+    if len(token) < 32:
+        raise ValueError("production image transparency anchor token must be at least 32 characters")
+    if ca_bundle and not ca_bundle.is_file():
+        raise ValueError(f"production image transparency anchor CA bundle does not exist: {ca_bundle}")
 
 
 def load_signing_key(path: Path) -> Ed25519PrivateKey:
@@ -362,7 +390,8 @@ def main() -> None:
     parser.add_argument("--container-out", default="/data/image-signatures.json")
     parser.add_argument("--base", default=os.getenv("BASE", "http://localhost:3000"))
     parser.add_argument("--gate", default=os.getenv("DECISION_GATE_BASE", "http://localhost:9090"))
-    parser.add_argument("--anchor", default=os.getenv("AUDIT_ANCHOR_BASE", "http://localhost:9100"))
+    parser.add_argument("--anchor", default=os.getenv("SERVERWARE_RELEASE_ANCHOR_BASE", os.getenv("AUDIT_ANCHOR_BASE", "http://localhost:9100")))
+    parser.add_argument("--anchor-ca-bundle", default=os.getenv("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""))
     parser.add_argument("--anchor-token", default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN", "dev-audit-anchor-token"))
     parser.add_argument("--signature-provider", default=os.getenv("SERVERWARE_IMAGE_SIGNATURE_PROVIDER", "dev-ed25519"))
     parser.add_argument("--image-sign-command", default=os.getenv("SERVERWARE_IMAGE_SIGN_COMMAND", ""))
@@ -391,6 +420,11 @@ def main() -> None:
     images = production_image_inventory(production_refs) if production_refs else provenance.get("images") or {}
     if not images:
         raise ValueError("release provenance contains no image inventory")
+    anchor_ca_bundle = Path(args.anchor_ca_bundle) if args.anchor_ca_bundle else None
+    if anchor_ca_bundle and not anchor_ca_bundle.is_absolute():
+        anchor_ca_bundle = ROOT / anchor_ca_bundle
+    if production_refs:
+        validate_production_anchor(args.anchor, args.anchor_token, anchor_ca_bundle)
 
     signature_provider = args.signature_provider.strip()
     if signature_provider not in {"dev-ed25519", "sigstore-command"}:
@@ -513,10 +547,15 @@ def main() -> None:
         method="POST",
         headers=anchor_headers,
         payload={"records": [record]},
+        ca_bundle=anchor_ca_bundle,
     )
     accepted = (anchor_response.get("anchors") or [{}])[0]
     sequence = accepted.get("sequence")
-    inclusion = request_json(f"{args.anchor.rstrip('/')}/anchors/inclusion/{sequence}", headers=anchor_headers)
+    inclusion = request_json(
+        f"{args.anchor.rstrip('/')}/anchors/inclusion/{sequence}",
+        headers=anchor_headers,
+        ca_bundle=anchor_ca_bundle,
+    )
     if inclusion.get("verified") is not True:
         raise RuntimeError(f"image signature transparency inclusion proof did not verify: {inclusion}")
     if (inclusion.get("item") or {}).get("record", {}).get("image_signature_bundle_digest") != bundle_digest:
@@ -530,28 +569,29 @@ def main() -> None:
     out_path = ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    write_container_file("serverware", args.container_out, out_path.read_bytes())
-
-    deadline = time.time() + 10
-    control = gate = {}
-    while time.time() < deadline:
-        control = request_json(f"{args.base.rstrip('/')}/attestation?nonce=image-signatures-control")
-        gate = request_json(f"{args.gate.rstrip('/')}/attestation?nonce=image-signatures-gate")
-        if control.get("image_signatures_digest") == bundle_digest and gate.get("image_signatures_digest") == bundle_digest:
-            break
-        time.sleep(0.25)
-    if control.get("image_signatures_digest") != bundle_digest:
-        raise RuntimeError(f"control-plane attestation did not bind image signatures digest: {control}")
-    if gate.get("image_signatures_digest") != bundle_digest:
-        raise RuntimeError(f"decision-gate attestation did not bind image signatures digest: {gate}")
-    if (control.get("quote") or {}).get("claims", {}).get("image_signatures_digest") != bundle_digest:
-        raise RuntimeError(f"control-plane quote did not bind image signatures digest: {control}")
+    if not production_refs:
+        write_container_file("serverware", args.container_out, out_path.read_bytes())
+        deadline = time.time() + 10
+        control = gate = {}
+        while time.time() < deadline:
+            control = request_json(f"{args.base.rstrip('/')}/attestation?nonce=image-signatures-control")
+            gate = request_json(f"{args.gate.rstrip('/')}/attestation?nonce=image-signatures-gate")
+            if control.get("image_signatures_digest") == bundle_digest and gate.get("image_signatures_digest") == bundle_digest:
+                break
+            time.sleep(0.25)
+        if control.get("image_signatures_digest") != bundle_digest:
+            raise RuntimeError(f"control-plane attestation did not bind image signatures digest: {control}")
+        if gate.get("image_signatures_digest") != bundle_digest:
+            raise RuntimeError(f"decision-gate attestation did not bind image signatures digest: {gate}")
+        if (control.get("quote") or {}).get("claims", {}).get("image_signatures_digest") != bundle_digest:
+            raise RuntimeError(f"control-plane quote did not bind image signatures digest: {control}")
 
     print(
         json.dumps(
             {
                 "ok": True,
                 "image_signatures": "pass",
+                "production": bool(production_refs),
                 "out": args.out,
                 "image_signature_bundle_digest": bundle_digest,
                 "image_signing_key_id": image_signing_key_id,

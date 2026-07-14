@@ -66,6 +66,32 @@ assert headers.get("content-length") == str(len(body)), headers
 assert headers.get("content-type") == "application/octet-stream", headers
 assert payload == body, (len(payload), hashlib.sha256(payload).hexdigest())
 
+reflected_token = b"demo-token-from-vault"
+raw_request = (
+    "GET https://demo-upstream:8443/stream-bytes?reflectCredential=1 HTTP/1.1\r\n"
+    "Host: demo-upstream:8443\r\n"
+    "X-Serverware-Agent: demo-agent\r\n"
+    "Connection: close\r\n\r\n"
+)
+with socket.create_connection((host, port), timeout=10) as sock:
+    sock.sendall(raw_request.encode("ascii"))
+    chunks_out = []
+    while True:
+        chunk = sock.recv(8192)
+        if not chunk:
+            break
+        chunks_out.append(chunk)
+reflected_response = b"".join(chunks_out)
+head, _, reflected_body = reflected_response.partition(b"\r\n\r\n")
+assert int(head.split(b" ", 2)[1]) == 200, head
+content_length = next(
+    int(line.split(b":", 1)[1].strip())
+    for line in head.split(b"\r\n")[1:]
+    if line.lower().startswith(b"content-length:")
+)
+assert len(reflected_body) == content_length, (len(reflected_body), content_length)
+assert reflected_token not in reflected_body, reflected_body[-128:]
+
 with socket.create_connection((host, port), timeout=10) as raw:
     raw.sendall(
         b"CONNECT demo-upstream:8443 HTTP/1.1\r\n"
@@ -87,9 +113,22 @@ with socket.create_connection((host, port), timeout=10) as raw:
         status, headers, payload = read_http(tls)
         expected = expected_body(3, 1024)
         assert status == 200, (status, headers)
-        assert headers.get("connection") == "keep-alive", headers
+        assert headers.get("connection") == "close", headers
         assert payload == expected, (len(payload), hashlib.sha256(payload).hexdigest())
 
+
+with socket.create_connection((host, port), timeout=10) as raw:
+    raw.sendall(
+        b"CONNECT demo-upstream:8443 HTTP/1.1\r\n"
+        b"Host: demo-upstream:8443\r\n"
+        b"X-Serverware-Agent: demo-agent\r\n"
+        b"\r\n"
+    )
+    status, _, _ = read_http(raw)
+    assert status == 200, status
+
+    context = ssl.create_default_context(cafile=ca_file)
+    with context.wrap_socket(raw, server_hostname="demo-upstream") as tls:
         tls.sendall(
             b"GET /echo HTTP/1.1\r\n"
             b"Host: demo-upstream:8443\r\n"

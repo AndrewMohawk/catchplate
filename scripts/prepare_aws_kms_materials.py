@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -93,8 +94,11 @@ def run_aws_kms_encrypt(
     region: str | None,
     timeout: float,
 ) -> dict[str, Any]:
+    aws_command = shlex.split(aws_binary)
+    if not aws_command:
+        raise ValueError("aws binary command must not be empty")
     command = [
-        aws_binary,
+        *aws_command,
         "kms",
         "encrypt",
         "--key-id",

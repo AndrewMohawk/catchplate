@@ -25,6 +25,7 @@ READINESS_CHECKS = [
     "no-dev-fixtures",
     "control-plane-auth",
     "nitro",
+    "attested-credential-delivery",
     "cosign-sigstore",
     "external-transparency",
     "apparmor",
@@ -42,6 +43,7 @@ METADATA_TABLES = (
     "gmail_message_cache",
     "request_logs",
     "rate_limit_counters",
+    "policy_high_water",
 )
 GRANT_TABLES = ("approval_grants", "approval_grant_consumptions")
 AUDIT_TABLES = ("serverware_audit_events",)
@@ -53,6 +55,7 @@ KMS_KEY_PREFIXES = (
     "pkcs11:",
     "kms://",
 )
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def canonical_json(value: Any) -> str:
@@ -165,6 +168,12 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         token not in {"dev-admin-token", "admin", "password", "changeme", "serverware"},
         "SERVERWARE_ADMIN_TOKEN must not use a development/default value",
     )
+    anchor_token = env.get("SERVERWARE_AUDIT_ANCHOR_TOKEN", "").strip()
+    add(failures, len(anchor_token) >= 32, "SERVERWARE_AUDIT_ANCHOR_TOKEN must be at least 32 characters")
+    add(failures, anchor_token != token, "audit-anchor token must be distinct from the admin token")
+    data_plane_token = env.get("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip()
+    if data_plane_token:
+        add(failures, anchor_token != data_plane_token, "audit-anchor token must be distinct from the data-plane token")
     roles = {role.strip() for role in env.get("SERVERWARE_ADMIN_ROLES", "").split(",") if role.strip()}
     required_roles = {"admin", "approver", "auditor", "policy_author", "policy_publisher", "credential_owner"}
     add(
@@ -230,6 +239,7 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         "route.update",
         "route.delete",
         "policy.publish",
+        "webauthn.credential.register",
         "rbac.role.change",
         "rbac.deprovision",
         "control_plane.token.rotate",
@@ -238,7 +248,13 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     add(
         failures,
         "*" in two_person_actions or required_two_person_actions.issubset(two_person_actions),
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential, route, policy publish, RBAC, deprovisioning, token rotation, and break-glass mutations",
+        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential, route, policy publish, WebAuthn enrollment, RBAC, deprovisioning, token rotation, and break-glass mutations",
+    )
+    bootstrap_token = env.get("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "")
+    add(
+        failures,
+        len(bootstrap_token) >= 32,
+        "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN must contain at least 32 characters",
     )
     add(
         failures,
@@ -331,12 +347,200 @@ def check_nitro(env: dict[str, str], failures: list[str]) -> None:
         kms_command and not command_mentions(kms_command, "fixture", "nitro_kms_fixture.py"),
         "SERVERWARE_NITRO_KMS_RELEASE_COMMAND must not use fixture helpers",
     )
+    kms_materials_file = Path(env.get("SERVERWARE_NITRO_KMS_MATERIALS_FILE", "").strip())
+    add(
+        failures,
+        kms_materials_file.is_absolute(),
+        "SERVERWARE_NITRO_KMS_MATERIALS_FILE must be an absolute host path",
+    )
     materials = {
         item.strip()
         for item in env.get("SERVERWARE_NITRO_ALLOWED_MATERIALS", ",".join(sorted(REQUIRED_MATERIALS))).split(",")
         if item.strip()
     }
     add(failures, materials == REQUIRED_MATERIALS, "Nitro allowed materials must be exactly broker-kek and decision-gate-ca")
+
+
+def check_attested_credential_delivery(env: dict[str, str], failures: list[str]) -> None:
+    tls_dir = Path(env.get("SERVERWARE_CONTROL_PLANE_TLS_DIR", "").strip())
+    anchor_tls_dir = Path(env.get("SERVERWARE_AUDIT_ANCHOR_TLS_DIR", "").strip())
+    helper_dir = Path(env.get("SERVERWARE_ATTESTATION_HELPER_DIR", "").strip())
+    provenance_file = Path(env.get("SERVERWARE_RELEASE_PROVENANCE_FILE", "").strip())
+    signatures_file = Path(env.get("SERVERWARE_IMAGE_SIGNATURES_FILE", "").strip())
+    add(failures, tls_dir.is_absolute(), "SERVERWARE_CONTROL_PLANE_TLS_DIR must be an absolute path")
+    add(failures, anchor_tls_dir.is_absolute(), "SERVERWARE_AUDIT_ANCHOR_TLS_DIR must be an absolute path")
+    add(failures, helper_dir.is_absolute(), "SERVERWARE_ATTESTATION_HELPER_DIR must be an absolute path")
+    add(failures, provenance_file.is_absolute(), "SERVERWARE_RELEASE_PROVENANCE_FILE must be an absolute path")
+    add(failures, signatures_file.is_absolute(), "SERVERWARE_IMAGE_SIGNATURES_FILE must be an absolute path")
+    control_plane_base = urllib.parse.urlparse(env.get("SERVERWARE_PRODUCTION_CONTROL_PLANE_BASE", ""))
+    add(
+        failures,
+        control_plane_base.scheme == "https" and bool(control_plane_base.hostname),
+        "SERVERWARE_PRODUCTION_CONTROL_PLANE_BASE must be an HTTPS URL",
+    )
+    add(
+        failures,
+        not env_bool(env, "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES"),
+        "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES must be disabled",
+    )
+
+    command_settings = (
+        ("SERVERWARE_TEE_QUOTE_COMMAND", "TEE quote command"),
+        ("SERVERWARE_TEE_QUOTE_VERIFY_COMMAND", "TEE quote verification command"),
+        ("SERVERWARE_KEY_RELEASE_COMMAND", "key-release command"),
+        ("SERVERWARE_MASTER_KEY_UNSEAL_COMMAND", "in-TEE broker KEK unseal command"),
+        ("SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", "Nitro NSM recipient unwrap command"),
+        ("SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND", "recipient attestation command"),
+        ("SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND", "response proof attestation command"),
+        ("SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND", "recipient attestation verification command"),
+        ("SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND", "control-plane attestation verification command"),
+    )
+    for name, label in command_settings:
+        command = env.get(name, "").strip()
+        add(failures, bool(command), f"{name} must configure a {label}")
+        add(
+            failures,
+            bool(command)
+            and not command_mentions(
+                command,
+                "fixture",
+                "external_tee_provider.py",
+                "nitro_attestation_fixture.py",
+                "nitro_kms_fixture.py",
+            ),
+            f"{name} must not use fixture helpers",
+        )
+
+    for name in (
+        "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
+        "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
+        "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
+        "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
+        "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+    ):
+        words = command_words(env.get(name, ""))
+        helper_path = Path(words[0]) if words else Path()
+        add(
+            failures,
+            bool(words) and helper_path.is_absolute() and helper_path.parent == Path("/opt/serverware/bin"),
+            f"{name} must name an absolute executable under /opt/serverware/bin",
+        )
+
+    add(
+        failures,
+        command_words(env.get("SERVERWARE_MASTER_KEY_UNSEAL_COMMAND", ""))
+        == ["/usr/bin/python3", "/app/scripts/aws_nitro_kms_unseal.py", "unseal"],
+        "SERVERWARE_MASTER_KEY_UNSEAL_COMMAND must use the measured image-bundled Nitro/KMS unseal adapter",
+    )
+    add(
+        failures,
+        "{recipient_ciphertext_path}" in env.get("SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE", ""),
+        "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE must consume {recipient_ciphertext_path}",
+    )
+
+    data_plane_instance_id = env.get("SERVERWARE_DATA_PLANE_INSTANCE_ID", "").strip()
+    add(
+        failures,
+        data_plane_instance_id.startswith("spiffe://") and len(data_plane_instance_id) > len("spiffe://"),
+        "SERVERWARE_DATA_PLANE_INSTANCE_ID must be a non-empty SPIFFE ID",
+    )
+
+    collector_command = env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND", "").strip()
+    collector_words = command_words(collector_command)
+    collector_path = Path(collector_words[0]) if collector_words else Path()
+    add(
+        failures,
+        len(collector_words) == 1
+        and collector_path.is_absolute()
+        and collector_path.parent == Path("/opt/serverware/bin"),
+        "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND must name one absolute executable under /opt/serverware/bin",
+    )
+    add(
+        failures,
+        bool(collector_words) and not command_mentions(collector_command, "fixture"),
+        "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND must not use a fixture",
+    )
+    proof_url = urllib.parse.urlparse(env.get("SERVERWARE_PROXY_PROOF_URL", ""))
+    add(
+        failures,
+        proof_url.scheme == "https" and bool(proof_url.hostname) and not proof_url.username and not proof_url.password,
+        "SERVERWARE_PROXY_PROOF_URL must be an HTTPS URL without userinfo",
+    )
+    add(failures, bool(env.get("SERVERWARE_PROXY_PROOF_ADDRESS", "").strip()), "SERVERWARE_PROXY_PROOF_ADDRESS is required")
+    add(
+        failures,
+        bool(env.get("SERVERWARE_PROXY_PROOF_AGENT_ID", "").strip()),
+        "SERVERWARE_PROXY_PROOF_AGENT_ID is required",
+    )
+    for name in (
+        "SERVERWARE_PROXY_RESPONSE_PROOF_FILE",
+        "SERVERWARE_PROXY_PROOF_CA_BUNDLE",
+        "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY",
+        "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
+        "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
+    ):
+        add(failures, Path(env.get(name, "").strip()).is_absolute(), f"{name} must be an absolute path")
+    for name in (
+        "SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID",
+        "SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID",
+    ):
+        add(
+            failures,
+            SHA256_RE.fullmatch(env.get(name, "").strip()) is not None,
+            f"{name} must be a sha256: digest",
+        )
+    configured_proof_instance = env.get("SERVERWARE_PROXY_SERVER_INSTANCE_ID", data_plane_instance_id).strip()
+    add(
+        failures,
+        configured_proof_instance == data_plane_instance_id,
+        "SERVERWARE_PROXY_SERVER_INSTANCE_ID must exactly match SERVERWARE_DATA_PLANE_INSTANCE_ID",
+    )
+    for name in ("SERVERWARE_POLICY_MIN_SEQUENCE", "SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH"):
+        try:
+            monotonic_floor = int(env.get(name, "0"))
+        except ValueError:
+            monotonic_floor = 0
+        add(failures, monotonic_floor > 0, f"{name} must be a positive integer")
+    for stale_name in (
+        "SERVERWARE_PROXY_CLIENT_NONCE",
+        "SERVERWARE_PROXY_REQUEST_DIGEST",
+        "SERVERWARE_PROXY_OPERATION_DIGEST",
+        "SERVERWARE_PROXY_TLS_CHANNEL_BINDING",
+    ):
+        add(
+            failures,
+            not env.get(stale_name, "").strip(),
+            f"{stale_name} must not be statically configured; the readiness runner generates it",
+        )
+
+    add(failures, env_bool(env, "SERVERWARE_KEY_RELEASE_REQUIRED"), "external key release must be required")
+    add(
+        failures,
+        not env.get("SERVERWARE_MASTER_KEY", "").strip(),
+        "SERVERWARE_MASTER_KEY must not be configured in production",
+    )
+    add(failures, not env_bool(env, "SERVERWARE_KEY_RELEASE_ALLOW_DEBUG"), "key release must reject debug attestation")
+    try:
+        rollback_floor = int(env.get("SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH", "0"))
+    except ValueError:
+        rollback_floor = 0
+    add(failures, rollback_floor >= 1, "key release must enforce a positive rollback-epoch floor")
+    add(
+        failures,
+        env_bool(env, "SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST"),
+        "key release must require the measured data-plane binary digest",
+    )
+    expected_digest = env.get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST", "").strip()
+    add(
+        failures,
+        SHA256_RE.fullmatch(expected_digest) is not None,
+        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST must be a sha256-prefixed 64-hex digest",
+    )
+    add(
+        failures,
+        env_bool(env, "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED"),
+        "credential leases must require recipient attestation",
+    )
 
 
 def check_cosign(env: dict[str, str], failures: list[str]) -> None:
@@ -394,6 +598,29 @@ def expected_sigstore_key_id(env: dict[str, str]) -> str | None:
 
 
 def check_transparency(env: dict[str, str], failures: list[str]) -> None:
+    release_anchor = urllib.parse.urlparse(env.get("SERVERWARE_RELEASE_ANCHOR_BASE", "").strip())
+    add(
+        failures,
+        release_anchor.scheme == "https" and bool(release_anchor.hostname),
+        "SERVERWARE_RELEASE_ANCHOR_BASE must be an HTTPS URL",
+    )
+    add(
+        failures,
+        not placeholder_hostname(release_anchor.hostname),
+        "SERVERWARE_RELEASE_ANCHOR_BASE must not use .example placeholder domains",
+    )
+    add(
+        failures,
+        (release_anchor.hostname or "").lower() not in {"localhost", "127.0.0.1", "::1"},
+        "SERVERWARE_RELEASE_ANCHOR_BASE must not be loopback",
+    )
+    release_anchor_ca = env.get("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", "").strip()
+    if release_anchor_ca:
+        add(
+            failures,
+            Path(release_anchor_ca).is_absolute(),
+            "SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE must be an absolute path when configured",
+        )
     add(
         failures,
         env_bool(env, "SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED"),
@@ -440,12 +667,22 @@ def check_apparmor(env: dict[str, str], failures: list[str]) -> None:
 
 
 def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
+    add(
+        failures,
+        not env.get("SERVERWARE_DECISION_GATE_BASE", "").strip(),
+        "production must use the shared grant store instead of the gate's local management API",
+    )
     add(failures, env.get("SERVERWARE_METADATA_STORE_BACKEND") == "postgres", "metadata store must be postgres")
     add(failures, bool(env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip()), "metadata Postgres DSN must be configured")
     add(failures, env.get("SERVERWARE_GRANT_STORE_BACKEND") == "postgres", "grant store must be postgres")
     add(failures, bool(env.get("SERVERWARE_GRANT_STORE_POSTGRES_DSN", "").strip()), "grant Postgres DSN must be configured")
     add(failures, env.get("SERVERWARE_AUDIT_STORE_BACKEND") == "postgres", "audit store must be postgres")
     add(failures, bool(env.get("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", "").strip()), "audit Postgres DSN must be configured")
+    add(
+        failures,
+        bool(env.get("SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL", "").strip()),
+        "shared JIT grant consume URL must be configured",
+    )
     add(
         failures,
         bool(env.get("SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL", "").strip()),
@@ -499,7 +736,7 @@ def check_production_images(env: dict[str, str], failures: list[str]) -> None:
         "production image no-shell verification must be required",
     )
     images = production_images(env)
-    add(failures, bool(images), "SERVERWARE_PRODUCTION_IMAGES must list production image refs")
+    add(failures, len(images) == 2, "SERVERWARE_PRODUCTION_IMAGES must list exactly control and decision-gate image refs")
     for image in images:
         add(
             failures,
@@ -517,6 +754,18 @@ def check_production_images(env: dict[str, str], failures: list[str]) -> None:
             not placeholder_hostname(image_ref_hostname(image)),
             f"production image ref must not use .example placeholder registry domains: {image}",
         )
+    control_image = env.get("SERVERWARE_CONTROL_PLANE_IMAGE", "").strip()
+    gate_image = env.get("SERVERWARE_DECISION_GATE_IMAGE", "").strip()
+    add(
+        failures,
+        control_image in images and control_image.rsplit("/", 1)[-1].startswith("control@sha256:"),
+        "SERVERWARE_CONTROL_PLANE_IMAGE must select the digest-pinned control image",
+    )
+    add(
+        failures,
+        gate_image in images and gate_image.rsplit("/", 1)[-1].startswith("decision-gate@sha256:"),
+        "SERVERWARE_DECISION_GATE_IMAGE must select the digest-pinned decision-gate image",
+    )
 
 
 def run_command(command: list[str], *, env: dict[str, str], input_obj: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -750,14 +999,33 @@ def live_claims(env: dict[str, str], claims_file: str | None) -> dict[str, Any]:
     return parsed
 
 
-def run_live_probes(env: dict[str, str], claims_file: str | None) -> dict[str, Any]:
+def run_live_probes(
+    env: dict[str, str],
+    claims_file: str | None,
+    nitro_evidence_file: str | None = None,
+) -> dict[str, Any]:
     probes: dict[str, Any] = {}
     probes["sigstore"] = run_sigstore_probe(env)
     probes["external_transparency"] = run_transparency_probe(env)
     probes["shared_stores"] = run_shared_store_probe(env)
 
     claims = live_claims(env, claims_file)
-    probes["nitro"] = collect_nitro_kms_evidence.collect_evidence(claims, env)
+    if nitro_evidence_file:
+        evidence_path = Path(nitro_evidence_file)
+        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+        if not isinstance(evidence, dict) or evidence.get("ok") is not True:
+            raise RuntimeError("pre-collected Nitro/KMS evidence is absent or not ok")
+        expected_claims = collect_nitro_kms_evidence.redacted_claims(claims)
+        evidence_claims = evidence.get("claims") if isinstance(evidence.get("claims"), dict) else {}
+        evidence_fields = dict(evidence_claims.get("fields") or {})
+        expected_fields = dict(expected_claims.get("fields") or {})
+        evidence_fields.pop("nonce", None)
+        expected_fields.pop("nonce", None)
+        if evidence_fields != expected_fields:
+            raise RuntimeError("pre-collected Nitro/KMS evidence claims do not match live readiness claims")
+        probes["nitro"] = evidence
+    else:
+        probes["nitro"] = collect_nitro_kms_evidence.collect_evidence(claims, env)
 
     image_args: list[str] = []
     for image in production_images(env):
@@ -796,6 +1064,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Fail-closed production readiness gate for Serverware external trust dependencies.")
     parser.add_argument("--mode", choices=("config", "live"), default="config")
     parser.add_argument("--claims-file", default=None)
+    parser.add_argument("--nitro-evidence-file", default=None)
     parser.add_argument("--out", default=None, help="write the full readiness result JSON to this path")
     args = parser.parse_args()
 
@@ -805,6 +1074,7 @@ def main() -> None:
         check_no_dev_or_fixture,
         check_control_plane_security,
         check_nitro,
+        check_attested_credential_delivery,
         check_cosign,
         check_transparency,
         check_apparmor,
@@ -833,7 +1103,7 @@ def main() -> None:
     live = None
     if args.mode == "live":
         try:
-            live = run_live_probes(env, args.claims_file)
+            live = run_live_probes(env, args.claims_file, args.nitro_evidence_file)
         except Exception as exc:
             emit_result(
                 {

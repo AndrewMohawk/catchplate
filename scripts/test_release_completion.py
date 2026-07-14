@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import build_production_images
+import run_production_readiness
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_TREE_DIGEST = build_production_images.source_tree_digest()
@@ -37,6 +39,10 @@ def sha256_prefixed_bytes(value: bytes) -> str:
 
 def b64e(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def b64d(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
 KMS_MATERIAL_FIXTURES: dict[str, dict[str, Any]] = {
@@ -186,6 +192,245 @@ def digest(char: str) -> str:
     return "sha256:" + char * 64
 
 
+PROXY_CLIENT_NONCE = b64e(b"n" * 32)
+PROXY_TLS_CHANNEL_BINDING = b64e(b"t" * 32)
+PROXY_REQUEST_DIGEST = digest("1")
+PROXY_OPERATION_DIGEST = digest("2")
+PROXY_SERVER_INSTANCE_ID = "spiffe://prod.serverware.dev/decision-gate/instance-01"
+PROXY_TLS_PEER_LEAF_CERTIFICATE_DIGEST = digest("a")
+
+
+def proxy_response_key_info() -> dict[str, Any]:
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x05" * 32))
+
+
+def proxy_collector_key_info() -> dict[str, Any]:
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x06" * 32))
+
+
+def alternate_proxy_collector_key_info() -> dict[str, Any]:
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x07" * 32))
+
+
+def proxy_vendor_verifier_key_info() -> dict[str, Any]:
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x04" * 32))
+
+
+def alternate_proxy_vendor_verifier_key_info() -> dict[str, Any]:
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x03" * 32))
+
+
+def sign_proxy_vendor_verifier_statement(
+    document: dict[str, Any],
+    verifier_key_info: dict[str, Any] | None = None,
+) -> None:
+    key_info = verifier_key_info or proxy_vendor_verifier_key_info()
+    trusted_verifier = document["vendor_tee"]["trusted_verifier"]
+    statement = trusted_verifier["statement"]
+    statement["verifier_key_id"] = key_info["key_id"]
+    trusted_verifier["signature"] = "ed25519:" + b64e(
+        key_info["key"].sign(canonical_json(statement).encode("utf-8"))
+    )
+
+
+def sign_proxy_external_capture(
+    document: dict[str, Any],
+    collector_key_info: dict[str, Any] | None = None,
+) -> None:
+    key_info = collector_key_info or proxy_collector_key_info()
+    external_capture = document["external_capture"]
+    document["collector_signature"] = {
+        "algorithm": "Ed25519",
+        "key_id": key_info["key_id"],
+        "public_key_pem": key_info["public_key_pem"],
+        "signature": "ed25519:"
+        + b64e(key_info["key"].sign(canonical_json(external_capture).encode("utf-8"))),
+    }
+
+
+def resign_proxy_response_proof(
+    document: dict[str, Any],
+    *,
+    verifier_key_info: dict[str, Any] | None = None,
+    sync_attested_claims: bool = True,
+) -> None:
+    response_key = proxy_response_key_info()
+    server_statement = document["server_statement"]
+    server_statement_digest = sha256_prefixed_json(server_statement)
+    document["external_capture"]["server_statement_sha256"] = server_statement_digest
+    sign_proxy_external_capture(document)
+    document["server_signature"] = {
+        "algorithm": "Ed25519",
+        "key_id": response_key["key_id"],
+        "public_key_pem": response_key["public_key_pem"],
+        "signature": "ed25519:"
+        + b64e(response_key["key"].sign(canonical_json(server_statement).encode("utf-8"))),
+    }
+
+    vendor_tee = document["vendor_tee"]
+    vendor_tee["quote_sha256"] = sha256_prefixed_json(vendor_tee["quote"])
+    statement = vendor_tee["trusted_verifier"]["statement"]
+    statement.pop("proof_evidence_sha256", None)
+    statement.update(
+        {
+            "tee_platform": vendor_tee["platform"],
+            "quote_provider": vendor_tee["provider"],
+            "vendor_quote_sha256": vendor_tee["quote_sha256"],
+            "server_statement_sha256": server_statement_digest,
+            "response_signing_key_id": response_key["key_id"],
+        }
+    )
+    if sync_attested_claims:
+        response = server_statement["response"]
+        tls_channel_binding = server_statement["tls_channel_binding"]
+        server_instance = server_statement["server_instance"]
+        statement["attested_claims"] = {
+            "server_statement_sha256": server_statement_digest,
+            "server_statement_api_version": server_statement["apiVersion"],
+            "issued_at_unix": server_statement["issued_at_unix"],
+            "client_nonce_sha256": sha256_prefixed_bytes(b64d(server_statement["client_nonce"])),
+            "client_request_digest": server_statement["client_request_digest"],
+            "request_digest": server_statement["request_digest"],
+            "operation_digest": server_statement["operation_digest"],
+            "response_status": response["status"],
+            "selected_response_headers_digest": response["selected_headers_digest"],
+            "response_body_digest": response["body_digest"],
+            "policy_digest": server_statement["policy_digest"],
+            "runtime_manifest_digest": server_statement["runtime_manifest_digest"],
+            "data_plane_binary_digest": server_statement["data_plane_binary_digest"],
+            "release_digest": server_statement["release_digest"],
+            "server_instance_id": server_instance["id"],
+            "server_instance_identity_digest": server_instance["identity_digest"],
+            "tls_channel_binding_type": tls_channel_binding["type"],
+            "tls_channel_binding_sha256": sha256_prefixed_json(tls_channel_binding),
+            "response_signing_key_id": response_key["key_id"],
+        }
+    sign_proxy_vendor_verifier_statement(document, verifier_key_info)
+
+
+def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> dict[str, Any]:
+    captured_at = int(time.time()) if now is None else now
+    body = b'{"ok":true,"source":"production-proxy"}'
+    body_digest = sha256_prefixed_bytes(body)
+    client_request = {
+        "apiVersion": "serverware.clientProofRequest/v1",
+        "method": "GET",
+        "scheme": "https",
+        "authority": "api.example.test",
+        "path": "/v1/resource",
+        "query": [["limit", "10"]],
+        "headers": {"accept": "application/json"},
+        "body_sha256": sha256_prefixed_bytes(b""),
+    }
+    client_request_digest = sha256_prefixed_json(client_request)
+    selected_headers = {
+        "content-length": str(len(body)),
+        "content-type": "application/json",
+        "x-serverware-client-request-digest": client_request_digest,
+        "x-serverware-policy-hash": digest("8"),
+        "x-serverware-request-digest": PROXY_REQUEST_DIGEST,
+        "x-serverware-operation-digest": PROXY_OPERATION_DIGEST,
+        "x-serverware-response-body-sha256": body_digest,
+    }
+    response = {
+        "status": 200,
+        "selected_headers": selected_headers,
+        "selected_headers_digest": sha256_prefixed_json(selected_headers),
+        "body_digest": body_digest,
+    }
+    tls_channel_binding = {
+        "type": "tls-exporter",
+        "value": PROXY_TLS_CHANNEL_BINDING,
+    }
+    document = {
+        "apiVersion": "serverware.proxyResponseProof/v2",
+        "kind": "ServerwareProxyResponseProof",
+        "external_capture": {
+            "apiVersion": "serverware.proxyResponseCapture/v1",
+            "environment": "production",
+            "collection_mode": "external-client-capture",
+            "captured_at_unix": captured_at,
+            "client_nonce": PROXY_CLIENT_NONCE,
+            "client_request": client_request,
+            "client_request_digest": client_request_digest,
+            "request_digest": PROXY_REQUEST_DIGEST,
+            "operation_digest": PROXY_OPERATION_DIGEST,
+            "response": json.loads(json.dumps(response)),
+            "tls_channel_binding": json.loads(json.dumps(tls_channel_binding)),
+            "tls_peer": {
+                "spiffe_id": PROXY_SERVER_INSTANCE_ID,
+                "leaf_certificate_sha256": PROXY_TLS_PEER_LEAF_CERTIFICATE_DIGEST,
+            },
+            "server_statement_sha256": digest("0"),
+        },
+        "collector_signature": {},
+        "server_statement": {
+            "apiVersion": "serverware.proxyResponseStatement/v1",
+            "issued_at_unix": captured_at,
+            "client_nonce": PROXY_CLIENT_NONCE,
+            "client_request_digest": client_request_digest,
+            "request_digest": PROXY_REQUEST_DIGEST,
+            "operation_digest": PROXY_OPERATION_DIGEST,
+            "response": json.loads(json.dumps(response)),
+            "tls_channel_binding": json.loads(json.dumps(tls_channel_binding)),
+            "policy_digest": digest("8"),
+            "runtime_manifest_digest": digest("7"),
+            "data_plane_binary_digest": digest("9"),
+            "release_digest": provenance_digest,
+            "server_instance": {
+                "id": PROXY_SERVER_INSTANCE_ID,
+                "identity_digest": sha256_prefixed_bytes(PROXY_SERVER_INSTANCE_ID.encode("utf-8")),
+            },
+        },
+        "server_signature": {},
+        "vendor_tee": {
+            "platform": "aws-nitro",
+            "provider": "aws-nitro-enclaves",
+            "quote": {
+                "format": "aws-nitro-attestation-document",
+                "body_b64": b64e(b"test-only opaque vendor quote bytes " * 4),
+            },
+            "trusted_verifier": {
+                "apiVersion": "serverware.vendorTeeVerification/v1",
+                "kind": "ServerwareVendorTeeVerification",
+                "statement": {
+                    "outcome": "verified",
+                    "environment": "production",
+                    "trust_basis": "vendor-root-certificate-chain",
+                    "vendor_quote_verified": True,
+                    "certificate_chain_verified": True,
+                    "revocation_checked": True,
+                    "debug": False,
+                    "verified_at_unix": captured_at,
+                    "expires_at_unix": captured_at + 300,
+                },
+            },
+        },
+    }
+    resign_proxy_response_proof(document)
+    return document
+
+
+def clone_document(value: dict[str, Any]) -> dict[str, Any]:
+    return json.loads(json.dumps(value))
+
+
+def benchmark_document(*, p99_ms: float = 9.0) -> dict[str, Any]:
+    return {
+        "candidate": "rust-decision-gate",
+        "requests": 1000,
+        "warmup": 100,
+        "p50_ms": 1.0,
+        "p95_ms": 5.0,
+        "p99_ms": p99_ms,
+        "data_plane_binary_digest": digest("9"),
+        "policy_hash": digest("8"),
+        "runtime_manifest_digest": digest("7"),
+        "attestation_nonce_before": "benchmark-nonce-before",
+        "attestation_nonce_after": "benchmark-nonce-after",
+    }
+
+
 def production_image_refs(control_digest: str = digest("6"), gate_digest: str = digest("7")) -> list[str]:
     return [
         "registry.prod.serverware.dev/serverware/control@" + control_digest,
@@ -210,6 +455,10 @@ def write_production_env_files(
         encoding="utf-8",
     )
     (tmp / "production.env").write_text(
+        f"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST={digest('9')}\n"
+        f"SERVERWARE_DATA_PLANE_INSTANCE_ID={PROXY_SERVER_INSTANCE_ID}\n"
+        f"SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID={proxy_collector_key_info()['key_id']}\n"
+        f"SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID={proxy_vendor_verifier_key_info()['key_id']}\n"
         f"SERVERWARE_PRODUCTION_IMAGES={selected_readiness_value}\n",
         encoding="utf-8",
     )
@@ -218,7 +467,13 @@ def write_production_env_files(
 
 def redacted_environment_summary(tmp: Path) -> dict[str, Any]:
     return {
-        "env_keys": ["SERVERWARE_PRODUCTION_IMAGES"],
+        "env_keys": [
+            "SERVERWARE_DATA_PLANE_INSTANCE_ID",
+            "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST",
+            "SERVERWARE_PRODUCTION_IMAGES",
+            "SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID",
+            "SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID",
+        ],
         "production_readiness_env_path": str(tmp / "production.env"),
         "production_readiness_env_sha256": sha256_file(tmp / "production.env"),
         "production_images_env_path": str(tmp / "production-images.env"),
@@ -237,6 +492,7 @@ def production_config_document(path: Path) -> dict[str, Any]:
             "no-dev-fixtures",
             "control-plane-auth",
             "nitro",
+            "attested-credential-delivery",
             "cosign-sigstore",
             "external-transparency",
             "apparmor",
@@ -470,7 +726,7 @@ def refresh_image_transparency_record(document: dict[str, Any]) -> None:
     )
 
 
-def nitro_evidence() -> dict[str, Any]:
+def nitro_evidence(provenance_digest: str) -> dict[str, Any]:
     releases = []
     for material in ("broker-kek", "decision-gate-ca"):
         config = KMS_MATERIAL_FIXTURES[material]
@@ -508,7 +764,22 @@ def nitro_evidence() -> dict[str, Any]:
         "ok": True,
         "provider": "aws-nitro-enclaves",
         "tee_platform": "aws-nitro",
-        "claims": {"sha256": digest("d"), "fields": {"materials": ["broker-kek", "decision-gate-ca"], "debug": False}},
+        "claims": {
+            "sha256": digest("d"),
+            "fields": {
+                "materials": ["broker-kek", "decision-gate-ca"],
+                "debug": False,
+                "release_channel": "prod",
+                "policy_bundle_digest": digest("8"),
+                "policy_sequence": 12,
+                "policy_high_water_digest": digest("6"),
+                "runtime_manifest_digest": digest("7"),
+                "data_plane_binary_digest": digest("9"),
+                "provenance_digest": provenance_digest,
+                "source_tree_digest": SOURCE_TREE_DIGEST,
+                "response_signing_key_id": proxy_response_key_info()["key_id"],
+            },
+        },
         "quote": {"provider": "aws-nitro-enclaves", "tee_platform": "aws-nitro", "debug": False},
         "nitro": {
             "provider": "aws-nitro-enclaves",
@@ -533,6 +804,7 @@ def production_readiness(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
         "no-dev-fixtures",
         "control-plane-auth",
         "nitro",
+        "attested-credential-delivery",
         "cosign-sigstore",
         "external-transparency",
         "apparmor",
@@ -583,8 +855,10 @@ def production_readiness(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
 def release_provenance() -> tuple[dict[str, Any], dict[str, Any]]:
     key_info = release_key_info()
     provenance = {
+        "source": "serverware-digest-pinned-production-release",
         "source_tree": {"digest": SOURCE_TREE_DIGEST},
         "compose_config_sha256": digest("4"),
+        "compose": {"file": "docker-compose.production.yml", "sha256": digest("4")},
         "sbom": {"cyclonedx": {"sha256": digest("5"), "components": 204}},
         "anchor_chain": {"ok": True, "mode": "signed-merkle-transparency-log"},
     }
@@ -727,6 +1001,7 @@ def production_images_build() -> dict[str, Any]:
                 "service": "serverware-decision-gate",
                 "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
                 "image_id": digest("b"),
+                "binary_digest": digest("9"),
             },
         ],
     }
@@ -746,14 +1021,18 @@ def production_images_published() -> dict[str, Any]:
                 "local_image_id": digest("a"),
                 "tag": "registry.prod.serverware.dev/serverware/control:production-candidate",
                 "repo_digest": control_ref,
+                "remote_image_id": digest("c"),
             },
             {
                 "service": "serverware-decision-gate",
                 "local_image_id": digest("b"),
                 "tag": "registry.prod.serverware.dev/serverware/decision-gate:production-candidate",
                 "repo_digest": gate_ref,
+                "remote_image_id": digest("d"),
+                "binary_digest": digest("9"),
             },
         ],
+        "remote_no_shell": {"ok": True},
         "env": {"SERVERWARE_PRODUCTION_IMAGES": ",".join([control_ref, gate_ref])},
     }
 
@@ -785,11 +1064,38 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                 "nitro_nsm_device": True,
                 "apparmor_sysfs": True,
             },
+            "runtime_trust_materials": {
+                "ok": True,
+                "skipped": False,
+                "tls_files": ["ca.pem", "serverware.crt", "serverware.key"],
+                "anchor_tls_files": ["audit-anchor.crt", "audit-anchor.key"],
+                "helper_files": [
+                    "control-plane-attestation-verify",
+                    "lease-recipient-attest",
+                    "lease-recipient-verify",
+                    "nsm-attest",
+                    "nsm-unseal",
+                    "response-proof-attest",
+                ],
+                "proof_files": [
+                    "proof-collector.key.pem",
+                    "proof-collector.pub.pem",
+                    "proxy-ca.pem",
+                    "proxy-proof-verifier.pub.pem",
+                ],
+                "proof_collector_files": ["serverware-proof-client"],
+                "proof_collector_private_key_mode": "0o600",
+                "proof_collector_key_id": proxy_collector_key_info()["key_id"],
+                "proof_verifier_key_id": proxy_vendor_verifier_key_info()["key_id"],
+                "private_key_mode": "0o600",
+                "certificate_not_after": "2035-01-01T00:00:00+00:00",
+                "secret_values_redacted": True,
+            },
             "production_env": {
                 "ok": True,
                 "path": str(tmp / "production.env"),
                 "file": file_summary(tmp / "production.env", "production-readiness-env"),
-                "env_keys": ["SERVERWARE_PRODUCTION_IMAGES"],
+                "env_keys": sorted(run_production_readiness.load_env_file(tmp / "production.env")),
                 "config_gate": {
                     "ok": True,
                     "out": str(tmp / "production-host-preflight-config.json"),
@@ -822,6 +1128,29 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                 "key": "SERVERWARE_PRODUCTION_IMAGES",
                 "production_env_has_key": True,
                 "matches_images_env": True,
+                "secret_values_redacted": True,
+            },
+            "production_compose": {
+                "ok": True,
+                "skipped": False,
+                "file": "docker-compose.production.yml",
+                "sha256": digest("4"),
+                "secret_values_redacted": True,
+            },
+            "release_artifact_mounts": {
+                "ok": True,
+                "artifacts": [
+                    {
+                        "label": "release-provenance",
+                        "matches_approved_artifact": True,
+                        "sha256": sha256_file(tmp / "release-provenance.json"),
+                    },
+                    {
+                        "label": "image-signatures",
+                        "matches_approved_artifact": True,
+                        "sha256": sha256_file(tmp / "image-signatures.json"),
+                    },
+                ],
                 "secret_values_redacted": True,
             },
             "release_artifacts": {
@@ -866,6 +1195,9 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                     "candidate": "rust-decision-gate",
                     "requests": 1000,
                     "p99_ms": json.loads((tmp / "decision-gate-rs-bench.json").read_text(encoding="utf-8"))["p99_ms"],
+                    "data_plane_binary_digest": json.loads(
+                        (tmp / "decision-gate-rs-bench.json").read_text(encoding="utf-8")
+                    )["data_plane_binary_digest"],
                     "target_p99_ms": 20.0,
                 },
             },
@@ -894,10 +1226,37 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
     }
 
 
-def run_verifier(tmp: Path, *extra: str, allow_host_bypass: bool = True) -> subprocess.CompletedProcess[bytes]:
+def run_verifier(
+    tmp: Path,
+    *extra: str,
+    allow_host_bypass: bool = True,
+    include_proxy_proof: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
     env = os.environ.copy()
     if allow_host_bypass:
         env["SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"] = "1"
+    proxy_proof_args = (
+        [
+            "--proxy-response-proof",
+            str(tmp / "proxy-response-proof.json"),
+            "--proxy-proof-verifier-public-key",
+            str(tmp / "proxy-vendor-verifier-public-key.pem"),
+            "--proxy-collector-public-key",
+            str(tmp / "proxy-collector-public-key.pem"),
+            "--proxy-server-instance-id",
+            PROXY_SERVER_INSTANCE_ID,
+            "--proxy-client-nonce",
+            PROXY_CLIENT_NONCE,
+            "--proxy-request-digest",
+            PROXY_REQUEST_DIGEST,
+            "--proxy-operation-digest",
+            PROXY_OPERATION_DIGEST,
+            "--proxy-tls-channel-binding",
+            PROXY_TLS_CHANNEL_BINDING,
+        ]
+        if include_proxy_proof
+        else []
+    )
     return subprocess.run(
         [
             sys.executable,
@@ -931,6 +1290,7 @@ def run_verifier(tmp: Path, *extra: str, allow_host_bypass: bool = True) -> subp
             str(tmp / "decision-gate-rs-bench.json"),
             "--kms-materials",
             str(tmp / "kms-materials.json"),
+            *proxy_proof_args,
             *extra,
         ],
         cwd=ROOT,
@@ -945,11 +1305,483 @@ def detail(result: subprocess.CompletedProcess[bytes]) -> str:
     return result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
 
 
+def expect_proxy_proof_failure(
+    tmp: Path,
+    document: dict[str, Any],
+    expected_error: str,
+    label: str,
+    *extra: str,
+) -> None:
+    write(tmp / "proxy-response-proof.json", document)
+    rejected = run_verifier(tmp, *extra)
+    if rejected.returncode == 0 or expected_error not in detail(rejected):
+        raise AssertionError(f"completion verifier accepted {label}: {detail(rejected)}")
+
+
+def test_proxy_response_proof_requirements(
+    tmp: Path,
+    valid_document: dict[str, Any],
+    provenance_digest: str,
+) -> None:
+    missing = run_verifier(tmp, include_proxy_proof=False)
+    if missing.returncode == 0 or "production completion requires --proxy-response-proof" not in detail(missing):
+        raise AssertionError(f"completion verifier accepted absent proxy proof evidence: {detail(missing)}")
+
+    wrong_version = clone_document(valid_document)
+    wrong_version["apiVersion"] = "serverware.proxyResponseProof/v1"
+    expect_proxy_proof_failure(tmp, wrong_version, "proxy response proof has wrong apiVersion", "a legacy v1 proxy proof")
+
+    wrong_capture_version = clone_document(valid_document)
+    wrong_capture_version["external_capture"]["apiVersion"] = "serverware.proxyResponseCapture/v0"
+    expect_proxy_proof_failure(
+        tmp,
+        wrong_capture_version,
+        "external capture has wrong apiVersion",
+        "a proxy proof with a legacy external capture",
+    )
+
+    tampered_client_request = clone_document(valid_document)
+    tampered_client_request["external_capture"]["client_request"]["path"] = "/v1/other-resource"
+    sign_proxy_external_capture(tampered_client_request)
+    expect_proxy_proof_failure(
+        tmp,
+        tampered_client_request,
+        "external client request digest mismatch",
+        "a collector-signed capture with a tampered client request",
+    )
+
+    wrong_statement_version = clone_document(valid_document)
+    wrong_statement_version["server_statement"]["apiVersion"] = "serverware.proxyResponseStatement/v0"
+    resign_proxy_response_proof(wrong_statement_version)
+    expect_proxy_proof_failure(
+        tmp,
+        wrong_statement_version,
+        "server statement has wrong apiVersion",
+        "a proxy proof with a legacy server statement",
+    )
+
+    development = clone_document(valid_document)
+    development["external_capture"]["environment"] = "development"
+    expect_proxy_proof_failure(tmp, development, "is not production evidence", "development proxy capture")
+
+    self_reported = clone_document(valid_document)
+    self_reported["external_capture"]["collection_mode"] = "rust-self-report"
+    expect_proxy_proof_failure(tmp, self_reported, "absent, dev, or self-reported", "Rust self-reported proxy capture")
+
+    self_reported_statement = clone_document(valid_document)
+    self_reported_statement["server_statement"]["collection_mode"] = "server-self-reported"
+    resign_proxy_response_proof(self_reported_statement)
+    expect_proxy_proof_failure(
+        tmp,
+        self_reported_statement,
+        "server statement fields do not match the contract",
+        "a self-reported field smuggled into the server statement",
+    )
+
+    missing_server_signature = clone_document(valid_document)
+    missing_server_signature["server_signature"] = {}
+    expect_proxy_proof_failure(
+        tmp,
+        missing_server_signature,
+        "server signature fields do not match the contract",
+        "a proxy statement without a server signature",
+    )
+
+    untrusted_collector = clone_document(valid_document)
+    sign_proxy_external_capture(untrusted_collector, alternate_proxy_collector_key_info())
+    expect_proxy_proof_failure(
+        tmp,
+        untrusted_collector,
+        "collector signing key does not match the configured trust root",
+        "an external capture signed by an untrusted collector",
+    )
+
+    tampered_signed_capture = clone_document(valid_document)
+    tampered_signed_capture["external_capture"]["tls_peer"]["leaf_certificate_sha256"] = digest("b")
+    expect_proxy_proof_failure(
+        tmp,
+        tampered_signed_capture,
+        "external capture collector signature verification failed",
+        "an external capture changed after collector signing",
+    )
+
+    unsigned_headers = clone_document(valid_document)
+    unsigned_headers["external_capture"]["response"]["selected_headers"]["x-serverware-request-id"] = "tampered"
+    expect_proxy_proof_failure(
+        tmp,
+        unsigned_headers,
+        "selected response headers digest mismatch",
+        "tampered external capture headers",
+    )
+
+    missing_selected_header = clone_document(valid_document)
+    missing_headers = missing_selected_header["external_capture"]["response"]["selected_headers"]
+    del missing_headers["content-length"]
+    missing_selected_header["external_capture"]["response"]["selected_headers_digest"] = sha256_prefixed_json(
+        missing_headers
+    )
+    sign_proxy_external_capture(missing_selected_header)
+    expect_proxy_proof_failure(
+        tmp,
+        missing_selected_header,
+        "missing required selected response headers",
+        "a collector-signed capture missing content-length",
+    )
+
+    extra_selected_header = clone_document(valid_document)
+    extra_headers = extra_selected_header["external_capture"]["response"]["selected_headers"]
+    extra_headers["x-serverware-request-id"] = "unexpected"
+    extra_selected_header["external_capture"]["response"]["selected_headers_digest"] = sha256_prefixed_json(
+        extra_headers
+    )
+    sign_proxy_external_capture(extra_selected_header)
+    expect_proxy_proof_failure(
+        tmp,
+        extra_selected_header,
+        "unexpected selected response headers",
+        "a collector-signed capture with an extra selected header",
+    )
+
+    capture_body_mismatch = clone_document(valid_document)
+    capture_body_mismatch["external_capture"]["response"]["body_digest"] = digest("0")
+    capture_body_headers = capture_body_mismatch["external_capture"]["response"]["selected_headers"]
+    capture_body_headers["x-serverware-response-body-sha256"] = digest("0")
+    capture_body_mismatch["external_capture"]["response"]["selected_headers_digest"] = sha256_prefixed_json(
+        capture_body_headers
+    )
+    sign_proxy_external_capture(capture_body_mismatch)
+    expect_proxy_proof_failure(
+        tmp,
+        capture_body_mismatch,
+        "external capture response does not match server statement",
+        "an external response body that differs from the server statement",
+    )
+
+    capture_statement_digest_mismatch = clone_document(valid_document)
+    capture_statement_digest_mismatch["external_capture"]["server_statement_sha256"] = digest("0")
+    sign_proxy_external_capture(capture_statement_digest_mismatch)
+    expect_proxy_proof_failure(
+        tmp,
+        capture_statement_digest_mismatch,
+        "external capture server statement digest mismatch",
+        "an external capture bound to another server statement",
+    )
+
+    invalid_tls_peer_leaf_digest = clone_document(valid_document)
+    invalid_tls_peer_leaf_digest["external_capture"]["tls_peer"]["leaf_certificate_sha256"] = "invalid"
+    sign_proxy_external_capture(invalid_tls_peer_leaf_digest)
+    expect_proxy_proof_failure(
+        tmp,
+        invalid_tls_peer_leaf_digest,
+        "TLS peer leaf certificate digest must be a sha256-prefixed digest",
+        "an external capture with an invalid TLS peer certificate digest",
+    )
+
+    mismatched_tls_peer = clone_document(valid_document)
+    mismatched_tls_peer["external_capture"]["tls_peer"]["spiffe_id"] = (
+        "spiffe://prod.serverware.dev/decision-gate/instance-02"
+    )
+    sign_proxy_external_capture(mismatched_tls_peer)
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_tls_peer,
+        "TLS peer SPIFFE ID does not match expected server instance",
+        "a collector-signed capture from another TLS peer",
+    )
+
+    forged_server_signature = clone_document(valid_document)
+    forged_server_signature["server_signature"]["signature"] = "ed25519:AAAA"
+    expect_proxy_proof_failure(
+        tmp,
+        forged_server_signature,
+        "server statement signature verification failed",
+        "a forged proxy server statement signature",
+    )
+
+    mismatched_server_key_id = clone_document(valid_document)
+    mismatched_server_key_id["server_signature"]["key_id"] = digest("0")
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_server_key_id,
+        "server statement signing key id mismatch",
+        "a server signature with an unrelated key id",
+    )
+
+    stale = proxy_response_proof(provenance_digest, now=int(time.time()) - 600)
+    expect_proxy_proof_failure(tmp, stale, "external capture is stale", "a stale external proxy capture")
+
+    stale_statement = clone_document(valid_document)
+    stale_statement["server_statement"]["issued_at_unix"] = int(time.time()) - 600
+    resign_proxy_response_proof(stale_statement)
+    expect_proxy_proof_failure(tmp, stale_statement, "server statement is stale", "a stale server statement")
+
+    unsuccessful = clone_document(valid_document)
+    unsuccessful["external_capture"]["response"]["status"] = 503
+    unsuccessful["server_statement"]["response"]["status"] = 503
+    resign_proxy_response_proof(unsuccessful)
+    expect_proxy_proof_failure(tmp, unsuccessful, "successful production response status", "a failed proxy response")
+
+    bad_header_digest = clone_document(valid_document)
+    bad_header_digest["external_capture"]["response"]["selected_headers_digest"] = digest("0")
+    bad_header_digest["server_statement"]["response"]["selected_headers_digest"] = digest("0")
+    resign_proxy_response_proof(bad_header_digest)
+    expect_proxy_proof_failure(
+        tmp,
+        bad_header_digest,
+        "selected response headers digest mismatch",
+        "a signed but incorrect selected response headers digest",
+    )
+
+    for field, expected_error in (
+        ("policy_digest", "proxy response server statement policy digest mismatch"),
+        ("runtime_manifest_digest", "proxy response server statement runtime manifest digest mismatch"),
+        ("data_plane_binary_digest", "proxy response server statement data plane binary digest mismatch"),
+        ("release_digest", "proxy response server statement release digest mismatch"),
+    ):
+        mismatched = clone_document(valid_document)
+        mismatched["server_statement"][field] = digest("0")
+        resign_proxy_response_proof(mismatched)
+        expect_proxy_proof_failure(tmp, mismatched, expected_error, f"a proxy proof with a mismatched {field}")
+
+    bad_instance = clone_document(valid_document)
+    bad_instance["server_statement"]["server_instance"]["identity_digest"] = digest("0")
+    resign_proxy_response_proof(bad_instance)
+    expect_proxy_proof_failure(
+        tmp,
+        bad_instance,
+        "server instance identity digest mismatch",
+        "a mismatched server instance identity",
+    )
+
+    mismatched_nonce = clone_document(valid_document)
+    mismatched_nonce["server_statement"]["client_nonce"] = b64e(b"s" * 32)
+    resign_proxy_response_proof(mismatched_nonce)
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_nonce,
+        "external capture client_nonce does not match server statement",
+        "a client nonce mismatch between capture and statement",
+    )
+
+    mismatched_request = clone_document(valid_document)
+    mismatched_request["server_statement"]["request_digest"] = digest("0")
+    resign_proxy_response_proof(mismatched_request)
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_request,
+        "external capture request_digest does not match server statement",
+        "a request digest mismatch between capture and statement",
+    )
+
+    mismatched_operation = clone_document(valid_document)
+    mismatched_operation["server_statement"]["operation_digest"] = digest("0")
+    resign_proxy_response_proof(mismatched_operation)
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_operation,
+        "external capture operation_digest does not match server statement",
+        "an operation digest mismatch between capture and statement",
+    )
+
+    mismatched_response = clone_document(valid_document)
+    mismatched_response["server_statement"]["response"]["body_digest"] = digest("0")
+    resign_proxy_response_proof(mismatched_response)
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_response,
+        "external capture response does not match server statement",
+        "a response mismatch between capture and statement",
+    )
+
+    mismatched_tls = clone_document(valid_document)
+    mismatched_tls["server_statement"]["tls_channel_binding"]["value"] = b64e(b"s" * 32)
+    resign_proxy_response_proof(mismatched_tls)
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_tls,
+        "external capture tls_channel_binding does not match server statement",
+        "a TLS channel mismatch between capture and statement",
+    )
+
+    missing_quote = clone_document(valid_document)
+    missing_quote["vendor_tee"]["quote"] = None
+    expect_proxy_proof_failure(tmp, missing_quote, "missing a non-null vendor TEE quote", "a null vendor TEE quote")
+
+    tampered_quote = clone_document(valid_document)
+    tampered_quote["vendor_tee"]["quote"]["body_b64"] = b64e(b"tampered opaque vendor quote bytes " * 4)
+    expect_proxy_proof_failure(tmp, tampered_quote, "vendor quote digest mismatch", "an unsigned vendor quote")
+
+    development_quote = clone_document(valid_document)
+    development_quote["vendor_tee"]["provider"] = "dev-self-reported"
+    resign_proxy_response_proof(development_quote)
+    expect_proxy_proof_failure(tmp, development_quote, "not a production identifier", "a development TEE provider")
+
+    missing_verifier = clone_document(valid_document)
+    missing_verifier["vendor_tee"]["trusted_verifier"] = {}
+    expect_proxy_proof_failure(
+        tmp,
+        missing_verifier,
+        "vendor verifier result has wrong apiVersion",
+        "a vendor quote without a trusted verifier outcome",
+    )
+
+    rejected_outcome = clone_document(valid_document)
+    rejected_outcome["vendor_tee"]["trusted_verifier"]["statement"]["outcome"] = "rejected"
+    sign_proxy_vendor_verifier_statement(rejected_outcome)
+    expect_proxy_proof_failure(tmp, rejected_outcome, "outcome is not verified", "a rejected vendor verifier outcome")
+
+    unverified_quote = clone_document(valid_document)
+    unverified_quote["vendor_tee"]["trusted_verifier"]["statement"]["vendor_quote_verified"] = False
+    sign_proxy_vendor_verifier_statement(unverified_quote)
+    expect_proxy_proof_failure(tmp, unverified_quote, "vendor quote was not verified", "an unverified vendor quote")
+
+    unchecked_revocation = clone_document(valid_document)
+    unchecked_revocation["vendor_tee"]["trusted_verifier"]["statement"]["revocation_checked"] = False
+    sign_proxy_vendor_verifier_statement(unchecked_revocation)
+    expect_proxy_proof_failure(
+        tmp,
+        unchecked_revocation,
+        "revocation status was not checked",
+        "a vendor receipt without revocation checking",
+    )
+
+    debug_quote = clone_document(valid_document)
+    debug_quote["vendor_tee"]["trusted_verifier"]["statement"]["debug"] = True
+    sign_proxy_vendor_verifier_statement(debug_quote)
+    expect_proxy_proof_failure(tmp, debug_quote, "accepted debug mode", "a debug-mode vendor quote")
+
+    forged_verifier = clone_document(valid_document)
+    forged_verifier["vendor_tee"]["trusted_verifier"]["signature"] = "ed25519:AAAA"
+    expect_proxy_proof_failure(
+        tmp,
+        forged_verifier,
+        "trusted vendor verifier signature verification failed",
+        "a forged vendor verifier receipt",
+    )
+
+    untrusted_verifier = clone_document(valid_document)
+    resign_proxy_response_proof(
+        untrusted_verifier,
+        verifier_key_info=alternate_proxy_vendor_verifier_key_info(),
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        untrusted_verifier,
+        "verifier key is not the configured trust root",
+        "a verifier receipt signed by an untrusted key",
+    )
+
+    legacy_verifier_binding = clone_document(valid_document)
+    legacy_verifier_statement = legacy_verifier_binding["vendor_tee"]["trusted_verifier"]["statement"]
+    legacy_verifier_statement["proof_evidence_sha256"] = legacy_verifier_statement.pop("server_statement_sha256")
+    sign_proxy_vendor_verifier_statement(legacy_verifier_binding)
+    expect_proxy_proof_failure(
+        tmp,
+        legacy_verifier_binding,
+        "legacy proof evidence digest binding",
+        "a vendor verifier receipt using the v1 evidence binding",
+    )
+
+    mismatched_response_key = clone_document(valid_document)
+    mismatched_response_key["vendor_tee"]["trusted_verifier"]["statement"]["response_signing_key_id"] = digest("0")
+    sign_proxy_vendor_verifier_statement(mismatched_response_key)
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_response_key,
+        "did not bind the response signing key",
+        "a vendor receipt bound to another response signing key",
+    )
+
+    mismatched_claim = clone_document(valid_document)
+    mismatched_claim["vendor_tee"]["trusted_verifier"]["statement"]["attested_claims"]["request_digest"] = digest("0")
+    sign_proxy_vendor_verifier_statement(mismatched_claim)
+    expect_proxy_proof_failure(
+        tmp,
+        mismatched_claim,
+        "attested claim request_digest mismatch",
+        "a vendor quote that did not attest the request digest",
+    )
+
+    missing_claim = clone_document(valid_document)
+    del missing_claim["vendor_tee"]["trusted_verifier"]["statement"]["attested_claims"]["issued_at_unix"]
+    sign_proxy_vendor_verifier_statement(missing_claim)
+    expect_proxy_proof_failure(
+        tmp,
+        missing_claim,
+        "attested claim issued_at_unix mismatch",
+        "a vendor receipt missing a server statement claim",
+    )
+
+    extra_claim = clone_document(valid_document)
+    extra_claim["vendor_tee"]["trusted_verifier"]["statement"]["attested_claims"]["self_reported"] = True
+    sign_proxy_vendor_verifier_statement(extra_claim)
+    expect_proxy_proof_failure(
+        tmp,
+        extra_claim,
+        "attested claims do not exactly match the server statement",
+        "a vendor receipt with an unbound self-reported claim",
+    )
+
+    expired_verifier = clone_document(valid_document)
+    expired_verifier["vendor_tee"]["trusted_verifier"]["statement"]["verified_at_unix"] = int(time.time()) - 100
+    expired_verifier["vendor_tee"]["trusted_verifier"]["statement"]["expires_at_unix"] = int(time.time()) - 1
+    sign_proxy_vendor_verifier_statement(expired_verifier)
+    expect_proxy_proof_failure(
+        tmp,
+        expired_verifier,
+        "trusted vendor verifier receipt is expired",
+        "an expired vendor verifier receipt",
+    )
+
+    write(tmp / "proxy-response-proof.json", valid_document)
+    wrong_nonce = b64e(b"x" * 32)
+    rejected_nonce = run_verifier(tmp, "--proxy-client-nonce", wrong_nonce)
+    if rejected_nonce.returncode == 0 or "client nonce mismatch" not in detail(rejected_nonce):
+        raise AssertionError(f"completion verifier accepted a proof for another client nonce: {detail(rejected_nonce)}")
+    rejected_request = run_verifier(tmp, "--proxy-request-digest", digest("0"))
+    if rejected_request.returncode == 0 or "canonical request digest mismatch" not in detail(rejected_request):
+        raise AssertionError(f"completion verifier accepted a proof for another request: {detail(rejected_request)}")
+    rejected_operation = run_verifier(tmp, "--proxy-operation-digest", digest("0"))
+    if rejected_operation.returncode == 0 or "operation digest mismatch" not in detail(rejected_operation):
+        raise AssertionError(f"completion verifier accepted a proof for another operation: {detail(rejected_operation)}")
+    rejected_tls = run_verifier(tmp, "--proxy-tls-channel-binding", b64e(b"z" * 32))
+    if rejected_tls.returncode == 0 or "TLS channel binding mismatch" not in detail(rejected_tls):
+        raise AssertionError(f"completion verifier accepted a proof from another TLS channel: {detail(rejected_tls)}")
+
+    prefix_only_spiffe = "spiffe://prod.serverware.dev/decision-gate"
+    rejected_instance = run_verifier(tmp, "--proxy-server-instance-id", prefix_only_spiffe)
+    instance_error = detail(rejected_instance)
+    if rejected_instance.returncode == 0 or not any(
+        message in instance_error
+        for message in (
+            "proxy response expected server instance does not match the signed production environment",
+            "TLS peer SPIFFE ID does not match expected server instance",
+        )
+    ):
+        raise AssertionError(
+            f"completion verifier accepted a prefix-only expected server SPIFFE ID: {instance_error}"
+        )
+
+    duplicate_json = json.dumps(valid_document, sort_keys=True)
+    api_version_field = '"apiVersion": "serverware.proxyResponseProof/v2"'
+    if api_version_field not in duplicate_json:
+        raise AssertionError("proxy proof fixture did not contain its expected apiVersion field")
+    (tmp / "proxy-response-proof.json").write_text(
+        duplicate_json.replace(api_version_field, f"{api_version_field}, {api_version_field}", 1),
+        encoding="utf-8",
+    )
+    rejected_duplicate = run_verifier(tmp)
+    if rejected_duplicate.returncode == 0 or "duplicate JSON object key: apiVersion" not in detail(rejected_duplicate):
+        raise AssertionError(f"completion verifier accepted duplicate JSON object keys: {detail(rejected_duplicate)}")
+
+    write(tmp / "proxy-response-proof.json", valid_document)
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
-        nitro = nitro_evidence()
         provenance_summary, provenance_document = release_provenance()
+        nitro = nitro_evidence(provenance_summary["provenance_digest"])
         image_summary, image_document = image_signatures(provenance_summary["provenance_digest"])
         write_production_env_files(tmp)
         write(tmp / "production-readiness.json", production_readiness(nitro, tmp))
@@ -963,9 +1795,19 @@ def main() -> None:
         write(tmp / "kms-materials.json", kms_materials_document())
         write(
             tmp / "decision-gate-rs-bench.json",
-            {"candidate": "rust-decision-gate", "requests": 1000, "p50_ms": 1.0, "p95_ms": 5.0, "p99_ms": 9.0},
+            benchmark_document(),
         )
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+        valid_proxy_response_proof = proxy_response_proof(provenance_summary["provenance_digest"])
+        write(tmp / "proxy-response-proof.json", valid_proxy_response_proof)
+        (tmp / "proxy-vendor-verifier-public-key.pem").write_text(
+            proxy_vendor_verifier_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        (tmp / "proxy-collector-public-key.pem").write_text(
+            proxy_collector_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
         out_path = tmp / "completion-proof.json"
         result = run_verifier(tmp, "--out", str(out_path))
         if result.returncode != 0:
@@ -973,6 +1815,25 @@ def main() -> None:
         proof = json.loads(result.stdout.decode("utf-8"))
         if proof.get("ok") is not True or not out_path.exists() or not proof.get("proof_sha256", "").startswith("sha256:"):
             raise AssertionError(f"completion verifier did not write a valid proof: {proof}")
+        proxy_summary = proof.get("production_proxy_response_proof") or {}
+        if proof.get("apiVersion") != "serverware.completionProof/v2" or not all(
+            proxy_summary.get(field) is True
+            for field in (
+                "vendor_quote_verified",
+                "collector_signature_verified",
+                "server_statement_signature_verified",
+                "fresh_client_nonce_bound",
+                "authenticated_external_client_capture_bound",
+                "release_artifacts_bound",
+            )
+        ):
+            raise AssertionError(f"completion verifier omitted verified production proxy proof bindings: {proof}")
+
+        test_proxy_response_proof_requirements(
+            tmp,
+            valid_proxy_response_proof,
+            provenance_summary["provenance_digest"],
+        )
 
         rejected_host_bypass = run_verifier(tmp, "--skip-current-host-check", allow_host_bypass=False)
         if rejected_host_bypass.returncode == 0 or "--skip-current-host-check is test-only" not in detail(rejected_host_bypass):
@@ -1207,7 +2068,7 @@ def main() -> None:
         write(tmp / "image-signatures.json", image_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
 
-        mismatched_nitro = nitro_evidence()
+        mismatched_nitro = nitro_evidence(provenance_summary["provenance_digest"])
         mismatched_nitro["nitro"]["raw_attestation_document_sha256"] = digest("9")
         for release in mismatched_nitro["release_materials"]:
             release["kms_release"]["attestation_document_sha256"] = digest("9")
@@ -1217,7 +2078,7 @@ def main() -> None:
             raise AssertionError(f"completion verifier accepted mismatched Nitro evidence: {detail(rejected_nitro)}")
         write(tmp / "nitro-kms-evidence.json", nitro)
 
-        mismatched_command = nitro_evidence()
+        mismatched_command = nitro_evidence(provenance_summary["provenance_digest"])
         mismatched_command["config"]["kms_release_command_sha256"] = digest("9")
         write(tmp / "nitro-kms-evidence.json", mismatched_command)
         rejected_command = run_verifier(tmp)
@@ -1225,7 +2086,7 @@ def main() -> None:
             raise AssertionError(f"completion verifier accepted mismatched Nitro/KMS commands: {detail(rejected_command)}")
         write(tmp / "nitro-kms-evidence.json", nitro)
 
-        mismatched_request_digest = nitro_evidence()
+        mismatched_request_digest = nitro_evidence(provenance_summary["provenance_digest"])
         mismatched_request_digest["release_materials"][0]["kms_release"]["request_digest"] = digest("9")
         write(tmp / "nitro-kms-evidence.json", mismatched_request_digest)
         rejected_request_digest = run_verifier(tmp)
@@ -1233,7 +2094,7 @@ def main() -> None:
             raise AssertionError(f"completion verifier accepted mismatched KMS request digest: {detail(rejected_request_digest)}")
         write(tmp / "nitro-kms-evidence.json", nitro)
 
-        mismatched_recipient_handle = nitro_evidence()
+        mismatched_recipient_handle = nitro_evidence(provenance_summary["provenance_digest"])
         mismatched_recipient_handle["release_materials"][0]["kms_release"]["material_handle"] = digest("9")
         write(tmp / "nitro-kms-evidence.json", mismatched_recipient_handle)
         rejected_recipient_handle = run_verifier(tmp)
@@ -1241,7 +2102,7 @@ def main() -> None:
             raise AssertionError(f"completion verifier accepted mismatched recipient ciphertext handle: {detail(rejected_recipient_handle)}")
         write(tmp / "nitro-kms-evidence.json", nitro)
 
-        mismatched_recipient_attestation = nitro_evidence()
+        mismatched_recipient_attestation = nitro_evidence(provenance_summary["provenance_digest"])
         mismatched_recipient_attestation["release_materials"][0]["kms_release"]["attestation_document_sha256"] = digest("9")
         write(tmp / "nitro-kms-evidence.json", mismatched_recipient_attestation)
         rejected_recipient_attestation = run_verifier(tmp)
@@ -1316,7 +2177,7 @@ def main() -> None:
         write(tmp / "kms-materials.json", kms_materials_document())
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
 
-        slow_bench = {"candidate": "rust-decision-gate", "requests": 1000, "p99_ms": 21.0}
+        slow_bench = benchmark_document(p99_ms=21.0)
         write(tmp / "decision-gate-rs-bench.json", slow_bench)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
         rejected = run_verifier(tmp)
@@ -1325,17 +2186,17 @@ def main() -> None:
 
         write(
             tmp / "decision-gate-rs-bench.json",
-            {"candidate": "rust-decision-gate", "requests": 1000, "p50_ms": 1.0, "p95_ms": 5.0, "p99_ms": 9.0},
+            benchmark_document(),
         )
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
-        stale_preflight_bench = {"candidate": "rust-decision-gate", "requests": 1000, "p50_ms": 1.0, "p95_ms": 5.0, "p99_ms": 10.0}
+        stale_preflight_bench = benchmark_document(p99_ms=10.0)
         write(tmp / "decision-gate-rs-bench.json", stale_preflight_bench)
         rejected_stale = run_verifier(tmp)
         if rejected_stale.returncode == 0 or "preflight bench digest" not in detail(rejected_stale):
             raise AssertionError(f"completion verifier accepted stale preflight evidence: {detail(rejected_stale)}")
         write(
             tmp / "decision-gate-rs-bench.json",
-            {"candidate": "rust-decision-gate", "requests": 1000, "p50_ms": 1.0, "p95_ms": 5.0, "p99_ms": 9.0},
+            benchmark_document(),
         )
         skipped_config_preflight = production_host_preflight(tmp)
         skipped_config_preflight["checks"]["production_env"]["config_gate"]["skipped"] = True

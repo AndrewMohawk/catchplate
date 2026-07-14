@@ -14,12 +14,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 
 import serverware_source_tree
-
-ROOT = Path(__file__).resolve().parents[1]
+from serverware.http_client import request_bytes as bounded_request_bytes
 
 
 def canonical_json(value: Any) -> str:
@@ -44,8 +46,8 @@ def source_tree_digest(root: Path) -> str:
 
 def request_bytes(url: str, *, headers: dict[str, str] | None = None) -> tuple[bytes, dict[str, str]]:
     request = urllib.request.Request(url, headers=headers or {})
-    with urllib.request.urlopen(request, timeout=10) as response:
-        return response.read(), {key.lower(): value for key, value in response.headers.items()}
+    response = bounded_request_bytes(request, timeout=10, max_bytes=8 * 1024 * 1024)
+    return response.body, dict(response.headers)
 
 
 def request_json(url: str, *, headers: dict[str, str] | None = None) -> dict[str, Any]:
@@ -84,6 +86,8 @@ def verify_dev_quote(attestation: dict[str, Any]) -> dict[str, Any]:
     for field in (
         "runtime_manifest_digest",
         "policy_bundle_digest",
+        "policy_sequence",
+        "policy_high_water_digest",
         "ca_intermediate_spki_sha256",
         "data_plane_binary_digest",
         "provenance_digest",

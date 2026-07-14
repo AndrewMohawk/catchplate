@@ -22,6 +22,8 @@ def main() -> None:
     for field in (
         "runtime_manifest_digest",
         "policy_bundle_digest",
+        "policy_sequence",
+        "policy_high_water_digest",
         "ca_intermediate_spki_sha256",
         "data_plane_binary_digest",
         "rollback_epoch",
@@ -36,6 +38,8 @@ def main() -> None:
     release = release_material(
         "broker-kek",
         expected_policy_hash=attestation["policy_bundle_digest"],
+        expected_policy_sequence=attestation["policy_sequence"],
+        expected_policy_high_water_digest=attestation["policy_high_water_digest"],
         expected_ca_spki=attestation["ca_intermediate_spki_sha256"],
         expected_rollback_epoch=attestation["rollback_epoch"],
         expected_release_channel=attestation["release_channel"],

@@ -50,24 +50,99 @@ def main() -> None:
                 "SERVERWARE_RELEASE_CHANNEL": "prod",
                 "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
                 "SERVERWARE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kid": "prod key"}]}),
+                "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(tmp / "proxy-response-proof.json"),
+                "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/serverware/bin/serverware-proof-client",
+                "SERVERWARE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:9090",
+                "SERVERWARE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
+                "SERVERWARE_PROXY_PROOF_CA_BUNDLE": str(tmp / "proxy-ca.pem"),
+                "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY": str(tmp / "collector-key.pem"),
+                "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY": str(tmp / "collector-key.pub.pem"),
+                "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY": str(tmp / "proxy-verifier.pub.pem"),
+                "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.serverware.internal/decision-gate/instance-01",
+                "SERVERWARE_PROXY_PROOF_AGENT_ID": "production-proof-agent",
+                "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS": "240",
             },
         )
         dry_run = run_runner("--env-file", str(minimal_env), "--dry-run")
         if dry_run.returncode != 0:
             raise AssertionError(f"runner dry-run failed: {detail(dry_run)}")
         plan = json.loads(dry_run.stdout.decode("utf-8"))
-        if plan.get("ok") is not True or len(plan.get("commands") or []) != 5:
+        if plan.get("ok") is not True or len(plan.get("commands") or []) != 6:
             raise AssertionError(f"runner dry-run did not return the full command plan: {plan}")
+        labels = [command["label"] for command in plan["commands"]]
+        if labels[-3:] != [
+            "verify-production-readiness",
+            "collect-production-proxy-response-proof",
+            "verify-release-completion",
+        ]:
+            raise AssertionError(f"runner does not collect the response proof after live readiness: {labels}")
+        collector_argv = plan["commands"][-2]["argv"]
         completion_argv = plan["commands"][-1]["argv"]
+        collector_nonce = collector_argv[collector_argv.index("--nonce") + 1]
+        completion_nonce = completion_argv[completion_argv.index("--proxy-client-nonce") + 1]
         if (
-            "--production-readiness-config" not in completion_argv
+            collector_argv[collector_argv.index("--verifier-key") + 1]
+            != str(tmp / "proxy-verifier.pub.pem")
+            or collector_argv[collector_argv.index("--expected-server-instance-id") + 1]
+            != "spiffe://prod.serverware.internal/decision-gate/instance-01"
+            or collector_argv[collector_argv.index("--max-age-seconds") + 1] != "240"
+            or "--production-readiness-config" not in completion_argv
             or "--production-readiness-env" not in completion_argv
             or "--production-images-env" not in completion_argv
             or "/etc/serverware/kms-materials.json" not in completion_argv
+            or "--proxy-response-proof" not in completion_argv
+            or "--proxy-proof-verifier-public-key" not in completion_argv
+            or "--proxy-collector-public-key" not in completion_argv
+            or "--proxy-server-instance-id" not in completion_argv
+            or "--proxy-client-nonce" not in completion_argv
+            or "--proxy-request-digest" not in completion_argv
+            or "--proxy-operation-digest" not in completion_argv
+            or "--proxy-tls-channel-binding" not in completion_argv
+            or completion_argv[completion_argv.index("--proxy-proof-max-age-seconds") + 1] != "240"
+            or collector_nonce != completion_nonce
+            or len(collector_nonce) != 43
+            or completion_argv[completion_argv.index("--proxy-request-digest") + 1]
+            != "$COLLECTOR_SUMMARY.request_digest"
+            or completion_argv[completion_argv.index("--proxy-operation-digest") + 1]
+            != "$COLLECTOR_SUMMARY.operation_digest"
+            or completion_argv[completion_argv.index("--proxy-tls-channel-binding") + 1]
+            != "$COLLECTOR_SUMMARY.tls_channel_binding"
         ):
             raise AssertionError(f"runner completion command does not bind current env files: {completion_argv}")
+        if "SERVERWARE_PROXY_CLIENT_NONCE" in plan["env_keys"]:
+            raise AssertionError(f"runner still accepts a static response-proof nonce: {plan['env_keys']}")
         if "prod-admin-token-32-bytes-minimum-value" in dry_run.stdout.decode("utf-8"):
             raise AssertionError(f"runner dry-run leaked environment values: {plan}")
+
+        missing_proof_env = tmp / "missing-proof.env"
+        write_env(missing_proof_env, {"SERVERWARE_RELEASE_CHANNEL": "prod"})
+        rejected_missing_proof = run_runner("--env-file", str(missing_proof_env), "--dry-run")
+        if rejected_missing_proof.returncode == 0 or "missing production proxy proof settings" not in detail(
+            rejected_missing_proof
+        ):
+            raise AssertionError(f"runner accepted missing proxy proof settings: {detail(rejected_missing_proof)}")
+
+        invalid_proof_age_env = tmp / "invalid-proof-age.env"
+        invalid_proof_age = {
+            key: value
+            for key, value in {
+                "SERVERWARE_RELEASE_CHANNEL": "prod",
+                "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(tmp / "proxy-response-proof.json"),
+                "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/serverware/bin/serverware-proof-client",
+                "SERVERWARE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:9090",
+                "SERVERWARE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
+                "SERVERWARE_PROXY_PROOF_CA_BUNDLE": str(tmp / "proxy-ca.pem"),
+                "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY": str(tmp / "collector-key.pem"),
+                "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY": str(tmp / "collector-key.pub.pem"),
+                "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY": str(tmp / "proxy-verifier.pub.pem"),
+                "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.serverware.internal/decision-gate/instance-01",
+                "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS": "901",
+            }.items()
+        }
+        write_env(invalid_proof_age_env, invalid_proof_age)
+        rejected_proof_age = run_runner("--env-file", str(invalid_proof_age_env), "--dry-run")
+        if rejected_proof_age.returncode == 0 or "proxy proof max age" not in detail(rejected_proof_age):
+            raise AssertionError(f"runner accepted an invalid proxy proof max age: {detail(rejected_proof_age)}")
 
         placeholder_env = tmp / "placeholder.env"
         placeholder_env.write_text("SERVERWARE_ADMIN_TOKEN=CHANGE_ME\n", encoding="utf-8")

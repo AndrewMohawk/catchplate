@@ -5,7 +5,6 @@ GATE_HOST="${DECISION_GATE_HOST:-localhost}"
 GATE_PORT="${DECISION_GATE_PORT:-9090}"
 
 python3 - "$GATE_HOST" "$GATE_PORT" <<'PY'
-import hashlib
 import json
 import socket
 import sys
@@ -51,27 +50,29 @@ status, payload = request("/echo")
 assert status == 200, payload
 assert payload["authorization_present"] is True, payload
 assert payload["authorization_scheme"] == "Bearer", payload
-assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), payload
+assert payload["credential_marker"] == "initial", payload
 assert payload["method"] == "GET", payload
 assert payload["path"] == "/echo", payload
 for key in ("authorization", "proxy_authorization", "serverware_agent", "cookie", "x_api_key"):
     assert key not in payload, payload
 
+status, payload = request("/echo?reflectCredential=1")
+assert status == 502, payload
+assert payload == {"error": "response_credential_reflection"}, payload
+
 status, payload = request("/2/tweets")
 assert status == 200, payload
 assert payload["authorization_present"] is True, payload
 assert payload["authorization_scheme"] == "Bearer", payload
-assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), payload
 assert payload["data"] == [{"id": "tweet-1", "text": "demo"}], payload
-for key in ("authorization", "proxy_authorization", "serverware_agent", "cookie", "path", "query"):
+for key in ("authorization", "authorization_sha256", "proxy_authorization", "serverware_agent", "cookie", "path", "query"):
     assert key not in payload, payload
 
 status, payload = request("/gmail/v1/users/me/messages?omitInternalDate=1")
-assert status == 200, payload
-assert set(payload) == {"messages", "serverwarePendingAgeProof"}, payload
-assert payload["serverwarePendingAgeProof"] == ["pending-message-1", "pending-message-2"], payload
-assert all("internalDate" not in item for item in payload["messages"]), payload
-assert_gmail_redaction(payload, "pending")
+assert status == 502, payload
+assert payload["error"] == "response_date_field_missing", payload
+assert payload["constraint_id"] == "gmail-list-response-30d", payload
+assert payload["field"] == "internalDate", payload
 
 status, payload = request("/gmail/v1/users/me/messages")
 assert status == 200, payload

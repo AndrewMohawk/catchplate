@@ -17,7 +17,6 @@ curl -fsS \
   https://demo-upstream:8443/echo > "$TMP_DIR/decision-gate-mitm-echo.json"
 
 python3 - "$TMP_DIR/decision-gate-mitm-echo.json" <<'PY'
-import hashlib
 import json
 import sys
 
@@ -26,7 +25,8 @@ with open(sys.argv[1], "r", encoding="utf-8") as handle:
 
 assert payload["authorization_present"] is True, payload
 assert payload["authorization_scheme"] == "Bearer", payload
-assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), payload
+assert payload["credential_marker"] == "initial", payload
+assert "authorization_sha256" not in payload, payload
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
 assert "serverware_agent" not in payload, payload
@@ -42,7 +42,6 @@ curl -fsS \
   https://demo-upstream:8443/echo > "$TMP_DIR/decision-gate-mitm-proxy-auth-echo.json"
 
 python3 - "$TMP_DIR/decision-gate-mitm-proxy-auth-echo.json" <<'PY'
-import hashlib
 import json
 import sys
 
@@ -51,7 +50,8 @@ with open(sys.argv[1], "r", encoding="utf-8") as handle:
 
 assert payload["authorization_present"] is True, payload
 assert payload["authorization_scheme"] == "Bearer", payload
-assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), payload
+assert payload["credential_marker"] == "initial", payload
+assert "authorization_sha256" not in payload, payload
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
 assert "serverware_agent" not in payload, payload
@@ -59,7 +59,6 @@ assert payload["path"] == "/echo", payload
 PY
 
 python3 - "$GATE_HOST" "$GATE_PORT" "$CA_FILE" <<'PY'
-import hashlib
 import json
 import socket
 import ssl
@@ -121,7 +120,8 @@ with socket.create_connection((host, port), timeout=10) as raw:
         assert headers.get("connection") == "keep-alive", headers
         assert payload["authorization_present"] is True, payload
         assert payload["authorization_scheme"] == "Bearer", payload
-        assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), payload
+        assert payload["credential_marker"] == "initial", payload
+        assert "authorization_sha256" not in payload, payload
         assert "authorization" not in payload, payload
         assert "serverware_agent" not in payload, payload
         assert payload["method"] == "GET", payload
@@ -139,7 +139,8 @@ with socket.create_connection((host, port), timeout=10) as raw:
         assert headers.get("connection") == "close", headers
         assert payload["authorization_present"] is True, payload
         assert payload["authorization_scheme"] == "Bearer", payload
-        assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), payload
+        assert payload["credential_marker"] == "initial", payload
+        assert "authorization_sha256" not in payload, payload
         assert "authorization" not in payload, payload
         assert "serverware_agent" not in payload, payload
         assert payload["method"] == "POST", payload

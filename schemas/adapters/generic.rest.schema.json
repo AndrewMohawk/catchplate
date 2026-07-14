@@ -3,6 +3,26 @@
   "$id": "https://serverware.local/schemas/adapters/generic.rest.schema.json",
   "title": "Serverware generic REST adapter config",
   "type": "object",
+  "$defs": {
+    "allowedResponseHeaders": {
+      "type": "array",
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {"enum": ["cache-control", "content-language", "etag", "last-modified", "retry-after", "www-authenticate"]}
+    },
+    "errorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "maxBodyBytes", "allowedFields", "allowedHeaders", "onInvalid"],
+      "properties": {
+        "mode": {"const": "json"},
+        "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "allowedFields": {"type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"}},
+        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "onInvalid": {"const": "block"}
+      }
+    }
+  },
   "required": ["request", "response"],
   "additionalProperties": false,
   "properties": {
@@ -10,9 +30,9 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "allowedQueryKeys": {"type": "array", "items": {"type": "string"}},
-        "allowedHeaders": {"type": "array", "items": {"type": "string"}},
-        "bodyMode": {"enum": ["none", "any", "json", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
+        "allowedQueryKeys": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
+        "allowedHeaders": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"}},
+        "bodyMode": {"enum": ["none", "any", "json", "formUrlencoded", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
         "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
         "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxItemBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
@@ -20,7 +40,21 @@
         "maxPairBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxRecordBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxNestedBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
-        "allowedFields": {"type": "array", "items": {"type": "string"}}
+        "allowedFields": {"type": "array", "items": {"type": "string"}},
+        "operation": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": {
+            "name": {"type": "string", "minLength": 1, "maxLength": 128},
+            "formFields": {
+              "type": "array",
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
+            }
+          }
+        }
       }
     },
     "response": {
@@ -35,7 +69,9 @@
         "maxPairBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxRecordBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "maxNestedBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
-        "allowedFields": {"type": "array", "items": {"type": "string"}}
+        "allowedFields": {"type": "array", "items": {"type": "string"}},
+        "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
+        "error": {"$ref": "#/$defs/errorResponse"}
       }
     }
   }

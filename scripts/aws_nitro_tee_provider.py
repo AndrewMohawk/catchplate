@@ -226,6 +226,7 @@ def fixture_paths() -> dict[str, Path]:
         "intermediate_cert": base / "intermediate.cert.pem",
         "leaf_key": base / "leaf.key.pem",
         "leaf_cert": base / "leaf.cert.pem",
+        "recipient_key": base / "recipient.key.pem",
     }
 
 
@@ -281,6 +282,18 @@ def ensure_fixture_chain() -> tuple[Any, x509.Certificate, x509.Certificate, x50
     return leaf_key, leaf_cert, intermediate_cert, root_cert
 
 
+def ensure_fixture_recipient_key() -> rsa.RSAPrivateKey:
+    path = fixture_paths()["recipient_key"]
+    if path.exists():
+        key = load_private_key(path)
+        if not isinstance(key, rsa.RSAPrivateKey):
+            raise ValueError("fixture recipient key must be RSA")
+        return key
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    write_pem_private_key(path, key)
+    return key
+
+
 def parse_pcr_json(raw: str) -> dict[int, bytes]:
     if not raw.strip():
         return {}
@@ -330,6 +343,7 @@ def decode_cose_es384_signature(raw_signature: bytes) -> bytes:
 
 def make_fixture_attestation_document(claims: dict[str, Any]) -> bytes:
     leaf_key, leaf_cert, intermediate_cert, root_cert = ensure_fixture_chain()
+    recipient_key = ensure_fixture_recipient_key()
     payload = {
         "module_id": "serverware-nitro-fixture-module",
         "timestamp": int(time.time() * 1000),
@@ -340,6 +354,10 @@ def make_fixture_attestation_document(claims: dict[str, Any]) -> bytes:
             root_cert.public_bytes(serialization.Encoding.DER),
             intermediate_cert.public_bytes(serialization.Encoding.DER),
         ],
+        "public_key": recipient_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ),
         "user_data": claims_user_data(claims),
     }
     if claims.get("nonce") is not None:
@@ -495,7 +513,7 @@ def verify_nitro_document(raw: bytes, claims: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("Nitro attestation COSE signature verification failed") from exc
     pcrs, debug = verify_payload_semantics(payload, claims)
     root = x509.load_der_x509_certificate(payload["cabundle"][0])
-    return {
+    result = {
         "provider": PROVIDER,
         "tee_platform": TEE_PLATFORM,
         "verified": True,
@@ -508,6 +526,27 @@ def verify_nitro_document(raw: bytes, claims: dict[str, Any]) -> dict[str, Any]:
         "root_sha256": certificate_sha256(root),
         "user_data_sha256": sha256_prefixed(payload["user_data"]),
     }
+    recipient_public_key_der = payload.get("public_key")
+    if recipient_public_key_der is not None:
+        if not isinstance(recipient_public_key_der, bytes) or not 1 <= len(recipient_public_key_der) <= 1024:
+            raise ValueError("Nitro attestation public_key must be 1-1024 bytes")
+        try:
+            recipient_public_key = serialization.load_der_public_key(recipient_public_key_der)
+        except ValueError as exc:
+            raise ValueError("Nitro attestation public_key is not valid DER") from exc
+        if not isinstance(recipient_public_key, rsa.RSAPublicKey):
+            raise ValueError("Nitro KMS recipient public_key must be RSA")
+        numbers = recipient_public_key.public_numbers()
+        if recipient_public_key.key_size < 2048 or recipient_public_key.key_size > 4096 or numbers.e != 65537:
+            raise ValueError("Nitro KMS recipient RSA key must be 2048-4096 bits with exponent 65537")
+        result.update(
+            {
+                "recipient_public_key_sha256": sha256_prefixed(recipient_public_key_der),
+                "recipient_public_key_algorithm": "RSAES_OAEP_SHA_256",
+                "recipient_public_key_bits": recipient_public_key.key_size,
+            }
+        )
+    return result
 
 
 def raw_quote_for_claims(claims: dict[str, Any]) -> bytes:
@@ -564,6 +603,8 @@ def verify() -> None:
 def expected_field_checks(claims: dict[str, Any], expected: dict[str, Any]) -> None:
     checks = {
         "policy_bundle_digest": "policy_bundle_digest",
+        "policy_sequence": "policy_sequence",
+        "policy_high_water_digest": "policy_high_water_digest",
         "ca_intermediate_spki_sha256": "ca_intermediate_spki_sha256",
         "rollback_epoch": "rollback_epoch",
         "release_channel": "release_channel",
@@ -637,6 +678,25 @@ def invoke_kms_release_command(command: str, request: dict[str, Any]) -> dict[st
     key_provider = response.get("key_provider")
     if not isinstance(key_provider, dict) or not key_provider.get("key_id"):
         raise SystemExit("external Nitro KMS release command must bind a key_provider.key_id")
+    tee = request.get("tee") or {}
+    if response.get("attestation_document_sha256") != tee.get("raw_attestation_document_sha256"):
+        raise SystemExit("external Nitro KMS release command attestation document digest mismatch")
+    if response.get("recipient_public_key_sha256") != tee.get("recipient_public_key_sha256"):
+        raise SystemExit("external Nitro KMS release command recipient public key digest mismatch")
+    recipient_ciphertext_b64 = response.get("recipient_ciphertext_b64")
+    if not isinstance(recipient_ciphertext_b64, str) or not recipient_ciphertext_b64:
+        raise SystemExit("external Nitro KMS release command must return recipient ciphertext")
+    try:
+        recipient_ciphertext = base64.b64decode(
+            recipient_ciphertext_b64 + "=" * (-len(recipient_ciphertext_b64) % 4), validate=True
+        )
+    except Exception as exc:
+        raise SystemExit("external Nitro KMS release command recipient ciphertext is invalid base64") from exc
+    recipient_ciphertext_sha256 = sha256_prefixed(recipient_ciphertext)
+    if response.get("recipient_ciphertext_sha256") != recipient_ciphertext_sha256:
+        raise SystemExit("external Nitro KMS release command recipient ciphertext digest mismatch")
+    if response.get("material_handle") != recipient_ciphertext_sha256:
+        raise SystemExit("external Nitro KMS release command material handle mismatch")
     return response
 
 

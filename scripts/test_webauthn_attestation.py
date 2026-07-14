@@ -182,6 +182,52 @@ def main() -> None:
             root_id="trusted-root-v1",
         )
 
+        unauthorized_options = webauthn.registration_options("user:unauthorized", "stolen-session key")
+        unauthorized_response = registration_response(
+            webauthn,
+            unauthorized_options["publicKey"]["challenge"],
+            leaf_key=trusted_leaf_key,
+            leaf_cert=trusted_leaf_cert,
+            intermediate_cert=trusted_intermediate_cert,
+        )
+        try:
+            webauthn.verify_registration(
+                "user:unauthorized",
+                "stolen-session key",
+                unauthorized_response,
+                require_authorization=True,
+            )
+        except webauthn.WebAuthnError as exc:
+            if "lacks enrollment authorization" not in str(exc):
+                raise
+        else:
+            raise SystemExit("registration challenge without bootstrap or existing-key authorization was accepted")
+
+        authorized_options = webauthn.registration_options(
+            "user:authorized",
+            "bootstrap key",
+            authorization={
+                "mode": "bootstrap-token",
+                "payload_digest": "sha256:" + "1" * 64,
+                "existing_credential_count": 0,
+            },
+        )
+        authorized_response = registration_response(
+            webauthn,
+            authorized_options["publicKey"]["challenge"],
+            leaf_key=trusted_leaf_key,
+            leaf_cert=trusted_leaf_cert,
+            intermediate_cert=trusted_intermediate_cert,
+        )
+        authorized = webauthn.verify_registration(
+            "user:authorized",
+            "bootstrap key",
+            authorized_response,
+            require_authorization=True,
+        )
+        if (authorized.get("_registration_authorization") or {}).get("mode") != "bootstrap-token":
+            raise SystemExit(f"authorized registration did not retain enrollment evidence: {authorized}")
+
         opts = webauthn.registration_options("user:test", "trusted yubikey")
         trusted_response = registration_response(
             webauthn,

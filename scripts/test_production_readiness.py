@@ -118,11 +118,19 @@ def expect_failure(env: dict[str, str], expected: str) -> None:
 
 def good_env() -> dict[str, str]:
     env = os.environ.copy()
+    env.pop("SERVERWARE_DECISION_GATE_BASE", None)
     env.update(
         {
             "SERVERWARE_RELEASE_CHANNEL": "prod",
             "SERVERWARE_PUBLIC_URL": "https://serverware.prod.acme-corp.net",
+            "SERVERWARE_CONTROL_PLANE_TLS_DIR": "/etc/serverware/control-plane-tls",
+            "SERVERWARE_AUDIT_ANCHOR_TLS_DIR": "/etc/serverware/audit-anchor-tls",
+            "SERVERWARE_PRODUCTION_CONTROL_PLANE_BASE": "https://serverware.prod.acme-corp.net:3000",
+            "SERVERWARE_ATTESTATION_HELPER_DIR": "/opt/serverware/attestation-helpers",
+            "SERVERWARE_RELEASE_PROVENANCE_FILE": "/opt/serverware/release/release-provenance.json",
+            "SERVERWARE_IMAGE_SIGNATURES_FILE": "/opt/serverware/release/image-signatures.json",
             "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
+            "SERVERWARE_AUDIT_ANCHOR_TOKEN": "prod-anchor-token-32-bytes-minimum-value",
             "SERVERWARE_ADMIN_ROLES": "admin,approver,auditor,policy_author,policy_publisher,credential_owner",
             "SERVERWARE_OIDC_ENABLED": "1",
             "SERVERWARE_OIDC_ISSUER": "https://idp.prod.acme-corp.net",
@@ -134,7 +142,8 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "0",
             "SERVERWARE_CA_INSTALL_SESSION_TTL_SECONDS": "300",
             "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
-            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
+            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
+            "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN": "test-production-bootstrap-token-32-chars-minimum",
             "SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED": "1",
             "SERVERWARE_POLICY_CANARY_REQUIRED": "1",
             "SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS": "60",
@@ -144,12 +153,42 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_TEE_PLATFORM": "aws-nitro",
             "SERVERWARE_TEE_QUOTE_COMMAND": "python scripts/aws_nitro_tee_provider.py quote",
             "SERVERWARE_TEE_QUOTE_VERIFY_COMMAND": "python scripts/aws_nitro_tee_provider.py verify",
+            "SERVERWARE_KEY_RELEASE_REQUIRED": "1",
             "SERVERWARE_KEY_RELEASE_COMMAND": "python scripts/aws_nitro_tee_provider.py release",
+            "SERVERWARE_MASTER_KEY_UNSEAL_COMMAND": "/usr/bin/python3 /app/scripts/aws_nitro_kms_unseal.py unseal",
+            "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": "/opt/serverware/bin/nsm-unseal --ciphertext {recipient_ciphertext_path}",
+            "SERVERWARE_NITRO_NSM_UNSEAL_OUTPUT_FORMAT": "json",
+            "SERVERWARE_KEY_RELEASE_ALLOW_DEBUG": "0",
+            "SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH": "1",
+            "SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST": "1",
+            "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": "sha256:" + "9" * 64,
+            "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "1",
+            "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND": "/opt/serverware/bin/lease-recipient-attest",
+            "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND": "/opt/serverware/bin/response-proof-attest",
+            "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.serverware.internal/decision-gate/instance-01",
+            "SERVERWARE_POLICY_MIN_SEQUENCE": "1",
+            "SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH": "1",
+            "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": "/opt/serverware/release/proxy-response-proof.json",
+            "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/serverware/bin/serverware-proof-client",
+            "SERVERWARE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:8080",
+            "SERVERWARE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
+            "SERVERWARE_PROXY_PROOF_CA_BUNDLE": "/etc/serverware/proxy-ca.pem",
+            "SERVERWARE_PROXY_PROOF_AGENT_ID": "production-proof-agent",
+            "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY": "/etc/serverware/proof-collector.key.pem",
+            "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY": "/etc/serverware/proof-collector.pub.pem",
+            "SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID": "sha256:" + "a" * 64,
+            "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY": "/etc/serverware/proxy-proof-verifier.pub.pem",
+            "SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID": "sha256:" + "b" * 64,
+            "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND": "/opt/serverware/bin/lease-recipient-verify",
+            "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND": "/opt/serverware/bin/control-plane-attestation-verify",
             "SERVERWARE_NITRO_ATTESTATION_COMMAND": "/opt/serverware/bin/nitro-nsm-attest",
+            "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE": "/opt/serverware/bin/nsm-attest --user-data {user_data_path} --out {output_path}",
+            "SERVERWARE_NITRO_ROOT_CERT": "/etc/serverware/nitro-root.pem",
             "SERVERWARE_NITRO_ROOT_CERT_PEM": "-----BEGIN CERTIFICATE-----\\nMIIB\\n-----END CERTIFICATE-----",
             "SERVERWARE_NITRO_EXPECTED_PCRS": canonical_json({"0": "11" * 48, "1": "22" * 48, "2": "33" * 48}),
             "SERVERWARE_NITRO_REQUIRE_KMS_COMMAND": "1",
             "SERVERWARE_NITRO_KMS_RELEASE_COMMAND": "/opt/serverware/bin/kms-unseal --key awskms://arn:aws:kms:us-east-1:111122223333:key/serverware",
+            "SERVERWARE_NITRO_KMS_MATERIALS_FILE": "/etc/serverware/kms-materials.json",
             "SERVERWARE_NITRO_ALLOWED_MATERIALS": "broker-kek,decision-gate-ca",
             "SERVERWARE_IMAGE_SIGNATURE_PROVIDER": "sigstore-command",
             "SERVERWARE_IMAGE_SIGN_COMMAND": "python3 scripts/cosign_sigstore.py sign",
@@ -159,6 +198,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_COSIGN_KEY_ID": "sha256:" + "c" * 64,
             "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID": "sha256:" + "5" * 64,
             "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY": "1",
+            "SERVERWARE_RELEASE_ANCHOR_BASE": "https://release-anchor.prod.acme-corp.net",
             "SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED": "1",
             "SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND": "python3 scripts/transparency_checkpoint.py checkpoint",
             "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE": "http",
@@ -172,6 +212,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_GRANT_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@grant-store/serverware",
             "SERVERWARE_AUDIT_STORE_BACKEND": "postgres",
             "SERVERWARE_AUDIT_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@audit-store/serverware",
+            "SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL": "https://serverware.internal/api/data-plane/grants/consume",
             "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL": "https://serverware.internal/api/data-plane/rate-limits/consume",
             "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": "prod-data-plane-token-32-bytes-min",
             "SERVERWARE_AGENT_EGRESS_POLICY_REQUIRED": "1",
@@ -186,6 +227,8 @@ def good_env() -> dict[str, str]:
                     "registry.prod.acme-corp.net/serverware/decision-gate@sha256:" + "b" * 64,
                 ]
             ),
+            "SERVERWARE_CONTROL_PLANE_IMAGE": "registry.prod.acme-corp.net/serverware/control@sha256:" + "a" * 64,
+            "SERVERWARE_DECISION_GATE_IMAGE": "registry.prod.acme-corp.net/serverware/decision-gate@sha256:" + "b" * 64,
         }
     )
     for name in (
@@ -295,6 +338,8 @@ def run_shared_store_probe_helper() -> None:
     required_by_label = {label: set(tables) for label, _, tables in calls}
     if "rate_limit_counters" not in required_by_label.get("metadata", set()):
         raise AssertionError(f"metadata probe did not require shared quota table: {calls}")
+    if "policy_high_water" not in required_by_label.get("metadata", set()):
+        raise AssertionError(f"metadata probe did not require policy rollback state: {calls}")
     if "control_plane_approvals" not in required_by_label.get("metadata", set()):
         raise AssertionError(f"metadata probe did not require two-person approval table: {calls}")
     if "approval_grant_consumptions" not in required_by_label.get("grant", set()):
@@ -381,7 +426,7 @@ def main() -> None:
 
     partial_two_person_env = good_env()
     partial_two_person_env["SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS"] = "credential.update,policy.publish"
-    expect_failure(partial_two_person_env, "credential, route, policy publish, RBAC")
+    expect_failure(partial_two_person_env, "must cover credential, route, policy publish")
 
     no_policy_dry_run_env = good_env()
     no_policy_dry_run_env.pop("SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED", None)
@@ -395,6 +440,34 @@ def main() -> None:
     weak_policy_canary_env["SERVERWARE_POLICY_CANARY_MIN_AUDIT_EVENTS"] = "0"
     expect_failure(weak_policy_canary_env, "audit evidence")
 
+    no_recipient_attestation_env = good_env()
+    no_recipient_attestation_env.pop("SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED", None)
+    expect_failure(no_recipient_attestation_env, "recipient attestation")
+
+    insecure_credential_transport_env = good_env()
+    insecure_credential_transport_env["SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES"] = "1"
+    expect_failure(insecure_credential_transport_env, "must be disabled")
+
+    missing_recipient_verifier_env = good_env()
+    missing_recipient_verifier_env.pop("SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND", None)
+    expect_failure(missing_recipient_verifier_env, "RECIPIENT_VERIFY_COMMAND")
+
+    debug_key_release_env = good_env()
+    debug_key_release_env["SERVERWARE_KEY_RELEASE_ALLOW_DEBUG"] = "1"
+    expect_failure(debug_key_release_env, "reject debug attestation")
+
+    unbound_key_release_env = good_env()
+    unbound_key_release_env.pop("SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST", None)
+    expect_failure(unbound_key_release_env, "measured data-plane binary digest")
+
+    invalid_binary_digest_env = good_env()
+    invalid_binary_digest_env["SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"] = "sha256:not-a-measurement"
+    expect_failure(invalid_binary_digest_env, "64-hex digest")
+
+    fixture_recipient_verifier_env = good_env()
+    fixture_recipient_verifier_env["SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND"] = "python fixture.py"
+    expect_failure(fixture_recipient_verifier_env, "must not use fixture helpers")
+
     insecure_transparency_env = good_env()
     insecure_transparency_env["SERVERWARE_TRANSPARENCY_LOG_URL"] = "http://transparency.example/checkpoints"
     insecure_transparency_env["SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP"] = "1"
@@ -403,6 +476,10 @@ def main() -> None:
     local_quota_env = good_env()
     local_quota_env.pop("SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL", None)
     expect_failure(local_quota_env, "shared rate-limit consume URL")
+
+    local_grant_env = good_env()
+    local_grant_env.pop("SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL", None)
+    expect_failure(local_grant_env, "shared JIT grant consume URL")
 
     mutable_image_env = good_env()
     mutable_image_env["SERVERWARE_PRODUCTION_IMAGES"] = "registry.prod.acme-corp.net/serverware/control:latest"

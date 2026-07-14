@@ -21,6 +21,8 @@ SAFE_CLAIM_FIELDS = (
     "nonce",
     "runtime_manifest_digest",
     "policy_bundle_digest",
+    "policy_sequence",
+    "policy_high_water_digest",
     "ca_intermediate_spki_sha256",
     "data_plane_binary_digest",
     "rollback_epoch",
@@ -155,6 +157,8 @@ def run_provider(mode: str, payload: dict[str, Any], env: dict[str, str]) -> dic
 def expected_from_claims(claims: dict[str, Any]) -> dict[str, Any]:
     return {
         "policy_bundle_digest": claims.get("policy_bundle_digest"),
+        "policy_sequence": claims.get("policy_sequence"),
+        "policy_high_water_digest": claims.get("policy_high_water_digest"),
         "ca_intermediate_spki_sha256": claims.get("ca_intermediate_spki_sha256"),
         "rollback_epoch": claims.get("rollback_epoch"),
         "release_channel": claims.get("release_channel"),

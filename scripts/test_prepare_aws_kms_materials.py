@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -94,8 +95,9 @@ def main() -> None:
         )
         aws = tmp / "aws"
         fake_aws(aws)
+        aws_command = shlex.join([sys.executable, str(aws)])
 
-        dry = run_helper("--spec", str(spec), "--aws-binary", str(aws), "--dry-run")
+        dry = run_helper("--spec", str(spec), "--aws-binary", aws_command, "--dry-run")
         if dry.returncode != 0:
             raise AssertionError(f"dry-run failed: {detail(dry)}")
         if "broker-kek-plaintext" in detail(dry):
@@ -120,7 +122,7 @@ def main() -> None:
             ),
             encoding="utf-8",
         )
-        missing_dry = run_helper("--spec", str(missing_spec), "--aws-binary", str(aws), "--dry-run")
+        missing_dry = run_helper("--spec", str(missing_spec), "--aws-binary", aws_command, "--dry-run")
         if missing_dry.returncode != 0:
             raise AssertionError(f"dry-run should allow missing plaintext files: {detail(missing_dry)}")
         missing_dry_plan = json.loads(missing_dry.stdout.decode("utf-8"))
@@ -130,7 +132,7 @@ def main() -> None:
             raise AssertionError(f"dry-run did not report missing plaintext file state: {missing_dry_plan}")
         if missing_entry.get("plaintext_bytes") is not None:
             raise AssertionError(f"dry-run reported bytes for missing plaintext: {missing_dry_plan}")
-        missing_real = run_helper("--spec", str(missing_spec), "--aws-binary", str(aws), "--out", str(tmp / "missing.json"))
+        missing_real = run_helper("--spec", str(missing_spec), "--aws-binary", aws_command, "--out", str(tmp / "missing.json"))
         if missing_real.returncode == 0 or "plaintext_path is not a file" not in detail(missing_real):
             raise AssertionError(f"real run accepted a missing plaintext file: {detail(missing_real)}")
 
@@ -146,7 +148,7 @@ def main() -> None:
             ),
             encoding="utf-8",
         )
-        partial = run_helper("--spec", str(partial_spec), "--aws-binary", str(aws), "--dry-run")
+        partial = run_helper("--spec", str(partial_spec), "--aws-binary", aws_command, "--dry-run")
         if partial.returncode == 0 or "missing required materials" not in detail(partial):
             raise AssertionError(f"materials helper accepted a partial material spec: {detail(partial)}")
 
@@ -170,12 +172,12 @@ def main() -> None:
             ),
             encoding="utf-8",
         )
-        extra = run_helper("--spec", str(extra_spec), "--aws-binary", str(aws), "--dry-run")
+        extra = run_helper("--spec", str(extra_spec), "--aws-binary", aws_command, "--dry-run")
         if extra.returncode == 0 or "unauthorized materials" not in detail(extra):
             raise AssertionError(f"materials helper accepted an unauthorized material spec: {detail(extra)}")
 
         out = tmp / "kms-materials.json"
-        result = run_helper("--spec", str(spec), "--aws-binary", str(aws), "--out", str(out))
+        result = run_helper("--spec", str(spec), "--aws-binary", aws_command, "--out", str(out))
         if result.returncode != 0:
             raise AssertionError(f"materials helper failed: {detail(result)}")
         materials = json.loads(out.read_text(encoding="utf-8"))
@@ -190,7 +192,7 @@ def main() -> None:
             "--spec",
             str(spec),
             "--aws-binary",
-            str(aws),
+            aws_command,
             "--out",
             str(tmp / "rejected.json"),
             env={"SERVERWARE_FAKE_AWS_RETURN_PLAINTEXT": "1"},

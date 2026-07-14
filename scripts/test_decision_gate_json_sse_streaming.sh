@@ -125,15 +125,14 @@ def assert_json_sse_result(body: bytes, expected_count: int) -> None:
     assert len(events) == expected_count, len(events)
     for index, item in enumerate(events):
         assert item == {
-            "authorization_present": True,
-            "authorization_scheme": "Bearer",
-            "authorization_sha256": item["authorization_sha256"],
+            "authorization_present": False,
+            "authorization_scheme": None,
             "index": index,
             "kept": f"value-{index}",
             "nested": {"safe": f"nested-{index}"},
             "sawSecret": False,
         }, item
-        assert item["authorization_sha256"].startswith("sha256:"), item
+        assert "authorization_sha256" not in item, item
 
 
 def request_absolute(payload: bytes):

@@ -14,6 +14,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import run_production_readiness  # noqa: E402
 
 KEY = "SERVERWARE_PRODUCTION_IMAGES"
+CONTROL_IMAGE_KEY = "SERVERWARE_CONTROL_PLANE_IMAGE"
+DECISION_GATE_IMAGE_KEY = "SERVERWARE_DECISION_GATE_IMAGE"
 IMAGE_REF_RE = re.compile(r"^(?P<repo>[^@,\s]+)@(?P<digest>sha256:[0-9a-f]{64})$")
 
 
@@ -77,6 +79,18 @@ def validate_production_images(value: str) -> list[dict[str, str]]:
     return images
 
 
+def service_image_assignments(images: list[dict[str, str]]) -> dict[str, str]:
+    by_name = {item["name"]: item["ref"] for item in images}
+    expected = {"control", "decision-gate"}
+    if set(by_name) != expected:
+        raise ValueError(f"production images must contain exactly {sorted(expected)}; found {sorted(by_name)}")
+    return {
+        KEY: ",".join(item["ref"] for item in images),
+        CONTROL_IMAGE_KEY: by_name["control"],
+        DECISION_GATE_IMAGE_KEY: by_name["decision-gate"],
+    }
+
+
 def find_assignment_lines(lines: list[str], key: str) -> list[int]:
     matches: list[int] = []
     for index, raw in enumerate(lines):
@@ -128,7 +142,7 @@ def redacted_summary(
         "production_images_count": len(images),
         "production_images": images,
         "target_env_keys": env_keys,
-        "updated_key": KEY,
+        "updated_keys": [KEY, CONTROL_IMAGE_KEY, DECISION_GATE_IMAGE_KEY],
         "secret_values_redacted": True,
     }
 
@@ -147,9 +161,14 @@ def main() -> None:
     try:
         production_images_value = load_images_fragment(images_env)
         images = validate_production_images(production_images_value)
+        image_assignments = service_image_assignments(images)
         target_assignments = load_env_assignments(env_file)
         existing = env_file.read_text(encoding="utf-8")
-        merged, changed = merge_env_text(existing, KEY, production_images_value)
+        merged = existing
+        changed = False
+        for key, value in image_assignments.items():
+            merged, key_changed = merge_env_text(merged, key, value)
+            changed = changed or key_changed
         if not args.dry_run:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_text(merged, encoding="utf-8")
@@ -160,7 +179,7 @@ def main() -> None:
                     env_file=env_file,
                     out=out,
                     images=images,
-                    env_keys=sorted(set(target_assignments) | {KEY}),
+                    env_keys=sorted(set(target_assignments) | set(image_assignments)),
                     changed=changed,
                     dry_run=args.dry_run,
                 )

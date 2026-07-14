@@ -7,7 +7,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, quote_plus, urlencode, urlsplit, urlunsplit
 
 from mitmproxy import http
 
@@ -29,6 +29,7 @@ from serverware.policy_bundle import (
 SENSITIVE_QUERY_KEYS = {"access_token", "api_key", "apikey", "key", "token", "auth", "authorization"}
 SECRET_FIELD_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 VOLATILE_DIGEST_HEADERS = {"date", "user-agent", "content-length", "connection", "authorization", "proxy-authorization"}
+_RESPONSE_CREDENTIAL_GUARD_ATTR = "_serverware_response_credential_guard"
 
 
 @dataclass
@@ -41,6 +42,73 @@ class RequestEvaluation:
     params: dict[str, str] | None = None
     request_digest: str | None = None
     operation_digest: str | None = None
+
+
+class _ResponseCredentialGuard:
+    def __init__(self) -> None:
+        self._patterns: list[bytearray] = []
+
+    def add_text_encodings(self, value: str) -> None:
+        raw = value.encode("utf-8")
+        digest = hashlib.sha256(raw).hexdigest().encode("ascii")
+        candidates = [
+            raw,
+            quote(value, safe="").encode("ascii"),
+            quote_plus(value, safe="").encode("ascii"),
+            base64.b64encode(raw),
+            base64.urlsafe_b64encode(raw).rstrip(b"="),
+            digest,
+            b"sha256:" + digest,
+        ]
+        for ensure_ascii in (False, True):
+            encoded = json.dumps(value, ensure_ascii=ensure_ascii)
+            candidates.append(encoded[1:-1].encode("utf-8"))
+        for candidate in candidates:
+            if candidate and not any(pattern == candidate for pattern in self._patterns):
+                self._patterns.append(bytearray(candidate))
+
+    def detects(self, value: bytes) -> bool:
+        return any(value.find(pattern) >= 0 for pattern in self._patterns)
+
+    def detects_response(self, response: Any) -> bool:
+        if not response:
+            return False
+        raw_content = getattr(response, "raw_content", None)
+        if isinstance(raw_content, (bytes, bytearray)) and self.detects(bytes(raw_content)):
+            return True
+        try:
+            content = response.content
+        except Exception:
+            content = None
+        if isinstance(content, (bytes, bytearray)) and content != raw_content and self.detects(bytes(content)):
+            return True
+        headers = getattr(response, "headers", {})
+        fields = getattr(headers, "fields", None)
+        values = (value for _, value in fields) if fields is not None else headers.values()
+        for value in values:
+            encoded = value if isinstance(value, bytes) else str(value).encode("utf-8")
+            if self.detects(encoded):
+                return True
+        return False
+
+    def clear(self) -> None:
+        for pattern in self._patterns:
+            pattern[:] = b"\x00" * len(pattern)
+        self._patterns.clear()
+
+
+def _install_response_credential_guard(flow: http.HTTPFlow, guard: _ResponseCredentialGuard) -> None:
+    existing = getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
+    if isinstance(existing, _ResponseCredentialGuard):
+        existing.clear()
+    setattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, guard)
+
+
+def _take_response_credential_guard(flow: http.HTTPFlow) -> _ResponseCredentialGuard | None:
+    guard = getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
+    if hasattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR):
+        delattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR)
+    return guard if isinstance(guard, _ResponseCredentialGuard) else None
 
 
 def redact_url(url: str) -> str:
@@ -188,40 +256,61 @@ def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy,
     injection = credential_policy.injection or {"type": credential.get("kind", "bearer")}
     injection_type = injection.get("type", credential.get("kind", "bearer"))
     secret = _secret_for_injection(str(credential["secret"]), injection)
-
-    if injection_type == "bearer":
-        header = injection.get("header", "Authorization")
-        prefix = injection.get("prefix", "Bearer ")
-        flow.request.headers[header] = f"{prefix}{secret}"
-        return f"injected bearer into {header}"
-    if injection_type == "header":
-        name = injection.get("name", "X-Api-Key")
-        flow.request.headers[name] = f"{injection.get('prefix', '')}{secret}"
-        return f"injected header {name}"
-    if injection_type == "query":
-        name = injection.get("name", "access_token")
-        flow.request.query[name] = secret
-        return f"injected query parameter {name}"
-    if injection_type == "cookie":
-        name = injection.get("name", "serverware_token")
-        current = flow.request.headers.get("Cookie", "")
-        flow.request.headers["Cookie"] = f"{current}{'; ' if current else ''}{name}={secret}"
-        return f"injected cookie {name}"
-    if injection_type == "basic":
-        username = injection.get("username") or credential.get("metadata", {}).get("username")
-        password = secret
-        try:
-            decoded = json.loads(secret)
-            username = username or decoded.get("username")
-            password = decoded.get("password", password)
-        except Exception:
-            pass
-        if not username:
-            raise ValueError("basic credential missing username")
-        token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
-        flow.request.headers[injection.get("header", "Authorization")] = f"Basic {token}"
-        return "injected basic authorization"
-    raise ValueError(f"unknown injection type {injection_type}")
+    guard = _ResponseCredentialGuard()
+    guard.add_text_encodings(secret)
+    installed = False
+    try:
+        if injection_type == "bearer":
+            header = injection.get("header", "Authorization")
+            value = f"{injection.get('prefix', 'Bearer ')}{secret}"
+            flow.request.headers[header] = value
+            guard.add_text_encodings(value)
+            reason = f"injected bearer into {header}"
+        elif injection_type == "header":
+            name = injection.get("name", "X-Api-Key")
+            value = f"{injection.get('prefix', '')}{secret}"
+            flow.request.headers[name] = value
+            guard.add_text_encodings(value)
+            reason = f"injected header {name}"
+        elif injection_type == "query":
+            name = injection.get("name", "access_token")
+            flow.request.query[name] = secret
+            reason = f"injected query parameter {name}"
+        elif injection_type == "cookie":
+            name = injection.get("name", "serverware_token")
+            current = flow.request.headers.get("Cookie", "")
+            flow.request.headers["Cookie"] = f"{current}{'; ' if current else ''}{name}={secret}"
+            guard.add_text_encodings(f"{name}={secret}")
+            reason = f"injected cookie {name}"
+        elif injection_type == "basic":
+            username = injection.get("username") or credential.get("metadata", {}).get("username")
+            password = secret
+            try:
+                decoded = json.loads(secret)
+                username = username or decoded.get("username")
+                password = decoded.get("password", password)
+            except Exception:
+                pass
+            if not username:
+                raise ValueError("basic credential missing username")
+            password_text = str(password)
+            raw = f"{username}:{password_text}"
+            token = base64.b64encode(raw.encode("utf-8")).decode("ascii")
+            value = f"Basic {token}"
+            flow.request.headers[injection.get("header", "Authorization")] = value
+            guard.add_text_encodings(password_text)
+            guard.add_text_encodings(raw)
+            guard.add_text_encodings(token)
+            guard.add_text_encodings(value)
+            reason = "injected basic authorization"
+        else:
+            raise ValueError(f"unknown injection type {injection_type}")
+        _install_response_credential_guard(flow, guard)
+        installed = True
+        return reason
+    finally:
+        if not installed:
+            guard.clear()
 
 
 def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
@@ -498,6 +587,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     flow.metadata["serverware_credential_version"] = credential_version_int
     flow.metadata["serverware_request_digest"] = request_digest
     flow.metadata["serverware_operation_digest"] = operation_digest
+    flow.metadata["serverware_operation"] = dict(operation_fields)
     flow.metadata["serverware_route"] = route
     flow.metadata["serverware_params"] = params
     runtime.log_request(route.id, flow.request.method, safe_url, "allowed", None, injection_reason, audit_context)
@@ -514,11 +604,39 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
 
 
 def evaluate_response(flow: http.HTTPFlow) -> PolicyDecision:
+    response_credential_guard = _take_response_credential_guard(flow)
+    try:
+        return _evaluate_response(flow, response_credential_guard)
+    finally:
+        if response_credential_guard:
+            response_credential_guard.clear()
+
+
+def _evaluate_response(
+    flow: http.HTTPFlow,
+    response_credential_guard: _ResponseCredentialGuard | None,
+) -> PolicyDecision:
     route = flow.metadata.get("serverware_route")
     params = flow.metadata.get("serverware_params") or {}
     route_id = flow.metadata.get("serverware_route_id")
     if not route:
-        return PolicyDecision(True)
+        if flow.metadata.get("serverware_blocked_response") is True:
+            return PolicyDecision(True)
+        safe_url = redact_url(flow.request.pretty_url)
+        runtime.log_request(
+            route_id,
+            flow.request.method,
+            safe_url,
+            "blocked",
+            502,
+            "response policy context missing",
+        )
+        return PolicyDecision(
+            False,
+            "response policy context missing",
+            502,
+            {"error": "response_policy_context_missing"},
+        )
     adapter = get_adapter(route.adapter_type)
     decision = adapter.validate_response(flow, route, params)
     status_code = flow.response.status_code if flow.response else None
@@ -554,5 +672,21 @@ def evaluate_response(flow: http.HTTPFlow) -> PolicyDecision:
             audit_context,
         )
         return constraint_decision
+    if response_credential_guard and response_credential_guard.detects_response(flow.response):
+        runtime.log_request(
+            route_id,
+            flow.request.method,
+            redact_url(flow.request.pretty_url),
+            "blocked",
+            502,
+            "response credential reflection denied",
+            audit_context,
+        )
+        return PolicyDecision(
+            False,
+            "response credential reflection denied",
+            502,
+            {"error": "response_credential_reflection"},
+        )
     runtime.log_request(route_id, flow.request.method, redact_url(flow.request.pretty_url), "response", status_code, None, audit_context)
     return decision

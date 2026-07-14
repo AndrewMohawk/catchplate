@@ -5,7 +5,6 @@ GATE_HOST="${DECISION_GATE_HOST:-localhost}"
 GATE_PORT="${DECISION_GATE_PORT:-9090}"
 
 python3 - "$GATE_HOST" "$GATE_PORT" <<'PY'
-import hashlib
 import json
 import socket
 import sys
@@ -39,7 +38,8 @@ status, payload = request(
 assert status == 200, payload
 assert payload["authorization_present"] is True, payload
 assert payload["authorization_scheme"] == "Bearer", payload
-assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), payload
+assert payload["credential_marker"] == "initial", payload
+assert "authorization_sha256" not in payload, payload
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
 assert "serverware_agent" not in payload, payload
@@ -56,7 +56,8 @@ status, payload = request(
 assert status == 200, payload
 assert payload["authorization_present"] is True, payload
 assert payload["authorization_scheme"] == "Bearer", payload
-assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), payload
+assert payload["credential_marker"] == "initial", payload
+assert "authorization_sha256" not in payload, payload
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
 assert "serverware_agent" not in payload, payload

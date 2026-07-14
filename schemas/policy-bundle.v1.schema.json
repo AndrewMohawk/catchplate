@@ -14,7 +14,7 @@
         "type": {"enum": ["string", "number", "integer", "boolean", "object", "array", "null"]},
         "minLength": {"type": "integer", "minimum": 0},
         "maxLength": {"type": "integer", "minimum": 0},
-        "pattern": {"type": "string"},
+        "pattern": {"type": "string", "maxLength": 256},
         "min": {"type": "number"},
         "max": {"type": "number"},
         "minItems": {"type": "integer", "minimum": 0},
@@ -36,7 +36,9 @@
             "operationPolicy",
             "queryDateWindow",
             "queryNumericBounds",
+            "requestTimeWindow",
             "jsonBody",
+            "formBody",
             "responseDateWindow"
           ]
         },
@@ -44,35 +46,65 @@
         "statusCode": {"type": "integer", "minimum": 400, "maximum": 599},
         "store": {"enum": ["local", "shared"]},
         "max": {"type": "number"},
-        "windowSeconds": {"type": "integer", "minimum": 1},
+        "windowSeconds": {"type": "integer", "minimum": 1, "maximum": 31536000},
         "key": {
           "type": "object",
           "additionalProperties": false,
           "properties": {
             "scope": {
               "type": "array",
-              "items": {"type": "string"}
+              "minItems": 1,
+              "maxItems": 5,
+              "uniqueItems": true,
+              "items": {"enum": ["principal", "credential", "credentialVersion", "route", "operation"]}
             },
             "operationFields": {
               "type": "array",
-              "items": {"type": "string"}
+              "maxItems": 16,
+              "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
             }
           }
         },
-        "allowedOperations": {"type": "array", "items": {"type": "string"}},
-        "deniedOperations": {"type": "array", "items": {"type": "string"}},
-        "parameters": {"type": "array", "items": {"type": "string"}},
+        "allowedOperations": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "deniedOperations": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+        "parameters": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
         "required": {"type": "boolean"},
         "formats": {
           "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
           "items": {"enum": ["rfc3339", "date", "epochSeconds", "epochMillis"]}
         },
         "maxAgeDays": {"type": "integer", "minimum": 1},
         "allowFutureSkewSeconds": {"type": "integer", "minimum": 0},
         "min": {"type": "number"},
         "integer": {"type": "boolean"},
+        "timezone": {"const": "UTC"},
+        "notBefore": {"type": "string", "format": "date-time"},
+        "notAfter": {"type": "string", "format": "date-time"},
+        "weekdays": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"enum": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]}
+        },
+        "dailyWindows": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "required": ["start", "end"],
+            "additionalProperties": false,
+            "properties": {
+              "start": {"type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"},
+              "end": {"type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"}
+            }
+          }
+        },
         "contentTypes": {"type": "array", "items": {"type": "string"}},
-        "allowedFields": {"type": "array", "items": {"type": "string"}},
+        "allowedFields": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
         "requiredFields": {"type": "array", "items": {"type": "string"}},
         "deniedFields": {"type": "array", "items": {"type": "string"}},
         "fields": {
@@ -81,7 +113,13 @@
         },
         "items": {"type": "array", "items": {"type": "string"}},
         "dateFields": {"type": "array", "items": {"type": "string"}},
-        "extensions": {"type": "object", "additionalProperties": true}
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
+        },
+        "extensions": {"type": "object", "maxProperties": 0, "additionalProperties": false}
       },
       "allOf": [
         {
@@ -96,6 +134,48 @@
           "else": {
             "properties": {"phase": {"const": "request"}}
           }
+        },
+        {
+          "if": {"properties": {"type": {"const": "rateLimit"}}, "required": ["type"]},
+          "then": {"required": ["max", "windowSeconds"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "operationPolicy"}}, "required": ["type"]},
+          "then": {"anyOf": [{"required": ["allowedOperations"]}, {"required": ["deniedOperations"]}]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "queryDateWindow"}}, "required": ["type"]},
+          "then": {"required": ["parameters", "formats", "maxAgeDays"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "queryNumericBounds"}}, "required": ["type"]},
+          "then": {
+            "required": ["parameters"],
+            "anyOf": [{"required": ["min"]}, {"required": ["max"]}]
+          }
+        },
+        {
+          "if": {"properties": {"type": {"const": "requestTimeWindow"}}, "required": ["type"]},
+          "then": {
+            "required": ["timezone"],
+            "anyOf": [
+              {"required": ["notBefore"]},
+              {"required": ["notAfter"]},
+              {"required": ["weekdays"]},
+              {"required": ["dailyWindows"]}
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {"type": {"enum": ["jsonBody", "formBody"]}},
+            "required": ["type"]
+          },
+          "then": {"required": ["allowedFields"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "responseDateWindow"}}, "required": ["type"]},
+          "then": {"required": ["phase", "dateFields", "formats", "maxAgeDays"]}
         }
       ]
     }
@@ -106,12 +186,13 @@
     "metadata": {
       "type": "object",
       "required": ["id", "sequence", "rollbackEpoch"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "properties": {
         "id": {"type": "string", "minLength": 1},
         "sequence": {"type": "integer", "minimum": 1},
         "rollbackEpoch": {"type": "integer", "minimum": 1},
         "validFrom": false,
+        "signingKeyId": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "signature": {"type": "string"}
       }
     },
@@ -130,6 +211,7 @@
     "principals": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 1024,
       "items": {
         "type": "object",
         "required": ["id"],
@@ -169,18 +251,36 @@
     },
     "credentials": {
       "type": "array",
+      "maxItems": 1024,
       "items": {
         "type": "object",
         "required": ["id", "injection"],
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {"required": ["providerSubject"]},
+            "then": {
+              "required": ["provider"],
+              "properties": {
+                "provider": {"type": "string", "minLength": 1, "not": {"const": "generic"}}
+              }
+            }
+          }
+        ],
         "properties": {
           "id": {"type": "string", "minLength": 1},
           "provider": {"type": "string"},
-          "scopes": {"type": "array", "items": {"type": "string"}},
+          "providerSubject": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(?!\\s)(?!.*\\s$)[^\\u0000-\\u001F\\u007F]+$"
+          },
+          "scopes": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
           "injection": {
             "type": "object",
             "required": ["type"],
-            "additionalProperties": true,
+            "additionalProperties": false,
             "properties": {
               "type": {"enum": ["bearer", "basic", "header", "query", "cookie"]},
               "header": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -201,13 +301,14 @@
     "routes": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 4096,
       "items": {
         "type": "object",
         "required": ["id", "principals", "match", "adapter"],
         "additionalProperties": false,
         "properties": {
           "id": {"type": "string", "minLength": 1},
-          "principals": {"type": "array", "items": {"type": "string"}},
+          "principals": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
           "match": {
             "type": "object",
             "required": ["scheme", "host", "port", "methods", "paths"],
@@ -216,8 +317,8 @@
               "scheme": {"enum": ["https"]},
               "host": {"type": "string", "minLength": 1},
               "port": {"type": "integer", "minimum": 1, "maximum": 65535},
-              "methods": {"type": "array", "minItems": 1, "items": {"type": "string"}},
-              "paths": {"type": "array", "minItems": 1, "items": {"type": "string", "pattern": "^/"}}
+              "methods": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+              "paths": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^/"}}
             }
           },
           "credentialRef": {"type": "string"},
@@ -232,6 +333,7 @@
           },
           "constraints": {
             "type": "array",
+            "uniqueItems": true,
             "items": {"$ref": "#/$defs/credentialConstraint"}
           },
           "jit": {

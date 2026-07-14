@@ -91,7 +91,6 @@ def assert_form_result(body: bytes, expected_count: int) -> None:
     assert set(parsed) == {
         "authorization_present",
         "authorization_scheme",
-        "authorization_sha256",
         "kept",
         "safe",
         "sawSecret",
@@ -99,10 +98,9 @@ def assert_form_result(body: bytes, expected_count: int) -> None:
     assert parsed["kept"] == [f"value-{index}" for index in range(expected_count)], parsed["kept"][:5]
     assert parsed["safe"] == [f"nested-{index}" for index in range(expected_count)], parsed["safe"][:5]
     assert parsed["sawSecret"] == ["false"], parsed["sawSecret"]
-    assert parsed["authorization_present"] == ["true"], parsed["authorization_present"]
-    assert parsed["authorization_scheme"] == ["Bearer"], parsed["authorization_scheme"]
-    assert len(parsed["authorization_sha256"]) == 1
-    assert parsed["authorization_sha256"][0].startswith("sha256:"), parsed["authorization_sha256"]
+    assert parsed["authorization_present"] == ["false"], parsed["authorization_present"]
+    assert parsed["authorization_scheme"] == [""], parsed["authorization_scheme"]
+    assert "authorization_sha256" not in parsed, parsed
 
 
 def request_absolute(payload: bytes):

@@ -120,12 +120,19 @@ def verify_production_images_build(path: Path, *, check_current_tree: bool) -> d
         if not service:
             raise ValueError("production image entry is missing service")
         image_id = require_sha256(image.get("image_id"), f"{service} image_id")
+        binary_digest = None
+        if service == "serverware-decision-gate":
+            binary_digest = require_sha256(
+                image.get("binary_digest"),
+                "serverware-decision-gate production image binary digest",
+            )
         normalized_images.append(
             {
                 "service": service,
                 "dockerfile": image.get("dockerfile"),
                 "image_id": image_id,
                 "tag": image.get("tag"),
+                **({"binary_digest": binary_digest} if binary_digest else {}),
             }
         )
     return {
@@ -140,6 +147,20 @@ def verify_production_images_build(path: Path, *, check_current_tree: bool) -> d
 
 def verify_bench(path: Path) -> dict[str, Any]:
     bench = load_json(path, "decision gate benchmark")
+    if bench.get("candidate") != "rust-decision-gate":
+        raise ValueError("decision gate benchmark did not run the Rust candidate")
+    binary_digest = require_sha256(bench.get("data_plane_binary_digest"), "decision gate benchmark binary digest")
+    policy_hash = require_sha256(bench.get("policy_hash"), "decision gate benchmark policy hash")
+    runtime_manifest_digest = require_sha256(
+        bench.get("runtime_manifest_digest"),
+        "decision gate benchmark runtime manifest digest",
+    )
+    nonce_before = bench.get("attestation_nonce_before")
+    nonce_after = bench.get("attestation_nonce_after")
+    if not isinstance(nonce_before, str) or not nonce_before or not isinstance(nonce_after, str) or not nonce_after:
+        raise ValueError("decision gate benchmark is missing nonce-bound attestation evidence")
+    if nonce_before == nonce_after:
+        raise ValueError("decision gate benchmark must use distinct before/after attestation nonces")
     p99 = bench.get("p99_ms")
     if not isinstance(p99, int | float):
         raise ValueError("decision gate benchmark is missing numeric p99_ms")
@@ -154,6 +175,10 @@ def verify_bench(path: Path) -> dict[str, Any]:
         "p50_ms": bench.get("p50_ms"),
         "p95_ms": bench.get("p95_ms"),
         "p99_ms": p99,
+        "data_plane_binary_digest": binary_digest,
+        "policy_hash": policy_hash,
+        "runtime_manifest_digest": runtime_manifest_digest,
+        "attestation_nonce_bound": True,
         "target_p99_ms": BENCH_P99_TARGET_MS,
     }
 
@@ -230,6 +255,17 @@ def verify_release_provenance_document(
         raise ValueError("release provenance summary digest does not match document digest")
     source_tree = provenance.get("source_tree") if isinstance(provenance.get("source_tree"), dict) else {}
     source_tree_digest = require_sha256(source_tree.get("digest"), "release provenance source tree digest")
+    if provenance.get("source") != "serverware-digest-pinned-production-release":
+        raise ValueError("release provenance was not generated in digest-pinned production mode")
+    compose_config_sha256 = require_sha256(
+        provenance.get("compose_config_sha256"),
+        "release provenance compose config digest",
+    )
+    compose = provenance.get("compose") if isinstance(provenance.get("compose"), dict) else {}
+    if compose.get("sha256") != compose_config_sha256:
+        raise ValueError("release provenance Compose summary digest does not match its rendered config digest")
+    if Path(str(compose.get("file") or "")).name != "docker-compose.production.yml":
+        raise ValueError("release provenance did not bind docker-compose.production.yml")
     sbom = provenance.get("sbom") if isinstance(provenance.get("sbom"), dict) else {}
     cyclonedx = sbom.get("cyclonedx") if isinstance(sbom.get("cyclonedx"), dict) else {}
     sbom_components = cyclonedx.get("components")
@@ -270,7 +306,7 @@ def verify_release_provenance_document(
         **file_summary(document_path, "release-provenance"),
         "provenance_digest": document_digest,
         "source_tree_digest": source_tree_digest,
-        "compose_config_sha256": require_sha256(provenance.get("compose_config_sha256"), "release provenance compose config digest"),
+        "compose_config_sha256": compose_config_sha256,
         "sbom_cyclonedx_sha256": require_sha256(cyclonedx.get("sha256"), "release provenance CycloneDX SBOM digest"),
         "sbom_cyclonedx_components": sbom_components,
         "release_signing_key_id": release_signing_key_id,
@@ -541,12 +577,6 @@ def production_commands(
             "decision-gate-bench-evidence",
             "DECISION_GATE_BENCH_FILE=.tmp/decision-gate-rs-bench.json",
         ],
-        [
-            "make",
-            "release-provenance",
-            "RELEASE_PROVENANCE_SUMMARY_FILE=.tmp/release-provenance-summary.json",
-            "RELEASE_PROVENANCE_FILE=.tmp/release-provenance.json",
-        ],
     ]
     publish_plan: list[dict[str, Any]] = []
     if registry_prefix:
@@ -563,17 +593,25 @@ def production_commands(
         [
             [
                 "make",
+                "merge-production-images-env",
+                "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
+                f"PRODUCTION_READINESS_ENV={env_file}",
+            ],
+            [
+                "make",
+                "production-release-provenance",
+                "RELEASE_PROVENANCE_SUMMARY_FILE=.tmp/release-provenance-summary.json",
+                "RELEASE_PROVENANCE_FILE=.tmp/release-provenance.json",
+                "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
+                f"PRODUCTION_READINESS_ENV={env_file}",
+            ],
+            [
+                "make",
                 "sign-production-images",
                 "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
                 f"PRODUCTION_READINESS_ENV={env_file}",
                 "IMAGE_SIGNATURES_SUMMARY_FILE=.tmp/image-signatures-summary.json",
                 "IMAGE_SIGNATURES_FILE=.tmp/image-signatures.json",
-            ],
-            [
-                "make",
-                "merge-production-images-env",
-                "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
-                f"PRODUCTION_READINESS_ENV={env_file}",
             ],
             [
                 "make",
@@ -641,6 +679,16 @@ def main() -> None:
         production_images = verify_production_images_build(build_path, check_current_tree=not args.skip_current_tree_check)
         image_ids = [item["image_id"] for item in production_images["images"]]
         bench = verify_bench(Path(args.bench))
+        production_gate_binary = next(
+            (
+                item.get("binary_digest")
+                for item in production_images["images"]
+                if item.get("service") == "serverware-decision-gate"
+            ),
+            None,
+        )
+        if production_gate_binary != bench["data_plane_binary_digest"]:
+            raise ValueError("decision-gate benchmark binary digest does not match the production image binary")
         release_provenance = verify_summary(
             Path(args.release_provenance_summary),
             label="release provenance summary",

@@ -29,12 +29,16 @@ from serverware import db
 from serverware.constraints import evaluate_request_constraints, reset_local_constraint_state
 
 try:
+    from fastapi import HTTPException
+
+    from serverware import app as app_module
     from serverware.app import DataPlaneRateLimitConsume, data_plane_rate_limit_consume
 except ModuleNotFoundError as exc:
     if exc.name != "fastapi":
         raise
     DataPlaneRateLimitConsume = None
     data_plane_rate_limit_consume = None
+    app_module = None
 
 
 class Request:
@@ -101,26 +105,75 @@ def main() -> None:
 
     endpoint_checked = False
     if DataPlaneRateLimitConsume is not None and data_plane_rate_limit_consume is not None:
+        policy_hash = "sha256:" + "d" * 64
+        api_constraint = {
+            "id": "api-one-call",
+            "type": "rateLimit",
+            "max": 1,
+            "windowSeconds": 60,
+            "store": "shared",
+            "key": {
+                "scope": ["principal", "credential", "credentialVersion", "route", "operation"],
+                "operationFields": ["tenant"],
+            },
+        }
+        api_route = SimpleNamespace(
+            id="route.api-quota",
+            principals=("agent:quota-test",),
+            credential_ref="cred-x",
+            constraints=(api_constraint,),
+        )
+        snapshot = SimpleNamespace(hash=policy_hash, routes=(api_route,))
+        operation_context = {"operation": "tweets.write", "tenant": "tenant-a"}
+        counter_key = app_module._rate_limit_counter_key(
+            constraint=api_constraint,
+            route_id=api_route.id,
+            principal_id="agent:quota-test",
+            credential_ref=api_route.credential_ref,
+            credential_version=7,
+            operation_context=operation_context,
+        )
         payload = DataPlaneRateLimitConsume.model_validate(
             {
-                "counterKey": "sha256:" + "c" * 64,
+                "counterKey": counter_key,
                 "principalId": "agent:quota-test",
                 "routeId": "route.api-quota",
                 "credentialRef": "cred-x",
                 "credentialVersion": 7,
-                "policyHash": "sha256:" + "d" * 64,
+                "policyHash": policy_hash,
                 "constraintId": "api-one-call",
                 "operation": "tweets.write",
+                "operationContext": operation_context,
                 "max": 1,
                 "windowSeconds": 60,
                 "consume": True,
                 "actorId": "decision-gate-rs",
             }
         )
-        api_first = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-data-plane-token")
-        api_second = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-data-plane-token")
-        assert api_first["ok"] is True and api_first["allowed"] is True, api_first
-        assert api_second["ok"] is True and api_second["allowed"] is False, api_second
+        original_snapshot = app_module.get_policy_snapshot
+        original_get_credential = db.get_credential
+        app_module.get_policy_snapshot = lambda: snapshot
+        db.get_credential = lambda credential_id, include_secret=False: (
+            {"id": credential_id, "credential_version": 7} if credential_id == "cred-x" else None
+        )
+        try:
+            api_first = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-data-plane-token")
+            api_second = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-data-plane-token")
+            assert api_first["ok"] is True and api_first["allowed"] is True, api_first
+            assert api_second["ok"] is True and api_second["allowed"] is False, api_second
+            tampered = payload.model_copy(update={"max_count": 999})
+            try:
+                data_plane_rate_limit_consume(
+                    tampered,
+                    x_serverware_data_plane_token="test-data-plane-token",
+                )
+            except HTTPException as exc:
+                assert exc.status_code == 409 and "parameters" in str(exc.detail), exc
+            else:
+                raise AssertionError("shared rate-limit endpoint accepted caller-controlled quota parameters")
+        finally:
+            app_module.get_policy_snapshot = original_snapshot
+            db.get_credential = original_get_credential
         endpoint_checked = True
 
     route = SimpleNamespace(

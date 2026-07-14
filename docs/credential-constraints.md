@@ -17,16 +17,24 @@ The route-level `constraints` array is the shared customization layer. Provider 
 
 ## Execution Order
 
+Policy activation is a separate fail-closed gate. Serverware verifies the bundle schema and signature, rejects capabilities that an enforcement runtime cannot implement, and compares the candidate with persisted policy high-water state before making it active. A changed bundle must advance `metadata.sequence`; `rollbackEpoch` cannot decrease; a previously seen policy hash cannot reappear with different monotonic metadata.
+
+For each request:
+
 1. Principal allowlist checks run first: client IP, identity headers, and proxy bearer token.
 2. Route matching blocks unknown hosts, ports, paths, and methods.
 3. The adapter validates provider-specific credential metadata and classifies the operation.
-4. Request constraints validate operation, query, body, and current rate-limit headroom.
-5. JIT approval is consumed if required.
-6. Stateful request constraints, currently rate limits, are committed immediately before credential injection.
-7. The credential is injected and Serverware-only identity headers are stripped.
-8. Response constraints validate returned data before adapter redaction and before bytes are released to the agent.
+4. Request constraints validate operation, query, body, time windows, and current rate-limit headroom.
+5. A request- and operation-bound JIT approval is consumed if the route requires one.
+6. Stateful request constraints, currently rate limits, are committed immediately before credential use.
+7. The Rust gate obtains the route's one-credential scoped lease, checks its version, policy generation, and expiry, injects only the selected credential field, and strips Serverware-only identity headers.
+8. Immediately before the upstream send, the gate rechecks that the lease and policy snapshot are still current, synchronously submits `data_plane.credential.release_started`, and requires the control plane to acknowledge its durable hash-chain append. If audit is unavailable or rejects the event, the upstream request is not sent.
+9. The upstream status selects the success or error response profile. Response size, syntax, field projection, semantic constraints, and released headers are validated before buffered bytes are released.
+10. After adapter and constraint projection, the credential-reflection guard scans the final body, content type, and released semantic headers. A match blocks the response.
 
 If any step fails, the request or response is blocked. Unknown routes are never proxied.
+
+For streaming responses, validation and projection happen incrementally. Serverware releases only generated protocol headers, never upstream semantic headers, and applies the reflection guard to projected output as it is written. Because already-released stream prefixes cannot be recalled, credential-bearing opaque streams are rejected at policy admission; see [Response Validation](#response-validation).
 
 ## Implemented Constraint Types
 
@@ -38,7 +46,11 @@ If any step fails, the request or response is blocked. Unknown routes are never 
 
 `queryNumericBounds`: caps query values such as `max_results`, `per_page`, `limit`, and `maxResults`.
 
+`requestTimeWindow`: limits credential use by absolute RFC3339 bounds, UTC weekdays, and one or more UTC daily intervals. `timezone` must be `UTC`; daily interval ends are exclusive. Empty bounds, reversed absolute bounds, duplicate weekdays, malformed times, and overlapping intervals are rejected when the policy loads. Runtime parsing also fails closed.
+
 `jsonBody`: enforces JSON request body shape: allowed fields, required fields, denied fields, type checks, string length, numeric bounds, enums, exact values, and array size bounds.
+
+`formBody`: applies the same allowlist, required/denied field, scalar duplicate, type, length, numeric, enum, exact-value, and safe-pattern rules to bounded `application/x-www-form-urlencoded` bodies. Bracketed keys such as `metadata[agent_request_id]` normalize to `metadata.agent_request_id`. Malformed UTF-8, malformed percent encoding, ambiguous duplicate scalar fields, and more than 256 pairs fail closed.
 
 `responseDateWindow`: validates JSON responses before release. It supports nested arrays through dot paths, so `data.created_at` checks every item in a `data` array.
 
@@ -49,10 +61,24 @@ The demo policy includes:
 - Gmail read access limited to the last 30 days, with page size caps and response `internalDate` validation.
 - X recent search limited to seven days, capped at 100 results, with response `created_at` validation.
 - X controlled posting limited to one plain-text tweet per day.
-- X broad route guarded by an operation allowlist so write operations stay blocked.
+- X bounded read access covering every explicitly cataloged current GET endpoint while writes, unknown endpoints, and streaming endpoints stay blocked.
 - npm publish/dist-tag writes guarded by operation allowlists and per-operation JIT approval.
 
-[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting, GitHub issue listing, Stripe customer read-only access, tokenized checkout creation with amount caps and hardware-backed JIT approval, and bounded object-store writes.
+[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting, GitHub issue listing, Stripe customer read-only access, tokenized PaymentIntent creation with amount caps and hardware-backed JIT approval, and bounded object-store writes. Each provider has a separate credential reference so copying the examples does not imply cross-provider credential reuse.
+
+## X Endpoint Catalog
+
+The X adapter classifies exact path templates from the current [X OpenAPI description](https://docs.x.com/openapi.json). Read operations are grouped into explicit policy names including `tweets.read`, `users.read`, `search.read`, `connections.read`, `directMessages.read`, `bookmarks.read`, `lists.read`, `spaces.read`, `analytics.read`, and the other cataloged families in the adapter schema. A new or changed X endpoint is denied until Serverware's Python classifier, Rust classifier, schema, and tests all recognize it.
+
+`example.x.full_bounded_read` demonstrates the broadest bounded-read profile. It permits the complete current non-streaming GET catalog, subject to the OAuth scopes actually granted to that credential. That includes sensitive private-data families such as bookmarks or direct messages only when both the credential scopes and the route operation policy allow them. Use narrower operation lists for agents that do not need those categories.
+
+Streaming reads are intentionally excluded from that profile because a live stream cannot receive whole-response validation or a final response-proof artifact. An opaque X stream would be credential-bearing and is therefore rejected; supporting it requires a structured, incrementally redacting adapter mode rather than `mode: "stream"`. Controlled writes are separate: the current audited write surface accepts only `POST /2/tweets`, requires `tweets.write`, an explicit JSON body allowlist, and a bounded non-stream response. Delete, follow, direct-message, like, retweet, media-upload, and unknown writes fail closed.
+
+## Composing New Limits
+
+Constraints compose as an intersection: a request must satisfy the principal, endpoint, adapter, every request constraint, any JIT grant, and every response constraint. This supports rules such as "one post per credential and agent per day, only on weekdays, with a 280-character body" without provider-specific scripting.
+
+Policy files are data, not executable code. Unknown constraint types, fields, adapter operations, and extension semantics are rejected instead of ignored. A limitation that cannot be expressed by the typed constraints requires an audited adapter or constraint implementation in both enforcement runtimes, schema admission rules, and parity tests before it can be enabled. This preserves customization without allowing policy text to become an arbitrary-code escape hatch.
 
 ## OAuth Credentials
 
@@ -76,10 +102,34 @@ Policies should inject only the needed field:
 
 Credential `field` selectors are strict dotted object paths such as `access_token` or `nested.token`. Wildcards, array fan-out, empty path components, and non-string selected values fail closed before forwarding the request. The agent never receives the OAuth token JSON or the refresh token.
 
+## Credential Lease Semantics
+
+The Rust gate reports `scoped-recipient-bound-pull/v2`. Each pull names exactly one `(principal, route, credential)` scope and is bound to the active policy hash, measured gate binary digest, recipient key, one-use nonce, and short expiry. The encrypted payload uses the typed `serverware.credentialLeaseEnvelope/v2` envelope. A response containing an unexpected credential, scope, version, field, or duplicated binding is rejected.
+
+Leases are cached only in zeroizing process memory. Cache and renewal work are bounded. A warm lease is renewed in the background before its five-second maximum expiry; a cold or expired lease may require a synchronous broker pull, so background renewal is an availability optimization rather than a security assumption. Lower credential versions and same-version secret or metadata changes are rejected. A higher version atomically replaces the old lease, and a stale request cannot remove that newer entry. Policy activation clears incompatible leases, and the gate rechecks lease currency immediately before the upstream send.
+
+## Policy Rollback Protection
+
+The control plane persists the accepted policy ID, sequence, `rollbackEpoch`, hash, and update time in its metadata store. The Rust gate independently persists its policy high-water record when a high-water path is configured. Startup and reload reject a policy ID change, a decreased rollback epoch, a changed policy whose sequence does not increase, or the reuse of a known hash with different monotonic metadata. Attestation binds the active policy and the control-plane high-water digest.
+
+This prevents an ordinary restart or stale signed bundle from silently re-enabling older access. Production durability still depends on protecting and retaining both high-water stores; restoring an older database and data-plane state together is an external rollback problem that deployment attestation and storage controls must address.
+
 ## Production Store Semantics
 
 `rateLimit.store` is enforced. `local` counters are process-local and exist for development throttles or single-instance deployments. `shared` counters use the metadata store, acquire a row lock or SQLite immediate transaction, and update by `counter_key` before credential injection. The Rust gate calls `POST /api/data-plane/rate-limits/consume` when `SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL` is configured; the Python proxy calls the same store directly. If a shared store is requested but unavailable, credential release fails closed with `shared_rate_limit_store_unavailable`.
 
 ## Response Validation
 
-Request constraints are not enough. Many APIs can accept a bounded query and still return old or over-broad data through bugs, aliases, pagination cursors, or endpoint drift. Response constraints are therefore first-class and run before redaction. Gmail and X examples both validate response age, and generic REST examples can validate timestamps such as `updated_at` or `created`.
+Request constraints are not enough. Many APIs can accept a bounded query and still return old or over-broad data through bugs, aliases, pagination cursors, or endpoint drift. Response constraints are therefore first-class. Gmail and X examples validate response age, and generic REST examples can validate timestamps such as `updated_at` or `created`.
+
+Every response profile has an explicit `maxBodyBytes`. A `2xx` status uses the success profile. Redirects are always blocked with `response_redirect_not_allowed`; Serverware never follows or releases an upstream `Location`. A `4xx` or `5xx` status uses the nested `error` profile, and fails closed with `response_error_policy_missing` if that profile is absent. Gmail and npm require bounded JSON error profiles at policy admission. Generic REST and X permit an omitted error profile at admission for compatibility, but an actual error response is still blocked when no profile exists. Other status classes are invalid.
+
+Buffered JSON profiles use non-empty dotted `allowedFields` paths. Each path segment is explicit; empty segments, wildcards, duplicates, and unrecognized shapes are rejected. Projection is structural, so allowing `data.id` does not release sibling fields under `data`. Gmail adds `allowedMessageHeaderNames`: when `payload.headers` is selected, only the named message-header objects are retained, using case-insensitive name matching. Selecting `payload.headers` without a non-empty message-header allowlist, or configuring that allowlist without selecting the field, is rejected.
+
+`allowedHeaders` controls upstream semantic response headers independently for each success or error profile. The only releasable names are `cache-control`, `content-language`, `etag`, `last-modified`, `retry-after`, and `www-authenticate`. Duplicate, malformed, overlong, or unlisted values fail closed or are stripped. Hop-by-hop headers, `set-cookie`, `location`, authentication/session state, upstream content encoding, and upstream content length are never forwarded. Serverware emits a canonical content type and recalculated content length for buffered output.
+
+Credential-bearing `mode: "any"` and opaque `mode: "stream"` responses are rejected at policy admission and again at runtime. Credential-bearing structured streaming modes such as `jsonlStream`, `jsonArrayStream`, `jsonSseStream`, `jsonNestedStream`, `formUrlencodedStream`, and `csvStream` require a non-empty field projection. No streaming mode may configure non-empty `allowedHeaders`, because streaming responses do not release upstream semantic headers. Credential-bearing mutating request streams are also rejected: methods other than `GET`, `HEAD`, and `OPTIONS` must use a bounded request body so malformed or truncated content cannot be discovered after an upstream write has begun.
+
+The final credential-reflection guard runs after adapter and constraint projection. It scans for the injected value and common JSON, URL, Base64, Base64url, and SHA-256 representations across output boundaries. This is a defense in depth control, not general information-flow proof: an intentionally malicious provider could transform a secret into some other allowed semantic value. Narrow endpoint allowlists, structured projections, trusted upstreams, and provider-specific response validation remain required.
+
+Successful buffered responses can carry the separate proxy response runtime proof described in [Security Review](security-review.md#response-and-attestation-proofs). Streaming responses have no final body digest or final proxy response-proof artifact.

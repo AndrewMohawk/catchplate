@@ -9,13 +9,22 @@ import shlex
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.x509.oid import NameOID
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_production_handoff  # noqa: E402
 import test_production_readiness  # noqa: E402
+import generate_release_provenance  # noqa: E402
+import production_host_preflight  # noqa: E402
 
 
 def sha256_prefixed(value: bytes) -> str:
@@ -25,6 +34,19 @@ def sha256_prefixed(value: bytes) -> str:
 def write_env(path: Path, env: dict[str, str]) -> None:
     production_env = {key: value for key, value in env.items() if key.startswith("SERVERWARE_")}
     path.write_text("\n".join(f"{key}={shlex.quote(value)}" for key, value in sorted(production_env.items())) + "\n", encoding="utf-8")
+
+
+def set_production_images(env: dict[str, str], images_env: Path) -> None:
+    images = images_env.read_text(encoding="utf-8").split("=", 1)[1].strip().split(",")
+    by_name = {image.rsplit("/", 1)[-1].split("@", 1)[0]: image for image in images}
+    env["SERVERWARE_PRODUCTION_IMAGES"] = ",".join(images)
+    env["SERVERWARE_CONTROL_PLANE_IMAGE"] = by_name["control"]
+    env["SERVERWARE_DECISION_GATE_IMAGE"] = by_name["decision-gate"]
+
+
+def set_release_artifacts(env: dict[str, str], paths: dict[str, Path]) -> None:
+    env["SERVERWARE_RELEASE_PROVENANCE_FILE"] = str(paths["provenance"].resolve())
+    env["SERVERWARE_IMAGE_SIGNATURES_FILE"] = str(paths["image_signatures"].resolve())
 
 
 def write_kms_materials(path: Path, *, mode: int = 0o600) -> None:
@@ -48,6 +70,168 @@ def write_kms_materials(path: Path, *, mode: int = 0o600) -> None:
         encoding="utf-8",
     )
     path.chmod(mode)
+
+
+def verify_runtime_trust_materials(tmp: Path) -> None:
+    tls_dir = tmp / "tls"
+    anchor_tls_dir = tmp / "anchor-tls"
+    helper_dir = tmp / "helpers"
+    tls_dir.mkdir()
+    anchor_tls_dir.mkdir()
+    helper_dir.mkdir()
+    now = datetime.now(timezone.utc)
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Serverware test CA")])
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(ca_name)
+        .issuer_name(ca_name)
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(days=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .sign(ca_key, hashes.SHA256())
+    )
+    server_key = ec.generate_private_key(ec.SECP256R1())
+    server_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "serverware")])
+    server_cert = (
+        x509.CertificateBuilder()
+        .subject_name(server_name)
+        .issuer_name(ca_name)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("serverware")]), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    (tls_dir / "serverware.crt").write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
+    (tls_dir / "serverware.key").write_bytes(
+        server_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    (tls_dir / "serverware.key").chmod(0o600)
+    (tls_dir / "ca.pem").write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    anchor_key = ec.generate_private_key(ec.SECP256R1())
+    anchor_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "audit-anchor")])
+    anchor_cert = (
+        x509.CertificateBuilder()
+        .subject_name(anchor_name)
+        .issuer_name(ca_name)
+        .public_key(anchor_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName("audit-anchor")]), critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    (anchor_tls_dir / "audit-anchor.crt").write_bytes(anchor_cert.public_bytes(serialization.Encoding.PEM))
+    (anchor_tls_dir / "audit-anchor.key").write_bytes(
+        anchor_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    (anchor_tls_dir / "audit-anchor.key").chmod(0o600)
+    for name in (
+        "nsm-attest",
+        "nsm-unseal",
+        "lease-recipient-attest",
+        "response-proof-attest",
+        "lease-recipient-verify",
+        "control-plane-attestation-verify",
+        "serverware-proof-client",
+    ):
+        helper = helper_dir / name
+        helper.write_bytes(b"test helper\n")
+        helper.chmod(0o755)
+    env = test_production_readiness.good_env()
+    env["SERVERWARE_CONTROL_PLANE_TLS_DIR"] = str(tls_dir)
+    env["SERVERWARE_AUDIT_ANCHOR_TLS_DIR"] = str(anchor_tls_dir)
+    env["SERVERWARE_ATTESTATION_HELPER_DIR"] = str(helper_dir)
+    proof_ca = tmp / "proxy-ca.pem"
+    proof_ca.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+    collector_private = Ed25519PrivateKey.generate()
+    collector_private_path = tmp / "proof-collector.key.pem"
+    collector_public_path = tmp / "proof-collector.pub.pem"
+    verifier_public_path = tmp / "proxy-proof-verifier.pub.pem"
+    collector_private_path.write_bytes(
+        collector_private.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    collector_private_path.chmod(0o600)
+    collector_public_der = collector_private.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    collector_public_path.write_bytes(
+        collector_private.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    verifier_private = Ed25519PrivateKey.generate()
+    verifier_public_der = verifier_private.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    verifier_public_path.write_bytes(
+        verifier_private.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    env["SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"] = "/opt/serverware/bin/serverware-proof-client"
+    env["SERVERWARE_PROXY_PROOF_CA_BUNDLE"] = str(proof_ca)
+    env["SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY"] = str(collector_private_path)
+    env["SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY"] = str(collector_public_path)
+    env["SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY"] = str(verifier_public_path)
+    env["SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID"] = sha256_prefixed(collector_public_der)
+    env["SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID"] = sha256_prefixed(verifier_public_der)
+    status, failures = production_host_preflight.runtime_trust_materials_check(env, skip_host_check=False)
+    if failures or status.get("ok") is not True:
+        raise AssertionError(f"valid runtime trust materials failed: {status} {failures}")
+    if status.get("proof_collector_key_id") != env["SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID"]:
+        raise AssertionError(f"response-proof collector key was not bound: {status}")
+    mismatched_proof_env = {**env, "SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID": "sha256:" + "0" * 64}
+    _, proof_key_failures = production_host_preflight.runtime_trust_materials_check(
+        mismatched_proof_env,
+        skip_host_check=False,
+    )
+    if not any("collector public key does not match" in failure for failure in proof_key_failures):
+        raise AssertionError(f"mismatched response-proof collector key pin was accepted: {proof_key_failures}")
+    collector_private_path.chmod(0o644)
+    _, proof_mode_failures = production_host_preflight.runtime_trust_materials_check(env, skip_host_check=False)
+    if not any("collector private key must not be readable" in failure for failure in proof_mode_failures):
+        raise AssertionError(f"weak response-proof collector private-key mode was accepted: {proof_mode_failures}")
+    collector_private_path.chmod(0o600)
+    missing_san_cert = (
+        x509.CertificateBuilder()
+        .subject_name(server_name)
+        .issuer_name(ca_name)
+        .public_key(server_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .sign(ca_key, hashes.SHA256())
+    )
+    (tls_dir / "serverware.crt").write_bytes(missing_san_cert.public_bytes(serialization.Encoding.PEM))
+    _, san_failures = production_host_preflight.runtime_trust_materials_check(env, skip_host_check=False)
+    if not any("DNS SAN serverware" in failure for failure in san_failures):
+        raise AssertionError(f"certificate without the internal DNS SAN was accepted: {san_failures}")
+    (tls_dir / "serverware.crt").write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
+    (helper_dir / "lease-recipient-verify").chmod(0o777)
+    _, weak_failures = production_host_preflight.runtime_trust_materials_check(env, skip_host_check=False)
+    if not any("must not be writable" in failure for failure in weak_failures):
+        raise AssertionError(f"writable attestation helper was accepted: {weak_failures}")
 
 
 def run_preflight(paths: dict[str, Path], *extra: str, allow_test_bypass: bool = True) -> subprocess.CompletedProcess[bytes]:
@@ -104,13 +288,55 @@ def main() -> None:
         raise AssertionError("make run-production-readiness does not enforce production-host-preflight first")
 
     with tempfile.TemporaryDirectory() as tmp_raw:
+        verify_runtime_trust_materials(Path(tmp_raw))
+
+    with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
         env = test_production_readiness.good_env()
-        env["SERVERWARE_PRODUCTION_IMAGES"] = paths["images_env"].read_text(encoding="utf-8").split("=", 1)[1].strip()
+        set_release_artifacts(env, paths)
+        set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
         write_kms_materials(paths["kms_materials"])
+        source_digest = json.loads(paths["build"].read_text(encoding="utf-8"))["metadata"]["source_tree_digest"]
+        production_images = generate_release_provenance.production_image_inventory(
+            build_path=paths["build"],
+            published_path=paths["published"],
+            images_env_path=paths["images_env"],
+            expected_source_tree_digest=source_digest,
+        )
+        _, compose_summary = generate_release_provenance.production_compose_model(
+            compose_file=ROOT / "docker-compose.production.yml",
+            env_file=paths["env"],
+            images=production_images,
+        )
+        if set(compose_summary.get("images", {}).values()) != {
+            env["SERVERWARE_CONTROL_PLANE_IMAGE"],
+            env["SERVERWARE_DECISION_GATE_IMAGE"],
+        }:
+            raise AssertionError(f"production Compose proof did not bind immutable images: {compose_summary}")
+        expected_images = generate_release_provenance.merge_production_images_env.validate_production_images(
+            env["SERVERWARE_PRODUCTION_IMAGES"]
+        )
+        compose_status, compose_failures = production_host_preflight.production_compose_check(
+            compose_file=ROOT / "docker-compose.production.yml",
+            env_file=paths["env"],
+            expected_images=expected_images,
+            expected_digest=compose_summary["sha256"],
+            skip_host_check=False,
+        )
+        if compose_failures or compose_status.get("ok") is not True:
+            raise AssertionError(f"valid production Compose proof failed: {compose_status} {compose_failures}")
+        _, mismatch_failures = production_host_preflight.production_compose_check(
+            compose_file=ROOT / "docker-compose.production.yml",
+            env_file=paths["env"],
+            expected_images=expected_images,
+            expected_digest="sha256:" + "0" * 64,
+            skip_host_check=False,
+        )
+        if not any("does not match signed release provenance" in failure for failure in mismatch_failures):
+            raise AssertionError(f"production Compose digest mismatch was accepted: {mismatch_failures}")
         rejected_bypass = run_preflight(paths, allow_test_bypass=False)
         if rejected_bypass.returncode == 0 or "test-only" not in detail(rejected_bypass):
             raise AssertionError(f"preflight accepted a bypass flag without test-only opt-in: {detail(rejected_bypass)}")
@@ -156,7 +382,8 @@ def main() -> None:
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
         env = test_production_readiness.good_env()
-        env["SERVERWARE_PRODUCTION_IMAGES"] = paths["images_env"].read_text(encoding="utf-8").split("=", 1)[1].strip()
+        set_release_artifacts(env, paths)
+        set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
         write_kms_materials(paths["kms_materials"], mode=0o644)
         rejected = run_preflight(paths)
@@ -168,7 +395,8 @@ def main() -> None:
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
         env = test_production_readiness.good_env()
-        env["SERVERWARE_PRODUCTION_IMAGES"] = paths["images_env"].read_text(encoding="utf-8").split("=", 1)[1].strip()
+        set_release_artifacts(env, paths)
+        set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
         write_kms_materials(paths["kms_materials"])
         materials = json.loads(paths["kms_materials"].read_text(encoding="utf-8"))
@@ -184,7 +412,8 @@ def main() -> None:
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
         env = test_production_readiness.good_env()
-        env["SERVERWARE_PRODUCTION_IMAGES"] = paths["images_env"].read_text(encoding="utf-8").split("=", 1)[1].strip()
+        set_release_artifacts(env, paths)
+        set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
         write_kms_materials(paths["kms_materials"])
         materials = json.loads(paths["kms_materials"].read_text(encoding="utf-8"))
@@ -204,6 +433,7 @@ def main() -> None:
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
         env = test_production_readiness.good_env()
+        set_release_artifacts(env, paths)
         env["SERVERWARE_PRODUCTION_IMAGES"] = "registry.prod.serverware.dev/serverware/control@sha256:" + "c" * 64
         write_env(paths["env"], env)
         write_kms_materials(paths["kms_materials"])
@@ -216,7 +446,8 @@ def main() -> None:
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
         env = test_production_readiness.good_env()
-        env["SERVERWARE_PRODUCTION_IMAGES"] = paths["images_env"].read_text(encoding="utf-8").split("=", 1)[1].strip()
+        set_release_artifacts(env, paths)
+        set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
         paths["images_env"].unlink()
         write_kms_materials(paths["kms_materials"])
@@ -229,7 +460,8 @@ def main() -> None:
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
         env = test_production_readiness.good_env()
-        env["SERVERWARE_PRODUCTION_IMAGES"] = paths["images_env"].read_text(encoding="utf-8").split("=", 1)[1].strip()
+        set_release_artifacts(env, paths)
+        set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
         write_kms_materials(paths["kms_materials"])
         published = json.loads(paths["published"].read_text(encoding="utf-8"))

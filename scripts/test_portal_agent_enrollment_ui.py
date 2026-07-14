@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import copy
 import json
 import os
+import re
+import shutil
+import subprocess
 import sys
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -13,6 +18,29 @@ sys.path.insert(0, str(ROOT))
 
 def canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+class PortalAccessibilityParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.control_ids: list[str] = []
+        self.label_targets: set[str] = set()
+        self.h1_count = 0
+        self.skip_target: str | None = None
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        values = dict(attrs)
+        if tag == "h1":
+            self.h1_count += 1
+        if tag == "a" and values.get("class") == "skip-link":
+            self.skip_target = values.get("href")
+        if tag == "label" and values.get("for"):
+            self.label_targets.add(str(values["for"]))
+        if tag in {"input", "select", "textarea"}:
+            control_id = values.get("id")
+            if not control_id:
+                raise AssertionError(f"portal {tag} control is missing an id: {attrs}")
+            self.control_ids.append(control_id)
 
 
 def main() -> None:
@@ -52,7 +80,13 @@ def main() -> None:
             "copyEnrollment()",
             "downloadEnrollment()",
             "state.enrollmentPacket",
-            '--proxy-header "X-Serverware-Agent: demo-agent"',
+            "copyEnrollmentVerifier",
+            "Generate an enrollment packet first so the verifier is bound to its pins",
+            "pinning.policySigningKeyId",
+            "pinning.rollbackEpoch",
+            "scripts/verify_attestation.py --base",
+            "--expected-policy-key-hash",
+            "--expected-rollback-epoch",
         )
         for marker in required_markup:
             if marker not in ui_html:
@@ -82,6 +116,592 @@ def main() -> None:
             if marker not in ui_html:
                 raise AssertionError(f"portal approval-review UI marker missing: {marker}")
 
+        parser = PortalAccessibilityParser()
+        parser.feed(ui_html)
+        if parser.h1_count != 1:
+            raise AssertionError(f"portal must expose exactly one h1, found {parser.h1_count}")
+        if parser.skip_target != "#main-content":
+            raise AssertionError(f"portal skip link does not target main content: {parser.skip_target}")
+        missing_labels = sorted(set(parser.control_ids) - parser.label_targets)
+        if missing_labels:
+            raise AssertionError(f"portal controls are missing explicit labels: {missing_labels}")
+
+        accessibility_markers = (
+            'id="main-content" tabindex="-1"',
+            'id="operator-status"',
+            'role="status" aria-live="polite" aria-atomic="true"',
+            "target.setAttribute('role', tone === 'error' ? 'alert' : 'status')",
+            "setStatus(`Refresh failed: ${error.message}`, 'error')",
+            'id="oauth-status" role="status" aria-live="polite"',
+            'class="approval-block-reason" role="status"',
+            'aria-disabled="true" aria-describedby=',
+        )
+        for marker in accessibility_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal accessibility/status marker missing: {marker}")
+
+        if "localStorage" in ui_html:
+            raise AssertionError("portal must not persist operator or mutation state in localStorage")
+        auth_markers = (
+            "sessionStorage.getItem(tokenKey)",
+            "sessionStorage.setItem(tokenKey, adminToken())",
+            "sessionStorage.removeItem(tokenKey)",
+            "'X-Serverware-Admin-Token': token",
+            "'Authorization': `Bearer ${token}`",
+        )
+        for marker in auth_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal dual admin/OIDC session auth marker missing: {marker}")
+
+        preservation_markers = (
+            "function captureControlState()",
+            "function restoreControlState(values)",
+            "const controlState = captureControlState();",
+            "render(controlState);",
+            "restoreControlState(controlState);",
+            "let refreshInFlight = null",
+        )
+        for marker in preservation_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal refresh preservation marker missing: {marker}")
+
+        mutation_markers = (
+            "class ApiError extends Error",
+            "async function runControlPlaneMutation(original)",
+            "detail.error === 'control_plane_webauthn_required'",
+            "'/api/control-plane/mutations/webauthn/options'",
+            "detail.error === 'control_plane_approval_required'",
+            "delete mfa.assertion",
+            "approvalId: detail.approvalId",
+            "async function continuePendingMutation()",
+            "Continue approved request",
+            "approval.status !== 'approved'",
+            "sessionStorage.setItem(pendingMutationKey",
+        )
+        for marker in mutation_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal control-plane mutation marker missing: {marker}")
+        if '"error": "control_plane_webauthn_required"' not in app_source:
+            raise AssertionError("control-plane 412 response must expose the challenge binding fields")
+        for marker in ('"action": action', '"resourceId": resource_id', '"payloadDigest": payload_digest'):
+            if marker not in app_source:
+                raise AssertionError(f"control-plane WebAuthn challenge detail missing: {marker}")
+
+        oauth_markers = (
+            "const oauthDraftKey = 'serverware.oauthDraft'",
+            "Connect Provider Credential",
+            "Connect with OAuth",
+            "function saveOAuthDraft()",
+            "function restoreOAuthDraft()",
+            "persist: true, path: '/api/oauth/start'",
+            "${esc(item.displayName)}${item.configured ? '' : ' (not configured)'}",
+            "$('oauth-submit').disabled = !provider.configured",
+            "The selected OAuth provider is not configured",
+            "$('oauth-status').textContent = error.message",
+            "Waiting for approval ${completed.approval.approvalId}",
+            "function credentialAccountStatus(item)",
+            "metadata.provider_account || metadata.account || metadata.account_email || metadata.provider_subject || metadata.subject",
+            "metadata.provider_identity_verified === true",
+            "verified identity",
+            "<span class=\"pill warn\">refresh on use</span>",
+        )
+        for marker in oauth_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal OAuth production-flow marker missing: {marker}")
+
+        queue_markers = (
+            'id="control-plane-approvals"',
+            "api('/api/control-plane/approvals?limit=100')",
+            "function renderControlPlaneApprovals()",
+            "function safeControlPlaneRequest(request)",
+            "safeControlPlaneRequest(item.request)",
+            "requester_id",
+            "payload_digest",
+            "`/api/control-plane/approvals/${id}/${decision}`",
+            "A different authorized operator must decide pending mutations",
+            'id="control-plane-status-filter"',
+            'id="control-plane-search"',
+            "queueStatusRank",
+            "renderJitApprovals",
+            'id="jit-approval-status-filter"',
+            'id="jit-approval-search"',
+            'aria-current="true"',
+            "scrollIntoView({behavior: 'smooth', block: 'start'})",
+        )
+        for marker in queue_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal control-plane approval queue marker missing: {marker}")
+        for filter_id in ("control-plane-status-filter", "jit-approval-status-filter"):
+            filter_markup = ui_html.split(f'id="{filter_id}"', 1)[1].split("</select>", 1)[0]
+            if '<option value="pending">Pending</option>' not in filter_markup.split(">", 1)[1]:
+                raise AssertionError(f"portal approval filter must include pending status: {filter_id}")
+            if not filter_markup.split(">", 1)[1].lstrip().startswith('<option value="pending">'):
+                raise AssertionError(f"portal approval filter must default to pending status: {filter_id}")
+        try:
+            queue_renderer = ui_html.split("function renderControlPlaneApprovals()", 1)[1].split(
+                "function queueStatusRank", 1
+            )[0]
+        except IndexError as exc:
+            raise AssertionError("could not isolate control-plane approval queue renderer") from exc
+        for forbidden in (
+            "json(item.request)",
+            "JSON.stringify(item.request)",
+            "item.request_json",
+            "access_token",
+            "refresh_token",
+            "secret",
+            "authorizationUrl",
+        ):
+            if forbidden in queue_renderer:
+                raise AssertionError(f"control-plane approval queue may expose secret-bearing request data: {forbidden}")
+        safe_summary = ui_html.split("function safeControlPlaneRequest(request)", 1)[1].split(
+            "function renderControlPlaneApprovals()", 1
+        )[0]
+        for expected in ("'provider'", "'scopes'", "'metadata_keys'", "'candidate_policy_hash'", "'dry_run'"):
+            if expected not in safe_summary:
+                raise AssertionError(f"control-plane approval summary omitted safe review field: {expected}")
+        for forbidden in ("access_token", "refresh_token", "authorizationUrl", "secret"):
+            if forbidden in safe_summary:
+                raise AssertionError(f"control-plane approval summary allowlist contains secret-bearing field: {forbidden}")
+
+        policy_markers = (
+            'id="policy-route-form"',
+            "const policyTemplates = {",
+            "gmail-response-last-30-days",
+            "x-one-post-per-day",
+            "npm.publish.yubikey-jit",
+            "'query', 'selectedHeaders', 'bodySha256'",
+            "stripe.customers.read-only",
+            "stripe.payment-intent.tokenized-jit",
+            "payment-intent-tokenized-only",
+            "function storedCredentialInjection(credential)",
+            "function normalizedInjectionShape(injection)",
+            "function injectionShapesCompatible(actual, required)",
+            "function bearerInjectionCompatible(actual, required)",
+            "function oauthCredentialGrantedScopes(credential)",
+            "function oauthCredentialProviderSubject(credential)",
+            "function policyCredentialInjection(credential, activeCredential, template)",
+            "item.metadata?.provider_account",
+            "item.metadata?.provider_subject",
+            'id="policy-custom-route"',
+            "function syncPolicyTemplateEditor(reset = false)",
+            'id="policy-approvers"',
+            "parseApproverPrincipals(form.get('approvers'))",
+            "route.jit.approvers.users",
+            "Custom route policy requires match and adapter objects",
+            "belongs to ${providerId || 'an unknown provider'}, not ${template.provider}",
+            "is missing its OAuth app ID binding",
+            "route.adapter.config.appIds",
+            "function renderPolicyCredentialOptions(preferredCredential = '')",
+            "item.compatible ? '' : 'disabled'",
+            "(not compatible)",
+            "renderPolicyCredentialOptions();",
+            "function buildPolicyCandidate()",
+            "state.activePolicy.bundle",
+            "delete bundle.metadata.signature",
+            "delete bundle.metadata.signingKeyId",
+            "uses an injection shape that is incompatible with this template",
+            "bundle.credentials.push",
+            "...(grantedScopes ? {scopes: grantedScopes} : {})",
+            "...(providerSubject ? {providerSubject} : {})",
+            "activeCredential.scopes = grantedScopes",
+            "activeCredential.providerSubject = providerSubject",
+            "injection: candidateInjection",
+            "expect: 'allow'",
+            "expect: 'deny'",
+            "api('/api/policy/candidate'",
+            "path: '/api/policy/publish'",
+            "activationMode: 'canary'",
+            "Stage candidate",
+            "Staged candidate lifecycle",
+            'id="policy-canary-status"',
+            'id="policy-activate-button"',
+            'id="policy-cancel-button"',
+            "api('/api/policy/canary/status')",
+            "No policy candidate is staged.",
+            "path: '/api/policy/canary/activate'",
+            "path: '/api/policy/canary/cancel'",
+            "function renderPolicyCanary()",
+            "function activatePolicyCanary()",
+            "function cancelPolicyCanary()",
+            "policyCanary: policyCanaryResult.status === 'fulfilled'",
+            "Active policy changed after preview",
+            "Signed candidate, diff, and dry-run",
+            "Local-only CRUD; not part of the signed production PolicyBundle",
+            "Array.isArray(report?.dryRun?.results)",
+            "report?.dryRun?.passed === true",
+            "!dryRunPassed",
+            "The signed candidate dry-run did not pass every check",
+        )
+        for marker in policy_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal signed PolicyBundle assignment marker missing: {marker}")
+        for misleading_canary_marker in ('Canary traffic percent', 'id="policy-canary-percent"', "canaryPercent"):
+            if misleading_canary_marker in ui_html:
+                raise AssertionError(f"portal still implies unsupported candidate traffic routing: {misleading_canary_marker}")
+        if "disabled title=" in ui_html:
+            raise AssertionError("approval blocking reasons must not be hidden on disabled controls")
+        ordered_sections = (
+            'class="jit-approvals-section"',
+            'class="control-plane-approvals-section"',
+            "<aside>",
+            'class="credentials-section"',
+            'class="audit-investigation-section"',
+        )
+        section_positions = [ui_html.index(marker) for marker in ordered_sections]
+        if section_positions != sorted(section_positions):
+            raise AssertionError("portal DOM order must put approval queues before setup and later operational tables")
+
+        runtime_handler_markers = (
+            "const scopes = parseOAuthScopes(form.get('scopes'));",
+            "const proxyEgressCidrs = parseProxyEgressCidrs(form.get('proxyEgressCidrs'));",
+            "const enrollmentNonce = generateEnrollmentNonce();",
+            "(provider.defaultScopes || []).join('\\n')",
+            "renderOAuthDefaults(true);",
+            'class="approval-table"',
+            'data-label="Actions"',
+        )
+        for marker in runtime_handler_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal corrected runtime helper is not wired to its caller: {marker}")
+
+        if "id=\"ttl-${item.id}\"" in ui_html or "$('ttl-' + id)" in ui_html:
+            raise AssertionError("portal must not imply that policy-derived JIT grant lifetime is operator-editable")
+        for marker in ("grantTtlSeconds", "policy grant", "retry_semantics?.grant_ttl_seconds"):
+            if marker not in ui_html:
+                raise AssertionError(f"portal policy-derived JIT lifetime marker missing: {marker}")
+
+        audit_markers = (
+            'id="audit-search-form"',
+            'id="audit-summary"',
+            'id="audit-events"',
+            "function auditSearchParams({exportMode = false} = {})",
+            "api(`/api/audit/search?${auditSearchParams()}`)",
+            "api('/api/audit/verify')",
+            "`/api/audit/export?${auditSearchParams({exportMode: true})}`",
+            "serverware-audit-export.jsonl",
+            "function redactAuditEvidence(value, key = '')",
+            "complete scan",
+            "partial scan",
+        )
+        for marker in audit_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal audit-investigation UI marker missing: {marker}")
+
+        confirmation_markers = (
+            "Delete credential ${id}? Agents using it will fail closed.",
+            "Delete local prototype route ${id}? Matching requests will be denied.",
+            "Clear the local traffic log? The append-only audit chain is not deleted.",
+            "Cancel staged policy candidate ${canary.id}?",
+        )
+        for marker in confirmation_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal destructive-action confirmation missing: {marker}")
+
+        node = shutil.which("node")
+        if node:
+            script_source = ui_html.split("<script>", 1)[1].split("</script>", 1)[0]
+            syntax = subprocess.run(
+                [node, "--check", "-"],
+                input=script_source,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if syntax.returncode != 0:
+                raise AssertionError(f"portal JavaScript syntax check failed: {syntax.stderr.strip()}")
+
+            try:
+                template_literal = ui_html.split("const policyTemplates = ", 1)[1].split(
+                    "\n    };\n\n    function adminToken()", 1
+                )[0] + "\n}"
+            except IndexError as exc:
+                raise AssertionError("could not isolate policyTemplates JavaScript object") from exc
+            evaluated = subprocess.run(
+                [
+                    node,
+                    "-e",
+                    "const fs=require('fs');const value=eval('('+fs.readFileSync(0,'utf8')+')');process.stdout.write(JSON.stringify(value));",
+                ],
+                input=template_literal,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if evaluated.returncode != 0:
+                raise AssertionError(f"could not evaluate policyTemplates: {evaluated.stderr.strip()}")
+            templates = json.loads(evaluated.stdout)
+
+            try:
+                scope_function = "function oauthCredentialGrantedScopes(credential)" + ui_html.split(
+                    "function oauthCredentialGrantedScopes(credential)", 1
+                )[1].split("\n\n    function policyCredentialInjection", 1)[0]
+            except IndexError as exc:
+                raise AssertionError("could not isolate OAuth granted-scope portal validator") from exc
+            scope_check = subprocess.run(
+                [
+                    node,
+                    "-e",
+                    scope_function
+                    + ";const good=oauthCredentialGrantedScopes({id:'cred',kind:'oauth2',metadata:{scopes:['scope.z','scope.a']}});"
+                    + "if(JSON.stringify(good)!=='[\"scope.a\",\"scope.z\"]')process.exit(2);"
+                    + "for(const scopes of [null,[],[''],[' scope.a'],['scope.a scope.b'],['scope.a','scope.a']]){"
+                    + "let failed=false;try{oauthCredentialGrantedScopes({id:'cred',kind:'oauth2',metadata:{scopes}})}catch(_){failed=true}"
+                    + "if(!failed)process.exit(3)}",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if scope_check.returncode != 0:
+                raise AssertionError(
+                    f"portal OAuth scope validator did not fail closed: {scope_check.returncode} {scope_check.stderr.strip()}"
+                )
+
+            try:
+                enrollment_helpers = "function bytesToB64(value)" + ui_html.split(
+                    "function bytesToB64(value)", 1
+                )[1].split("\n\n    function credentialToJson", 1)[0]
+            except IndexError as exc:
+                raise AssertionError("could not isolate enrollment runtime helpers") from exc
+            enrollment_check = subprocess.run(
+                [
+                    node,
+                    "-e",
+                    "globalThis.btoa=(value)=>Buffer.from(value,'binary').toString('base64');"
+                    + enrollment_helpers
+                    + r"""
+const oauth=parseOAuthScopes('scope.a\nscope.b, scope.c');
+if(JSON.stringify(oauth)!=='["scope.a","scope.b","scope.c"]')process.exit(10);
+const cidrs=parseProxyEgressCidrs('127.0.0.1/32\n10.0.0.0/8, 2001:db8::/32');
+if(JSON.stringify(cidrs)!=='["127.0.0.1/32","10.0.0.0/8","2001:db8::/32"]')process.exit(11);
+const source={getRandomValues(value){for(let index=0;index<value.length;index+=1)value[index]=index;return value;}};
+const nonce=generateEnrollmentNonce(source);
+if(nonce.length!==43||!/^[A-Za-z0-9_-]+$/.test(nonce)||/[=+/]/.test(nonce))process.exit(12);
+if(bytesToB64(Uint8Array.from([251,255]))!=='-_8')process.exit(15);
+const approvers=parseApproverPrincipals('user:release-manager, oidc:auth0|operator-1');
+if(JSON.stringify(approvers)!=='["user:release-manager","oidc:auth0|operator-1"]')process.exit(13);
+for(const value of ['', 'release-manager', 'user:*', 'user:one,user:one']){
+  let failed=false;try{parseApproverPrincipals(value)}catch(_){failed=true}
+  if(!failed)process.exit(14);
+}
+""",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if enrollment_check.returncode != 0:
+                raise AssertionError(
+                    "portal OAuth/enrollment helpers failed in Node: "
+                    f"{enrollment_check.returncode} {enrollment_check.stderr.strip()}"
+                )
+
+            try:
+                policy_builder_functions = "function materializePolicyPath(path)" + ui_html.split(
+                    "function materializePolicyPath(path)", 1
+                )[1].split("\n\n    async function previewPolicyCandidate", 1)[0]
+                selector_functions = "function policyCredentialOptions(template)" + ui_html.split(
+                    "function policyCredentialOptions(template)", 1
+                )[1].split("\n\n    function render(controlState", 1)[0]
+                oauth_defaults_function = "function renderOAuthDefaults(applyDefaults = true)" + ui_html.split(
+                    "function renderOAuthDefaults(applyDefaults = true)", 1
+                )[1].split("\n\n    function safeControlPlaneRequest", 1)[0]
+            except IndexError as exc:
+                raise AssertionError("could not isolate refresh-time credential selector helpers") from exc
+            selector_check = subprocess.run(
+                [
+                    node,
+                    "-e",
+                    r"""
+const elements={
+  'policy-template':{value:'gmail_recent'},
+  'policy-credential':{innerHTML:'',value:'',disabled:false},
+  'enrollment-principal':{innerHTML:''},
+  'policy-principal':{innerHTML:''},
+  'policy-route-form':{},
+  'oauth-provider':{value:'google'},
+  'oauth-scopes':{value:''},
+  'oauth-status':{textContent:''},
+  'oauth-submit':{disabled:false}
+};
+const $=(id)=>elements[id];
+const esc=(value)=>String(value??'').replace(/[&<>"']/g,'');
+const policyTemplates={gmail_recent:{provider:'google',injection:{type:'bearer',field:'access_token'},match:{scheme:'https',host:'gmail.googleapis.com',port:443,methods:['GET'],paths:['/gmail/v1/users/{user}/messages']},adapter:{type:'gmail.v1',config:{}},constraints:[]}};
+let state={
+  activePolicy:{ready:true,policy_hash:'base-hash',bundle:{metadata:{sequence:1},credentials:[],routes:[]}},
+  credentials:[{id:'cred-google',name:'Google fixture',kind:'oauth2',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_account:'operator@example.com',provider_subject:'google-subject-123',scopes:['gmail.readonly']}}],
+  policyPrincipals:[{id:'agent:mail-reader',routeCount:2}],
+  oauthProviders:[{id:'google',displayName:'Google',configured:true,defaultScopes:['openid','email'],redirectUri:'https://serverware.test/callback'}]
+};
+"""
+                    + policy_builder_functions
+                    + selector_functions
+                    + oauth_defaults_function
+                    + r"""
+const shapes=[
+  [{id:'bearer',kind:'bearer',metadata:{}},{type:'bearer',header:'Authorization'}],
+  [{id:'header',kind:'header',metadata:{injection_name:'x-api-key'}},{type:'header',name:'x-api-key'}],
+  [{id:'query',kind:'query',metadata:{injection_name:'api_key'}},{type:'query',name:'api_key'}],
+  [{id:'cookie',kind:'cookie',metadata:{injection_name:'session_token'}},{type:'cookie',name:'session_token'}],
+  [{id:'basic',kind:'basic',metadata:{username:'service-account'}},{type:'basic',username:'service-account'}]
+];
+for(const [credential,expected] of shapes){
+  const actual=storedCredentialInjection(credential);
+  for(const [key,value] of Object.entries(expected))if(actual[key]!==value)process.exit(20);
+}
+for(const credential of [
+  {id:'header',kind:'header',metadata:{}},
+  {id:'header',kind:'header',metadata:{injection_name:'authorization'}},
+  {id:'basic',kind:'basic',metadata:{username:'bad:name'}}
+]){
+  let failed=false;try{storedCredentialInjection(credential)}catch(_){failed=true}
+  if(!failed)process.exit(21);
+}
+renderPolicyPrincipalOptions();
+renderPolicyCredentialOptions();
+if(!elements['enrollment-principal'].innerHTML.includes('agent:mail-reader'))process.exit(22);
+if(!elements['policy-principal'].innerHTML.includes('agent:mail-reader'))process.exit(23);
+if(!elements['policy-credential'].innerHTML.includes('cred-google'))process.exit(24);
+if(elements['policy-credential'].value!=='cred-google'||elements['policy-credential'].disabled)process.exit(25);
+renderOAuthDefaults(true);
+if(elements['oauth-scopes'].value!=='openid\nemail'||elements['oauth-scopes'].value.includes('\\n'))process.exit(26);
+if(oauthCredentialProviderSubject(state.credentials[0])!=='google-subject-123')process.exit(27);
+let malformedSubjectAccepted=false;
+try{oauthCredentialProviderSubject({id:'bad',kind:'oauth2',metadata:{oauth:true,provider_identity_verified:true,provider_id:'google',provider_subject:' bad ',scopes:['gmail.readonly']}});malformedSubjectAccepted=true}catch(_){}
+if(malformedSubjectAccepted)process.exit(28);
+let unverifiedSubjectAccepted=false;
+try{oauthCredentialProviderSubject({id:'unverified',kind:'oauth2',metadata:{oauth:true,provider_identity_verified:false,provider_id:'google',provider_subject:'google-subject-123',scopes:['gmail.readonly']}});unverifiedSubjectAccepted=true}catch(_){}
+if(unverifiedSubjectAccepted)process.exit(31);
+global.FormData=class {get(name){return {template:'gmail_recent',routeId:'gmail.bound',principalId:'agent:mail-reader',credentialRef:'cred-google'}[name]??null;}};
+const newCandidate=buildPolicyCandidate();
+const newCredential=newCandidate.bundle.credentials.find((item)=>item.id==='cred-google');
+if(newCredential.providerSubject!=='google-subject-123'||JSON.stringify(newCredential.scopes)!=='["gmail.readonly"]')process.exit(29);
+state.activePolicy.bundle.credentials=[{id:'cred-google',provider:'google',providerSubject:'old-subject',scopes:['old.scope'],injection:{type:'bearer',field:'access_token'}}];
+const updatedCandidate=buildPolicyCandidate();
+const updatedCredential=updatedCandidate.bundle.credentials.find((item)=>item.id==='cred-google');
+if(updatedCredential.providerSubject!=='google-subject-123'||JSON.stringify(updatedCredential.scopes)!=='["gmail.readonly"]')process.exit(30);
+""",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if selector_check.returncode != 0:
+                raise AssertionError(
+                    "portal refresh-time selector helpers failed in Node: "
+                    f"{selector_check.returncode} {selector_check.stderr.strip()}"
+                )
+
+            try:
+                run_ui_action_function = "async function runUiAction(label, action)" + ui_html.split(
+                    "async function runUiAction(label, action)", 1
+                )[1].split("\n\n    function controlStateKey", 1)[0]
+                approve_function = "async function approve(id)" + ui_html.split(
+                    "async function approve(id)", 1
+                )[1].split("\n    async function deny", 1)[0]
+            except IndexError as exc:
+                raise AssertionError("could not isolate approval action runtime helpers") from exc
+            approval_action_check = subprocess.run(
+                [
+                    node,
+                    "-e",
+                    r"""
+let statusEvents=[];
+function setStatus(message,tone=''){statusEvents.push({message,tone});}
+let state={approvals:[{id:'approval-test',grant_ttl_seconds:30}],approvalReview:null,blockReason:''};
+let apiCalls=0;
+async function api(){apiCalls+=1;throw new Error('approval API must not be called');}
+async function loadApprovalReview(id){state.approvalReview={id,retry_semantics:{grant_ttl_seconds:30}};}
+function approvalReviewBlockReason(item){
+  if(!state.approvalReview||state.approvalReview.id!==item.id)return 'Open review first';
+  return state.blockReason;
+}
+const window={};
+const navigator={};
+function prepareRequestOptions(value){return value;}
+function credentialToJson(value){return value;}
+"""
+                    + run_ui_action_function
+                    + approve_function
+                    + r"""
+(async()=>{
+  const reviewResult=await runUiAction('Approve request',()=>approve('approval-test'));
+  if(!reviewResult?.pending||!reviewResult.reviewLoaded||apiCalls!==0)process.exit(31);
+  if(statusEvents[statusEvents.length-1]?.tone!=='pending'||/complete/i.test(statusEvents[statusEvents.length-1]?.message||''))process.exit(32);
+  state.blockReason='Policy changed; request a new approval';
+  const blockedResult=await runUiAction('Approve request',()=>approve('approval-test'));
+  if(!blockedResult?.blocked||apiCalls!==0)process.exit(33);
+  if(statusEvents[statusEvents.length-1]?.tone!=='error'||!/cannot be approved/.test(statusEvents[statusEvents.length-1]?.message||''))process.exit(34);
+})().catch((error)=>{console.error(error);process.exit(35);});
+""",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if approval_action_check.returncode != 0:
+                raise AssertionError(
+                    "portal blocked approval action failed in Node: "
+                    f"{approval_action_check.returncode} {approval_action_check.stderr.strip()}"
+                )
+            if set(templates) != {
+                "gmail_recent",
+                "x_read_recent",
+                "x_one_post_daily",
+                "npm_write_mfa",
+                "stripe_readonly",
+                "stripe_payment_intent_jit",
+                "custom_json",
+            }:
+                raise AssertionError(f"unexpected common PolicyBundle template set: {sorted(templates)}")
+
+            for index, (template_id, template) in enumerate(templates.items(), start=1):
+                candidate = copy.deepcopy(snapshot.raw)
+                candidate["metadata"]["sequence"] = int(candidate["metadata"].get("sequence") or 0) + index
+                candidate["metadata"].pop("signature", None)
+                candidate["metadata"].pop("signingKeyId", None)
+                route_id = f"portal.contract.{template_id}"
+                route = {
+                    "id": route_id,
+                    "principals": ["agent:demo-proxy-token"],
+                    "match": template["match"],
+                    "credentialRef": "cred-demo-bearer",
+                    "adapter": template["adapter"],
+                    "constraints": template.get("constraints", []),
+                }
+                response = route["adapter"]["config"]["response"]
+                if response.get("allowedHeaders") != []:
+                    raise AssertionError(f"PolicyBundle portal template has an unsafe success header release: {template_id}")
+                error_response = response.get("error")
+                if (
+                    not isinstance(error_response, dict)
+                    or error_response.get("mode") != "json"
+                    or error_response.get("onInvalid") != "block"
+                    or not error_response.get("allowedFields")
+                ):
+                    raise AssertionError(f"PolicyBundle portal template lacks a bounded error projection: {template_id}")
+                if route["adapter"]["type"] == "x.v2":
+                    route["adapter"]["config"]["appIds"] = ["demo-x-app"]
+                if template.get("jit"):
+                    route["jit"] = copy.deepcopy(template["jit"])
+                    route["jit"]["approvers"]["users"] = ["user:portal-test-approver"]
+                candidate["routes"].append(route)
+                compiled = compile_policy_bundle(sign_policy_bundle(candidate), verify_signature=True, validate_schema=True)
+                allow_path = re.sub(r"\{[^}]+\}", "example", route["match"]["paths"][0])
+                if allow_path.endswith("/**"):
+                    allow_path = allow_path[:-3] + "/example"
+                matched = compiled.match_route(
+                    route["match"]["scheme"],
+                    route["match"]["host"],
+                    route["match"]["port"],
+                    route["match"]["methods"][0],
+                    allow_path,
+                    "agent:demo-proxy-token",
+                )
+                if not matched or matched.route.id != route_id:
+                    raise AssertionError(f"PolicyBundle portal template did not match its allow dry-run: {template_id}")
+
         try:
             review_fn = ui_html.split("function renderApprovalReview()", 1)[1].split("async function approve", 1)[0]
         except IndexError as exc:
@@ -103,7 +723,19 @@ def main() -> None:
             if marker in ui_html:
                 raise AssertionError(f"portal UI should not mention secret-bearing enrollment internals: {marker}")
 
-    print(canonical_json({"ok": True, "portal_agent_enrollment_ui": "pass", "portal_approval_review_ui": "pass"}))
+    print(
+        canonical_json(
+            {
+                "ok": True,
+                "portal_accessibility_ui": "pass",
+                "portal_agent_enrollment_ui": "pass",
+                "portal_approval_review_ui": "pass",
+                "portal_control_plane_mutation_ui": "pass",
+                "portal_audit_investigation_ui": "pass",
+                "portal_policy_templates": "pass" if node else "static-only",
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

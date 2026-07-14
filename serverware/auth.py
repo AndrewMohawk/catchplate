@@ -16,6 +16,7 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa, utils
 from cryptography.hazmat.primitives import hashes
 
+from serverware import db
 from serverware.config import (
     ADMIN_ROLES,
     ADMIN_TOKEN_PATH,
@@ -29,6 +30,7 @@ from serverware.config import (
     OIDC_LEEWAY_SECONDS,
     OIDC_ROLE_CLAIM,
     OIDC_SUBJECT_CLAIM,
+    RELEASE_CHANNEL,
     ensure_data_dirs,
 )
 
@@ -39,6 +41,14 @@ UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 class OIDCAuthError(ValueError):
+    pass
+
+
+class OIDCAccessDenied(PermissionError):
+    pass
+
+
+class OIDCAuthoritativeStateError(RuntimeError):
     pass
 
 
@@ -197,6 +207,36 @@ def _roles_from_claim(value: object) -> frozenset[str]:
     return frozenset(role.strip() for role in raw if role.strip())
 
 
+def _production_release() -> bool:
+    return RELEASE_CHANNEL.strip().lower() not in {"dev", "development", "local", "test"}
+
+
+def _authoritative_oidc_roles(user_id: str, claimed_roles: frozenset[str]) -> frozenset[str]:
+    try:
+        binding = db.get_rbac_role_binding(user_id)
+    except db.RBACBindingStoreError as exc:
+        raise OIDCAuthoritativeStateError("authoritative RBAC binding state is unavailable") from exc
+    if binding is None:
+        if _production_release():
+            raise OIDCAccessDenied("OIDC subject is not provisioned")
+        return claimed_roles
+    if binding["status"] != "active":
+        raise OIDCAccessDenied("OIDC subject is deprovisioned")
+    return frozenset(binding["roles"])
+
+
+def _refresh_oidc_authorization(identity: AdminIdentity) -> AdminIdentity:
+    if identity.auth_method != "oidc-bearer":
+        return identity
+    try:
+        roles = _authoritative_oidc_roles(identity.user_id, identity.roles)
+    except OIDCAuthoritativeStateError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except OIDCAccessDenied as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return AdminIdentity(identity.user_id, roles, identity.auth_method)
+
+
 def oidc_identity_from_token(token: str | None) -> AdminIdentity | None:
     if not OIDC_ENABLED or not token:
         return None
@@ -222,7 +262,8 @@ def oidc_identity_from_token(token: str | None) -> AdminIdentity | None:
     roles = _roles_from_claim(payload.get(OIDC_ROLE_CLAIM))
     if not roles:
         raise OIDCAuthError("OIDC token is missing Serverware RBAC roles")
-    return AdminIdentity(f"oidc:{subject}", roles, "oidc-bearer")
+    user_id = f"oidc:{subject}"
+    return AdminIdentity(user_id, _authoritative_oidc_roles(user_id, roles), "oidc-bearer")
 
 
 def require_admin(
@@ -238,6 +279,10 @@ def require_admin(
         return AdminIdentity(ADMIN_USER_ID, frozenset(ADMIN_ROLES), "bearer-token")
     try:
         oidc_identity = oidc_identity_from_token(bearer_token)
+    except OIDCAuthoritativeStateError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except OIDCAccessDenied as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except OIDCAuthError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
     if oidc_identity:
@@ -261,7 +306,7 @@ def _request_has_valid_non_cookie_admin_auth(request: Request) -> bool:
         return True
     try:
         return oidc_identity_from_token(_bearer_token(request)) is not None
-    except OIDCAuthError:
+    except (OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError):
         return False
 
 
@@ -309,6 +354,7 @@ def require_role(*roles: str) -> Callable[..., AdminIdentity]:
     required = set(roles)
 
     def dependency(identity: AdminIdentity = Depends(require_admin)) -> AdminIdentity:
+        identity = _refresh_oidc_authorization(identity)
         if identity.has_any_role(required):
             return identity
         raise HTTPException(

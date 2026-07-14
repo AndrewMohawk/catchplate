@@ -73,10 +73,9 @@ assert result["method"] == "POST", result
 assert result["path"] == "/upload-bytes", result
 assert result["bytes"] == len(payload), result
 assert result["sha256"] == payload_sha, result
-assert result["authorization_present"] is True, result
-assert result["authorization_scheme"] == "Bearer", result
-expected_auth = "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest()
-assert result["authorization_sha256"] == expected_auth, result
+assert result["authorization_present"] is False, result
+assert result["authorization_scheme"] is None, result
+assert "authorization_sha256" not in result, result
 assert "authorization" not in result, result
 
 connect_payload = bytes((index * 17) % 251 for index in range(160 * 1024))
@@ -112,9 +111,9 @@ with socket.create_connection((host, port), timeout=10) as raw:
         assert result["path"] == "/upload-bytes", result
         assert result["bytes"] == len(connect_payload), result
         assert result["sha256"] == connect_payload_sha, result
-        assert result["authorization_present"] is True, result
-        assert result["authorization_scheme"] == "Bearer", result
-        assert result["authorization_sha256"] == expected_auth, result
+        assert result["authorization_present"] is False, result
+        assert result["authorization_scheme"] is None, result
+        assert "authorization_sha256" not in result, result
         assert "authorization" not in result, result
 
 status, _, body = request(

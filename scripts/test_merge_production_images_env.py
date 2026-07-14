@@ -83,6 +83,10 @@ def main() -> None:
             raise AssertionError("merge did not preserve existing env values")
         if "SERVERWARE_PRODUCTION_IMAGES=" + images_value() not in merged_text:
             raise AssertionError(f"merge did not append production images: {merged_text}")
+        if "SERVERWARE_CONTROL_PLANE_IMAGE=registry.prod.serverware.dev/serverware/control@" + digest("a") not in merged_text:
+            raise AssertionError(f"merge did not bind the control-plane service image: {merged_text}")
+        if "SERVERWARE_DECISION_GATE_IMAGE=registry.prod.serverware.dev/serverware/decision-gate@" + digest("b") not in merged_text:
+            raise AssertionError(f"merge did not bind the decision-gate service image: {merged_text}")
 
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)

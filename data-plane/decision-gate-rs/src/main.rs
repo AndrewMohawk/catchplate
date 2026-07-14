@@ -1,40 +1,102 @@
+#![allow(clippy::too_many_arguments)]
+
 use base64::{engine::general_purpose, Engine as _};
 use csv::{ByteRecord, ReaderBuilder, WriterBuilder};
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use ipnet::IpNet;
 use rcgen::{
-    Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, KeyPair, KeyUsagePurpose,
+    Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, Ia5String, KeyPair,
+    KeyUsagePurpose, SanType,
 };
 use reqwest::blocking::{Body, Client};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH, HOST};
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue, CONTENT_LENGTH};
 use reqwest::{Method, StatusCode};
+use ring::{aead, hkdf, rand as ring_rand};
+use ring_rand::SecureRandom;
+use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::{self, Cursor, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use time::{Duration as TimeDuration, OffsetDateTime};
+use time::format_description::well_known::Rfc3339;
+use time::{Date, Duration as TimeDuration, Month, OffsetDateTime, Weekday};
 use url::{form_urlencoded, Url};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
+use zeroize::{Zeroize, Zeroizing};
+
+const MAX_CREDENTIAL_LEASE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_CONTROL_PLANE_ATTESTATION_BYTES: u64 = 64 * 1024;
+const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
+const MAX_REQUEST_HEADER_COUNT: usize = 128;
+const MAX_BUFFERED_REQUEST_BODY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_MANAGEMENT_REQUEST_BODY_BYTES: u64 = 1024 * 1024;
+const MAX_BUFFERED_RESPONSE_BODY_BYTES: u64 = 16 * 1024 * 1024;
+const MAX_INJECTED_CREDENTIAL_BYTES: usize = 64 * 1024;
+const MAX_NPM_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_LOCAL_RATE_COUNTERS: usize = 65_536;
+const POLICY_TRUST_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
+const POLICY_TRUST_MAX_AGE: Duration = Duration::from_secs(90);
+const CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT: Duration = Duration::from_secs(15);
+const CREDENTIAL_LEASE_RENEW_BEFORE: Duration = Duration::from_secs(4);
+const CREDENTIAL_LEASE_RECIPIENT_ATTESTATION_TIMEOUT: Duration = Duration::from_secs(2);
+const SAFE_RESPONSE_HEADERS: [&str; 6] = [
+    "cache-control",
+    "content-language",
+    "etag",
+    "last-modified",
+    "retry-after",
+    "www-authenticate",
+];
+const DEFAULT_REQUEST_HEAD_DEADLINE_MS: u64 = 10_000;
+const DEFAULT_REQUEST_BODY_DEADLINE_MS: u64 = 120_000;
+const DEFAULT_RESPONSE_WRITE_DEADLINE_MS: u64 = 120_000;
+const SOCKET_IO_SLICE: Duration = Duration::from_secs(1);
+const RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
+const RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-proof-nonce";
 
 #[derive(Clone)]
 struct Snapshot {
+    epoch: u64,
     hash: String,
+    policy_id: String,
+    policy_sequence: u64,
+    rollback_epoch: u64,
+    trust_generation: u64,
     policy_signing_key_id: String,
+    response_verifying_key: Option<VerifyingKey>,
+    response_signing_key_id: Option<String>,
+    attested_response_context: Option<AttestedResponseContext>,
     principals: Vec<Principal>,
     credentials: HashMap<String, Credential>,
     routes: Vec<Route>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct PolicyHighWater {
+    api_version: String,
+    policy_id: String,
+    sequence: u64,
+    rollback_epoch: u64,
+    policy_hash: String,
 }
 
 #[derive(Clone)]
@@ -85,6 +147,7 @@ struct PathTemplate {
 enum PathSegment {
     Literal(String),
     Variable(String),
+    Wildcard,
     Glob,
 }
 
@@ -100,10 +163,16 @@ struct DecisionRequest {
     body: String,
     #[serde(default, rename = "bodySha256")]
     body_sha256: Option<String>,
+    #[serde(skip)]
+    forwarded_body_length: Option<u64>,
+    #[serde(skip)]
+    forwarded_body_utf8_valid: Option<bool>,
     #[serde(default, rename = "credentialMetadata")]
-    credential_metadata: BTreeMap<String, BTreeMap<String, String>>,
-    #[serde(default, rename = "gmailProofs")]
+    credential_metadata: BTreeMap<String, BTreeMap<String, Value>>,
+    #[serde(skip)]
     gmail_proofs: Vec<String>,
+    #[serde(skip)]
+    client_request_digest: Option<String>,
 }
 
 struct RouteMatch<'a> {
@@ -132,6 +201,7 @@ struct RequestHead {
 struct ResponsePolicy {
     adapter_type: String,
     response_config: Value,
+    has_response_constraints: bool,
 }
 
 #[derive(Clone)]
@@ -176,25 +246,38 @@ struct GateState {
     policy_path: String,
     policy_trust_root_source: PolicyTrustRootSource,
     policy_mtime: Mutex<Option<SystemTime>>,
+    policy_trust_refresh_due: Mutex<Instant>,
+    policy_trust_last_success: Mutex<Instant>,
     policy_reload_success: AtomicU64,
     policy_reload_failed: AtomicU64,
+    policy_high_water_path: Option<PathBuf>,
+    policy_high_water: Mutex<PolicyHighWater>,
     grants: Mutex<HashMap<String, Grant>>,
-    gmail_proofs: Mutex<HashMap<(String, String, String), u128>>,
+    gmail_proofs: Mutex<HashMap<GmailProofKey, GmailProof>>,
     gmail_proof_cache_max: usize,
     constraint_rate_counters: Mutex<HashMap<String, ConstraintRateCounter>>,
-    credential_generations: Mutex<HashMap<String, Option<u64>>>,
-    generation_mtime: Mutex<Option<SystemTime>>,
-    generation_path: String,
-    credential_leases: Mutex<HashMap<String, Option<SecretLease>>>,
-    lease_mtime: Mutex<Option<SystemTime>>,
-    lease_path: String,
+    credential_leases: Mutex<HashMap<CredentialLeaseScope, SecretLease>>,
+    credential_lease_flights:
+        Mutex<HashMap<CredentialLeaseGenerationKey, Arc<CredentialLeaseFlight>>>,
+    credential_lease_url: Option<String>,
+    credential_lease_recipient_attestation_command: Option<String>,
+    credential_lease_refresh_success: AtomicU64,
+    credential_lease_refresh_failed: AtomicU64,
+    credential_lease_renewal_poll_interval_ms: u64,
+    credential_lease_renewal_workers: usize,
+    credential_lease_renewal_queue_capacity: usize,
+    credential_lease_renewal_queued: AtomicU64,
+    credential_lease_renewal_queue_full: AtomicU64,
+    credential_lease_cache_max: usize,
     upstream_client: Client,
     audit_client: Client,
+    credential_lease_client: Client,
     audit_url: Option<String>,
     audit_token: Option<String>,
     grant_consume_url: Option<String>,
     rate_limit_consume_url: Option<String>,
     audit_queue: Mutex<VecDeque<AuditEvent>>,
+    audit_reserved: AtomicU64,
     audit_queue_max: usize,
     audit_batch_max: usize,
     audit_enqueued: AtomicU64,
@@ -202,17 +285,294 @@ struct GateState {
     audit_required_failed: AtomicU64,
     audit_sent: AtomicU64,
     audit_send_failed: AtomicU64,
+    request_head_deadline: Duration,
+    request_body_deadline: Duration,
+    response_write_deadline: Duration,
     mitm_authority: Option<Mutex<MitmAuthority>>,
     leaf_configs: Mutex<HashMap<String, Arc<ServerConfig>>>,
     binary_digest: String,
     release_provenance_path: Option<String>,
     image_signatures_path: Option<String>,
+    response_proof_signing_key: SigningKey,
+    response_proof_public_key_pem: String,
+    response_proof_signing_key_id: String,
+    response_proof_attestation_command: Option<String>,
+    server_instance_id: Option<String>,
+}
+
+#[derive(Clone)]
+struct ResponseProofContext {
+    client_nonce: String,
+    client_nonce_bytes: Vec<u8>,
+    tls_exporter: String,
+}
+
+#[derive(Serialize)]
+struct CanonicalSafeProofRequest {
+    #[serde(rename = "apiVersion")]
+    api_version: &'static str,
+    method: String,
+    scheme: String,
+    authority: String,
+    path: String,
+    query: Vec<(String, String)>,
+    headers: BTreeMap<String, String>,
+    body_sha256: String,
+}
+
+enum ResponseProofAttachment {
+    Attached {
+        response: Vec<u8>,
+        runtime_proof_sha256: String,
+        client_request_digest: String,
+    },
+    Skipped {
+        response: Vec<u8>,
+    },
 }
 
 #[derive(Clone)]
 struct ConstraintRateCounter {
-    window_start_ms: u128,
+    expires_at_ms: u128,
     count: u64,
+}
+
+#[derive(Clone)]
+struct GmailProof {
+    expires_at_ms: u128,
+    snapshot_epoch: u64,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct GmailProofKey {
+    principal_id: String,
+    credential_ref: String,
+    credential_version: u64,
+    gmail_user: String,
+    route_id: String,
+    policy_hash: String,
+    cutoff_epoch_ms: u128,
+    message_id: String,
+}
+
+struct CredentialLeaseFlight {
+    result: Mutex<Option<Result<(), String>>>,
+    completed: Condvar,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct CredentialLeaseGenerationKey {
+    scope: CredentialLeaseScope,
+    snapshot_epoch: u64,
+    policy_hash: String,
+    trust_generation: u64,
+}
+
+impl CredentialLeaseGenerationKey {
+    fn new(snapshot: &Snapshot, scope: &CredentialLeaseScope) -> Self {
+        Self {
+            scope: scope.clone(),
+            snapshot_epoch: snapshot.epoch,
+            policy_hash: snapshot.hash.clone(),
+            trust_generation: snapshot.trust_generation,
+        }
+    }
+}
+
+struct CredentialLeaseRenewalTask {
+    snapshot: Arc<Snapshot>,
+    key: CredentialLeaseGenerationKey,
+}
+
+struct CredentialLeaseRenewalPendingGuard {
+    pending: Arc<Mutex<HashSet<CredentialLeaseGenerationKey>>>,
+    state: Arc<GateState>,
+    key: CredentialLeaseGenerationKey,
+}
+
+impl Drop for CredentialLeaseRenewalPendingGuard {
+    fn drop(&mut self) {
+        self.pending
+            .lock()
+            .expect("credential lease renewal pending mutex poisoned")
+            .remove(&self.key);
+        self.state
+            .credential_lease_renewal_queued
+            .fetch_sub(1, Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone)]
+struct CredentialLeaseReleaseBinding {
+    scope: CredentialLeaseScope,
+    version: u64,
+    expires_at_monotonic: Instant,
+}
+
+struct DeadlineIo<T> {
+    inner: T,
+    read_budget: Duration,
+    read_started: Option<Instant>,
+    write_budget: Duration,
+    write_started: Option<Instant>,
+}
+
+trait ConfigureIoTimeout {
+    fn configure_read_timeout(&self, timeout: Duration) -> io::Result<()>;
+    fn configure_write_timeout(&self, timeout: Duration) -> io::Result<()>;
+}
+
+impl ConfigureIoTimeout for TcpStream {
+    fn configure_read_timeout(&self, timeout: Duration) -> io::Result<()> {
+        self.set_read_timeout(Some(timeout))
+    }
+
+    fn configure_write_timeout(&self, timeout: Duration) -> io::Result<()> {
+        self.set_write_timeout(Some(timeout))
+    }
+}
+
+impl<T> ConfigureIoTimeout for Cursor<T> {
+    fn configure_read_timeout(&self, _timeout: Duration) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn configure_write_timeout(&self, _timeout: Duration) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<T> DeadlineIo<T> {
+    fn new(inner: T, read_budget: Duration, write_budget: Duration) -> Self {
+        Self {
+            inner,
+            read_budget,
+            read_started: None,
+            write_budget,
+            write_started: None,
+        }
+    }
+
+    fn reset_read_deadline(&mut self, budget: Duration) {
+        self.read_budget = budget;
+        self.read_started = None;
+    }
+
+    fn reset_write_deadline(&mut self, budget: Duration) {
+        self.write_budget = budget;
+        self.write_started = None;
+    }
+
+    fn phase_remaining(started: &mut Option<Instant>, budget: Duration) -> Option<Duration> {
+        let started = started.get_or_insert_with(Instant::now);
+        budget.checked_sub(started.elapsed())
+    }
+}
+
+impl<T: ConfigureIoTimeout + Read> Read for DeadlineIo<T> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let Some(remaining) = Self::phase_remaining(&mut self.read_started, self.read_budget)
+            else {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "absolute request read deadline exceeded",
+                ));
+            };
+            self.inner
+                .configure_read_timeout(remaining.min(SOCKET_IO_SLICE))?;
+            match self.inner.read(buffer) {
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                Ok(read) => {
+                    if Self::phase_remaining(&mut self.read_started, self.read_budget).is_none() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "absolute request read deadline exceeded",
+                        ));
+                    }
+                    return Ok(read);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
+impl<T: ConfigureIoTimeout + Write> Write for DeadlineIo<T> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        loop {
+            let Some(remaining) = Self::phase_remaining(&mut self.write_started, self.write_budget)
+            else {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "absolute response write deadline exceeded",
+                ));
+            };
+            self.inner
+                .configure_write_timeout(remaining.min(SOCKET_IO_SLICE))?;
+            match self.inner.write(buffer) {
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                Ok(written) => {
+                    if Self::phase_remaining(&mut self.write_started, self.write_budget).is_none() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "absolute response write deadline exceeded",
+                        ));
+                    }
+                    return Ok(written);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        loop {
+            let Some(remaining) = Self::phase_remaining(&mut self.write_started, self.write_budget)
+            else {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "absolute response write deadline exceeded",
+                ));
+            };
+            self.inner
+                .configure_write_timeout(remaining.min(SOCKET_IO_SLICE))?;
+            match self.inner.flush() {
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                    ) =>
+                {
+                    continue;
+                }
+                Ok(()) => {
+                    if Self::phase_remaining(&mut self.write_started, self.write_budget).is_none() {
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            "absolute response write deadline exceeded",
+                        ));
+                    }
+                    return Ok(());
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -221,6 +581,7 @@ enum PolicyTrustRootSource {
     AttestedControlPlane {
         url: String,
         expected_quote_key_id: Option<String>,
+        verify_command: Option<String>,
     },
 }
 
@@ -233,10 +594,23 @@ impl PolicyTrustRootSource {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AttestedResponseContext {
+    runtime_manifest_digest: String,
+    policy_bundle_digest: String,
+    provenance_digest: Option<String>,
+    image_signatures_digest: Option<String>,
+    source_tree_digest: Option<String>,
+}
+
 struct PolicyTrustRoot {
     verifying_key: VerifyingKey,
     key_id: String,
     attested_policy_hash: Option<String>,
+    attested_data_plane_binary_digest: Option<String>,
+    response_verifying_key: Option<VerifyingKey>,
+    response_signing_key_id: Option<String>,
+    attested_response_context: Option<AttestedResponseContext>,
 }
 
 #[derive(Clone, Serialize)]
@@ -244,6 +618,56 @@ struct AuditEvent {
     event_type: String,
     actor_id: String,
     event: Value,
+    #[serde(skip)]
+    required: bool,
+}
+
+struct AuditReservation<'a> {
+    state: &'a GateState,
+    active: bool,
+}
+
+impl AuditReservation<'_> {
+    fn commit(&mut self, event_type: &str, event: Value) -> bool {
+        if !self.active {
+            return false;
+        }
+        let mut queue = self
+            .state
+            .audit_queue
+            .lock()
+            .expect("audit queue mutex poisoned");
+        self.state.audit_reserved.fetch_sub(1, Ordering::Relaxed);
+        self.active = false;
+        if queue.len() >= self.state.audit_queue_max {
+            self.state
+                .audit_required_failed
+                .fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        queue.push_back(AuditEvent {
+            event_type: event_type.to_string(),
+            actor_id: "decision-gate-rs".to_string(),
+            event,
+            required: true,
+        });
+        self.state.audit_enqueued.fetch_add(1, Ordering::Relaxed);
+        true
+    }
+}
+
+impl Drop for AuditReservation<'_> {
+    fn drop(&mut self) {
+        if self.active {
+            let _queue = self
+                .state
+                .audit_queue
+                .lock()
+                .expect("audit queue mutex poisoned");
+            self.state.audit_reserved.fetch_sub(1, Ordering::Relaxed);
+            self.active = false;
+        }
+    }
 }
 
 struct MitmAuthority {
@@ -252,19 +676,291 @@ struct MitmAuthority {
     ca_cert_der: Vec<u8>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct CredentialLeaseScope {
+    principal_id: String,
+    route_id: String,
+    credential_id: String,
+}
+
+impl CredentialLeaseScope {
+    fn new(principal_id: &str, route_id: &str, credential_id: &str) -> Self {
+        Self {
+            principal_id: principal_id.to_string(),
+            route_id: route_id.to_string(),
+            credential_id: credential_id.to_string(),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct SecretLease {
+    scope: CredentialLeaseScope,
     version: u64,
-    secret: String,
-    metadata: BTreeMap<String, String>,
+    secret: Zeroizing<String>,
+    metadata: BTreeMap<String, Value>,
+    policy_hash: String,
+    expires_at_epoch_ms: u128,
+    expires_at_monotonic: Instant,
+}
+
+#[derive(Default)]
+struct ResponseSecretGuard {
+    patterns: Vec<Zeroizing<Vec<u8>>>,
+    max_pattern_len: usize,
+}
+
+impl ResponseSecretGuard {
+    fn add_pattern(&mut self, pattern: &[u8]) {
+        if pattern.is_empty()
+            || self
+                .patterns
+                .iter()
+                .any(|existing| existing.as_slice() == pattern)
+        {
+            return;
+        }
+        self.max_pattern_len = self.max_pattern_len.max(pattern.len());
+        self.patterns.push(Zeroizing::new(pattern.to_vec()));
+    }
+
+    fn add_text_encodings(&mut self, value: &str) {
+        self.add_pattern(value.as_bytes());
+        if let Ok(encoded) = serde_json::to_string(value) {
+            let encoded = Zeroizing::new(encoded);
+            if encoded.len() >= 2 {
+                self.add_pattern(&encoded.as_bytes()[1..encoded.len() - 1]);
+            }
+        }
+        let encoded =
+            Zeroizing::new(form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>());
+        self.add_pattern(encoded.as_bytes());
+        let encoded = Zeroizing::new(general_purpose::STANDARD.encode(value.as_bytes()));
+        self.add_pattern(encoded.as_bytes());
+        let encoded = Zeroizing::new(general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes()));
+        self.add_pattern(encoded.as_bytes());
+        let digest = Zeroizing::new(hex::encode(Sha256::digest(value.as_bytes())));
+        self.add_pattern(digest.as_bytes());
+        let prefixed_digest = Zeroizing::new(format!("sha256:{}", digest.as_str()));
+        self.add_pattern(prefixed_digest.as_bytes());
+    }
+
+    fn is_empty(&self) -> bool {
+        self.patterns.is_empty()
+    }
+
+    fn detects(&self, value: &[u8]) -> bool {
+        self.patterns.iter().any(|pattern| {
+            value.len() >= pattern.len()
+                && value
+                    .windows(pattern.len())
+                    .any(|window| window == pattern.as_slice())
+        })
+    }
+}
+
+struct ResponseSecretWriter<'a, W: Write + ?Sized> {
+    inner: &'a mut W,
+    guard: &'a ResponseSecretGuard,
+    pending: Zeroizing<Vec<u8>>,
+    blocked: bool,
+}
+
+impl<'a, W: Write + ?Sized> ResponseSecretWriter<'a, W> {
+    fn new(inner: &'a mut W, guard: &'a ResponseSecretGuard) -> Self {
+        Self {
+            inner,
+            guard,
+            pending: Zeroizing::new(Vec::with_capacity(guard.max_pattern_len.max(1024))),
+            blocked: false,
+        }
+    }
+
+    fn release_prefix(&mut self, length: usize) -> io::Result<()> {
+        if length == 0 {
+            return Ok(());
+        }
+        self.inner.write_all(&self.pending[..length])?;
+        let suffix = self.pending.split_off(length);
+        self.pending.zeroize();
+        self.pending = Zeroizing::new(suffix);
+        Ok(())
+    }
+
+    fn finish(mut self) -> io::Result<()> {
+        if self.blocked {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "response_credential_reflection",
+            ));
+        }
+        let remaining = self.pending.len();
+        self.release_prefix(remaining)?;
+        self.inner.flush()
+    }
+}
+
+impl<W: Write + ?Sized> Write for ResponseSecretWriter<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.blocked {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "response_credential_reflection",
+            ));
+        }
+        self.pending.extend_from_slice(buf);
+        if self.guard.detects(&self.pending) {
+            self.pending.zeroize();
+            self.blocked = true;
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "response_credential_reflection",
+            ));
+        }
+        let retained = self.guard.max_pattern_len.saturating_sub(1);
+        let releasable = self.pending.len().saturating_sub(retained);
+        self.release_prefix(releasable)?;
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CredentialLeaseRequest {
+    api_version: String,
+    principal_id: String,
+    route_id: String,
+    credential_id: String,
+    recipient_public_key: String,
+    recipient_key_id: String,
+    recipient_nonce: String,
+    policy_hash: String,
+    data_plane_binary_digest: String,
+    max_ttl_seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    recipient_attestation: Option<Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialLeaseEnvelope {
+    api_version: String,
+    algorithm: String,
+    recipient_key_id: String,
+    recipient_nonce: String,
+    policy_hash: String,
+    data_plane_binary_digest: String,
+    principal_id: String,
+    route_id: String,
+    credential_id: String,
+    issued_at_epoch_ms: u64,
+    expires_at_epoch_ms: u64,
+    server_ephemeral_public_key: String,
+    aead_nonce: String,
+    ciphertext: String,
+    ciphertext_sha256: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialLeaseResponseStatement {
+    version: String,
+    issued_at_ms: u64,
+    request: CredentialLeaseResponseRequest,
+    status_code: u16,
+    body_sha256: String,
+    nonce: Option<String>,
+    response_signing_key_id: String,
+    context: CredentialLeaseResponseContext,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialLeaseResponseRequest {
+    method: String,
+    path: String,
+    query: String,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct CredentialLeaseResponseContext {
+    runtime_manifest_digest: String,
+    policy_bundle_digest: String,
+    provenance_digest: Option<String>,
+    image_signatures_digest: Option<String>,
+    source_tree_digest: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialLeaseSet {
+    api_version: String,
+    recipient_key_id: String,
+    recipient_nonce: String,
+    policy_hash: String,
+    data_plane_binary_digest: String,
+    principal_id: String,
+    route_id: String,
+    credential_id: String,
+    issued_at_epoch_ms: u64,
+    expires_at_epoch_ms: u64,
+    credentials: Vec<CredentialLeaseEntry>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CredentialLeaseEntry {
+    credential_id: String,
+    credential_version: u64,
+    secret: Zeroizing<String>,
+    metadata: BTreeMap<String, Value>,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+#[allow(dead_code)]
+enum SecretJsonValue {
+    String(Zeroizing<String>),
+    Object(BTreeMap<String, SecretJsonValue>),
+    Array(Vec<SecretJsonValue>),
+    Number(serde_json::Number),
+    Bool(bool),
+    Null,
+}
+
+impl SecretJsonValue {
+    fn path_string<'a>(&'a self, parts: &[&str]) -> Option<&'a str> {
+        if parts.is_empty() {
+            return match self {
+                Self::String(value) => Some(value.as_str()),
+                _ => None,
+            };
+        }
+        match self {
+            Self::Object(values) => values.get(parts[0])?.path_string(&parts[1..]),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Aes256KeyLength;
+
+impl hkdf::KeyType for Aes256KeyLength {
+    fn len(&self) -> usize {
+        32
+    }
 }
 
 #[derive(Clone)]
 struct Grant {
     id: String,
     approval_id: Option<String>,
-    credential_ref: String,
-    credential_version: u64,
     uses_remaining: u64,
     expires_at_ms: u128,
 }
@@ -324,6 +1020,25 @@ fn canonical_json(value: &Value) -> String {
     serde_json::to_string(value).expect("canonical JSON serialization failed")
 }
 
+fn canonical_json_ensure_ascii(value: &Value) -> String {
+    let encoded = canonical_json(value);
+    let mut ascii = String::with_capacity(encoded.len());
+    for character in encoded.chars() {
+        let codepoint = character as u32;
+        if codepoint <= 0x7f {
+            ascii.push(character);
+        } else if codepoint <= 0xffff {
+            ascii.push_str(&format!("\\u{codepoint:04x}"));
+        } else {
+            let supplementary = codepoint - 0x1_0000;
+            let high = 0xd800 + (supplementary >> 10);
+            let low = 0xdc00 + (supplementary & 0x3ff);
+            ascii.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+        }
+    }
+    ascii
+}
+
 fn sha256_prefixed(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -343,24 +1058,197 @@ fn compile_template(template: &str) -> Result<PathTemplate, String> {
         return Err(format!("path template must start with /: {template}"));
     }
     let mut segments = Vec::new();
-    for segment in template.trim_matches('/').split('/') {
-        if segment.is_empty() {
-            continue;
-        }
-        if segment == "**" {
+    let template_segments = template
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    for (index, segment) in template_segments.iter().enumerate() {
+        if *segment == "**" {
+            if index + 1 != template_segments.len() {
+                return Err(format!("path template glob must be terminal: {template}"));
+            }
             segments.push(PathSegment::Glob);
+        } else if *segment == "*" {
+            segments.push(PathSegment::Wildcard);
         } else if segment.starts_with('{') && segment.ends_with('}') {
-            segments.push(PathSegment::Variable(
-                segment[1..segment.len() - 1].to_string(),
-            ));
+            let name = &segment[1..segment.len() - 1];
+            let mut bytes = name.bytes();
+            if !matches!(bytes.next(), Some(first) if first.is_ascii_alphabetic() || first == b'_')
+                || bytes.any(|byte| !(byte.is_ascii_alphanumeric() || byte == b'_'))
+            {
+                return Err(format!("invalid path variable {segment} in {template}"));
+            }
+            segments.push(PathSegment::Variable(name.to_string()));
         } else {
-            segments.push(PathSegment::Literal(segment.to_string()));
+            segments.push(PathSegment::Literal((*segment).to_string()));
         }
     }
     Ok(PathTemplate { segments })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RequestPathValidation {
+    has_encoded_slash: bool,
+}
+
+fn raw_absolute_path(target: &str) -> Result<&str, String> {
+    if target.contains('#') {
+        return Err("request target fragments are not allowed".to_string());
+    }
+    let (_, authority_and_path) = target
+        .split_once("://")
+        .ok_or_else(|| "request target must be absolute-form".to_string())?;
+    let path_start = authority_and_path
+        .find(['/', '?'])
+        .unwrap_or(authority_and_path.len());
+    let path_and_query = &authority_and_path[path_start..];
+    if path_and_query.starts_with('?') || path_and_query.is_empty() {
+        return Ok("/");
+    }
+    Ok(path_and_query.split('?').next().unwrap_or("/"))
+}
+
+fn is_unreserved_path_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
+}
+
+fn valid_npm_package_part(value: &str, scope: bool) -> bool {
+    let value = value.strip_prefix('@').unwrap_or(value);
+    !value.is_empty()
+        && value.len() <= 214
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'-' | b'_' | b'.' | b'~')
+                || (!scope && byte == b'@')
+        })
+}
+
+fn is_canonical_npm_scoped_segment(segment: &str) -> bool {
+    let Some((scope, package)) = segment.split_once("%2f") else {
+        return false;
+    };
+    !package.contains("%2f")
+        && !scope.contains('%')
+        && !package.contains('%')
+        && scope.starts_with('@')
+        && valid_npm_package_part(scope, true)
+        && valid_npm_package_part(package, false)
+}
+
+fn validate_request_target_path(target: &str) -> Result<RequestPathValidation, String> {
+    let raw_path = raw_absolute_path(target)?;
+    if raw_path.len() > MAX_REQUEST_HEADER_BYTES {
+        return Err("request path is too large".to_string());
+    }
+    if raw_path.contains("//") {
+        return Err("request path contains empty segments".to_string());
+    }
+
+    let bytes = raw_path.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0usize;
+    let mut encoded_slashes = 0usize;
+    while index < bytes.len() {
+        let byte = bytes[index];
+        if byte == b'\\' || byte < 0x20 || byte == 0x7f {
+            return Err("request path contains a forbidden separator or control".to_string());
+        }
+        if byte != b'%' {
+            decoded.push(byte);
+            index += 1;
+            continue;
+        }
+        if index + 2 >= bytes.len()
+            || !bytes[index + 1].is_ascii_hexdigit()
+            || !bytes[index + 2].is_ascii_hexdigit()
+        {
+            return Err("request path contains an invalid percent encoding".to_string());
+        }
+        let hex = &raw_path[index + 1..index + 3];
+        let decoded_byte = u8::from_str_radix(hex, 16)
+            .map_err(|_| "request path contains an invalid percent encoding".to_string())?;
+        if decoded_byte == b'/' {
+            if hex != "2f" {
+                return Err("npm scoped-package separators must use canonical %2f".to_string());
+            }
+            encoded_slashes += 1;
+        } else if decoded_byte == b'\\' || decoded_byte < 0x20 || decoded_byte == 0x7f {
+            return Err("request path encodes a forbidden separator or control".to_string());
+        } else {
+            if decoded_byte == b'%' {
+                return Err("request path contains a double encoding".to_string());
+            }
+            if is_unreserved_path_byte(decoded_byte) {
+                return Err("request path percent-encodes an unreserved byte".to_string());
+            }
+            if bytes[index + 1].is_ascii_lowercase() || bytes[index + 2].is_ascii_lowercase() {
+                return Err("request path uses a non-canonical percent encoding".to_string());
+            }
+        }
+        decoded.push(decoded_byte);
+        index += 3;
+    }
+    let decoded_path = std::str::from_utf8(&decoded)
+        .map_err(|_| "request path is not valid UTF-8 after decoding".to_string())?;
+    if decoded_path
+        .split('/')
+        .any(|segment| segment == "." || segment == "..")
+    {
+        return Err("request path contains a dot segment".to_string());
+    }
+    if encoded_slashes > 0 {
+        let scoped_segments = raw_path
+            .split('/')
+            .filter(|segment| segment.contains("%2f"))
+            .collect::<Vec<_>>();
+        if encoded_slashes != 1
+            || scoped_segments.len() != 1
+            || !is_canonical_npm_scoped_segment(scoped_segments[0])
+        {
+            return Err("encoded slash is not a canonical npm scoped package".to_string());
+        }
+    }
+    Ok(RequestPathValidation {
+        has_encoded_slash: encoded_slashes == 1,
+    })
+}
+
+fn decode_npm_scoped_name(value: &str) -> String {
+    value.replace("%2f", "/")
+}
+
 impl PathTemplate {
+    fn specificity(&self) -> Vec<u8> {
+        if self.segments.is_empty() {
+            return vec![3];
+        }
+        self.segments
+            .iter()
+            .map(|segment| match segment {
+                PathSegment::Glob => 0,
+                PathSegment::Wildcard => 1,
+                PathSegment::Variable(_) => 2,
+                PathSegment::Literal(_) => 3,
+            })
+            .collect()
+    }
+
+    fn shape(&self) -> Vec<String> {
+        if self.segments.is_empty() {
+            return vec![String::new()];
+        }
+        self.segments
+            .iter()
+            .map(|segment| match segment {
+                PathSegment::Literal(value) => value.clone(),
+                PathSegment::Variable(_) => "{}".to_string(),
+                PathSegment::Wildcard => "*".to_string(),
+                PathSegment::Glob => "**".to_string(),
+            })
+            .collect()
+    }
+
     fn matches(&self, path: &str) -> Option<BTreeMap<String, String>> {
         let actual: Vec<&str> = path
             .trim_matches('/')
@@ -380,6 +1268,9 @@ impl PathTemplate {
                 PathSegment::Variable(name) => {
                     let value = actual.get(index)?;
                     params.insert(name.clone(), (*value).to_string());
+                }
+                PathSegment::Wildcard => {
+                    actual.get(index)?;
                 }
             }
             index += 1;
@@ -494,6 +1385,7 @@ impl Snapshot {
         let host = url.host_str()?.trim_end_matches('.').to_ascii_lowercase();
         let port = url.port_or_known_default()?;
         let normalized_method = method.to_ascii_uppercase();
+        let mut matches = Vec::new();
         for route in &self.routes {
             if route.scheme != scheme || route.host != host || route.port != port {
                 continue;
@@ -508,13 +1400,31 @@ impl Snapshot {
             {
                 continue;
             }
+            let mut route_match: Option<(Vec<u8>, BTreeMap<String, String>)> = None;
             for template in &route.paths {
                 if let Some(params) = template.matches(url.path()) {
-                    return Some(RouteMatch { route, params });
+                    let specificity = template.specificity();
+                    if route_match
+                        .as_ref()
+                        .is_none_or(|(current, _)| specificity > *current)
+                    {
+                        route_match = Some((specificity, params));
+                    }
                 }
             }
+            if let Some((specificity, params)) = route_match {
+                matches.push((specificity, route, params));
+            }
         }
-        None
+        let best_specificity = matches.iter().map(|(score, _, _)| score).max()?.clone();
+        let mut best = matches
+            .into_iter()
+            .filter(|(score, _, _)| *score == best_specificity);
+        let (_, route, params) = best.next()?;
+        if best.next().is_some() {
+            return None;
+        }
+        Some(RouteMatch { route, params })
     }
 
     fn match_connect_routes(&self, principal_id: &str, host: &str, port: u16) -> Vec<String> {
@@ -582,6 +1492,105 @@ fn append_nonce_query(url: &str, nonce: &str) -> Result<String, String> {
     Ok(parsed.to_string())
 }
 
+fn is_sha256_digest(value: &str) -> bool {
+    value.len() == 71
+        && value.starts_with("sha256:")
+        && value[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn required_attested_digest(
+    claims: &Map<String, Value>,
+    attestation: &Value,
+    field: &str,
+) -> Result<String, String> {
+    let claimed = claims
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_digest(value))
+        .ok_or_else(|| format!("control-plane quote missing valid {field}"))?;
+    let top_level = attestation
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_digest(value))
+        .ok_or_else(|| format!("control-plane attestation missing valid {field}"))?;
+    if claimed != top_level {
+        return Err(format!(
+            "control-plane {field} mismatch: quote has {claimed}, attestation has {top_level}"
+        ));
+    }
+    Ok(claimed.to_string())
+}
+
+fn required_attested_u64(
+    claims: &Map<String, Value>,
+    attestation: &Value,
+    field: &str,
+) -> Result<u64, String> {
+    let claimed = claims
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("control-plane quote missing positive integer {field}"))?;
+    let top_level = attestation
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("control-plane attestation missing positive integer {field}"))?;
+    if claimed == 0 || claimed != top_level {
+        return Err(format!(
+            "control-plane {field} mismatch: quote has {claimed}, attestation has {top_level}"
+        ));
+    }
+    Ok(claimed)
+}
+
+fn optional_attested_digest(
+    claims: &Map<String, Value>,
+    attestation: &Value,
+    field: &str,
+) -> Result<Option<String>, String> {
+    let claimed = claims.get(field).filter(|value| !value.is_null());
+    let top_level = attestation.get(field).filter(|value| !value.is_null());
+    match (claimed, top_level) {
+        (None, None) => Ok(None),
+        (Some(claimed), Some(top_level)) => {
+            let claimed = claimed
+                .as_str()
+                .filter(|value| is_sha256_digest(value))
+                .ok_or_else(|| format!("control-plane quote has invalid {field}"))?;
+            let top_level = top_level
+                .as_str()
+                .filter(|value| is_sha256_digest(value))
+                .ok_or_else(|| format!("control-plane attestation has invalid {field}"))?;
+            if claimed != top_level {
+                return Err(format!(
+                    "control-plane {field} mismatch: quote has {claimed}, attestation has {top_level}"
+                ));
+            }
+            Ok(Some(claimed.to_string()))
+        }
+        _ => Err(format!(
+            "control-plane {field} must be present in both quote and attestation or neither"
+        )),
+    }
+}
+
+fn response_peer_spki_sha256(
+    response: &reqwest::blocking::Response,
+) -> Result<Option<String>, String> {
+    let Some(tls_info) = response.extensions().get::<reqwest::tls::TlsInfo>() else {
+        return Ok(None);
+    };
+    let Some(certificate) = tls_info.peer_certificate() else {
+        return Ok(None);
+    };
+    let (_, parsed) = x509_parser::parse_x509_certificate(certificate)
+        .map_err(|err| format!("parse control-plane TLS peer certificate: {err}"))?;
+    Ok(Some(sha256_prefixed(
+        parsed.tbs_certificate.subject_pki.raw,
+    )))
+}
+
 fn verify_dev_quote_signature(
     quote: &Value,
     expected_quote_key_id: &Option<String>,
@@ -647,6 +1656,7 @@ fn verify_dev_quote_signature(
 fn fetch_attested_policy_trust_root(
     url: &str,
     expected_quote_key_id: &Option<String>,
+    verify_command: &Option<String>,
 ) -> Result<PolicyTrustRoot, String> {
     let nonce = format!(
         "decision-gate-policy-trust-{}-{}",
@@ -654,18 +1664,25 @@ fn fetch_attested_policy_trust_root(
         now_epoch_ms()
     );
     let request_url = append_nonce_query(url, &nonce)?;
-    let client = Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .map_err(|err| format!("build policy trust root client: {err}"))?;
+    let client = build_control_plane_client(Duration::from_secs(5))?;
     let deadline = Instant::now() + Duration::from_secs(15);
-    let attestation_text = loop {
+    let (attestation_bytes, peer_spki_sha256) = loop {
         let attempt_error = match client.get(&request_url).send() {
             Ok(response) => match response.error_for_status() {
-                Ok(response) => match response.text() {
-                    Ok(text) => break text,
-                    Err(err) => format!("read control-plane attestation: {err}"),
-                },
+                Ok(response) => {
+                    let peer_spki_sha256 = response_peer_spki_sha256(&response)?;
+                    let mut body = Vec::new();
+                    match response
+                        .take(MAX_CONTROL_PLANE_ATTESTATION_BYTES + 1)
+                        .read_to_end(&mut body)
+                    {
+                        Ok(_) if body.len() as u64 <= MAX_CONTROL_PLANE_ATTESTATION_BYTES => {
+                            break (body, peer_spki_sha256)
+                        }
+                        Ok(_) => "control-plane attestation exceeds 64 KiB".to_string(),
+                        Err(err) => format!("read control-plane attestation: {err}"),
+                    }
+                }
                 Err(err) => format!("control-plane attestation HTTP error: {err}"),
             },
             Err(err) => format!("fetch control-plane attestation: {err}"),
@@ -677,7 +1694,7 @@ fn fetch_attested_policy_trust_root(
         }
         thread::sleep(Duration::from_millis(250));
     };
-    let attestation: Value = serde_json::from_str(&attestation_text)
+    let attestation: Value = serde_json::from_slice(&attestation_bytes)
         .map_err(|err| format!("parse control-plane attestation: {err}"))?;
     if attestation.get("nonce").and_then(Value::as_str) != Some(nonce.as_str()) {
         return Err("control-plane attestation nonce mismatch".to_string());
@@ -685,9 +1702,43 @@ fn fetch_attested_policy_trust_root(
     let quote = attestation
         .get("quote")
         .ok_or("control-plane attestation missing quote")?;
-    let claims = verify_dev_quote_signature(quote, expected_quote_key_id)?;
+    let claims = if let Some(command) = verify_command.as_deref() {
+        let verified = run_bounded_json_command(
+            command,
+            &json!({"attestation":attestation}),
+            "control-plane attestation verifier",
+        )?;
+        if verified.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err("control-plane attestation verifier rejected quote".to_string());
+        }
+        verified
+            .get("claims")
+            .and_then(Value::as_object)
+            .cloned()
+            .ok_or("control-plane attestation verifier omitted claims")?
+    } else {
+        verify_dev_quote_signature(quote, expected_quote_key_id)?
+    };
     if claims.get("nonce").and_then(Value::as_str) != Some(nonce.as_str()) {
         return Err("control-plane quote nonce mismatch".to_string());
+    }
+    let service_tls_spki_sha256 =
+        optional_attested_digest(&claims, &attestation, "service_tls_spki_sha256")?;
+    let attestation_scheme = Url::parse(&request_url)
+        .map_err(|err| format!("parse control-plane attestation URL: {err}"))?
+        .scheme()
+        .to_string();
+    if attestation_scheme == "https" {
+        let expected_spki = service_tls_spki_sha256
+            .as_deref()
+            .ok_or("HTTPS control-plane attestation did not bind its service TLS SPKI")?;
+        if peer_spki_sha256.as_deref() != Some(expected_spki) {
+            return Err("control-plane attestation service TLS SPKI mismatch".to_string());
+        }
+    } else if service_tls_spki_sha256.is_some() || peer_spki_sha256.is_some() {
+        return Err(
+            "plaintext control-plane attestation reported a TLS service binding".to_string(),
+        );
     }
     let policy_public_key_pem = attestation
         .get("policy_signing_public_key_pem")
@@ -718,28 +1769,102 @@ fn fetch_attested_policy_trust_root(
             "control-plane policy key mismatch: attestation has {attestation_key_id}, public key is {key_id}"
         ));
     }
-    let attested_policy_hash = claims
-        .get("policy_bundle_digest")
+    let response_public_key_pem = attestation
+        .get("response_signing_public_key_pem")
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("sha256:"))
-        .map(str::to_string);
-    let top_level_policy_hash = attestation
-        .get("policy_bundle_digest")
+        .ok_or("control-plane attestation missing response_signing_public_key_pem")?;
+    let (response_verifying_key, response_signing_key_id) =
+        verifying_key_from_spki_pem_text(response_public_key_pem, "attested response")?;
+    let claimed_response_key_id = claims
+        .get("response_signing_key_id")
         .and_then(Value::as_str)
-        .filter(|value| value.starts_with("sha256:"));
-    if let (Some(claimed), Some(top_level)) =
-        (attested_policy_hash.as_deref(), top_level_policy_hash)
+        .ok_or("control-plane quote missing response_signing_key_id")?;
+    let top_level_response_key_id = attestation
+        .get("response_signing_key_id")
+        .and_then(Value::as_str)
+        .ok_or("control-plane attestation missing response_signing_key_id")?;
+    if claimed_response_key_id != response_signing_key_id
+        || top_level_response_key_id != response_signing_key_id
     {
-        if claimed != top_level {
-            return Err(format!(
-                "control-plane policy digest mismatch: quote has {claimed}, attestation has {top_level}"
-            ));
-        }
+        return Err("attested response signing key hash mismatch".to_string());
     }
+    let policy_bundle_digest =
+        required_attested_digest(&claims, &attestation, "policy_bundle_digest")?;
+    let policy_sequence = required_attested_u64(&claims, &attestation, "policy_sequence")?;
+    let rollback_epoch = required_attested_u64(&claims, &attestation, "rollback_epoch")?;
+    let policy_high_water_digest =
+        required_attested_digest(&claims, &attestation, "policy_high_water_digest")?;
+    let policy_high_water = attestation
+        .get("policy_high_water")
+        .and_then(Value::as_object)
+        .ok_or("control-plane attestation missing policy_high_water")?;
+    let expected_high_water_fields = [
+        "store",
+        "policyId",
+        "sequence",
+        "rollbackEpoch",
+        "policyHash",
+        "updatedAt",
+    ]
+    .into_iter()
+    .collect::<HashSet<_>>();
+    if policy_high_water
+        .keys()
+        .map(String::as_str)
+        .collect::<HashSet<_>>()
+        != expected_high_water_fields
+    {
+        return Err("control-plane policy_high_water fields do not match the contract".to_string());
+    }
+    if !matches!(
+        policy_high_water.get("store").and_then(Value::as_str),
+        Some("sqlite" | "postgres")
+    ) || policy_high_water
+        .get("policyId")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+        || policy_high_water.get("sequence").and_then(Value::as_u64) != Some(policy_sequence)
+        || policy_high_water
+            .get("rollbackEpoch")
+            .and_then(Value::as_u64)
+            != Some(rollback_epoch)
+        || policy_high_water.get("policyHash").and_then(Value::as_str)
+            != Some(policy_bundle_digest.as_str())
+        || policy_high_water
+            .get("updatedAt")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+    {
+        return Err("control-plane policy_high_water does not bind the active policy".to_string());
+    }
+    if digest_json(&Value::Object(policy_high_water.clone())) != policy_high_water_digest {
+        return Err("control-plane policy_high_water digest mismatch".to_string());
+    }
+    let data_plane_binary_digest =
+        required_attested_digest(&claims, &attestation, "data_plane_binary_digest")?;
+    let attested_response_context = AttestedResponseContext {
+        runtime_manifest_digest: required_attested_digest(
+            &claims,
+            &attestation,
+            "runtime_manifest_digest",
+        )?,
+        policy_bundle_digest: policy_bundle_digest.clone(),
+        provenance_digest: optional_attested_digest(&claims, &attestation, "provenance_digest")?,
+        image_signatures_digest: optional_attested_digest(
+            &claims,
+            &attestation,
+            "image_signatures_digest",
+        )?,
+        source_tree_digest: optional_attested_digest(&claims, &attestation, "source_tree_digest")?,
+    };
     Ok(PolicyTrustRoot {
         verifying_key,
         key_id,
-        attested_policy_hash,
+        attested_policy_hash: Some(policy_bundle_digest),
+        attested_data_plane_binary_digest: Some(data_plane_binary_digest),
+        response_verifying_key: Some(response_verifying_key),
+        response_signing_key_id: Some(response_signing_key_id),
+        attested_response_context: Some(attested_response_context),
     })
 }
 
@@ -751,12 +1876,17 @@ fn load_policy_trust_root(source: &PolicyTrustRootSource) -> Result<PolicyTrustR
                 verifying_key,
                 key_id,
                 attested_policy_hash: None,
+                attested_data_plane_binary_digest: None,
+                response_verifying_key: None,
+                response_signing_key_id: None,
+                attested_response_context: None,
             })
         }
         PolicyTrustRootSource::AttestedControlPlane {
             url,
             expected_quote_key_id,
-        } => fetch_attested_policy_trust_root(url, expected_quote_key_id),
+            verify_command,
+        } => fetch_attested_policy_trust_root(url, expected_quote_key_id, verify_command),
     }
 }
 
@@ -796,6 +1926,102 @@ fn verify_policy_signature(raw: &Value, trust_root: &PolicyTrustRoot) -> Result<
         .map_err(|err| format!("policy signature verification failed: {err}"))
 }
 
+fn validate_response_header_allowlist(
+    profile: &Map<String, Value>,
+    label: &str,
+) -> Result<(), String> {
+    let headers = profile
+        .get("allowedHeaders")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{label} allowedHeaders must be an array"))?;
+    let mut seen = HashSet::new();
+    for header in headers {
+        let name = header
+            .as_str()
+            .ok_or_else(|| format!("{label} allowedHeaders must contain only strings"))?
+            .to_ascii_lowercase();
+        if !SAFE_RESPONSE_HEADERS.contains(&name.as_str()) || !seen.insert(name.clone()) {
+            return Err(format!(
+                "{label} response header {name} is unsafe or duplicated"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_response_field_allowlist(
+    profile: &Map<String, Value>,
+    label: &str,
+) -> Result<(), String> {
+    let fields = profile
+        .get("allowedFields")
+        .and_then(Value::as_array)
+        .filter(|fields| !fields.is_empty())
+        .ok_or_else(|| format!("{label} allowedFields must be a non-empty array"))?;
+    let mut seen = HashSet::new();
+    for field in fields {
+        let path = field
+            .as_str()
+            .ok_or_else(|| format!("{label} allowedFields must contain only strings"))?;
+        if path.len() > 256
+            || path.is_empty()
+            || path.split('.').any(|segment| {
+                segment.is_empty()
+                    || !segment
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+            })
+            || !seen.insert(path)
+        {
+            return Err(format!(
+                "{label} response field path {path:?} is invalid or duplicated"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_json_error_response_profile(
+    response: &Map<String, Value>,
+    label: &str,
+) -> Result<(), String> {
+    let error = response
+        .get("error")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{label} error response profile missing"))?;
+    if error.get("mode").and_then(Value::as_str) != Some("json")
+        || error.get("onInvalid").and_then(Value::as_str) != Some("block")
+    {
+        return Err(format!(
+            "{label} error response must use bounded JSON and block on invalid"
+        ));
+    }
+    let max_body = error
+        .get("maxBodyBytes")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("{label} error response maxBodyBytes missing"))?;
+    if max_body == 0 || max_body > 65_536 {
+        return Err(format!(
+            "{label} error response maxBodyBytes must be between 1 and 65536"
+        ));
+    }
+    validate_response_field_allowlist(error, &format!("{label} error response"))?;
+    validate_response_header_allowlist(error, &format!("{label} error response"))
+}
+
+fn validate_optional_response_release_contract(
+    response: &Map<String, Value>,
+    label: &str,
+) -> Result<(), String> {
+    if response.contains_key("allowedHeaders") {
+        validate_response_header_allowlist(response, &format!("{label} success response"))?;
+    }
+    if response.contains_key("error") {
+        validate_json_error_response_profile(response, label)?;
+    }
+    Ok(())
+}
+
 fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
     const DEFAULTS: [(&str, &str); 5] = [
         ("action", "deny"),
@@ -805,6 +2031,16 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         ("validationFailure", "block"),
     ];
     const ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
+    const BUFFERED_RESPONSE_MODES: [&str; 3] = ["any", "headersOnly", "json"];
+    const STREAMING_RESPONSE_MODES: [&str; 7] = [
+        "stream",
+        "jsonlStream",
+        "jsonArrayStream",
+        "jsonSseStream",
+        "jsonNestedStream",
+        "formUrlencodedStream",
+        "csvStream",
+    ];
     const JIT_BINDING_FIELDS: [&str; 15] = [
         "principal",
         "routeId",
@@ -945,6 +2181,382 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 "route {route_id} adapter type {adapter_type} is not supported by the Rust runtime"
             ));
         }
+        let adapter_config = route
+            .get("adapter")
+            .and_then(Value::as_object)
+            .and_then(|adapter| adapter.get("config"))
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("route {route_id} adapter config missing"))?;
+        let credential_bound = route
+            .get("credentialRef")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty());
+        let request_mode = adapter_config
+            .get("request")
+            .and_then(Value::as_object)
+            .and_then(|request| request.get("bodyMode"))
+            .and_then(Value::as_str);
+        let response_mode = adapter_config
+            .get("response")
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("mode"))
+            .and_then(Value::as_str);
+        let has_mutating_method = route
+            .get("match")
+            .and_then(Value::as_object)
+            .and_then(|matcher| matcher.get("methods"))
+            .and_then(Value::as_array)
+            .is_none_or(|methods| {
+                methods
+                    .iter()
+                    .any(|method| !matches!(method.as_str(), Some("GET" | "HEAD" | "OPTIONS")))
+            });
+        if credential_bound && matches!(response_mode, Some("any" | "stream")) {
+            return Err(format!(
+                "route {route_id} credential-bearing responses require projection or structured validation"
+            ));
+        }
+        if credential_bound
+            && has_mutating_method
+            && request_mode.is_some_and(|mode| STREAMING_RESPONSE_MODES.contains(&mode))
+        {
+            return Err(format!(
+                "route {route_id} credential-bearing mutating request streams must buffer before forwarding"
+            ));
+        }
+        if adapter_type != "gmail.v1" {
+            let response = adapter_config
+                .get("response")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("route {route_id} response policy missing"))?;
+            let response_mode = response
+                .get("mode")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("route {route_id} response mode missing or non-string"))?;
+            let mode_supported = BUFFERED_RESPONSE_MODES.contains(&response_mode)
+                || (adapter_type == "generic.rest"
+                    && STREAMING_RESPONSE_MODES.contains(&response_mode))
+                || (adapter_type != "generic.rest" && response_mode == "stream");
+            if !mode_supported {
+                return Err(format!(
+                    "route {route_id} response mode {response_mode} is unsupported"
+                ));
+            }
+            response
+                .get("maxBodyBytes")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| {
+                    format!("route {route_id} response maxBodyBytes must be an unsigned integer")
+                })?;
+            validate_optional_response_release_contract(
+                response,
+                &format!("route {route_id} {adapter_type}"),
+            )?;
+            if STREAMING_RESPONSE_MODES.contains(&response_mode)
+                && response
+                    .get("allowedHeaders")
+                    .and_then(Value::as_array)
+                    .is_some_and(|headers| !headers.is_empty())
+            {
+                return Err(format!(
+                    "route {route_id} streaming responses cannot release upstream headers"
+                ));
+            }
+        }
+        if adapter_type == "gmail.v1" {
+            if route
+                .get("credentialRef")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                return Err(format!(
+                    "route {route_id} Gmail policy must bind a credential"
+                ));
+            }
+            for flag in ["forceQuery", "allowMessageGetOnlyFromPriorSearch"] {
+                if adapter_config.get(flag).and_then(Value::as_bool) != Some(true) {
+                    return Err(format!(
+                        "route {route_id} Gmail policy requires {flag}=true"
+                    ));
+                }
+            }
+            for field in ["maxAgeDays", "maxResults", "cacheTtlSeconds"] {
+                if adapter_config
+                    .get(field)
+                    .and_then(Value::as_u64)
+                    .is_none_or(|value| value == 0)
+                {
+                    return Err(format!(
+                        "route {route_id} Gmail policy requires positive {field}"
+                    ));
+                }
+            }
+            let response = adapter_config
+                .get("response")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("route {route_id} Gmail response policy missing"))?;
+            if response
+                .get("validateInternalDate")
+                .and_then(Value::as_bool)
+                != Some(true)
+            {
+                return Err(format!(
+                    "route {route_id} Gmail policy must validate response internalDate"
+                ));
+            }
+            if !response
+                .get("validateListByMetadataFetch")
+                .is_some_and(Value::is_boolean)
+            {
+                return Err(format!(
+                    "route {route_id} Gmail policy must explicitly configure list metadata age proof"
+                ));
+            }
+            if response.get("onViolation").and_then(Value::as_str) != Some("block") {
+                return Err(format!(
+                    "route {route_id} Gmail response violations must block"
+                ));
+            }
+            let max_body = response
+                .get("maxBodyBytes")
+                .and_then(Value::as_u64)
+                .ok_or_else(|| format!("route {route_id} Gmail response maxBodyBytes missing"))?;
+            if max_body == 0 || max_body > 1_048_576 {
+                return Err(format!(
+                    "route {route_id} Gmail response maxBodyBytes must be between 1 and 1048576"
+                ));
+            }
+            validate_response_field_allowlist(
+                response,
+                &format!("route {route_id} Gmail response"),
+            )?;
+            validate_response_header_allowlist(
+                response,
+                &format!("route {route_id} Gmail response"),
+            )?;
+            validate_json_error_response_profile(response, &format!("route {route_id} Gmail"))?;
+            let releases_message_headers = response
+                .get("allowedFields")
+                .and_then(Value::as_array)
+                .is_some_and(|fields| {
+                    fields
+                        .iter()
+                        .any(|field| field.as_str() == Some("payload.headers"))
+                });
+            let allowed_message_headers = response
+                .get("allowedMessageHeaderNames")
+                .and_then(Value::as_array);
+            if releases_message_headers
+                && allowed_message_headers.is_none_or(|headers| headers.is_empty())
+            {
+                return Err(format!(
+                    "route {route_id} Gmail payload.headers requires allowedMessageHeaderNames"
+                ));
+            }
+            if !releases_message_headers && allowed_message_headers.is_some() {
+                return Err(format!(
+                    "route {route_id} Gmail allowedMessageHeaderNames requires payload.headers"
+                ));
+            }
+            if let Some(headers) = allowed_message_headers {
+                let mut seen = HashSet::new();
+                for header in headers {
+                    let name = header.as_str().ok_or_else(|| {
+                        format!("route {route_id} Gmail message header names must be strings")
+                    })?;
+                    if name.is_empty()
+                        || name.len() > 128
+                        || name.contains(':')
+                        || name.contains('\r')
+                        || name.contains('\n')
+                        || !seen.insert(name.to_lowercase())
+                    {
+                        return Err(format!(
+                            "route {route_id} Gmail message header name is invalid or duplicated"
+                        ));
+                    }
+                }
+            }
+        }
+        if adapter_type == "npm.registry" {
+            let operations = adapter_config
+                .get("operations")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("route {route_id} npm operations missing"))?;
+            let has_write = operations.iter().any(|operation| {
+                matches!(
+                    operation.as_str(),
+                    Some("publish" | "distTagWrite" | "tokenWrite" | "metadataWrite")
+                )
+            });
+            let response = adapter_config
+                .get("response")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("route {route_id} npm response policy missing"))?;
+            validate_response_field_allowlist(response, &format!("route {route_id} npm response"))?;
+            validate_response_header_allowlist(
+                response,
+                &format!("route {route_id} npm response"),
+            )?;
+            validate_json_error_response_profile(response, &format!("route {route_id} npm"))?;
+            if has_write {
+                if response.get("mode").and_then(Value::as_str) != Some("json") {
+                    return Err(format!(
+                        "route {route_id} npm writes require a bounded JSON response mode"
+                    ));
+                }
+                let jit = route
+                    .get("jit")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        format!(
+                            "route {route_id} npm writes require one-use, hardware-attested WebAuthn JIT"
+                        )
+                    })?;
+                let authn = jit
+                    .get("approvers")
+                    .and_then(Value::as_object)
+                    .and_then(|approvers| approvers.get("authn"))
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| format!("route {route_id} npm write JIT authn missing"))?;
+                let classes = authn
+                    .get("allowedAuthenticatorClasses")
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| {
+                        format!("route {route_id} npm write JIT authenticator classes missing")
+                    })?;
+                if jit.get("required").and_then(Value::as_bool) != Some(true)
+                    || jit.get("mode").and_then(Value::as_str) != Some("perOperation")
+                    || jit.get("maxUses").and_then(Value::as_u64) != Some(1)
+                    || jit.get("consumeOn").and_then(Value::as_str) != Some("forwardStart")
+                    || authn.get("webauthnRequired").and_then(Value::as_bool) != Some(true)
+                    || authn.get("userVerification").and_then(Value::as_str) != Some("required")
+                    || authn
+                        .get("requireHardwareAttestation")
+                        .and_then(Value::as_bool)
+                        != Some(true)
+                    || classes.is_empty()
+                    || classes
+                        .iter()
+                        .any(|class| !matches!(class.as_str(), Some("yubikey" | "hardware")))
+                {
+                    return Err(format!(
+                        "route {route_id} npm writes require one-use, hardware-attested WebAuthn JIT"
+                    ));
+                }
+            }
+        }
+        if let Some(max_body_bytes) = route
+            .get("adapter")
+            .and_then(Value::as_object)
+            .and_then(|adapter| adapter.get("config"))
+            .and_then(|config| config.get("response"))
+            .and_then(|response| response.get("maxBodyBytes"))
+        {
+            let max_body_bytes = max_body_bytes.as_u64().ok_or_else(|| {
+                format!("route {route_id} response maxBodyBytes must be an unsigned integer")
+            })?;
+            if max_body_bytes > MAX_BUFFERED_RESPONSE_BODY_BYTES {
+                return Err(format!(
+                    "route {route_id} response maxBodyBytes must be <= {MAX_BUFFERED_RESPONSE_BODY_BYTES}"
+                ));
+            }
+        }
+        if adapter_type == "generic.rest" {
+            let config = route
+                .get("adapter")
+                .and_then(Value::as_object)
+                .and_then(|adapter| adapter.get("config"))
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("route {route_id} generic.rest config missing"))?;
+            let request = config
+                .get("request")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("route {route_id} generic.rest request config missing"))?;
+            let response = config
+                .get("response")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("route {route_id} generic.rest response config missing"))?;
+            for key in [
+                "allowedHeaders",
+                "allowedQueryKeys",
+                "bodyMode",
+                "maxBodyBytes",
+            ] {
+                if !request.contains_key(key) {
+                    return Err(format!(
+                        "route {route_id} generic.rest request config missing {key}"
+                    ));
+                }
+            }
+            for key in ["mode", "maxBodyBytes"] {
+                if !response.contains_key(key) {
+                    return Err(format!(
+                        "route {route_id} generic.rest response config missing {key}"
+                    ));
+                }
+            }
+            let body_mode = request
+                .get("bodyMode")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    format!("route {route_id} generic.rest bodyMode must be a string")
+                })?;
+            if !matches!(
+                body_mode,
+                "none"
+                    | "any"
+                    | "json"
+                    | "formUrlencoded"
+                    | "stream"
+                    | "jsonlStream"
+                    | "jsonArrayStream"
+                    | "jsonSseStream"
+                    | "jsonNestedStream"
+                    | "formUrlencodedStream"
+                    | "csvStream"
+            ) {
+                return Err(format!(
+                    "route {route_id} generic.rest bodyMode {body_mode} is unsupported"
+                ));
+            }
+            if let Some(operation) = request.get("operation") {
+                let operation = operation.as_object().ok_or_else(|| {
+                    format!("route {route_id} generic.rest request.operation must be an object")
+                })?;
+                if operation
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                {
+                    return Err(format!(
+                        "route {route_id} generic.rest request.operation.name must be non-empty"
+                    ));
+                }
+                if let Some(form_fields) = operation.get("formFields") {
+                    let form_fields = form_fields.as_array().ok_or_else(|| {
+                        format!(
+                            "route {route_id} generic.rest request.operation.formFields must be an array"
+                        )
+                    })?;
+                    if body_mode != "formUrlencoded" && !form_fields.is_empty() {
+                        return Err(format!(
+                            "route {route_id} generic.rest operation formFields require bodyMode formUrlencoded"
+                        ));
+                    }
+                    if form_fields.iter().any(|field| {
+                        field
+                            .as_str()
+                            .and_then(normalized_form_key)
+                            .is_none_or(|normalized| field.as_str() != Some(normalized.as_str()))
+                    }) {
+                        return Err(format!(
+                            "route {route_id} generic.rest operation has invalid formFields"
+                        ));
+                    }
+                }
+            }
+        }
 
         let constraints: &[Value] = match route.get("constraints") {
             Some(Value::Array(constraints)) => constraints,
@@ -953,6 +2565,142 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 return Err(format!("route {route_id} constraints must be an array"));
             }
         };
+        if adapter_type == "x.v2" {
+            if route
+                .get("credentialRef")
+                .and_then(Value::as_str)
+                .is_none_or(str::is_empty)
+            {
+                return Err(format!("route {route_id} X policy must bind a credential"));
+            }
+            let app_ids = adapter_config
+                .get("appIds")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("route {route_id} X policy appIds missing"))?;
+            if app_ids.is_empty()
+                || app_ids
+                    .iter()
+                    .any(|app_id| app_id.as_str().is_none_or(str::is_empty))
+            {
+                return Err(format!(
+                    "route {route_id} X policy must bind at least one non-empty appId"
+                ));
+            }
+            let response_mode = adapter_config
+                .get("response")
+                .and_then(Value::as_object)
+                .and_then(|response| response.get("mode"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("route {route_id} X response mode missing"))?;
+            let route_match = route
+                .get("match")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("route {route_id} match missing"))?;
+            let methods = route_match
+                .get("methods")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("route {route_id} methods missing"))?;
+            let paths = route_match
+                .get("paths")
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("route {route_id} paths missing"))?;
+            let mode = adapter_config
+                .get("mode")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("route {route_id} X mode missing"))?;
+            let allowed_reads = adapter_config
+                .get("allowedReadOperations")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect::<HashSet<_>>();
+            if matches!(mode, "readOnly" | "recentSearchOnly") {
+                if methods.len() != 1 || methods.first().and_then(Value::as_str) != Some("GET") {
+                    return Err(format!("route {route_id} X read policy may only match GET"));
+                }
+                if adapter_config.get("blockWrites").and_then(Value::as_bool) != Some(true)
+                    || allowed_reads.is_empty()
+                    || allowed_reads.iter().any(|operation| {
+                        !X_V2_READ_OPERATION_PATHS
+                            .iter()
+                            .any(|(supported, _)| operation == supported)
+                    })
+                {
+                    return Err(format!(
+                        "route {route_id} X read policy must explicitly allow supported read operations"
+                    ));
+                }
+                if mode == "recentSearchOnly"
+                    && (allowed_reads.len() != 1 || !allowed_reads.contains("search.read"))
+                {
+                    return Err(format!(
+                        "route {route_id} X recent-search policy may only allow search.read"
+                    ));
+                }
+                if allowed_reads.contains("streams.read") {
+                    if allowed_reads.len() != 1 || response_mode != "stream" {
+                        return Err(format!(
+                            "route {route_id} X streams require a dedicated stream-only route"
+                        ));
+                    }
+                } else if response_mode == "stream" {
+                    return Err(format!(
+                        "route {route_id} X bounded reads cannot use a stream response"
+                    ));
+                }
+            } else if mode == "controlledWrite" {
+                let exact_post = methods.len() == 1
+                    && methods.first().and_then(Value::as_str) == Some("POST")
+                    && paths.len() == 1
+                    && paths.first().and_then(Value::as_str) == Some("/2/tweets");
+                if !exact_post
+                    || adapter_config.get("blockWrites").and_then(Value::as_bool) != Some(false)
+                    || adapter_config.contains_key("allowedReadOperations")
+                {
+                    return Err(format!(
+                        "route {route_id} controlled X writes currently support only POST /2/tweets"
+                    ));
+                }
+                let has_tweet_write_policy = constraints.iter().any(|constraint| {
+                    constraint.get("type").and_then(Value::as_str) == Some("operationPolicy")
+                        && constraint
+                            .get("allowedOperations")
+                            .and_then(Value::as_array)
+                            .is_some_and(|operations| {
+                                operations.len() == 1
+                                    && operations.first().and_then(Value::as_str)
+                                        == Some("tweets.write")
+                            })
+                });
+                let has_json_body_policy = constraints.iter().any(|constraint| {
+                    constraint.get("type").and_then(Value::as_str) == Some("jsonBody")
+                });
+                if !has_tweet_write_policy || !has_json_body_policy || response_mode == "stream" {
+                    return Err(format!(
+                        "route {route_id} controlled X post writes require tweets.write and JSON body policies"
+                    ));
+                }
+            } else {
+                return Err(format!("route {route_id} X mode {mode} is unsupported"));
+            }
+        }
+        let request_body_mode = route
+            .get("adapter")
+            .and_then(Value::as_object)
+            .and_then(|adapter| adapter.get("config"))
+            .and_then(|config| config.get("request"))
+            .and_then(|request| request.get("bodyMode"))
+            .and_then(Value::as_str);
+        if request_body_mode == Some("formUrlencodedStream")
+            && constraints.iter().any(|constraint| {
+                constraint.get("type").and_then(Value::as_str) == Some("formBody")
+            })
+        {
+            return Err(format!(
+                "route {route_id} cannot combine formUrlencodedStream with whole-form formBody constraints"
+            ));
+        }
         for (constraint_index, constraint) in constraints.iter().enumerate() {
             let constraint = constraint.as_object().ok_or_else(|| {
                 format!("route {route_id} constraint {constraint_index} must be an object")
@@ -970,7 +2718,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     })?;
             let supported_phase = match constraint_type {
                 "rateLimit" | "operationPolicy" | "queryDateWindow" | "queryNumericBounds"
-                | "jsonBody" => "request",
+                | "requestTimeWindow" | "jsonBody" | "formBody" => "request",
                 "responseDateWindow" => "response",
                 _ => {
                     return Err(format!(
@@ -992,6 +2740,510 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     "route {route_id} constraint {constraint_id} type {constraint_type} is enforceable only in the {supported_phase} phase, not {phase}"
                 ));
             }
+            let type_fields: &[&str] = match constraint_type {
+                "rateLimit" => &["store", "max", "windowSeconds", "key"],
+                "operationPolicy" => &["allowedOperations", "deniedOperations"],
+                "queryDateWindow" => &[
+                    "parameters",
+                    "required",
+                    "formats",
+                    "maxAgeDays",
+                    "allowFutureSkewSeconds",
+                ],
+                "queryNumericBounds" => &["parameters", "required", "min", "max", "integer"],
+                "requestTimeWindow" => &[
+                    "timezone",
+                    "notBefore",
+                    "notAfter",
+                    "weekdays",
+                    "dailyWindows",
+                ],
+                "jsonBody" | "formBody" => &[
+                    "contentTypes",
+                    "allowedFields",
+                    "requiredFields",
+                    "deniedFields",
+                    "fields",
+                ],
+                "responseDateWindow" => &[
+                    "required",
+                    "formats",
+                    "maxAgeDays",
+                    "allowFutureSkewSeconds",
+                    "items",
+                    "dateFields",
+                    "operations",
+                ],
+                _ => &[],
+            };
+            let common_fields = [
+                "id",
+                "description",
+                "type",
+                "phase",
+                "statusCode",
+                "extensions",
+            ];
+            if let Some(field) = constraint.keys().find(|field| {
+                !common_fields.contains(&field.as_str()) && !type_fields.contains(&field.as_str())
+            }) {
+                return Err(format!(
+                    "route {route_id} constraint {constraint_id} type {constraint_type} has unsupported field {field}"
+                ));
+            }
+            if constraint
+                .get("extensions")
+                .is_some_and(|value| !value.as_object().is_some_and(Map::is_empty))
+            {
+                return Err(format!(
+                    "route {route_id} constraint {constraint_id} declares unattested extensions"
+                ));
+            }
+            let require_string_array = |field: &str| -> Result<&Vec<Value>, String> {
+                let values = constraint
+                    .get(field)
+                    .and_then(Value::as_array)
+                    .ok_or_else(|| {
+                        format!(
+                            "route {route_id} {constraint_type} {constraint_id} must define {field}"
+                        )
+                    })?;
+                if values.is_empty()
+                    || values
+                        .iter()
+                        .any(|value| value.as_str().is_none_or(str::is_empty))
+                {
+                    return Err(format!(
+                        "route {route_id} {constraint_type} {constraint_id} has invalid {field}"
+                    ));
+                }
+                Ok(values)
+            };
+            if constraint_type == "operationPolicy" {
+                let allowed = constraint
+                    .get("allowedOperations")
+                    .and_then(Value::as_array);
+                let denied = constraint.get("deniedOperations").and_then(Value::as_array);
+                if allowed.is_none_or(Vec::is_empty) && denied.is_none_or(Vec::is_empty) {
+                    return Err(format!(
+                        "route {route_id} operationPolicy {constraint_id} must define allowedOperations or deniedOperations"
+                    ));
+                }
+                for (field, values) in
+                    [("allowedOperations", allowed), ("deniedOperations", denied)]
+                {
+                    if values.is_some_and(|items| {
+                        items.is_empty()
+                            || items
+                                .iter()
+                                .any(|item| item.as_str().is_none_or(str::is_empty))
+                    }) {
+                        return Err(format!(
+                            "route {route_id} operationPolicy {constraint_id} has invalid {field}"
+                        ));
+                    }
+                }
+            }
+            if matches!(constraint_type, "queryDateWindow" | "queryNumericBounds") {
+                require_string_array("parameters")?;
+            }
+            if constraint_type == "queryDateWindow" {
+                let formats = require_string_array("formats")?;
+                let mut unique_formats = HashSet::new();
+                if formats.iter().any(|format| {
+                    !matches!(
+                        format.as_str(),
+                        Some("rfc3339" | "date" | "epochSeconds" | "epochMillis")
+                    ) || !unique_formats.insert(format.as_str().unwrap_or_default())
+                }) {
+                    return Err(format!(
+                        "route {route_id} queryDateWindow {constraint_id} has invalid formats"
+                    ));
+                }
+                if constraint
+                    .get("maxAgeDays")
+                    .and_then(Value::as_u64)
+                    .is_none_or(|value| value == 0)
+                {
+                    return Err(format!(
+                        "route {route_id} queryDateWindow {constraint_id} must define maxAgeDays >= 1"
+                    ));
+                }
+            }
+            if constraint_type == "queryNumericBounds" {
+                let minimum = constraint.get("min").map(|value| value.as_f64());
+                let maximum = constraint.get("max").map(|value| value.as_f64());
+                if minimum == Some(None) || maximum == Some(None) {
+                    return Err(format!(
+                        "route {route_id} queryNumericBounds {constraint_id} min and max must be numbers"
+                    ));
+                }
+                if minimum.is_none() && maximum.is_none() {
+                    return Err(format!(
+                        "route {route_id} queryNumericBounds {constraint_id} must define min or max"
+                    ));
+                }
+                if minimum
+                    .flatten()
+                    .zip(maximum.flatten())
+                    .is_some_and(|(min, max)| min > max)
+                {
+                    return Err(format!(
+                        "route {route_id} queryNumericBounds {constraint_id} min must not exceed max"
+                    ));
+                }
+            }
+            if constraint_type == "requestTimeWindow" {
+                if constraint.get("timezone").and_then(Value::as_str) != Some("UTC") {
+                    return Err(format!(
+                        "route {route_id} requestTimeWindow {constraint_id} must use timezone UTC"
+                    ));
+                }
+                if !["notBefore", "notAfter", "weekdays", "dailyWindows"]
+                    .iter()
+                    .any(|field| {
+                        constraint.get(*field).is_some_and(|value| match value {
+                            Value::Array(items) => !items.is_empty(),
+                            Value::String(text) => !text.is_empty(),
+                            _ => false,
+                        })
+                    })
+                {
+                    return Err(format!(
+                        "route {route_id} requestTimeWindow {constraint_id} must define at least one bound"
+                    ));
+                }
+                let parse_bound = |field: &str| -> Result<Option<i128>, String> {
+                    let Some(value) = constraint.get(field) else {
+                        return Ok(None);
+                    };
+                    let text = value.as_str().ok_or_else(|| {
+                        format!(
+                            "route {route_id} requestTimeWindow {constraint_id} {field} must be RFC3339"
+                        )
+                    })?;
+                    parse_rfc3339_ms(text).map(Some).ok_or_else(|| {
+                        format!(
+                            "route {route_id} requestTimeWindow {constraint_id} {field} must be RFC3339"
+                        )
+                    })
+                };
+                let not_before = parse_bound("notBefore")?;
+                let not_after = parse_bound("notAfter")?;
+                if not_before
+                    .zip(not_after)
+                    .is_some_and(|(start, end)| start >= end)
+                {
+                    return Err(format!(
+                        "route {route_id} requestTimeWindow {constraint_id} notBefore must precede notAfter"
+                    ));
+                }
+                if let Some(weekdays) = constraint.get("weekdays") {
+                    let weekdays = weekdays.as_array().ok_or_else(|| {
+                        format!(
+                            "route {route_id} requestTimeWindow {constraint_id} weekdays must be an array"
+                        )
+                    })?;
+                    let mut unique = HashSet::new();
+                    if weekdays.is_empty()
+                        || weekdays.iter().any(|day| {
+                            !matches!(
+                                day.as_str(),
+                                Some("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")
+                            ) || !unique.insert(day.as_str().unwrap_or_default())
+                        })
+                    {
+                        return Err(format!(
+                            "route {route_id} requestTimeWindow {constraint_id} has invalid weekdays"
+                        ));
+                    }
+                }
+                if let Some(windows) = constraint.get("dailyWindows") {
+                    let windows = windows.as_array().ok_or_else(|| {
+                        format!(
+                            "route {route_id} requestTimeWindow {constraint_id} dailyWindows must be an array"
+                        )
+                    })?;
+                    let mut intervals = Vec::new();
+                    for window in windows {
+                        let window = window.as_object().ok_or_else(|| {
+                            format!(
+                                "route {route_id} requestTimeWindow {constraint_id} has invalid daily window"
+                            )
+                        })?;
+                        if window.len() != 2
+                            || !window.contains_key("start")
+                            || !window.contains_key("end")
+                        {
+                            return Err(format!(
+                                "route {route_id} requestTimeWindow {constraint_id} has invalid daily window"
+                            ));
+                        }
+                        let start = window
+                            .get("start")
+                            .and_then(Value::as_str)
+                            .and_then(parse_clock_minutes)
+                            .ok_or_else(|| {
+                                format!(
+                                    "route {route_id} requestTimeWindow {constraint_id} has invalid daily window start"
+                                )
+                            })?;
+                        let end = window
+                            .get("end")
+                            .and_then(Value::as_str)
+                            .and_then(parse_clock_minutes)
+                            .ok_or_else(|| {
+                                format!(
+                                    "route {route_id} requestTimeWindow {constraint_id} has invalid daily window end"
+                                )
+                            })?;
+                        if start >= end {
+                            return Err(format!(
+                                "route {route_id} requestTimeWindow {constraint_id} daily windows must be increasing UTC times"
+                            ));
+                        }
+                        intervals.push((start, end));
+                    }
+                    if intervals.is_empty() {
+                        return Err(format!(
+                            "route {route_id} requestTimeWindow {constraint_id} dailyWindows must not be empty"
+                        ));
+                    }
+                    intervals.sort_unstable();
+                    if intervals.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+                        return Err(format!(
+                            "route {route_id} requestTimeWindow {constraint_id} daily windows must not overlap"
+                        ));
+                    }
+                }
+            }
+            if constraint_type == "responseDateWindow" {
+                require_string_array("dateFields")?;
+                let formats = require_string_array("formats")?;
+                let mut unique_formats = HashSet::new();
+                if formats.iter().any(|format| {
+                    !matches!(
+                        format.as_str(),
+                        Some("rfc3339" | "date" | "epochSeconds" | "epochMillis")
+                    ) || !unique_formats.insert(format.as_str().unwrap_or_default())
+                }) {
+                    return Err(format!(
+                        "route {route_id} responseDateWindow {constraint_id} has invalid formats"
+                    ));
+                }
+                if constraint
+                    .get("maxAgeDays")
+                    .and_then(Value::as_u64)
+                    .is_none_or(|value| value == 0)
+                {
+                    return Err(format!(
+                        "route {route_id} responseDateWindow {constraint_id} must define maxAgeDays >= 1"
+                    ));
+                }
+            }
+            if let Some(operations) = constraint.get("operations") {
+                if constraint_type != "responseDateWindow" {
+                    return Err(format!(
+                        "route {route_id} constraint {constraint_id} operations are supported only for responseDateWindow"
+                    ));
+                }
+                let operations = operations.as_array().ok_or_else(|| {
+                    format!(
+                        "route {route_id} responseDateWindow {constraint_id} operations must be an array"
+                    )
+                })?;
+                let mut unique = HashSet::new();
+                if operations.is_empty()
+                    || operations.iter().any(|operation| {
+                        let Some(operation) = operation.as_str() else {
+                            return true;
+                        };
+                        let mut bytes = operation.bytes();
+                        !matches!(bytes.next(), Some(first) if first.is_ascii_alphabetic())
+                            || operation.len() > 128
+                            || bytes.any(|byte| {
+                                !(byte.is_ascii_alphanumeric()
+                                    || matches!(byte, b'_' | b'.' | b'-'))
+                            })
+                            || !unique.insert(operation)
+                    })
+                {
+                    return Err(format!(
+                        "route {route_id} responseDateWindow {constraint_id} has invalid operations"
+                    ));
+                }
+            }
+            if constraint_type == "rateLimit" {
+                let max = constraint.get("max").and_then(Value::as_u64).unwrap_or(0);
+                let window_seconds = constraint
+                    .get("windowSeconds")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                if !(1..=1_000_000_000).contains(&max)
+                    || !(1..=31_536_000).contains(&window_seconds)
+                {
+                    return Err(format!(
+                        "route {route_id} rateLimit {constraint_id} has invalid max or windowSeconds"
+                    ));
+                }
+                let key = match constraint.get("key") {
+                    Some(Value::Object(key)) => Some(key),
+                    Some(Value::Null) | None => None,
+                    Some(_) => {
+                        return Err(format!(
+                            "route {route_id} rateLimit {constraint_id} key must be an object"
+                        ));
+                    }
+                };
+                if let Some(scope) = key.and_then(|key| key.get("scope")) {
+                    let scope = scope.as_array().ok_or_else(|| {
+                        format!(
+                            "route {route_id} rateLimit {constraint_id} key scope must be an array"
+                        )
+                    })?;
+                    if scope.iter().any(|item| {
+                        !matches!(
+                            item.as_str(),
+                            Some(
+                                "principal"
+                                    | "credential"
+                                    | "credentialVersion"
+                                    | "route"
+                                    | "operation"
+                            )
+                        )
+                    }) {
+                        return Err(format!(
+                            "route {route_id} rateLimit {constraint_id} has unsupported key scope"
+                        ));
+                    }
+                }
+                if let Some(fields) = key.and_then(|key| key.get("operationFields")) {
+                    let fields = fields.as_array().ok_or_else(|| {
+                        format!(
+                            "route {route_id} rateLimit {constraint_id} operationFields must be an array"
+                        )
+                    })?;
+                    if fields.iter().any(|field| {
+                        let Some(field) = field.as_str() else {
+                            return true;
+                        };
+                        let mut bytes = field.bytes();
+                        !matches!(bytes.next(), Some(first) if first.is_ascii_alphabetic())
+                            || field.len() > 128
+                            || bytes.any(|byte| {
+                                !(byte.is_ascii_alphanumeric()
+                                    || matches!(byte, b'_' | b'.' | b'-'))
+                            })
+                    }) {
+                        return Err(format!(
+                            "route {route_id} rateLimit {constraint_id} has invalid operationFields"
+                        ));
+                    }
+                }
+            }
+            if matches!(constraint_type, "jsonBody" | "formBody") {
+                if constraint
+                    .get("allowedFields")
+                    .and_then(Value::as_array)
+                    .is_none_or(|items| items.is_empty())
+                {
+                    return Err(format!(
+                        "route {route_id} {constraint_type} {constraint_id} must define non-empty allowedFields so unknown fields fail closed"
+                    ));
+                }
+                let has_field_policy =
+                    ["allowedFields", "requiredFields", "deniedFields", "fields"]
+                        .iter()
+                        .any(|key| {
+                            constraint.get(*key).is_some_and(|value| match value {
+                                Value::Array(items) => !items.is_empty(),
+                                Value::Object(items) => !items.is_empty(),
+                                _ => false,
+                            })
+                        });
+                if !has_field_policy {
+                    return Err(format!(
+                        "route {route_id} {constraint_type} {constraint_id} must define at least one field rule"
+                    ));
+                }
+                for key in ["allowedFields", "requiredFields", "deniedFields"] {
+                    if constraint.get(key).is_some_and(|value| {
+                        !value
+                            .as_array()
+                            .is_some_and(|items| items.iter().all(Value::is_string))
+                    }) {
+                        return Err(format!(
+                            "route {route_id} {constraint_type} {constraint_id} {key} must be a string array"
+                        ));
+                    }
+                }
+                if constraint.get("fields").is_some_and(|value| {
+                    !value
+                        .as_object()
+                        .is_some_and(|fields| fields.values().all(Value::is_object))
+                }) {
+                    return Err(format!(
+                        "route {route_id} {constraint_type} {constraint_id} fields must contain object rules"
+                    ));
+                }
+                if let Some(fields) = constraint.get("fields").and_then(Value::as_object) {
+                    for (field, rule) in fields {
+                        if constraint_type == "formBody"
+                            && rule
+                                .get("type")
+                                .and_then(Value::as_str)
+                                .is_some_and(|kind| {
+                                    !matches!(
+                                        kind,
+                                        "string" | "integer" | "number" | "boolean" | "array"
+                                    )
+                                })
+                        {
+                            return Err(format!(
+                                "route {route_id} formBody {constraint_id} field {field} has unsupported type"
+                            ));
+                        }
+                        if rule
+                            .get("pattern")
+                            .and_then(Value::as_str)
+                            .is_some_and(|pattern| simple_bounded_pattern(pattern).is_none())
+                        {
+                            return Err(format!(
+                                "route {route_id} {constraint_type} {constraint_id} field {field} has a pattern unsupported by the Rust runtime"
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        let has_response_constraints = constraints
+            .iter()
+            .any(|constraint| constraint_phase_includes(constraint, "response"));
+        let response_mode = route
+            .get("adapter")
+            .and_then(Value::as_object)
+            .and_then(|adapter| adapter.get("config"))
+            .and_then(|config| config.get("response"))
+            .and_then(|response| response.get("mode"))
+            .and_then(Value::as_str);
+        if has_response_constraints
+            && matches!(
+                response_mode,
+                Some(
+                    "stream"
+                        | "jsonlStream"
+                        | "jsonArrayStream"
+                        | "jsonSseStream"
+                        | "jsonNestedStream"
+                        | "formUrlencodedStream"
+                        | "csvStream"
+                )
+            )
+        {
+            return Err(format!(
+                "route {route_id} cannot stream responses with whole-body response constraints"
+            ));
         }
 
         let Some(jit_value) = route.get("jit") else {
@@ -1147,9 +3399,46 @@ fn parse_proxy_authorization(
     }))
 }
 
+fn route_principals_overlap(left: &Route, right: &Route) -> bool {
+    left.principals.iter().any(|principal| principal == "*")
+        || right.principals.iter().any(|principal| principal == "*")
+        || left
+            .principals
+            .iter()
+            .any(|principal| right.principals.contains(principal))
+}
+
+fn validate_route_ambiguity(routes: &[Route]) -> Result<(), String> {
+    for (index, left) in routes.iter().enumerate() {
+        for right in &routes[index + 1..] {
+            if (left.scheme.as_str(), left.host.as_str(), left.port)
+                != (right.scheme.as_str(), right.host.as_str(), right.port)
+                || left.methods.is_disjoint(&right.methods)
+                || !route_principals_overlap(left, right)
+            {
+                continue;
+            }
+            for left_path in &left.paths {
+                for right_path in &right.paths {
+                    if left_path.shape() == right_path.shape()
+                        && left_path.specificity() == right_path.specificity()
+                    {
+                        return Err(format!(
+                            "routes {} and {} have ambiguous path templates",
+                            left.id, right.id
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn load_snapshot(
     path: &str,
     trust_root_source: &PolicyTrustRootSource,
+    running_binary_digest: &str,
 ) -> Result<Snapshot, String> {
     let text = fs::read_to_string(path).map_err(|err| format!("read policy bundle: {err}"))?;
     let raw: Value =
@@ -1164,6 +3453,22 @@ fn load_snapshot(
         .get("metadata")
         .and_then(Value::as_object)
         .ok_or("policy metadata missing")?;
+    let policy_id = metadata
+        .get("id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("policy metadata.id must be a non-empty string")?
+        .to_string();
+    let policy_sequence = metadata
+        .get("sequence")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or("policy metadata.sequence must be a positive integer")?;
+    let rollback_epoch = metadata
+        .get("rollbackEpoch")
+        .and_then(Value::as_u64)
+        .filter(|value| *value > 0)
+        .ok_or("policy metadata.rollbackEpoch must be a positive integer")?;
     if !metadata
         .get("signature")
         .and_then(Value::as_str)
@@ -1181,6 +3486,13 @@ fn load_snapshot(
         return Err("policy metadata.signingKeyId must be present for data-plane load".to_string());
     }
     let trust_root = load_policy_trust_root(trust_root_source)?;
+    if let Some(attested_binary_digest) = trust_root.attested_data_plane_binary_digest.as_deref() {
+        if attested_binary_digest != running_binary_digest {
+            return Err(format!(
+                "running data-plane binary is not the control-plane attested executable: attestation has {attested_binary_digest}, running binary is {running_binary_digest}"
+            ));
+        }
+    }
     if let Some(expected_key_id) = env::var("SERVERWARE_EXPECTED_POLICY_SIGNING_KEY_ID")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -1340,24 +3652,154 @@ fn load_snapshot(
             jit: item.get("jit").cloned().unwrap_or_else(|| json!({})),
         });
     }
-    routes.sort_by_key(|route| {
-        std::cmp::Reverse(
-            route
-                .paths
-                .iter()
-                .map(|path| path.segments.len())
-                .max()
-                .unwrap_or(0),
-        )
-    });
+    validate_route_ambiguity(&routes)?;
+    routes.sort_by(|left, right| left.id.cmp(&right.id));
 
     Ok(Snapshot {
+        epoch: 0,
         hash,
+        policy_id,
+        policy_sequence,
+        rollback_epoch,
+        trust_generation: 0,
         policy_signing_key_id: signing_key_id,
+        response_verifying_key: trust_root.response_verifying_key,
+        response_signing_key_id: trust_root.response_signing_key_id,
+        attested_response_context: trust_root.attested_response_context,
         principals,
         credentials,
         routes,
     })
+}
+
+fn policy_high_water_for(snapshot: &Snapshot) -> PolicyHighWater {
+    PolicyHighWater {
+        api_version: "serverware.policyHighWater/v1".to_string(),
+        policy_id: snapshot.policy_id.clone(),
+        sequence: snapshot.policy_sequence,
+        rollback_epoch: snapshot.rollback_epoch,
+        policy_hash: snapshot.hash.clone(),
+    }
+}
+
+fn validate_policy_high_water(
+    candidate: &Snapshot,
+    high_water: &PolicyHighWater,
+) -> Result<(), String> {
+    if high_water.api_version != "serverware.policyHighWater/v1" {
+        return Err("policy high-water record has an unsupported api_version".to_string());
+    }
+    if candidate.policy_id != high_water.policy_id {
+        return Err(format!(
+            "policy id changed from {} to {}",
+            high_water.policy_id, candidate.policy_id
+        ));
+    }
+    if candidate.hash == high_water.policy_hash {
+        if candidate.policy_sequence != high_water.sequence
+            || candidate.rollback_epoch != high_water.rollback_epoch
+        {
+            return Err("policy hash reappeared with different monotonic metadata".to_string());
+        }
+        return Ok(());
+    }
+    if candidate.rollback_epoch < high_water.rollback_epoch {
+        return Err(format!(
+            "policy rollbackEpoch {} is below persisted high-water {}",
+            candidate.rollback_epoch, high_water.rollback_epoch
+        ));
+    }
+    if candidate.policy_sequence <= high_water.sequence {
+        return Err(format!(
+            "policy sequence {} does not exceed persisted high-water {}",
+            candidate.policy_sequence, high_water.sequence
+        ));
+    }
+    Ok(())
+}
+
+fn persist_policy_high_water(path: &Path, value: &PolicyHighWater) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .filter(|value| !value.as_os_str().is_empty())
+        .ok_or("policy high-water path must have a parent directory")?;
+    fs::create_dir_all(parent)
+        .map_err(|err| format!("create policy high-water directory: {err}"))?;
+    let temporary = parent.join(format!(
+        ".{}.{}.tmp",
+        path.file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or("policy-high-water"),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_else(|_| Duration::from_secs(0))
+            .as_nanos()
+    ));
+    let payload = format!(
+        "{}\n",
+        serde_json::to_string(value)
+            .map_err(|err| format!("serialize policy high-water: {err}"))?
+    );
+    let write_result = (|| -> Result<(), String> {
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&temporary)
+            .map_err(|err| format!("create policy high-water temporary file: {err}"))?;
+        file.write_all(payload.as_bytes())
+            .map_err(|err| format!("write policy high-water temporary file: {err}"))?;
+        file.sync_all()
+            .map_err(|err| format!("sync policy high-water temporary file: {err}"))?;
+        fs::rename(&temporary, path)
+            .map_err(|err| format!("replace policy high-water file: {err}"))?;
+        fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|err| format!("sync policy high-water directory: {err}"))?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    write_result
+}
+
+fn initialize_policy_high_water(
+    snapshot: &Snapshot,
+    path: Option<&Path>,
+    minimum_sequence: u64,
+    minimum_rollback_epoch: u64,
+) -> Result<PolicyHighWater, String> {
+    if snapshot.policy_sequence < minimum_sequence {
+        return Err(format!(
+            "initial policy sequence {} is below configured floor {}",
+            snapshot.policy_sequence, minimum_sequence
+        ));
+    }
+    if snapshot.rollback_epoch < minimum_rollback_epoch {
+        return Err(format!(
+            "initial policy rollbackEpoch {} is below configured floor {}",
+            snapshot.rollback_epoch, minimum_rollback_epoch
+        ));
+    }
+    let current = policy_high_water_for(snapshot);
+    let Some(path) = path else {
+        return Ok(current);
+    };
+    if path.exists() {
+        let raw =
+            fs::read_to_string(path).map_err(|err| format!("read policy high-water: {err}"))?;
+        let persisted: PolicyHighWater =
+            serde_json::from_str(&raw).map_err(|err| format!("parse policy high-water: {err}"))?;
+        validate_policy_high_water(snapshot, &persisted)?;
+        if snapshot.hash != persisted.policy_hash {
+            persist_policy_high_water(path, &current)?;
+            return Ok(current);
+        }
+        return Ok(persisted);
+    }
+    persist_policy_high_water(path, &current)?;
+    Ok(current)
 }
 
 fn current_snapshot(state: &GateState) -> Arc<Snapshot> {
@@ -1368,6 +3810,29 @@ fn current_snapshot(state: &GateState) -> Arc<Snapshot> {
         .clone()
 }
 
+fn policy_trust_is_fresh(state: &GateState) -> bool {
+    !matches!(
+        state.policy_trust_root_source,
+        PolicyTrustRootSource::AttestedControlPlane { .. }
+    ) || state
+        .policy_trust_last_success
+        .lock()
+        .expect("policy trust last-success mutex poisoned")
+        .elapsed()
+        <= POLICY_TRUST_MAX_AGE
+}
+
+fn snapshot_is_active(state: &GateState, snapshot: &Arc<Snapshot>) -> bool {
+    if !policy_trust_is_fresh(state) {
+        return false;
+    }
+    let active = state
+        .snapshot
+        .read()
+        .expect("policy snapshot lock poisoned");
+    active.epoch == snapshot.epoch && Arc::ptr_eq(&active, snapshot)
+}
+
 fn file_mtime(path: &str) -> Option<SystemTime> {
     fs::metadata(path)
         .and_then(|metadata| metadata.modified())
@@ -1376,21 +3841,93 @@ fn file_mtime(path: &str) -> Option<SystemTime> {
 
 fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, String> {
     let mtime = file_mtime(&state.policy_path);
-    {
-        let mut seen = state
+    let trust_refresh_due = matches!(
+        state.policy_trust_root_source,
+        PolicyTrustRootSource::AttestedControlPlane { .. }
+    ) && Instant::now()
+        >= *state
+            .policy_trust_refresh_due
+            .lock()
+            .expect("policy trust refresh mutex poisoned");
+    if !force && !trust_refresh_due {
+        let seen = state
             .policy_mtime
             .lock()
             .expect("policy mtime mutex poisoned");
-        if !force && *seen == mtime {
+        if *seen == mtime {
             return Ok(false);
         }
-        *seen = mtime;
     }
-    match load_snapshot(&state.policy_path, &state.policy_trust_root_source) {
-        Ok(snapshot) => {
-            let next = Arc::new(snapshot);
+    match load_snapshot(
+        &state.policy_path,
+        &state.policy_trust_root_source,
+        &state.binary_digest,
+    ) {
+        Ok(mut snapshot) => {
             let previous = current_snapshot(state);
-            if previous.hash == next.hash {
+            let high_water_update = (|| -> Result<(), String> {
+                let mut high_water = state
+                    .policy_high_water
+                    .lock()
+                    .expect("policy high-water mutex poisoned");
+                validate_policy_high_water(&snapshot, &high_water)?;
+                if snapshot.hash != high_water.policy_hash {
+                    let next_high_water = policy_high_water_for(&snapshot);
+                    if let Some(path) = state.policy_high_water_path.as_deref() {
+                        persist_policy_high_water(path, &next_high_water)?;
+                    }
+                    *high_water = next_high_water;
+                }
+                Ok(())
+            })();
+            if let Err(err) = high_water_update {
+                state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
+                enqueue_audit(
+                    state,
+                    "data_plane.policy.reload_failed",
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "error":err.clone(),
+                        "candidate_policy_id":snapshot.policy_id,
+                        "candidate_sequence":snapshot.policy_sequence,
+                        "candidate_rollback_epoch":snapshot.rollback_epoch,
+                    }),
+                );
+                return Err(err);
+            }
+            let trust_changed = previous.policy_signing_key_id != snapshot.policy_signing_key_id
+                || previous.response_signing_key_id != snapshot.response_signing_key_id
+                || previous.attested_response_context != snapshot.attested_response_context;
+            snapshot.trust_generation = if trust_changed {
+                previous.trust_generation.saturating_add(1)
+            } else {
+                previous.trust_generation
+            };
+            snapshot.epoch = previous.epoch.saturating_add(1);
+            let next = Arc::new(snapshot);
+            *state
+                .policy_trust_last_success
+                .lock()
+                .expect("policy trust last-success mutex poisoned") = Instant::now();
+            {
+                let mut seen = state
+                    .policy_mtime
+                    .lock()
+                    .expect("policy mtime mutex poisoned");
+                *seen = mtime;
+            }
+            {
+                let mut due = state
+                    .policy_trust_refresh_due
+                    .lock()
+                    .expect("policy trust refresh mutex poisoned");
+                *due = Instant::now() + POLICY_TRUST_REFRESH_INTERVAL;
+            }
+            if previous.hash == next.hash
+                && previous.policy_signing_key_id == next.policy_signing_key_id
+                && previous.response_signing_key_id == next.response_signing_key_id
+                && previous.attested_response_context == next.attested_response_context
+            {
                 return Ok(false);
             }
             {
@@ -1398,7 +3935,12 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     .snapshot
                     .write()
                     .expect("policy snapshot lock poisoned");
+                let mut leases = state
+                    .credential_leases
+                    .lock()
+                    .expect("credential lease mutex poisoned");
                 *current = Arc::clone(&next);
+                leases.clear();
             }
             state
                 .grants
@@ -1410,6 +3952,11 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 .lock()
                 .expect("gmail proof cache mutex poisoned")
                 .clear();
+            state
+                .constraint_rate_counters
+                .lock()
+                .expect("constraint rate counter lock poisoned")
+                .clear();
             state.policy_reload_success.fetch_add(1, Ordering::Relaxed);
             enqueue_audit(
                 state,
@@ -1418,10 +3965,15 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     "component":"serverware-decision-gate-rs",
                     "previous_policy_hash":previous.hash.clone(),
                     "policy_hash":next.hash.clone(),
+                    "policy_id":next.policy_id.clone(),
+                    "policy_sequence":next.policy_sequence,
+                    "rollback_epoch":next.rollback_epoch,
                     "policy_signing_key_id":next.policy_signing_key_id.clone(),
                     "routes":next.routes.len(),
                     "grants_cleared":true,
                     "gmail_proofs_cleared":true,
+                    "local_rate_counters_cleared":true,
+                    "credential_leases_cleared":true,
                 }),
             );
             Ok(true)
@@ -1467,25 +4019,238 @@ fn query_pairs(url: &Url) -> Vec<(String, String)> {
     pairs
 }
 
-fn selected_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String> {
-    let volatile = [
-        "date",
-        "user-agent",
-        "content-length",
-        "connection",
-        "authorization",
-        "proxy-authorization",
-    ];
-    let selected = ["content-type", "npm-command", "x-serverware-agent"];
+fn connection_nominated_headers(headers: &BTreeMap<String, String>) -> HashSet<String> {
     headers
-        .iter()
-        .filter(|(name, _)| {
-            !volatile.contains(&name.as_str())
-                && !name.starts_with("proxy-")
-                && selected.contains(&name.as_str())
-        })
-        .map(|(name, value)| (name.clone(), value.clone()))
+        .get("connection")
+        .into_iter()
+        .flat_map(|value| value.split(','))
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
         .collect()
+}
+
+fn is_standard_hop_by_hop_header(name: &str) -> bool {
+    matches!(
+        name,
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "proxy-connection"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    )
+}
+
+fn credential_injection_header(injection: &Value) -> Option<String> {
+    match injection
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("bearer")
+    {
+        "bearer" => Some(
+            injection
+                .get("header")
+                .and_then(Value::as_str)
+                .unwrap_or("authorization")
+                .to_ascii_lowercase(),
+        ),
+        "header" => Some(
+            injection
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("x-api-key")
+                .to_ascii_lowercase(),
+        ),
+        "basic" => Some("authorization".to_string()),
+        _ => None,
+    }
+}
+
+fn client_forward_header_material(
+    headers: &BTreeMap<String, String>,
+    injection: &Value,
+) -> Result<BTreeMap<String, String>, String> {
+    let headers = lower_headers(headers);
+    let nominated = connection_nominated_headers(&headers);
+    for name in &nominated {
+        if headers.contains_key(name) {
+            return Err(format!("Connection nominates supplied header {name}"));
+        }
+    }
+    let credential_header = credential_injection_header(injection);
+    let mut forwarded = BTreeMap::new();
+    for (name, value) in headers {
+        if is_standard_hop_by_hop_header(&name)
+            || nominated.contains(&name)
+            || name == "authorization"
+            || credential_header.as_deref() == Some(name.as_str())
+            || name == "host"
+            || name == "content-length"
+            || name == "x-serverware-agent"
+            || name == "x-serverware-data-plane-token"
+            || name == RESPONSE_PROOF_NONCE_HEADER
+        {
+            continue;
+        }
+        HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| format!("invalid forwarding header {name}: {err}"))?;
+        HeaderValue::from_str(&value)
+            .map_err(|err| format!("invalid forwarding value for {name}: {err}"))?;
+        forwarded.insert(name, value);
+    }
+    Ok(forwarded)
+}
+
+fn canonical_authority(url: &Url) -> String {
+    url.host_str()
+        .map(|host| {
+            let host = host.trim_end_matches('.').to_ascii_lowercase();
+            let host = if host.contains(':') {
+                format!("[{host}]")
+            } else {
+                host
+            };
+            match url.port() {
+                Some(port) => format!("{host}:{port}"),
+                None => host,
+            }
+        })
+        .unwrap_or_default()
+}
+
+fn canonical_forwarded_request_headers(
+    headers: &BTreeMap<String, String>,
+    url: &Url,
+    body_length: Option<u64>,
+    injection: &Value,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut forwarded = client_forward_header_material(headers, injection)?;
+    forwarded.insert("host".to_string(), canonical_authority(url));
+    if let Some(body_length) = body_length {
+        forwarded.insert("content-length".to_string(), body_length.to_string());
+    }
+    Ok(forwarded)
+}
+
+fn canonical_client_proof_headers(
+    headers: &BTreeMap<String, String>,
+) -> Result<BTreeMap<String, String>, String> {
+    let mut lowered = BTreeMap::new();
+    for (name, value) in headers {
+        let name = name.to_ascii_lowercase();
+        HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| format!("invalid proof request header {name}: {err}"))?;
+        HeaderValue::from_str(value)
+            .map_err(|err| format!("invalid proof request header value for {name}: {err}"))?;
+        if lowered
+            .insert(name.clone(), value.trim().to_string())
+            .is_some()
+        {
+            return Err(format!(
+                "proof request repeats header {name} after case normalization"
+            ));
+        }
+    }
+
+    let nominated = connection_nominated_headers(&lowered);
+    for name in &nominated {
+        if lowered.contains_key(name) {
+            return Err(format!("Connection nominates supplied header {name}"));
+        }
+    }
+    lowered.retain(|name, _| {
+        !is_standard_hop_by_hop_header(name)
+            && !nominated.contains(name)
+            && !matches!(
+                name.as_str(),
+                "host"
+                    | "content-length"
+                    | "authorization"
+                    | "proxy-authorization"
+                    | "x-serverware-agent"
+                    | "x-serverware-data-plane-token"
+            )
+            && name != RESPONSE_PROOF_NONCE_HEADER
+    });
+    Ok(lowered)
+}
+
+fn canonical_client_proof_request(
+    request: &IncomingRequest,
+) -> Result<CanonicalSafeProofRequest, String> {
+    let method = request.method.to_ascii_uppercase();
+    if !matches!(method.as_str(), "GET" | "HEAD") {
+        return Err("response proof requires GET or HEAD".to_string());
+    }
+    if !request.body.is_empty() {
+        return Err("response proof requires an empty request body".to_string());
+    }
+    validate_request_target_path(&request.target)
+        .map_err(|err| format!("invalid response proof request path: {err}"))?;
+    let url = Url::parse(&request.target)
+        .map_err(|err| format!("invalid response proof request URL: {err}"))?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("response proof request URL is not a canonical HTTP authority".to_string());
+    }
+    Ok(CanonicalSafeProofRequest {
+        api_version: "serverware.clientProofRequest/v1",
+        method,
+        scheme: url.scheme().to_ascii_lowercase(),
+        authority: canonical_authority(&url),
+        path: url.path().to_string(),
+        query: query_pairs(&url),
+        headers: canonical_client_proof_headers(&request.headers)?,
+        body_sha256: sha256_prefixed(b""),
+    })
+}
+
+fn client_proof_request_digest(
+    request: &IncomingRequest,
+    context: &ResponseProofContext,
+) -> Result<String, String> {
+    let headers = lower_headers(&request.headers);
+    if headers.get(RESPONSE_PROOF_NONCE_HEADER).map(String::as_str)
+        != Some(context.client_nonce.as_str())
+    {
+        return Err("response proof context does not match the request nonce".to_string());
+    }
+    let canonical = canonical_client_proof_request(request)?;
+    let value = serde_json::to_value(canonical)
+        .map_err(|err| format!("serialize canonical response proof request: {err}"))?;
+    Ok(digest_json(&value))
+}
+
+fn decision_request_body_length(req: &DecisionRequest) -> Result<Option<u64>, String> {
+    let headers = lower_headers(&req.headers);
+    let configured = headers
+        .get("content-length")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|err| format!("invalid content-length: {err}"))
+        })
+        .transpose()?;
+    if let Some(actual) = req.forwarded_body_length {
+        if configured.is_some_and(|configured| configured != actual) {
+            return Err("content-length does not match forwarded request body".to_string());
+        }
+        return Ok(configured.or((actual > 0).then_some(actual)));
+    }
+    if let Some(configured) = configured {
+        if !req.body.is_empty() && configured != req.body.len() as u64 {
+            return Err("content-length does not match buffered request body".to_string());
+        }
+        return Ok(Some(configured));
+    }
+    Ok((!req.body.is_empty()).then_some(req.body.len() as u64))
 }
 
 fn body_sha(req: &DecisionRequest) -> String {
@@ -1498,191 +4263,1291 @@ fn digest_json(value: &Value) -> String {
     sha256_prefixed(canonical_json(value).as_bytes())
 }
 
-fn load_generation_map(path: &str) -> Result<HashMap<String, Option<u64>>, String> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(err) => return Err(format!("read credential generations: {err}")),
-    };
-    let payload: Value = serde_json::from_str(&text)
-        .map_err(|err| format!("parse credential generations: {err}"))?;
-    let mut generations = HashMap::new();
-    for (credential_id, entry) in payload
-        .get("credentials")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flatten()
-    {
-        if entry
-            .get("deleted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            generations.insert(credential_id.clone(), None);
-            continue;
-        }
-        if let Some(version) = entry.get("credential_version").and_then(Value::as_u64) {
-            generations.insert(credential_id.clone(), Some(version));
-        }
+fn response_proof_signing_material() -> Result<(SigningKey, String, String), String> {
+    let rng = ring_rand::SystemRandom::new();
+    let mut seed = [0u8; 32];
+    rng.fill(&mut seed)
+        .map_err(|_| "generate response proof signing key".to_string())?;
+    let signing_key = SigningKey::from_bytes(&seed);
+    seed.zeroize();
+    let public_key = signing_key.verifying_key().to_bytes();
+    let mut spki_der = vec![
+        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+    ];
+    spki_der.extend_from_slice(&public_key);
+    let encoded = general_purpose::STANDARD.encode(&spki_der);
+    let mut pem = String::from("-----BEGIN PUBLIC KEY-----\n");
+    for chunk in encoded.as_bytes().chunks(64) {
+        pem.push_str(std::str::from_utf8(chunk).expect("base64 output is ASCII"));
+        pem.push('\n');
     }
-    Ok(generations)
+    pem.push_str("-----END PUBLIC KEY-----\n");
+    let key_id = sha256_prefixed(&spki_der);
+    spki_der.zeroize();
+    Ok((signing_key, pem, key_id))
 }
 
-fn refresh_generation_cache(state: &GateState, force: bool) -> Result<(), String> {
-    let mtime = match fs::metadata(&state.generation_path).and_then(|metadata| metadata.modified())
-    {
-        Ok(mtime) => Some(mtime),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(format!("stat credential generations: {err}")),
+fn response_proof_context(
+    state: &GateState,
+    headers: &BTreeMap<String, String>,
+    tls: &ServerConnection,
+) -> Result<Option<ResponseProofContext>, String> {
+    let lowered = lower_headers(headers);
+    let Some(client_nonce) = lowered.get(RESPONSE_PROOF_NONCE_HEADER) else {
+        return Ok(None);
     };
-    {
-        let mut cached = state
-            .generation_mtime
-            .lock()
-            .expect("generation mtime mutex poisoned");
-        if !force && *cached == mtime {
-            return Ok(());
-        }
-        *cached = mtime;
+    if state.response_proof_attestation_command.is_none() || state.server_instance_id.is_none() {
+        return Err("response proof service is not configured".to_string());
     }
-    let generations = load_generation_map(&state.generation_path)?;
-    {
-        let mut cached = state
-            .credential_generations
-            .lock()
-            .expect("credential generation mutex poisoned");
-        *cached = generations.clone();
+    if client_nonce.contains('=') {
+        return Err("response proof nonce must use unpadded base64url".to_string());
     }
-    let mut grants = state.grants.lock().expect("grant cache mutex poisoned");
-    grants.retain(|_, grant| {
-        matches!(
-            generations.get(&grant.credential_ref),
-            Some(Some(active_version)) if *active_version == grant.credential_version
+    let client_nonce_bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(client_nonce.as_bytes())
+        .map_err(|_| "response proof nonce is not valid base64url".to_string())?;
+    if !(32..=64).contains(&client_nonce_bytes.len()) {
+        return Err("response proof nonce must contain 32 to 64 bytes".to_string());
+    }
+    let exporter = tls
+        .export_keying_material(
+            [0u8; 32],
+            RESPONSE_PROOF_EXPORTER_LABEL,
+            Some(client_nonce_bytes.as_slice()),
         )
+        .map_err(|err| format!("derive response proof TLS exporter: {err}"))?;
+    Ok(Some(ResponseProofContext {
+        client_nonce: client_nonce.to_string(),
+        client_nonce_bytes,
+        tls_exporter: general_purpose::URL_SAFE_NO_PAD.encode(exporter),
+    }))
+}
+
+struct ParsedBufferedResponse<'a> {
+    status: u16,
+    header_end: usize,
+    headers: BTreeMap<String, String>,
+    body: &'a [u8],
+}
+
+fn parse_buffered_response(response: &[u8]) -> Result<ParsedBufferedResponse<'_>, String> {
+    let header_end = response
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .ok_or("response proof requires a complete buffered HTTP response")?;
+    let head = std::str::from_utf8(&response[..header_end])
+        .map_err(|_| "response proof HTTP headers are not UTF-8".to_string())?;
+    let mut lines = head.split("\r\n");
+    let status_line = lines
+        .next()
+        .ok_or("response proof HTTP status line is missing")?;
+    let status = status_line
+        .split_ascii_whitespace()
+        .nth(1)
+        .ok_or("response proof HTTP status is missing")?
+        .parse::<u16>()
+        .map_err(|_| "response proof HTTP status is invalid".to_string())?;
+    let mut headers = BTreeMap::new();
+    for line in lines {
+        let (name, value) = line
+            .split_once(':')
+            .ok_or("response proof HTTP header is malformed")?;
+        let name = name.trim().to_ascii_lowercase();
+        let value = value.trim().to_string();
+        if headers.insert(name.clone(), value).is_some() {
+            return Err(format!(
+                "response proof HTTP response repeats header {name}"
+            ));
+        }
+    }
+    Ok(ParsedBufferedResponse {
+        status,
+        header_end,
+        headers,
+        body: &response[header_end + 4..],
+    })
+}
+
+fn required_parsed_response_header(
+    headers: &BTreeMap<String, String>,
+    name: &str,
+) -> Result<String, String> {
+    headers
+        .get(name)
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .ok_or_else(|| format!("response proof response is missing {name}"))
+}
+
+fn append_buffered_response_headers(
+    response: &[u8],
+    header_end: usize,
+    headers: &[(&str, String)],
+) -> Vec<u8> {
+    let mut output = Vec::with_capacity(
+        response.len()
+            + headers
+                .iter()
+                .map(|(name, value)| name.len() + value.len() + 4)
+                .sum::<usize>(),
+    );
+    output.extend_from_slice(&response[..header_end]);
+    for (name, value) in headers {
+        output.extend_from_slice(b"\r\n");
+        output.extend_from_slice(name.as_bytes());
+        output.extend_from_slice(b": ");
+        output.extend_from_slice(value.as_bytes());
+    }
+    output.extend_from_slice(&response[header_end..]);
+    output
+}
+
+fn attach_response_proof(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    context: &ResponseProofContext,
+    expected_client_request_digest: &str,
+    response: Vec<u8>,
+) -> Result<ResponseProofAttachment, String> {
+    let parsed = parse_buffered_response(&response)?;
+    if !(200..300).contains(&parsed.status) {
+        return Ok(ResponseProofAttachment::Skipped { response });
+    }
+    let client_request_digest =
+        required_parsed_response_header(&parsed.headers, "x-serverware-client-request-digest")?;
+    if client_request_digest != expected_client_request_digest {
+        return Err("response proof client request digest mismatch".to_string());
+    }
+    let request_digest =
+        required_parsed_response_header(&parsed.headers, "x-serverware-request-digest")?;
+    let operation_digest =
+        required_parsed_response_header(&parsed.headers, "x-serverware-operation-digest")?;
+    let policy_digest =
+        required_parsed_response_header(&parsed.headers, "x-serverware-policy-hash")?;
+    let declared_body_digest =
+        required_parsed_response_header(&parsed.headers, "x-serverware-response-body-sha256")?;
+    let body_digest = sha256_prefixed(parsed.body);
+    if declared_body_digest != body_digest {
+        return Err("response proof emitted body digest mismatch".to_string());
+    }
+    if policy_digest != snapshot.hash {
+        return Err("response proof policy digest is not the active snapshot".to_string());
+    }
+    for (label, digest) in [
+        ("client request", client_request_digest.as_str()),
+        ("request", request_digest.as_str()),
+        ("operation", operation_digest.as_str()),
+        ("policy", policy_digest.as_str()),
+        ("body", body_digest.as_str()),
+    ] {
+        if !is_sha256_digest(digest) {
+            return Err(format!("response proof {label} digest is invalid"));
+        }
+    }
+
+    let mut selected_headers = BTreeMap::new();
+    for name in [
+        "content-length",
+        "content-type",
+        "x-serverware-client-request-digest",
+        "x-serverware-policy-hash",
+        "x-serverware-request-digest",
+        "x-serverware-operation-digest",
+        "x-serverware-response-body-sha256",
+    ] {
+        if let Some(value) = parsed.headers.get(name) {
+            selected_headers.insert(name.to_string(), value.clone());
+        }
+    }
+    if selected_headers.is_empty() {
+        return Err("response proof has no selected response headers".to_string());
+    }
+    let provenance_digest = release_provenance_digest(&state.release_provenance_path);
+    let release_digest = provenance_digest
+        .as_str()
+        .filter(|value| is_sha256_digest(value))
+        .ok_or("response proof requires release provenance")?
+        .to_string();
+    let image_signature_digest = image_signatures_digest(&state.image_signatures_path);
+    let source_digest = source_tree_digest(&state.release_provenance_path);
+    let runtime_manifest = build_runtime_manifest(
+        state,
+        snapshot,
+        &provenance_digest,
+        &image_signature_digest,
+        &source_digest,
+    );
+    let runtime_manifest_digest = sha256_prefixed(canonical_json(&runtime_manifest).as_bytes());
+    let server_instance_id = state
+        .server_instance_id
+        .as_deref()
+        .ok_or("response proof server instance is not configured")?;
+    let server_instance_identity_digest = sha256_prefixed(server_instance_id.as_bytes());
+    let selected_headers_value = serde_json::to_value(&selected_headers)
+        .map_err(|err| format!("serialize response proof selected headers: {err}"))?;
+    let selected_headers_digest = digest_json(&selected_headers_value);
+    let tls_channel_binding = json!({
+        "type":"tls-exporter",
+        "value":context.tls_exporter,
     });
+    let issued_at_unix = now_epoch_ms() / 1000;
+    let statement = json!({
+        "apiVersion":"serverware.proxyResponseStatement/v1",
+        "issued_at_unix":issued_at_unix,
+        "client_nonce":context.client_nonce,
+        "client_request_digest":client_request_digest,
+        "request_digest":request_digest,
+        "operation_digest":operation_digest,
+        "response":{
+            "status":parsed.status,
+            "selected_headers":selected_headers,
+            "selected_headers_digest":selected_headers_digest,
+            "body_digest":body_digest,
+        },
+        "policy_digest":policy_digest,
+        "runtime_manifest_digest":runtime_manifest_digest,
+        "data_plane_binary_digest":state.binary_digest,
+        "release_digest":release_digest,
+        "server_instance":{
+            "id":server_instance_id,
+            "identity_digest":server_instance_identity_digest,
+        },
+        "tls_channel_binding":tls_channel_binding,
+    });
+    let canonical_statement = canonical_json(&statement);
+    let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
+    let signature = state
+        .response_proof_signing_key
+        .sign(canonical_statement.as_bytes());
+    let attested_claims = json!({
+        "server_statement_sha256":statement_digest,
+        "server_statement_api_version":"serverware.proxyResponseStatement/v1",
+        "issued_at_unix":issued_at_unix,
+        "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
+        "client_request_digest":client_request_digest,
+        "request_digest":request_digest,
+        "operation_digest":operation_digest,
+        "response_status":parsed.status,
+        "selected_response_headers_digest":selected_headers_digest,
+        "response_body_digest":body_digest,
+        "policy_digest":policy_digest,
+        "runtime_manifest_digest":runtime_manifest_digest,
+        "data_plane_binary_digest":state.binary_digest,
+        "release_digest":release_digest,
+        "server_instance_id":server_instance_id,
+        "server_instance_identity_digest":server_instance_identity_digest,
+        "tls_channel_binding_type":"tls-exporter",
+        "tls_channel_binding_sha256":digest_json(&tls_channel_binding),
+        "response_signing_key_id":state.response_proof_signing_key_id,
+    });
+    let attestation_request = json!({
+        "apiVersion":"serverware.responseProofAttestationRequest/v1",
+        "kind":"ServerwareResponseProofAttestationRequest",
+        "server_statement_sha256":statement_digest,
+        "response_signing_key_id":state.response_proof_signing_key_id,
+        "response_signing_public_key_pem":state.response_proof_public_key_pem,
+        "attested_claims":attested_claims,
+    });
+    let attestation_command = state
+        .response_proof_attestation_command
+        .as_deref()
+        .ok_or("response proof attestation command is not configured")?;
+    let attestation = run_bounded_json_command(
+        attestation_command,
+        &attestation_request,
+        "response proof attestation",
+    )?;
+    let vendor_tee = attestation
+        .get("vendor_tee")
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or("response proof attestation output is missing vendor_tee")?;
+    let runtime_proof = json!({
+        "apiVersion":"serverware.proxyResponseRuntimeProof/v1",
+        "kind":"ServerwareProxyResponseRuntimeProof",
+        "server_statement":statement,
+        "server_statement_sha256":statement_digest,
+        "server_signature":{
+            "algorithm":"Ed25519",
+            "key_id":state.response_proof_signing_key_id,
+            "public_key_pem":state.response_proof_public_key_pem,
+            "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())),
+        },
+        "vendor_tee":vendor_tee,
+    });
+    let runtime_proof_bytes = canonical_json(&runtime_proof).into_bytes();
+    let runtime_proof_digest = sha256_prefixed(&runtime_proof_bytes);
+    let runtime_proof_b64 = general_purpose::URL_SAFE_NO_PAD.encode(runtime_proof_bytes);
+    let output = append_buffered_response_headers(
+        &response,
+        parsed.header_end,
+        &[
+            ("X-Serverware-Response-Proof-B64", runtime_proof_b64),
+            (
+                "X-Serverware-Response-Proof-SHA256",
+                runtime_proof_digest.clone(),
+            ),
+            (
+                "X-Serverware-Response-Key-Id",
+                state.response_proof_signing_key_id.clone(),
+            ),
+        ],
+    );
+    Ok(ResponseProofAttachment::Attached {
+        response: output,
+        runtime_proof_sha256: runtime_proof_digest,
+        client_request_digest,
+    })
+}
+
+fn required_response_header(headers: &HeaderMap, name: &str) -> Result<String, String> {
+    let header_name = HeaderName::from_bytes(name.as_bytes())
+        .map_err(|_| format!("invalid response proof header name {name}"))?;
+    headers
+        .get(header_name)
+        .ok_or_else(|| format!("credential lease response missing {name}"))?
+        .to_str()
+        .map(str::to_string)
+        .map_err(|_| format!("credential lease response {name} is not ASCII"))
+}
+
+fn verify_credential_lease_response(
+    snapshot: &Snapshot,
+    request_url: &str,
+    response_nonce: &str,
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: &[u8],
+) -> Result<(), String> {
+    let verifying_key = snapshot
+        .response_verifying_key
+        .as_ref()
+        .ok_or("credential leases require an attested response signing key")?;
+    let expected_key_id = snapshot
+        .response_signing_key_id
+        .as_deref()
+        .ok_or("credential leases require an attested response signing key id")?;
+    let header_key_id = required_response_header(headers, "X-Serverware-Response-Key-Id")?;
+    if header_key_id != expected_key_id {
+        return Err("credential lease response signing key is not attested".to_string());
+    }
+    let statement_b64 = required_response_header(headers, "X-Serverware-Response-Statement-B64")?;
+    let statement_bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(statement_b64.as_bytes())
+        .map_err(|err| format!("decode credential lease response statement: {err}"))?;
+    let statement: CredentialLeaseResponseStatement = serde_json::from_slice(&statement_bytes)
+        .map_err(|err| format!("parse credential lease response statement: {err}"))?;
+    let canonical_statement = serde_json::to_value(&statement)
+        .map_err(|err| format!("serialize credential lease response statement: {err}"))?;
+    if canonical_json(&canonical_statement).as_bytes() != statement_bytes.as_slice() {
+        return Err("credential lease response statement is not canonical JSON".to_string());
+    }
+    let signature_value = required_response_header(headers, "X-Serverware-Response-Signature")?;
+    let signature_b64 = signature_value
+        .strip_prefix("ed25519:")
+        .ok_or("credential lease response signature must use ed25519")?;
+    let signature_bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .map_err(|err| format!("decode credential lease response signature: {err}"))?;
+    let signature_array: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| "credential lease response signature must be 64 bytes".to_string())?;
+    verifying_key
+        .verify(&statement_bytes, &Signature::from_bytes(&signature_array))
+        .map_err(|err| format!("credential lease response signature verification failed: {err}"))?;
+
+    let expected_body_digest = sha256_prefixed(body);
+    if statement.version != "serverware.responseSignature/v1"
+        || statement.nonce.as_deref() != Some(response_nonce)
+        || statement.status_code != status.as_u16()
+        || statement.body_sha256 != expected_body_digest
+        || statement.response_signing_key_id != expected_key_id
+    {
+        return Err("credential lease response statement binding mismatch".to_string());
+    }
+    if required_response_header(headers, "X-Serverware-Response-Body-SHA256")?
+        != expected_body_digest
+    {
+        return Err("credential lease response body digest header mismatch".to_string());
+    }
+    let statement_digest = sha256_prefixed(&statement_bytes);
+    if required_response_header(headers, "X-Serverware-Response-Statement-SHA256")?
+        != statement_digest
+    {
+        return Err("credential lease response statement digest header mismatch".to_string());
+    }
+    let parsed_url = Url::parse(request_url)
+        .map_err(|err| format!("parse credential lease URL for response proof: {err}"))?;
+    if statement.request.method != "POST"
+        || statement.request.path != parsed_url.path()
+        || statement.request.query != parsed_url.query().unwrap_or("")
+    {
+        return Err("credential lease response request binding mismatch".to_string());
+    }
+    let expected_context = snapshot
+        .attested_response_context
+        .as_ref()
+        .ok_or("credential leases require attested response context")?;
+    if statement.context.runtime_manifest_digest != expected_context.runtime_manifest_digest
+        || statement.context.policy_bundle_digest != expected_context.policy_bundle_digest
+        || statement.context.provenance_digest != expected_context.provenance_digest
+        || statement.context.image_signatures_digest != expected_context.image_signatures_digest
+        || statement.context.source_tree_digest != expected_context.source_tree_digest
+        || statement.context.policy_bundle_digest != snapshot.hash
+    {
+        return Err("credential lease response attested context mismatch".to_string());
+    }
+    let issued_at_ms = u128::from(statement.issued_at_ms);
+    if issued_at_ms.abs_diff(now_epoch_ms()) > 30_000 {
+        return Err("credential lease response statement is outside the clock window".to_string());
+    }
     Ok(())
 }
 
-fn generation_worker(state: Arc<GateState>, poll_interval: Duration) {
-    loop {
-        if let Err(err) = refresh_generation_cache(&state, false) {
-            eprintln!("credential generation refresh failed: {err}");
-        }
-        thread::sleep(poll_interval);
-    }
-}
-
-fn credential_generation(state: &GateState, credential_ref: &str) -> Option<Option<u64>> {
-    state
-        .credential_generations
-        .lock()
-        .expect("credential generation mutex poisoned")
-        .get(credential_ref)
-        .copied()
-}
-
-fn load_lease_map(path: &str) -> Result<HashMap<String, Option<SecretLease>>, String> {
-    let text = match fs::read_to_string(path) {
-        Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashMap::new()),
-        Err(err) => return Err(format!("read credential leases: {err}")),
-    };
-    let payload: Value =
-        serde_json::from_str(&text).map_err(|err| format!("parse credential leases: {err}"))?;
-    let mut leases = HashMap::new();
-    for (credential_id, entry) in payload
-        .get("credentials")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flatten()
+fn exactly_one_matching_credential(
+    snapshot: &Snapshot,
+    scope: &CredentialLeaseScope,
+    entries: Vec<CredentialLeaseEntry>,
+) -> Result<CredentialLeaseEntry, String> {
+    let mut entries = entries.into_iter();
+    let entry = entries
+        .next()
+        .ok_or("credential lease set must contain exactly one credential")?;
+    if entries.next().is_some()
+        || entry.credential_id != scope.credential_id
+        || !snapshot.credentials.contains_key(&entry.credential_id)
     {
-        if entry
-            .get("deleted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-        {
-            leases.insert(credential_id.clone(), None);
-            continue;
-        }
-        let Some(version) = entry.get("credential_version").and_then(Value::as_u64) else {
-            continue;
-        };
-        let Some(secret) = entry.get("secret").and_then(Value::as_str) else {
-            continue;
-        };
-        let metadata = entry
-            .get("metadata")
-            .and_then(Value::as_object)
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|(key, value)| {
-                        value.as_str().map(|value| (key.clone(), value.to_string()))
-                    })
-                    .collect::<BTreeMap<_, _>>()
-            })
-            .unwrap_or_default();
-        leases.insert(
-            credential_id.clone(),
-            Some(SecretLease {
-                version,
-                secret: secret.to_string(),
-                metadata,
-            }),
+        return Err(
+            "credential lease set must contain exactly one matching credential".to_string(),
         );
     }
-    Ok(leases)
+    Ok(entry)
 }
 
-fn refresh_lease_cache(state: &GateState, force: bool) -> Result<(), String> {
-    let mtime = match fs::metadata(&state.lease_path).and_then(|metadata| metadata.modified()) {
-        Ok(mtime) => Some(mtime),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(err) => return Err(format!("stat credential leases: {err}")),
-    };
+fn decrypt_credential_lease_envelope(
+    snapshot: &Snapshot,
+    binary_digest: &str,
+    scope: &CredentialLeaseScope,
+    recipient_private_key: X25519StaticSecret,
+    recipient_key_id: &str,
+    recipient_nonce: &str,
+    recipient_nonce_bytes: &[u8; 32],
+    body: &[u8],
+    requested_ttl_seconds: u64,
+) -> Result<SecretLease, String> {
+    let envelope: CredentialLeaseEnvelope = serde_json::from_slice(body)
+        .map_err(|err| format!("parse credential lease envelope: {err}"))?;
+    let issued_at_ms = u128::from(envelope.issued_at_epoch_ms);
+    let expires_at_ms = u128::from(envelope.expires_at_epoch_ms);
+    let now_ms = now_epoch_ms();
+    let max_ttl_ms = u128::from(requested_ttl_seconds) * 1000;
+    if envelope.api_version != "serverware.credentialLeaseEnvelope/v2"
+        || envelope.algorithm != "X25519-HKDF-SHA256-AES-256-GCM"
+        || envelope.recipient_key_id != recipient_key_id
+        || envelope.recipient_nonce != recipient_nonce
+        || envelope.policy_hash != snapshot.hash
+        || envelope.data_plane_binary_digest != binary_digest
+        || envelope.principal_id != scope.principal_id
+        || envelope.route_id != scope.route_id
+        || envelope.credential_id != scope.credential_id
+        || expires_at_ms <= issued_at_ms
+        || expires_at_ms.saturating_sub(issued_at_ms) > max_ttl_ms
+        || issued_at_ms > now_ms.saturating_add(5_000)
+        || expires_at_ms <= now_ms
     {
-        let mut cached = state
-            .lease_mtime
-            .lock()
-            .expect("lease mtime mutex poisoned");
-        if !force && *cached == mtime {
-            return Ok(());
-        }
-        *cached = mtime;
+        return Err("credential lease envelope binding or expiry mismatch".to_string());
     }
-    let leases = load_lease_map(&state.lease_path)?;
-    let mut cached = state
+    let aad = json!({
+        "apiVersion":"serverware.credentialLeaseEnvelope/v2",
+        "algorithm":"X25519-HKDF-SHA256-AES-256-GCM",
+        "recipientKeyId":recipient_key_id,
+        "recipientNonce":recipient_nonce,
+        "policyHash":snapshot.hash,
+        "dataPlaneBinaryDigest":binary_digest,
+        "principalId":scope.principal_id,
+        "routeId":scope.route_id,
+        "credentialId":scope.credential_id,
+        "issuedAtEpochMs":issued_at_ms,
+        "expiresAtEpochMs":expires_at_ms,
+    });
+    let aad_bytes = canonical_json(&aad).into_bytes();
+    let server_public_key = general_purpose::URL_SAFE_NO_PAD
+        .decode(envelope.server_ephemeral_public_key.as_bytes())
+        .map_err(|err| format!("decode credential lease server public key: {err}"))?;
+    if server_public_key.len() != 32 {
+        return Err("credential lease server public key must be 32 bytes".to_string());
+    }
+    let aead_nonce_bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(envelope.aead_nonce.as_bytes())
+        .map_err(|err| format!("decode credential lease AEAD nonce: {err}"))?;
+    let aead_nonce: [u8; 12] = aead_nonce_bytes
+        .try_into()
+        .map_err(|_| "credential lease AEAD nonce must be 12 bytes".to_string())?;
+    let mut ciphertext = Zeroizing::new(
+        general_purpose::URL_SAFE_NO_PAD
+            .decode(envelope.ciphertext.as_bytes())
+            .map_err(|err| format!("decode credential lease ciphertext: {err}"))?,
+    );
+    if ciphertext.len() < aead::AES_256_GCM.tag_len()
+        || envelope.ciphertext_sha256 != sha256_prefixed(&ciphertext)
+    {
+        return Err("credential lease ciphertext digest mismatch".to_string());
+    }
+    let aad_digest = Sha256::digest(&aad_bytes);
+    let mut hkdf_info = b"serverware:credential-lease-envelope:v2\0".to_vec();
+    hkdf_info.extend_from_slice(&aad_digest);
+    let server_public_key: [u8; 32] = server_public_key
+        .try_into()
+        .map_err(|_| "credential lease server public key must be 32 bytes".to_string())?;
+    let peer_public_key = X25519PublicKey::from(server_public_key);
+    let shared_secret = recipient_private_key.diffie_hellman(&peer_public_key);
+    if !shared_secret.was_contributory() {
+        return Err("credential lease server public key is non-contributory".to_string());
+    }
+    let salt = hkdf::Salt::new(hkdf::HKDF_SHA256, recipient_nonce_bytes);
+    let prk = salt.extract(shared_secret.as_bytes());
+    let info = [hkdf_info.as_slice()];
+    let mut key_bytes = Zeroizing::new([0u8; 32]);
+    prk.expand(&info, Aes256KeyLength)
+        .map_err(|_| "credential lease HKDF expand failed".to_string())?
+        .fill(key_bytes.as_mut())
+        .map_err(|_| "credential lease HKDF fill failed".to_string())?;
+    let unbound = aead::UnboundKey::new(&aead::AES_256_GCM, key_bytes.as_ref())
+        .map_err(|_| "credential lease AEAD key rejected".to_string())?;
+    let key = aead::LessSafeKey::new(unbound);
+    let plaintext = key
+        .open_in_place(
+            aead::Nonce::assume_unique_for_key(aead_nonce),
+            aead::Aad::from(aad_bytes.as_slice()),
+            &mut ciphertext,
+        )
+        .map_err(|_| "credential lease AEAD authentication failed".to_string())?
+        .to_vec();
+    let plaintext = Zeroizing::new(plaintext);
+    let payload: CredentialLeaseSet = serde_json::from_slice(&plaintext)
+        .map_err(|err| format!("parse decrypted credential lease set: {err}"))?;
+    if payload.api_version != "serverware.credentialLeaseSet/v2"
+        || payload.recipient_key_id != recipient_key_id
+        || payload.recipient_nonce != recipient_nonce
+        || payload.policy_hash != snapshot.hash
+        || payload.data_plane_binary_digest != binary_digest
+        || payload.principal_id != scope.principal_id
+        || payload.route_id != scope.route_id
+        || payload.credential_id != scope.credential_id
+        || u128::from(payload.issued_at_epoch_ms) != issued_at_ms
+        || u128::from(payload.expires_at_epoch_ms) != expires_at_ms
+    {
+        return Err("decrypted credential lease set binding mismatch".to_string());
+    }
+    let remaining_ms = expires_at_ms.saturating_sub(now_epoch_ms());
+    if remaining_ms == 0 || remaining_ms > max_ttl_ms {
+        return Err("credential lease expired during verification".to_string());
+    }
+    let expires_at_monotonic =
+        Instant::now() + Duration::from_millis(u64::try_from(remaining_ms).unwrap_or(u64::MAX));
+    let entry = exactly_one_matching_credential(snapshot, scope, payload.credentials)?;
+    if entry.credential_version == 0 || entry.secret.is_empty() {
+        return Err("credential lease entry has invalid version or empty secret".to_string());
+    }
+    Ok(SecretLease {
+        scope: scope.clone(),
+        version: entry.credential_version,
+        secret: entry.secret,
+        metadata: entry.metadata,
+        policy_hash: snapshot.hash.clone(),
+        expires_at_epoch_ms: expires_at_ms,
+        expires_at_monotonic,
+    })
+}
+
+fn validate_credential_lease_scope(
+    snapshot: &Snapshot,
+    scope: &CredentialLeaseScope,
+) -> Result<(), String> {
+    let route = snapshot
+        .routes
+        .iter()
+        .find(|route| route.id == scope.route_id)
+        .ok_or("credential lease route is not active")?;
+    if !route
+        .principals
+        .iter()
+        .any(|principal| principal == "*" || principal == &scope.principal_id)
+    {
+        return Err("credential lease principal is not assigned to the active route".to_string());
+    }
+    if route.credential_ref.as_deref() != Some(scope.credential_id.as_str())
+        || !snapshot.credentials.contains_key(&scope.credential_id)
+    {
+        return Err("credential lease credential is not assigned to the active route".to_string());
+    }
+    Ok(())
+}
+
+fn fetch_scoped_credential_lease(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+) -> Result<SecretLease, String> {
+    let request_url = state
+        .credential_lease_url
+        .as_deref()
+        .ok_or("credential lease URL is not configured")?;
+    let token = state
+        .audit_token
+        .as_deref()
+        .ok_or("credential lease data-plane token is not configured")?;
+    validate_credential_lease_scope(snapshot, scope)?;
+    if !snapshot_is_active(state, snapshot) {
+        return Err("policy snapshot was revoked before credential lease fetch".to_string());
+    }
+    if snapshot.response_verifying_key.is_none() {
+        return Err("credential lease URL requires an attested policy trust root".to_string());
+    }
+    if matches!(
+        state.policy_trust_root_source,
+        PolicyTrustRootSource::AttestedControlPlane { .. }
+    ) && state
+        .policy_trust_last_success
+        .lock()
+        .expect("policy trust last-success mutex poisoned")
+        .elapsed()
+        > POLICY_TRUST_MAX_AGE
+    {
+        return Err("attested control-plane trust root is stale".to_string());
+    }
+    let rng = ring_rand::SystemRandom::new();
+    let mut recipient_private_key_bytes = [0u8; 32];
+    rng.fill(&mut recipient_private_key_bytes)
+        .map_err(|_| "generate credential lease recipient key failed".to_string())?;
+    let recipient_private_key = X25519StaticSecret::from(recipient_private_key_bytes);
+    recipient_private_key_bytes.zeroize();
+    let recipient_public_key = X25519PublicKey::from(&recipient_private_key);
+    let recipient_key_id = sha256_prefixed(recipient_public_key.as_bytes());
+    let mut recipient_nonce_bytes = Zeroizing::new([0u8; 32]);
+    rng.fill(recipient_nonce_bytes.as_mut())
+        .map_err(|_| "generate credential lease nonce failed".to_string())?;
+    let recipient_nonce = general_purpose::URL_SAFE_NO_PAD.encode(&recipient_nonce_bytes);
+    let requested_ttl_seconds = 5u64;
+    let recipient_attestation = if let Some(command) = state
+        .credential_lease_recipient_attestation_command
+        .as_deref()
+    {
+        let attestation_request = json!({
+            "apiVersion":"serverware.recipientAttestationRequest/v2",
+            "recipientPublicKey":general_purpose::URL_SAFE_NO_PAD.encode(recipient_public_key.as_bytes()),
+            "recipientKeyId":recipient_key_id,
+            "recipientNonce":recipient_nonce,
+            "policyHash":snapshot.hash,
+            "dataPlaneBinaryDigest":state.binary_digest,
+            "principalId":scope.principal_id,
+            "routeId":scope.route_id,
+            "credentialId":scope.credential_id,
+        });
+        Some(generate_recipient_attestation(
+            command,
+            &attestation_request,
+        )?)
+    } else {
+        None
+    };
+    let request_body = CredentialLeaseRequest {
+        api_version: "serverware.credentialLeaseRequest/v2".to_string(),
+        principal_id: scope.principal_id.clone(),
+        route_id: scope.route_id.clone(),
+        credential_id: scope.credential_id.clone(),
+        recipient_public_key: general_purpose::URL_SAFE_NO_PAD
+            .encode(recipient_public_key.as_bytes()),
+        recipient_key_id: recipient_key_id.clone(),
+        recipient_nonce: recipient_nonce.clone(),
+        policy_hash: snapshot.hash.clone(),
+        data_plane_binary_digest: state.binary_digest.clone(),
+        max_ttl_seconds: requested_ttl_seconds,
+        recipient_attestation,
+    };
+    let response = state
+        .credential_lease_client
+        .post(request_url)
+        .header("X-Serverware-Data-Plane-Token", token)
+        .header("X-Serverware-Response-Nonce", recipient_nonce.as_str())
+        .json(&request_body)
+        .send()
+        .map_err(|err| format!("fetch credential leases: {err}"))?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let mut body = Zeroizing::new(Vec::new());
+    response
+        .take(MAX_CREDENTIAL_LEASE_RESPONSE_BYTES + 1)
+        .read_to_end(body.as_mut())
+        .map_err(|err| format!("read credential lease response: {err}"))?;
+    if body.len() as u64 > MAX_CREDENTIAL_LEASE_RESPONSE_BYTES {
+        return Err("credential lease response exceeds 8 MiB".to_string());
+    }
+    verify_credential_lease_response(
+        snapshot,
+        request_url,
+        &recipient_nonce,
+        status,
+        &headers,
+        body.as_ref(),
+    )?;
+    if !status.is_success() {
+        return Err(format!(
+            "credential lease control plane returned HTTP {status}"
+        ));
+    }
+    let lease = decrypt_credential_lease_envelope(
+        snapshot,
+        &state.binary_digest,
+        scope,
+        recipient_private_key,
+        &recipient_key_id,
+        &recipient_nonce,
+        &recipient_nonce_bytes,
+        body.as_ref(),
+        requested_ttl_seconds,
+    )?;
+    if !snapshot_is_active(state, snapshot) {
+        return Err("policy snapshot changed while credential lease was fetched".to_string());
+    }
+    Ok(lease)
+}
+
+fn run_bounded_json_command(command: &str, request: &Value, label: &str) -> Result<Value, String> {
+    run_bounded_json_command_with_timeout(command, request, label, Duration::from_secs(10))
+}
+
+fn run_bounded_json_command_with_timeout(
+    command: &str,
+    request: &Value,
+    label: &str,
+    timeout: Duration,
+) -> Result<Value, String> {
+    let argv =
+        shlex::split(command).ok_or_else(|| format!("{label} command has invalid quoting"))?;
+    let (program, args) = argv
+        .split_first()
+        .ok_or_else(|| format!("{label} command is empty"))?;
+    let mut process = Command::new(program);
+    process
+        .args(args)
+        .env_clear()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0);
+    for name in ["PATH", "LANG", "LC_ALL", "TZ"] {
+        if let Some(value) = env::var_os(name) {
+            process.env(name, value);
+        }
+    }
+    let mut child = process
+        .spawn()
+        .map_err(|err| format!("start {label} command: {err}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("{label} command stdout unavailable"))?;
+    let (stdout_tx, stdout_rx) = mpsc::sync_channel(1);
+    let reader_label = label.to_string();
+    thread::spawn(move || {
+        let mut output = Vec::new();
+        let result = stdout
+            .take(65_537)
+            .read_to_end(&mut output)
+            .map(|_| output)
+            .map_err(|err| format!("read {reader_label} output: {err}"));
+        let _ = stdout_tx.send(result);
+    });
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("{label} command stdin unavailable"))?
+        .write_all(canonical_json(request).as_bytes())
+        .map_err(|err| format!("write {label} request: {err}"))?;
+    let deadline = Instant::now() + timeout;
+    let mut output: Option<Vec<u8>> = None;
+    let status = loop {
+        if output.is_none() {
+            match stdout_rx.try_recv() {
+                Ok(Ok(value)) => {
+                    if value.len() > 65_536 {
+                        terminate_child_process_group(&mut child);
+                        return Err(format!("{label} output is too large"));
+                    }
+                    output = Some(value);
+                }
+                Ok(Err(err)) => {
+                    terminate_child_process_group(&mut child);
+                    return Err(err);
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    terminate_child_process_group(&mut child);
+                    return Err(format!("{label} output reader failed"));
+                }
+            }
+        }
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|err| format!("wait for {label} command: {err}"))?
+        {
+            if output.is_some() {
+                break status;
+            }
+        }
+        if Instant::now() >= deadline {
+            terminate_child_process_group(&mut child);
+            return Err(format!("{label} command timed out"));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    if !status.success() {
+        return Err(format!("{label} command rejected request"));
+    }
+    let value: Value = serde_json::from_slice(
+        output
+            .as_deref()
+            .ok_or_else(|| format!("{label} command produced no output"))?,
+    )
+    .map_err(|err| format!("parse {label} output: {err}"))?;
+    if !value.is_object() {
+        return Err(format!("{label} output must be an object"));
+    }
+    Ok(value)
+}
+
+fn terminate_child_process_group(child: &mut std::process::Child) {
+    let process_group = -(child.id() as i32);
+    // The helper is started in its own process group so descendants cannot outlive a timeout.
+    unsafe {
+        libc::kill(process_group, libc::SIGKILL);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn generate_recipient_attestation(command: &str, request: &Value) -> Result<Value, String> {
+    run_bounded_json_command_with_timeout(
+        command,
+        request,
+        "credential lease recipient attestation",
+        CREDENTIAL_LEASE_RECIPIENT_ATTESTATION_TIMEOUT,
+    )
+}
+
+struct CredentialLeaseInfo {
+    version: u64,
+    metadata: BTreeMap<String, Value>,
+    secret_available: bool,
+}
+
+fn lease_info(lease: &SecretLease) -> CredentialLeaseInfo {
+    CredentialLeaseInfo {
+        version: lease.version,
+        metadata: lease.metadata.clone(),
+        secret_available: !lease.secret.is_empty(),
+    }
+}
+
+fn cached_credential_lease_info(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+) -> Option<CredentialLeaseInfo> {
+    let now = Instant::now();
+    let mut leases = state
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
-    *cached = leases;
+    let info = leases.get(scope).filter(|lease| {
+        lease.scope == *scope
+            && lease.expires_at_monotonic > now
+            && lease.policy_hash == snapshot.hash
+    });
+    match info {
+        Some(lease) => Some(lease_info(lease)),
+        None => {
+            leases.remove(scope);
+            None
+        }
+    }
+}
+
+fn cache_scoped_credential_lease(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+    lease: SecretLease,
+) -> Result<(), String> {
+    let active = state
+        .snapshot
+        .read()
+        .expect("policy snapshot lock poisoned");
+    if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
+        return Err("policy snapshot changed before credential lease caching".to_string());
+    }
+    let mut leases = state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned");
+    if let Some(current) = leases.get(scope) {
+        if lease.version < current.version {
+            return Err("credential lease version regression rejected".to_string());
+        }
+        if lease.version == current.version
+            && (lease.secret.as_str() != current.secret.as_str()
+                || lease.metadata != current.metadata)
+        {
+            return Err(
+                "credential lease semantics changed without a version increment".to_string(),
+            );
+        }
+    } else if leases.len() >= state.credential_lease_cache_max {
+        return Err("credential lease cache capacity exhausted".to_string());
+    }
+    leases.insert(scope.clone(), lease);
     Ok(())
 }
 
-fn lease_worker(state: Arc<GateState>, poll_interval: Duration) {
-    loop {
-        if let Err(err) = refresh_lease_cache(&state, false) {
-            eprintln!("credential lease refresh failed: {err}");
+fn refresh_scoped_credential_lease(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+) -> Result<(), String> {
+    let result = fetch_scoped_credential_lease(state, snapshot, scope)
+        .and_then(|lease| cache_scoped_credential_lease(state, snapshot, scope, lease));
+    if let Err(err) = result {
+        state
+            .credential_lease_refresh_failed
+            .fetch_add(1, Ordering::Relaxed);
+        return Err(err);
+    }
+    state
+        .credential_lease_refresh_success
+        .fetch_add(1, Ordering::Relaxed);
+    Ok(())
+}
+
+fn refresh_scoped_credential_lease_singleflight(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+) -> Result<(), String> {
+    if !snapshot_is_active(state, snapshot) {
+        return Err("policy snapshot was revoked before credential lease refresh".to_string());
+    }
+    let key = CredentialLeaseGenerationKey::new(snapshot, scope);
+    let (flight, leader) = {
+        let mut flights = state
+            .credential_lease_flights
+            .lock()
+            .expect("credential lease flight mutex poisoned");
+        match flights.entry(key.clone()) {
+            std::collections::hash_map::Entry::Occupied(entry) => (Arc::clone(entry.get()), false),
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                let flight = Arc::new(CredentialLeaseFlight {
+                    result: Mutex::new(None),
+                    completed: Condvar::new(),
+                });
+                entry.insert(Arc::clone(&flight));
+                (flight, true)
+            }
         }
-        thread::sleep(poll_interval);
+    };
+    if leader {
+        let result = refresh_scoped_credential_lease(state, snapshot, scope);
+        *flight
+            .result
+            .lock()
+            .expect("credential lease flight result mutex poisoned") = Some(result.clone());
+        flight.completed.notify_all();
+        let mut flights = state
+            .credential_lease_flights
+            .lock()
+            .expect("credential lease flight mutex poisoned");
+        if flights
+            .get(&key)
+            .is_some_and(|active| Arc::ptr_eq(active, &flight))
+        {
+            flights.remove(&key);
+        }
+        result?;
+    } else {
+        let deadline = Instant::now() + CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT;
+        let mut result = flight
+            .result
+            .lock()
+            .expect("credential lease flight result mutex poisoned");
+        while result.is_none() {
+            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                break;
+            };
+            let (next, timeout) = flight
+                .completed
+                .wait_timeout(result, remaining)
+                .expect("credential lease flight result mutex poisoned");
+            result = next;
+            if timeout.timed_out() {
+                break;
+            }
+        }
+        let completed = result.clone();
+        drop(result);
+        let Some(completed) = completed else {
+            return Err("credential lease singleflight timed out".to_string());
+        };
+        completed?;
+    }
+    Ok(())
+}
+
+fn ensure_scoped_credential_lease(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+) -> Result<CredentialLeaseInfo, String> {
+    if !snapshot_is_active(state, snapshot) {
+        return Err("policy snapshot was revoked before credential lease lookup".to_string());
+    }
+    if let Some(info) = cached_credential_lease_info(state, snapshot, scope) {
+        return Ok(info);
+    }
+    refresh_scoped_credential_lease_singleflight(state, snapshot, scope)?;
+    if !snapshot_is_active(state, snapshot) {
+        return Err("policy snapshot changed during credential lease lookup".to_string());
+    }
+    cached_credential_lease_info(state, snapshot, scope)
+        .ok_or_else(|| "credential lease refresh completed without a cached lease".to_string())
+}
+
+fn credential_generation(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+) -> Option<u64> {
+    cached_credential_lease_info(state, snapshot, scope).map(|info| info.version)
+}
+
+fn credential_lease_for_release(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    credential_ref: &str,
+    credential_version: u64,
+) -> Result<SecretLease, &'static str> {
+    let active = state
+        .snapshot
+        .read()
+        .expect("policy snapshot lock poisoned");
+    if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
+        return Err("policy_snapshot_revoked");
+    }
+    let principal_id = decision
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("credential_scope_missing")?;
+    let route_id = decision
+        .get("route_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("credential_scope_missing")?;
+    if decision.get("policy_hash").and_then(Value::as_str) != Some(snapshot.hash.as_str())
+        || decision.get("snapshot_epoch").and_then(Value::as_u64) != Some(snapshot.epoch)
+    {
+        return Err("credential_scope_mismatch");
+    }
+    let scope = CredentialLeaseScope::new(principal_id, route_id, credential_ref);
+    validate_credential_lease_scope(snapshot, &scope).map_err(|_| "credential_scope_mismatch")?;
+    let now = Instant::now();
+    let mut leases = state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned");
+    let Some(lease) = leases.get(&scope) else {
+        return Err("credential_lease_missing");
+    };
+    if lease.scope != scope
+        || lease.expires_at_monotonic <= now
+        || lease.policy_hash != snapshot.hash
+    {
+        leases.remove(&scope);
+        return Err("credential_lease_missing");
+    }
+    if lease.version != credential_version {
+        return Err("credential_lease_rotated");
+    }
+    Ok(lease.clone())
+}
+
+fn credential_lease_release_binding(lease: &SecretLease) -> CredentialLeaseReleaseBinding {
+    CredentialLeaseReleaseBinding {
+        scope: lease.scope.clone(),
+        version: lease.version,
+        expires_at_monotonic: lease.expires_at_monotonic,
     }
 }
 
-fn credential_lease(
+fn credential_lease_still_releasable(
     state: &GateState,
-    credential_ref: &str,
-    credential_version: u64,
-) -> Option<SecretLease> {
-    match state
+    snapshot: &Arc<Snapshot>,
+    binding: &CredentialLeaseReleaseBinding,
+) -> bool {
+    if binding.expires_at_monotonic <= Instant::now() || !snapshot_is_active(state, snapshot) {
+        return false;
+    }
+    state
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned")
-        .get(credential_ref)
-        .cloned()
-    {
-        Some(Some(lease)) if lease.version == credential_version => Some(lease),
-        _ => None,
+        .get(&binding.scope)
+        .is_some_and(|lease| {
+            lease.scope == binding.scope
+                && lease.version == binding.version
+                && lease.policy_hash == snapshot.hash
+                && lease.expires_at_monotonic > Instant::now()
+        })
+}
+
+fn earliest_credential_lease_expiry_epoch_ms(state: &GateState) -> Option<u128> {
+    let now = Instant::now();
+    let leases = state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned");
+    leases
+        .values()
+        .filter(|lease| lease.expires_at_monotonic > now)
+        .map(|lease| lease.expires_at_epoch_ms)
+        .min()
+}
+
+fn credential_lease_renewal_candidates(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    renew_before: Duration,
+) -> Vec<CredentialLeaseScope> {
+    let deadline = Instant::now()
+        .checked_add(renew_before)
+        .unwrap_or_else(Instant::now);
+    state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned")
+        .values()
+        .filter(|lease| {
+            lease.policy_hash == snapshot.hash && lease.expires_at_monotonic <= deadline
+        })
+        .map(|lease| lease.scope.clone())
+        .collect()
+}
+
+fn start_credential_lease_renewal(
+    state: Arc<GateState>,
+    interval: Duration,
+    worker_count: usize,
+    queue_capacity: usize,
+) -> Result<(), String> {
+    let (sender, receiver) = mpsc::sync_channel::<CredentialLeaseRenewalTask>(queue_capacity);
+    let receiver = Arc::new(Mutex::new(receiver));
+    let pending = Arc::new(Mutex::new(HashSet::<CredentialLeaseGenerationKey>::new()));
+
+    for worker_index in 0..worker_count {
+        let worker_state = Arc::clone(&state);
+        let worker_receiver = Arc::clone(&receiver);
+        let worker_pending = Arc::clone(&pending);
+        thread::Builder::new()
+            .name(format!("credential-lease-renewal-{worker_index}"))
+            .spawn(move || loop {
+                let task = worker_receiver
+                    .lock()
+                    .expect("credential lease renewal receiver mutex poisoned")
+                    .recv();
+                let Ok(task) = task else {
+                    break;
+                };
+                let _pending_guard = CredentialLeaseRenewalPendingGuard {
+                    pending: Arc::clone(&worker_pending),
+                    state: Arc::clone(&worker_state),
+                    key: task.key.clone(),
+                };
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    refresh_scoped_credential_lease_singleflight(
+                        &worker_state,
+                        &task.snapshot,
+                        &task.key.scope,
+                    )
+                }));
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => eprintln!(
+                        "credential lease renewal failed for scope {}: {err}",
+                        task.key.scope.credential_id
+                    ),
+                    Err(_) => eprintln!(
+                        "credential lease renewal panicked for scope {}",
+                        task.key.scope.credential_id
+                    ),
+                }
+            })
+            .map_err(|err| format!("spawn credential lease renewal worker: {err}"))?;
     }
+
+    thread::Builder::new()
+        .name("credential-lease-renewal-coordinator".to_string())
+        .spawn(move || loop {
+            let snapshot = current_snapshot(&state);
+            for scope in credential_lease_renewal_candidates(
+                &state,
+                &snapshot,
+                CREDENTIAL_LEASE_RENEW_BEFORE,
+            ) {
+                let key = CredentialLeaseGenerationKey::new(&snapshot, &scope);
+                let inserted = state.credential_lease_url.is_some()
+                    && pending
+                        .lock()
+                        .expect("credential lease renewal pending mutex poisoned")
+                        .insert(key.clone());
+                if !inserted {
+                    continue;
+                }
+                state
+                    .credential_lease_renewal_queued
+                    .fetch_add(1, Ordering::Relaxed);
+                let task = CredentialLeaseRenewalTask {
+                    snapshot: Arc::clone(&snapshot),
+                    key: key.clone(),
+                };
+                match sender.try_send(task) {
+                    Ok(()) => {}
+                    Err(mpsc::TrySendError::Full(_)) => {
+                        pending
+                            .lock()
+                            .expect("credential lease renewal pending mutex poisoned")
+                            .remove(&key);
+                        state
+                            .credential_lease_renewal_queued
+                            .fetch_sub(1, Ordering::Relaxed);
+                        state
+                            .credential_lease_renewal_queue_full
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    Err(mpsc::TrySendError::Disconnected(_)) => {
+                        pending
+                            .lock()
+                            .expect("credential lease renewal pending mutex poisoned")
+                            .remove(&key);
+                        state
+                            .credential_lease_renewal_queued
+                            .fetch_sub(1, Ordering::Relaxed);
+                        return;
+                    }
+                }
+            }
+            thread::sleep(interval);
+        })
+        .map_err(|err| format!("spawn credential lease renewal coordinator: {err}"))?;
+    Ok(())
 }
 
 fn current_binary_digest() -> Result<String, String> {
@@ -1714,7 +5579,9 @@ fn pem_certificates(bundle: &str) -> Vec<Vec<u8>> {
 }
 
 fn build_upstream_client() -> Result<Client, String> {
-    let mut builder = Client::builder().timeout(Duration::from_secs(10));
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::none());
     if let Ok(path) = env::var("SERVERWARE_UPSTREAM_CA_BUNDLE") {
         if !path.trim().is_empty() {
             let text = fs::read_to_string(&path)
@@ -1736,10 +5603,35 @@ fn build_upstream_client() -> Result<Client, String> {
 }
 
 fn build_audit_client() -> Result<Client, String> {
-    Client::builder()
-        .timeout(Duration::from_secs(2))
+    build_control_plane_client(Duration::from_secs(2))
+}
+
+fn build_control_plane_client(timeout: Duration) -> Result<Client, String> {
+    let mut builder = Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .tls_info(true);
+    if let Ok(path) = env::var("SERVERWARE_CONTROL_PLANE_CA_BUNDLE") {
+        if !path.trim().is_empty() {
+            builder = builder.tls_built_in_root_certs(false);
+            let text = fs::read_to_string(&path)
+                .map_err(|err| format!("read control-plane CA bundle {path}: {err}"))?;
+            let certs = pem_certificates(&text);
+            if certs.is_empty() {
+                return Err(format!(
+                    "control-plane CA bundle {path} has no PEM certificates"
+                ));
+            }
+            for cert in certs {
+                let cert = reqwest::Certificate::from_pem(&cert)
+                    .map_err(|err| format!("parse control-plane CA certificate {path}: {err}"))?;
+                builder = builder.add_root_certificate(cert);
+            }
+        }
+    }
+    builder
         .build()
-        .map_err(|err| format!("build audit HTTP client: {err}"))
+        .map_err(|err| format!("build control-plane HTTP client: {err}"))
 }
 
 fn audit_enabled(state: &GateState) -> bool {
@@ -1750,43 +5642,94 @@ fn enqueue_audit(state: &GateState, event_type: &str, event: Value) {
     let _ = enqueue_audit_event(state, event_type, event, false);
 }
 
-fn enqueue_required_audit(state: &GateState, event_type: &str, event: Value) -> bool {
-    enqueue_audit_event(state, event_type, event, true)
+fn record_required_credential_release_start(
+    state: &GateState,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+    binding: &CredentialLeaseReleaseBinding,
+) -> bool {
+    if state.audit_url.is_none() || state.audit_token.is_none() {
+        state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    let batch = [AuditEvent {
+        event_type: "data_plane.credential.release_started".to_string(),
+        actor_id: "decision-gate-rs".to_string(),
+        event: decision_audit_event(
+            decision,
+            method,
+            url,
+            "release_started",
+            json!({
+                "stage":"credential_release",
+                "credential_ref":binding.scope.credential_id,
+                "credential_version":binding.version,
+            }),
+        ),
+        required: true,
+    }];
+    match post_audit_batch(state, &batch) {
+        Ok(()) => {
+            state.audit_sent.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(err) => {
+            state.audit_send_failed.fetch_add(1, Ordering::Relaxed);
+            state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+            eprintln!("required credential release audit failed: {err}");
+            false
+        }
+    }
 }
 
-fn audit_queue_full(state: &GateState) -> bool {
-    audit_enabled(state)
-        && state
-            .audit_queue
-            .lock()
-            .expect("audit queue mutex poisoned")
-            .len()
-            >= state.audit_queue_max
+fn reserve_required_audit(state: &GateState) -> Option<AuditReservation<'_>> {
+    if !audit_enabled(state) {
+        state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+    let queue = state
+        .audit_queue
+        .lock()
+        .expect("audit queue mutex poisoned");
+    let reserved = state.audit_reserved.load(Ordering::Relaxed) as usize;
+    if queue.len().saturating_add(reserved) >= state.audit_queue_max {
+        state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+        return None;
+    }
+    state.audit_reserved.fetch_add(1, Ordering::Relaxed);
+    Some(AuditReservation {
+        state,
+        active: true,
+    })
 }
 
 fn enqueue_audit_event(state: &GateState, event_type: &str, event: Value, required: bool) -> bool {
+    if required {
+        return reserve_required_audit(state)
+            .is_some_and(|mut reservation| reservation.commit(event_type, event));
+    }
     if !audit_enabled(state) {
-        if required {
-            state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
-        }
-        return !required;
+        return true;
     }
     let mut queue = state
         .audit_queue
         .lock()
         .expect("audit queue mutex poisoned");
-    if queue.len() >= state.audit_queue_max {
-        if required {
-            state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+    let reserved = state.audit_reserved.load(Ordering::Relaxed) as usize;
+    if queue.len().saturating_add(reserved) >= state.audit_queue_max {
+        let Some(index) = queue.iter().position(|queued| !queued.required) else {
+            state.audit_dropped.fetch_add(1, Ordering::Relaxed);
             return false;
-        }
-        queue.pop_front();
+        };
+        queue.remove(index);
         state.audit_dropped.fetch_add(1, Ordering::Relaxed);
     }
     queue.push_back(AuditEvent {
         event_type: event_type.to_string(),
         actor_id: "decision-gate-rs".to_string(),
         event,
+        required: false,
     });
     state.audit_enqueued.fetch_add(1, Ordering::Relaxed);
     true
@@ -1801,6 +5744,9 @@ fn pop_audit_batch(state: &GateState) -> Vec<AuditEvent> {
     let mut batch = Vec::with_capacity(count);
     for _ in 0..count {
         if let Some(event) = queue.pop_front() {
+            if event.required {
+                state.audit_reserved.fetch_add(1, Ordering::Relaxed);
+            }
             batch.push(event);
         }
     }
@@ -1813,11 +5759,35 @@ fn requeue_audit_batch(state: &GateState, batch: Vec<AuditEvent>) {
         .lock()
         .expect("audit queue mutex poisoned");
     for event in batch.into_iter().rev() {
-        if queue.len() >= state.audit_queue_max {
-            queue.pop_back();
-            state.audit_dropped.fetch_add(1, Ordering::Relaxed);
+        if event.required {
+            state.audit_reserved.fetch_sub(1, Ordering::Relaxed);
+        }
+        let reserved = state.audit_reserved.load(Ordering::Relaxed) as usize;
+        if queue.len().saturating_add(reserved) >= state.audit_queue_max {
+            if let Some(index) = queue.iter().rposition(|queued| !queued.required) {
+                queue.remove(index);
+                state.audit_dropped.fetch_add(1, Ordering::Relaxed);
+            } else {
+                if event.required {
+                    state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+                } else {
+                    state.audit_dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                continue;
+            }
         }
         queue.push_front(event);
+    }
+}
+
+fn release_audit_batch_reservations(state: &GateState, batch: &[AuditEvent]) {
+    let required = batch.iter().filter(|event| event.required).count() as u64;
+    if required > 0 {
+        let _queue = state
+            .audit_queue
+            .lock()
+            .expect("audit queue mutex poisoned");
+        state.audit_reserved.fetch_sub(required, Ordering::Relaxed);
     }
 }
 
@@ -1856,6 +5826,7 @@ fn audit_worker(state: Arc<GateState>, interval: Duration) {
         let count = batch.len() as u64;
         match post_audit_batch(&state, &batch) {
             Ok(()) => {
+                release_audit_batch_reservations(&state, &batch);
                 state.audit_sent.fetch_add(count, Ordering::Relaxed);
             }
             Err(err) => {
@@ -1914,6 +5885,7 @@ fn decision_audit_event(
         "policy_hash",
         "credential_ref",
         "credential_version",
+        "client_request_digest",
         "request_digest",
         "operation_digest",
         "operation",
@@ -1963,6 +5935,7 @@ fn audit_status(state: &GateState) -> Value {
     json!({
         "enabled": audit_enabled(state),
         "queue_depth": state.audit_queue.lock().expect("audit queue mutex poisoned").len(),
+        "reserved": state.audit_reserved.load(Ordering::Relaxed),
         "queue_max": state.audit_queue_max,
         "batch_max": state.audit_batch_max,
         "enqueued": state.audit_enqueued.load(Ordering::Relaxed),
@@ -1974,14 +5947,8 @@ fn audit_status(state: &GateState) -> Value {
 }
 
 fn first_certificate_der(pem_text: &str, path: &str) -> Result<Vec<u8>, String> {
-    let mut reader = Cursor::new(pem_text.as_bytes());
-    let mut certs = rustls_pemfile::certs(&mut reader);
-    let Some(cert) = certs.next() else {
-        return Err(format!(
-            "CA certificate file {path} has no PEM certificates"
-        ));
-    };
-    cert.map(|der| der.to_vec())
+    CertificateDer::from_pem_slice(pem_text.as_bytes())
+        .map(|der| der.to_vec())
         .map_err(|err| format!("parse CA certificate {path}: {err}"))
 }
 
@@ -2049,6 +6016,13 @@ fn mitm_server_config(state: &GateState, host: &str) -> Result<Arc<ServerConfig>
     let leaf_key = KeyPair::generate().map_err(|err| format!("generate leaf key: {err}"))?;
     let mut params =
         CertificateParams::new(vec![cache_key.clone()]).map_err(|err| err.to_string())?;
+    if let Some(instance_id) = state.server_instance_id.as_deref() {
+        params
+            .subject_alt_names
+            .push(SanType::URI(Ia5String::try_from(instance_id).map_err(
+                |err| format!("invalid data-plane SPIFFE URI SAN: {err}"),
+            )?));
+    }
     let now = OffsetDateTime::now_utc();
     params.not_before = now - TimeDuration::minutes(5);
     params.not_after = now + TimeDuration::hours(24);
@@ -2129,9 +6103,26 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
             started,
         );
     }
-    match credential_generation(state, &payload.credential_ref) {
-        Some(Some(active_version)) if active_version == payload.credential_version => {}
-        Some(Some(active_version)) => {
+    let Some(route) = snapshot.routes.iter().find(|route| {
+        route.id == payload.route_id
+            && route.credential_ref.as_deref() == Some(payload.credential_ref.as_str())
+            && route
+                .principals
+                .iter()
+                .any(|principal| principal == "*" || principal == &payload.principal_id)
+    }) else {
+        return deny(
+            404,
+            "grant route, principal, or credential is not in active policy",
+            json!({"error":"grant_scope_unknown"}),
+            started,
+        );
+    };
+    let scope =
+        CredentialLeaseScope::new(&payload.principal_id, &route.id, &payload.credential_ref);
+    match credential_generation(state, &snapshot, &scope) {
+        Some(active_version) if active_version == payload.credential_version => {}
+        Some(active_version) => {
             return deny(
                 409,
                 "grant credential version is stale",
@@ -2143,14 +6134,6 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
                 started,
             )
         }
-        Some(None) => {
-            return deny(
-                410,
-                "grant credential has been deleted",
-                json!({"error":"grant_credential_deleted"}),
-                started,
-            )
-        }
         None => {
             return deny(
                 503,
@@ -2159,17 +6142,6 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
                 started,
             )
         }
-    }
-    if !snapshot.routes.iter().any(|route| {
-        route.id == payload.route_id
-            && route.credential_ref.as_deref() == Some(payload.credential_ref.as_str())
-    }) {
-        return deny(
-            404,
-            "grant route or credential is not in active policy",
-            json!({"error":"grant_route_or_credential_unknown"}),
-            started,
-        );
     }
     let key = grant_key(
         &payload.principal_id,
@@ -2188,8 +6160,6 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
     let grant = Grant {
         id: grant_id.clone(),
         approval_id: payload.approval_id.clone(),
-        credential_ref: payload.credential_ref.clone(),
-        credential_version: payload.credential_version,
         uses_remaining: payload.max_uses,
         expires_at_ms,
     };
@@ -2263,6 +6233,72 @@ fn consume_local_grant(
     Some(consumed)
 }
 
+fn find_local_grant(
+    state: &GateState,
+    principal_id: &str,
+    route_id: &str,
+    credential_ref: &str,
+    credential_version: u64,
+    policy_hash: &str,
+    request_digest: &str,
+    operation_digest: &str,
+) -> Option<ConsumedGrant> {
+    let key = grant_key(
+        principal_id,
+        route_id,
+        credential_ref,
+        credential_version,
+        policy_hash,
+        request_digest,
+        operation_digest,
+    );
+    let now = now_epoch_ms();
+    let mut grants = state.grants.lock().expect("grant cache mutex poisoned");
+    let grant = grants.get(&key)?;
+    if grant.expires_at_ms <= now || grant.uses_remaining == 0 {
+        grants.remove(&key);
+        return None;
+    }
+    Some(ConsumedGrant {
+        id: grant.id.clone(),
+        approval_id: grant.approval_id.clone(),
+    })
+}
+
+fn shared_grant_consume_request(
+    principal_id: &str,
+    route_id: &str,
+    credential_ref: &str,
+    credential_version: u64,
+    policy_hash: &str,
+    request_digest: &str,
+    operation_digest: &str,
+    flow_id: &str,
+    attempt_id: &str,
+    method: &str,
+    request_url: &str,
+    canonical_request: &Value,
+    redacted_display: &Value,
+    consume: bool,
+) -> Value {
+    json!({
+        "principalId":principal_id,
+        "routeId":route_id,
+        "credentialRef":credential_ref,
+        "credentialVersion":credential_version,
+        "policyHash":policy_hash,
+        "requestDigest":request_digest,
+        "operationDigest":operation_digest,
+        "flowId":flow_id,
+        "attemptId":attempt_id,
+        "method":method,
+        "url":request_url,
+        "canonicalRequest":canonical_request,
+        "redactedDisplay":redacted_display,
+        "consume":consume,
+    })
+}
+
 fn consume_shared_grant(
     state: &GateState,
     principal_id: &str,
@@ -2273,10 +6309,12 @@ fn consume_shared_grant(
     request_digest: &str,
     operation_digest: &str,
     flow_id: &str,
+    attempt_id: &str,
     method: &str,
     request_url: &str,
     canonical_request: &Value,
     redacted_display: &Value,
+    consume: bool,
 ) -> Result<(Option<ConsumedGrant>, Option<PendingApproval>), String> {
     let grant_consume_url = state
         .grant_consume_url
@@ -2286,33 +6324,58 @@ fn consume_shared_grant(
         .audit_token
         .as_ref()
         .ok_or("data-plane token is not configured")?;
-    let body = serde_json::to_vec(&json!({
-        "principalId":principal_id,
-        "routeId":route_id,
-        "credentialRef":credential_ref,
-        "credentialVersion":credential_version,
-        "policyHash":policy_hash,
-        "requestDigest":request_digest,
-        "operationDigest":operation_digest,
-        "flowId":flow_id,
-        "method":method,
-        "url":request_url,
-        "canonicalRequest":canonical_request,
-        "redactedDisplay":redacted_display,
-    }))
-    .map_err(|err| format!("serialize shared grant consume request: {err}"))?;
-    let response = state
-        .audit_client
-        .post(grant_consume_url)
-        .header("X-Serverware-Data-Plane-Token", token.as_str())
-        .header("Content-Type", "application/json")
-        .body(body)
-        .send()
-        .map_err(|err| format!("send shared grant consume request: {err}"))?;
-    let status = response.status();
-    let text = response
-        .text()
-        .map_err(|err| format!("read shared grant consume response: {err}"))?;
+    let request = shared_grant_consume_request(
+        principal_id,
+        route_id,
+        credential_ref,
+        credential_version,
+        policy_hash,
+        request_digest,
+        operation_digest,
+        flow_id,
+        attempt_id,
+        method,
+        request_url,
+        canonical_request,
+        redacted_display,
+        consume,
+    );
+    let body = serde_json::to_vec(&request)
+        .map_err(|err| format!("serialize shared grant consume request: {err}"))?;
+    let (status, text) = {
+        let mut attempt = 0;
+        loop {
+            let response = state
+                .audit_client
+                .post(grant_consume_url)
+                .header("X-Serverware-Data-Plane-Token", token.as_str())
+                .header("Content-Type", "application/json")
+                .body(body.clone())
+                .send();
+            match response {
+                Ok(response) => {
+                    let status = response.status();
+                    let text = response
+                        .text()
+                        .map_err(|err| format!("read shared grant consume response: {err}"))?;
+                    if consume && status == StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
+                        attempt += 1;
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                    break (status, text);
+                }
+                Err(_err) if consume && attempt == 0 => {
+                    attempt += 1;
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                Err(err) => {
+                    return Err(format!("send shared grant consume request: {err}"));
+                }
+            }
+        }
+    };
     if !status.is_success() {
         return Err(format!("shared grant consume returned {status}: {text}"));
     }
@@ -2321,7 +6384,8 @@ fn consume_shared_grant(
     if value.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(format!("shared grant consume response was not ok: {value}"));
     }
-    if value.get("consumed").and_then(Value::as_bool) != Some(true) {
+    let grant_available = value.get("available").and_then(Value::as_bool) == Some(true);
+    if value.get("consumed").and_then(Value::as_bool) != Some(true) && !grant_available {
         let pending = value
             .get("approval_id")
             .or_else(|| value.get("approval_request_id"))
@@ -2359,10 +6423,12 @@ fn consume_grant(
     request_digest: &str,
     operation_digest: &str,
     flow_id: &str,
+    attempt_id: &str,
     method: &str,
     url: &str,
     canonical_request: &Value,
     redacted_display: &Value,
+    consume: bool,
 ) -> Result<(Option<ConsumedGrant>, &'static str, Option<PendingApproval>), String> {
     if state.grant_consume_url.is_some() {
         let (consumed, pending) = consume_shared_grant(
@@ -2375,24 +6441,39 @@ fn consume_grant(
             request_digest,
             operation_digest,
             flow_id,
+            attempt_id,
             method,
             url,
             canonical_request,
             redacted_display,
+            consume,
         )?;
         return Ok((consumed, "shared", pending));
     }
     Ok((
-        consume_local_grant(
-            state,
-            principal_id,
-            route_id,
-            credential_ref,
-            credential_version,
-            policy_hash,
-            request_digest,
-            operation_digest,
-        ),
+        if consume {
+            consume_local_grant(
+                state,
+                principal_id,
+                route_id,
+                credential_ref,
+                credential_version,
+                policy_hash,
+                request_digest,
+                operation_digest,
+            )
+        } else {
+            find_local_grant(
+                state,
+                principal_id,
+                route_id,
+                credential_ref,
+                credential_version,
+                policy_hash,
+                request_digest,
+                operation_digest,
+            )
+        },
         "local",
         None,
     ))
@@ -2400,7 +6481,7 @@ fn consume_grant(
 
 fn canonical_request(
     req: &DecisionRequest,
-    headers: &BTreeMap<String, String>,
+    forwarded_headers: &BTreeMap<String, String>,
     url: &Url,
     principal: &Principal,
     route: &Route,
@@ -2419,13 +6500,10 @@ fn canonical_request(
         "request": {
             "method": req.method.to_ascii_uppercase(),
             "scheme": url.scheme(),
-            "authority": url.host_str().map(|host| match url.port() {
-                Some(port) => format!("{host}:{port}"),
-                None => host.to_string(),
-            }).unwrap_or_default().to_ascii_lowercase(),
+            "authority": canonical_authority(url),
             "path": url.path(),
             "query": query_pairs(url),
-            "headers": selected_headers(headers),
+            "headers": forwarded_headers,
             "body_sha256": body_sha(req),
         },
         "operation": operation,
@@ -2483,14 +6561,13 @@ fn connect_authority(target: &str) -> Result<(String, u16), String> {
 }
 
 fn connect_preflight(
-    state: &GateState,
+    snapshot: &Arc<Snapshot>,
     client_ip: Option<&str>,
     target: &str,
     headers: &BTreeMap<String, String>,
 ) -> Value {
     let started = Instant::now();
     let headers = lower_headers(headers);
-    let snapshot = current_snapshot(state);
     let (host, port) = match connect_authority(target) {
         Ok(parsed) => parsed,
         Err(err) => {
@@ -2526,6 +6603,10 @@ fn connect_preflight(
         "status_code":200,
         "principal_id":principal.id,
         "policy_hash":snapshot.hash,
+        "policy_id":snapshot.policy_id,
+        "policy_sequence":snapshot.policy_sequence,
+        "policy_rollback_epoch":snapshot.rollback_epoch,
+        "snapshot_epoch":snapshot.epoch,
         "authority":authority,
         "route_ids":route_ids,
         "decision_us":started.elapsed().as_micros() as u64,
@@ -2593,28 +6674,276 @@ fn tighten_gmail_query(query: &str, days: u64) -> String {
         if existing_days <= days {
             return query.to_string();
         }
-        return "newer_than:30d".to_string();
+        let lower = query.to_ascii_lowercase();
+        let marker = "newer_than:";
+        if let Some(start) = lower.find(marker) {
+            let value_start = start + marker.len();
+            let suffix = &lower[value_start..];
+            let digits = suffix.chars().take_while(|ch| ch.is_ascii_digit()).count();
+            if digits > 0 && suffix.as_bytes().get(digits).is_some() {
+                let end = value_start + digits + 1;
+                return format!("{}{}d{}", &query[..value_start], days, &query[end..]);
+            }
+        }
     }
     format!("({query}) newer_than:{days}d")
 }
 
+const X_V2_READ_OPERATION_PATHS: &[(&str, &[&str])] = &[
+    (
+        "accountActivity.read",
+        &[
+            "/2/account_activity/subscriptions/count",
+            "/2/account_activity/webhooks/{webhook_id}/subscriptions/all",
+            "/2/account_activity/webhooks/{webhook_id}/subscriptions/all/list",
+        ],
+    ),
+    ("activity.read", &["/2/activity/subscriptions"]),
+    (
+        "analytics.read",
+        &["/2/media/analytics", "/2/tweets/analytics"],
+    ),
+    (
+        "bookmarks.read",
+        &[
+            "/2/users/{id}/bookmarks",
+            "/2/users/{id}/bookmarks/folders",
+            "/2/users/{id}/bookmarks/folders/{folder_id}",
+        ],
+    ),
+    (
+        "chat.read",
+        &[
+            "/2/chat/conversations",
+            "/2/chat/conversations/{id}",
+            "/2/chat/conversations/{id}/events",
+            "/2/chat/media/{id}/{media_hash_key}",
+        ],
+    ),
+    (
+        "communities.read",
+        &["/2/communities/search", "/2/communities/{id}"],
+    ),
+    (
+        "compliance.read",
+        &["/2/compliance/jobs", "/2/compliance/jobs/{id}"],
+    ),
+    ("connections.read", &["/2/connections"]),
+    (
+        "directMessages.read",
+        &[
+            "/2/dm_conversations/media/{dm_id}/{media_id}/{resource_id}",
+            "/2/dm_conversations/with/{participant_id}/dm_events",
+            "/2/dm_conversations/{id}/dm_events",
+            "/2/dm_events",
+            "/2/dm_events/{event_id}",
+        ],
+    ),
+    (
+        "insights.read",
+        &["/2/insights/28hr", "/2/insights/historical"],
+    ),
+    (
+        "lists.read",
+        &[
+            "/2/lists/{id}",
+            "/2/lists/{id}/followers",
+            "/2/lists/{id}/members",
+            "/2/lists/{id}/tweets",
+            "/2/users/{id}/followed_lists",
+            "/2/users/{id}/list_memberships",
+            "/2/users/{id}/owned_lists",
+            "/2/users/{id}/pinned_lists",
+        ],
+    ),
+    (
+        "media.read",
+        &["/2/media", "/2/media/upload", "/2/media/{media_key}"],
+    ),
+    ("news.read", &["/2/news/search", "/2/news/{id}"]),
+    (
+        "notes.read",
+        &[
+            "/2/notes/search/notes_written",
+            "/2/notes/search/posts_eligible_for_notes",
+        ],
+    ),
+    ("schema.read", &["/2/openapi.json"]),
+    (
+        "search.read",
+        &[
+            "/2/tweets/counts/all",
+            "/2/tweets/counts/recent",
+            "/2/tweets/search/all",
+            "/2/tweets/search/recent",
+        ],
+    ),
+    (
+        "spaces.read",
+        &[
+            "/2/spaces",
+            "/2/spaces/by/creator_ids",
+            "/2/spaces/search",
+            "/2/spaces/{id}",
+            "/2/spaces/{id}/buyers",
+            "/2/spaces/{id}/tweets",
+        ],
+    ),
+    (
+        "streams.read",
+        &[
+            "/2/activity/stream",
+            "/2/likes/compliance/stream",
+            "/2/likes/firehose/stream",
+            "/2/likes/sample10/stream",
+            "/2/tweets/compliance/stream",
+            "/2/tweets/firehose/stream",
+            "/2/tweets/firehose/stream/lang/en",
+            "/2/tweets/firehose/stream/lang/ja",
+            "/2/tweets/firehose/stream/lang/ko",
+            "/2/tweets/firehose/stream/lang/pt",
+            "/2/tweets/label/stream",
+            "/2/tweets/sample/stream",
+            "/2/tweets/sample10/stream",
+            "/2/tweets/search/stream",
+            "/2/tweets/search/stream/rules",
+            "/2/tweets/search/stream/rules/counts",
+            "/2/users/compliance/stream",
+        ],
+    ),
+    (
+        "trends.read",
+        &["/2/trends/by/woeid/{woeid}", "/2/users/personalized_trends"],
+    ),
+    (
+        "tweets.read",
+        &[
+            "/2/tweets",
+            "/2/tweets/{id}",
+            "/2/tweets/{id}/liking_users",
+            "/2/tweets/{id}/quote_tweets",
+            "/2/tweets/{id}/retweeted_by",
+            "/2/tweets/{id}/retweets",
+            "/2/users/reposts_of_me",
+            "/2/users/{id}/liked_tweets",
+            "/2/users/{id}/mentions",
+            "/2/users/{id}/timelines/reverse_chronological",
+            "/2/users/{id}/tweets",
+        ],
+    ),
+    ("usage.read", &["/2/usage/tweets"]),
+    (
+        "users.read",
+        &[
+            "/2/users",
+            "/2/users/by",
+            "/2/users/by/username/{username}",
+            "/2/users/me",
+            "/2/users/public_keys",
+            "/2/users/search",
+            "/2/users/{id}",
+            "/2/users/{id}/affiliates",
+            "/2/users/{id}/blocking",
+            "/2/users/{id}/followers",
+            "/2/users/{id}/following",
+            "/2/users/{id}/muting",
+            "/2/users/{id}/public_keys",
+        ],
+    ),
+    (
+        "webhooks.read",
+        &["/2/tweets/search/webhooks", "/2/webhooks"],
+    ),
+];
+
+fn x_path_template_matches(path: &str, template: &str) -> bool {
+    let path_segments = path
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    let template_segments = template
+        .trim_matches('/')
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>();
+    path_segments.len() == template_segments.len()
+        && path_segments.iter().zip(template_segments.iter()).all(
+            |(path_segment, template_segment)| {
+                !path_segment.is_empty()
+                    && (*path_segment == *template_segment
+                        || (template_segment.starts_with('{') && template_segment.ends_with('}')))
+            },
+        )
+}
+
+fn x_read_operation(path: &str) -> Option<&'static str> {
+    let mut best: Option<(usize, &'static str)> = None;
+    for (operation, templates) in X_V2_READ_OPERATION_PATHS {
+        for template in *templates {
+            if !x_path_template_matches(path, template) {
+                continue;
+            }
+            let specificity = template
+                .trim_matches('/')
+                .split('/')
+                .filter(|segment| !(segment.starts_with('{') && segment.ends_with('}')))
+                .count();
+            match best {
+                Some((best_specificity, _)) if best_specificity > specificity => {}
+                Some((best_specificity, best_operation))
+                    if best_specificity == specificity && best_operation != *operation =>
+                {
+                    return None;
+                }
+                _ => best = Some((specificity, operation)),
+            }
+        }
+    }
+    best.map(|(_, operation)| operation)
+}
+
 fn x_operation(url: &Url, method: &str) -> Option<String> {
     let path = url.path().trim_end_matches('/');
-    let read = method.eq_ignore_ascii_case("GET");
-    if path.starts_with("/2/tweets/search") {
-        return Some(if read { "search.read" } else { "search.write" }.to_string());
+    if method.eq_ignore_ascii_case("POST") && path == "/2/tweets" {
+        return Some("tweets.write".to_string());
     }
-    if path == "/2/tweets" || path.starts_with("/2/tweets/") {
-        return Some(if read { "tweets.read" } else { "tweets.write" }.to_string());
+    if !method.eq_ignore_ascii_case("GET") {
+        return None;
     }
-    if path == "/2/users" || path.starts_with("/2/users/") {
-        return Some(if read { "users.read" } else { "users.write" }.to_string());
+    x_read_operation(path).map(str::to_string)
+}
+
+fn x_response_constraint_rewrite(url: &Url, operation: &str, route: &Route) -> Value {
+    if operation != "search.read"
+        || !route
+            .constraints
+            .iter()
+            .any(|constraint| constraint_phase_includes(constraint, "response"))
+    {
+        return json!({});
     }
-    None
+    let mut fields = url
+        .query_pairs()
+        .filter(|(key, _)| key == "tweet.fields")
+        .flat_map(|(_, value)| {
+            value
+                .split(',')
+                .map(str::trim)
+                .filter(|field| !field.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .collect::<HashSet<_>>();
+    fields.insert("created_at".to_string());
+    let mut fields = fields.into_iter().collect::<Vec<_>>();
+    fields.sort();
+    json!({"query":{"tweet.fields":fields.join(",")}})
 }
 
 fn npm_registry_path(url: &Url) -> String {
-    let path = url.path().trim_end_matches('/');
+    let decoded_path = decode_npm_scoped_name(url.path());
+    let path = decoded_path.trim_end_matches('/');
     if let Some(rest) = path.strip_prefix("/npm/") {
         return format!("/{rest}");
     }
@@ -2647,39 +6976,339 @@ fn npm_operation_fields(
     method: &str,
     params: &BTreeMap<String, String>,
     body: &str,
-) -> Value {
+) -> Result<Value, Value> {
     let operation = npm_operation(url, method);
     let mut fields = Map::new();
     fields.insert(
         "operation".to_string(),
         Value::String(format!("npm.{operation}")),
     );
-    if let Some(package) = params.get("package") {
+    let route_package = params
+        .get("package")
+        .map(|package| decode_npm_scoped_name(package));
+    if let Some(package) = route_package.as_ref() {
         fields.insert("packageName".to_string(), Value::String(package.clone()));
     }
     if let Ok(Value::Object(body_json)) = serde_json::from_str::<Value>(body) {
-        if let Some(value) = body_json.get("name").and_then(Value::as_str) {
-            fields.insert("packageName".to_string(), Value::String(value.to_string()));
-        }
-        if let Some(value) = body_json.get("version").and_then(Value::as_str) {
+        if let Some(package_name) = body_json.get("name").and_then(Value::as_str) {
+            if route_package
+                .as_deref()
+                .is_some_and(|route_package| route_package != package_name)
+            {
+                return Err(json!({
+                    "error":"npm_publish_package_mismatch",
+                    "route_package":route_package,
+                    "document_package":package_name,
+                }));
+            }
             fields.insert(
-                "packageVersion".to_string(),
-                Value::String(value.to_string()),
+                "packageName".to_string(),
+                Value::String(package_name.to_string()),
             );
         }
-        if let Some(value) = body_json.get("tarball_integrity").and_then(Value::as_str) {
-            fields.insert(
-                "tarballIntegrity".to_string(),
-                Value::String(value.to_string()),
+        let versions = body_json.get("versions").and_then(Value::as_object);
+        if operation == "publish" {
+            let versions =
+                versions.ok_or_else(|| json!({"error":"npm_publish_versions_missing"}))?;
+            if versions.len() != 1 {
+                return Err(json!({
+                    "error":"npm_publish_requires_exactly_one_version",
+                    "version_count":versions.len(),
+                }));
+            }
+            let only_version = versions.keys().next().expect("one npm version");
+            let latest = body_json
+                .get("dist-tags")
+                .and_then(Value::as_object)
+                .and_then(|tags| tags.get("latest"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| json!({"error":"npm_publish_latest_tag_missing"}))?;
+            if latest != only_version {
+                return Err(json!({
+                    "error":"npm_publish_latest_tag_mismatch",
+                    "latest":latest,
+                    "version":only_version,
+                }));
+            }
+        }
+        let version = body_json
+            .get("dist-tags")
+            .and_then(Value::as_object)
+            .and_then(|tags| tags.get("latest"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                versions.and_then(|versions| {
+                    (versions.len() == 1)
+                        .then(|| versions.keys().next().cloned())
+                        .flatten()
+                })
+            })
+            .or_else(|| {
+                body_json
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .map(str::to_string)
+            });
+        if let Some(version) = version {
+            if let Some(version_document) = versions.and_then(|versions| versions.get(&version)) {
+                let declared_version = version_document
+                    .get("version")
+                    .and_then(Value::as_str)
+                    .ok_or_else(
+                        || json!({"error":"npm_publish_version_document_missing_version"}),
+                    )?;
+                if declared_version != version {
+                    return Err(json!({
+                        "error":"npm_publish_version_mismatch",
+                        "dist_tag_version":version,
+                        "document_version":declared_version,
+                    }));
+                }
+                if let Some(integrity) = version_document
+                    .get("dist")
+                    .and_then(Value::as_object)
+                    .and_then(|dist| dist.get("integrity"))
+                    .and_then(Value::as_str)
+                {
+                    fields.insert(
+                        "tarballIntegrity".to_string(),
+                        Value::String(integrity.to_string()),
+                    );
+                } else if let Some(integrity) =
+                    version_document.get("_integrity").and_then(Value::as_str)
+                {
+                    fields.insert(
+                        "tarballIntegrity".to_string(),
+                        Value::String(integrity.to_string()),
+                    );
+                }
+            }
+            fields.insert("packageVersion".to_string(), Value::String(version));
+        }
+        if !fields.contains_key("tarballIntegrity") {
+            if let Some(integrity) = body_json.get("tarball_integrity").and_then(Value::as_str) {
+                fields.insert(
+                    "tarballIntegrity".to_string(),
+                    Value::String(integrity.to_string()),
+                );
+            }
+        }
+        if operation == "publish" && !fields.contains_key("tarballIntegrity") {
+            let attachments = body_json
+                .get("_attachments")
+                .and_then(Value::as_object)
+                .ok_or_else(|| json!({"error":"npm_publish_attachment_missing"}))?;
+            if attachments.len() != 1 {
+                return Err(json!({
+                    "error":"npm_publish_attachment_ambiguous",
+                    "attachment_count":attachments.len(),
+                }));
+            }
+            let (attachment_name, attachment) = attachments.iter().next().expect("one attachment");
+            let encoded = attachment
+                .get("data")
+                .and_then(Value::as_str)
+                .ok_or_else(|| json!({"error":"npm_publish_attachment_data_missing"}))?;
+            let max_encoded_bytes = MAX_NPM_ATTACHMENT_BYTES.saturating_mul(4) / 3 + 4;
+            if encoded.len() > max_encoded_bytes {
+                return Err(json!({"error":"npm_publish_attachment_too_large"}));
+            }
+            let decoded = general_purpose::STANDARD
+                .decode(encoded.as_bytes())
+                .map_err(|_| json!({"error":"npm_publish_attachment_invalid_base64"}))?;
+            if decoded.len() > MAX_NPM_ATTACHMENT_BYTES {
+                return Err(json!({"error":"npm_publish_attachment_too_large"}));
+            }
+            if decoded.is_empty() {
+                return Err(json!({"error":"npm_publish_attachment_empty"}));
+            }
+            let mut hasher = Sha512::new();
+            hasher.update(&decoded);
+            let integrity = format!(
+                "sha512-{}",
+                general_purpose::STANDARD.encode(hasher.finalize())
             );
+            fields.insert("tarballIntegrity".to_string(), Value::String(integrity));
+            fields.insert(
+                "attachmentName".to_string(),
+                Value::String(attachment_name.clone()),
+            );
+            fields.insert("attachmentBytes".to_string(), json!(decoded.len()));
         }
     }
-    Value::Object(fields)
+    Ok(Value::Object(fields))
+}
+
+fn form_hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn decode_form_component(value: &[u8]) -> Result<String, String> {
+    let mut decoded = Vec::with_capacity(value.len());
+    let mut index = 0;
+    while index < value.len() {
+        match value[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                if index + 2 >= value.len() {
+                    return Err("form request contains invalid percent encoding".to_string());
+                }
+                let high = form_hex_value(value[index + 1])
+                    .ok_or("form request contains invalid percent encoding")?;
+                let low = form_hex_value(value[index + 2])
+                    .ok_or("form request contains invalid percent encoding")?;
+                decoded.push((high << 4) | low);
+                index += 3;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).map_err(|_| "form request is not valid UTF-8".to_string())
+}
+
+fn normalized_form_key(key: &str) -> Option<String> {
+    let bytes = key.as_bytes();
+    let base_end = bytes
+        .iter()
+        .position(|byte| *byte == b'[')
+        .unwrap_or(bytes.len());
+    let base = &bytes[..base_end];
+    if base.is_empty()
+        || !base[0].is_ascii_alphabetic()
+        || base
+            .iter()
+            .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')))
+    {
+        return None;
+    }
+    let mut parts = vec![std::str::from_utf8(base).ok()?.to_string()];
+    let mut index = base_end;
+    while index < bytes.len() {
+        if bytes[index] != b'[' {
+            return None;
+        }
+        let end = bytes[index + 1..].iter().position(|byte| *byte == b']')? + index + 1;
+        let part = &bytes[index + 1..end];
+        if part.is_empty()
+            || part
+                .iter()
+                .any(|byte| !(byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')))
+        {
+            return None;
+        }
+        if !part.iter().all(u8::is_ascii_digit) {
+            parts.push(std::str::from_utf8(part).ok()?.to_string());
+        }
+        index = end + 1;
+    }
+    Some(parts.join("."))
+}
+
+fn parse_form_urlencoded(req: &DecisionRequest) -> Result<Vec<(String, String)>, String> {
+    if req.forwarded_body_utf8_valid == Some(false) {
+        return Err("form request is not valid UTF-8".to_string());
+    }
+    let raw = req.body.as_bytes();
+    if !raw.is_empty() && raw.split(|byte| *byte == b'&').count() > 256 {
+        return Err("form request exceeds 256 fields".to_string());
+    }
+    let mut pairs = Vec::new();
+    for pair in raw.split(|byte| *byte == b'&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let separator = pair.iter().position(|byte| *byte == b'=');
+        let (raw_key, raw_value) = match separator {
+            Some(index) => (&pair[..index], &pair[index + 1..]),
+            None => (pair, &[][..]),
+        };
+        let key = decode_form_component(raw_key)?;
+        let value = decode_form_component(raw_value)?;
+        let key = normalized_form_key(&key)
+            .ok_or_else(|| "form request contains an invalid field name".to_string())?;
+        pairs.push((key, value));
+    }
+    Ok(pairs)
+}
+
+fn request_content_type(headers: &BTreeMap<String, String>) -> String {
+    headers
+        .get("content-type")
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .unwrap_or_default()
+}
+
+fn generic_operation_fields(
+    req: &DecisionRequest,
+    request_config: &Map<String, Value>,
+) -> Result<Value, Value> {
+    let Some(operation) = request_config.get("operation") else {
+        return Ok(json!({}));
+    };
+    let operation = operation
+        .as_object()
+        .ok_or_else(|| json!({"error":"generic_operation_invalid","status_code":500}))?;
+    let name = operation
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| json!({"error":"generic_operation_name_invalid","status_code":500}))?;
+    let mut fields = Map::from_iter([("operation".to_string(), Value::String(name.to_string()))]);
+    let configured = match operation.get("formFields") {
+        Some(Value::Array(items)) if items.iter().all(Value::is_string) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect::<HashSet<_>>(),
+        Some(_) => {
+            return Err(json!({
+                "error":"generic_operation_form_fields_invalid",
+                "status_code":500,
+            }))
+        }
+        None => HashSet::new(),
+    };
+    if configured.is_empty() {
+        return Ok(Value::Object(fields));
+    }
+    let mut values = BTreeMap::<String, Vec<String>>::new();
+    for (key, value) in parse_form_urlencoded(req)
+        .map_err(|detail| json!({"error":"request_form_invalid","detail":detail}))?
+    {
+        if configured.contains(&key) {
+            values.entry(key).or_default().push(value);
+        }
+    }
+    for (field, found) in values {
+        if found.len() == 1 {
+            fields.insert(field, Value::String(found[0].clone()));
+        }
+    }
+    Ok(Value::Object(fields))
 }
 
 fn validate_adapter(
     req: &DecisionRequest,
-    _headers: &BTreeMap<String, String>,
+    forwarded_headers: &BTreeMap<String, String>,
     url: &Url,
     route_match: &RouteMatch<'_>,
 ) -> Result<(Value, Value), Value> {
@@ -2687,7 +7316,36 @@ fn validate_adapter(
     let config = &route.adapter_config;
     match route.adapter_type.as_str() {
         "generic.rest" => {
+            if get_object(config, "request").is_none() {
+                return Err(json!({
+                    "error":"generic_request_policy_missing",
+                    "status_code":500,
+                }));
+            }
             if let Some(request_config) = get_object(config, "request") {
+                let allowed_headers = match request_config.get("allowedHeaders") {
+                    Some(Value::Array(items)) if items.iter().all(Value::is_string) => items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_ascii_lowercase)
+                        .collect::<HashSet<_>>(),
+                    Some(_) => {
+                        return Err(json!({
+                            "error":"generic_allowed_headers_invalid",
+                            "status_code":500,
+                        }))
+                    }
+                    None => HashSet::new(),
+                };
+                for name in forwarded_headers.keys() {
+                    if name != "host" && name != "content-length" && !allowed_headers.contains(name)
+                    {
+                        return Err(json!({
+                            "error":"generic_header_not_allowed",
+                            "header":name,
+                        }));
+                    }
+                }
                 let allowed_query = request_config
                     .get("allowedQueryKeys")
                     .and_then(Value::as_array)
@@ -2705,15 +7363,48 @@ fn validate_adapter(
                         }
                     }
                 }
-                let max_body = request_config
-                    .get("maxBodyBytes")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                if max_body > 0 && req.body.len() as u64 > max_body {
+                let body_length = forwarded_headers
+                    .get("content-length")
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(req.body.len() as u64);
+                let Some(body_mode) = request_config.get("bodyMode").and_then(Value::as_str) else {
+                    return Err(json!({
+                        "error":"generic_body_mode_missing",
+                        "status_code":500,
+                    }));
+                };
+                if body_mode == "none" && body_length != 0 {
+                    return Err(json!({"error":"generic_body_not_allowed","bodyMode":"none"}));
+                }
+                let Some(max_body) = request_config.get("maxBodyBytes").and_then(Value::as_u64)
+                else {
+                    return Err(json!({
+                        "error":"generic_request_body_limit_missing",
+                        "status_code":500,
+                    }));
+                };
+                if body_length > max_body {
                     return Err(json!({"error":"generic_body_too_large","maxBodyBytes":max_body}));
                 }
+                if body_mode == "formUrlencoded" && body_length != 0 {
+                    let content_type = request_content_type(forwarded_headers);
+                    if content_type != "application/x-www-form-urlencoded" {
+                        return Err(json!({
+                            "error":"request_form_content_type_denied",
+                            "contentType":content_type,
+                            "status_code":415,
+                        }));
+                    }
+                    parse_form_urlencoded(req).map_err(|detail| {
+                        json!({"error":"request_form_invalid","detail":detail,"status_code":400})
+                    })?;
+                }
+                return Ok((generic_operation_fields(req, request_config)?, json!({})));
             }
-            Ok((json!({}), json!({})))
+            Err(json!({
+                "error":"generic_request_policy_missing",
+                "status_code":500,
+            }))
         }
         "gmail.v1" => {
             let denied = config
@@ -2782,8 +7473,9 @@ fn validate_adapter(
                     .get(credential_id)
                     .and_then(|metadata| {
                         metadata.get("x_app_id").or_else(|| metadata.get("app_id"))
-                    });
-                if !app_id.is_some_and(|value| allowed_app_ids.contains(value.as_str())) {
+                    })
+                    .and_then(Value::as_str);
+                if !app_id.is_some_and(|value| allowed_app_ids.contains(value)) {
                     return Err(json!({"error":"x_app_id_denied"}));
                 }
             }
@@ -2807,7 +7499,8 @@ fn validate_adapter(
             if operation.ends_with(".read") && !allowed_reads.contains(operation.as_str()) {
                 return Err(json!({"error":"x_read_operation_not_allowed","operation":operation}));
             }
-            Ok((json!({"operation":operation}), json!({})))
+            let rewrite = x_response_constraint_rewrite(url, &operation, route);
+            Ok((json!({"operation":operation}), rewrite))
         }
         "npm.registry" => {
             let operation = npm_operation(url, &req.method);
@@ -2821,15 +7514,15 @@ fn validate_adapter(
             if !allowed.contains(operation.as_str()) {
                 return Err(json!({"error":"npm_operation_not_allowed","operation":operation}));
             }
-            let fields = npm_operation_fields(url, &req.method, &route_match.params, &req.body);
+            let fields = npm_operation_fields(url, &req.method, &route_match.params, &req.body)?;
             if operation == "publish" {
                 let missing = ["packageName", "packageVersion", "tarballIntegrity"]
                     .iter()
                     .filter(|field| {
-                        !fields
+                        fields
                             .get(**field)
                             .and_then(Value::as_str)
-                            .is_some_and(|v| !v.is_empty())
+                            .is_none_or(|v| v.is_empty())
                     })
                     .copied()
                     .collect::<Vec<_>>();
@@ -2906,6 +7599,7 @@ fn rate_limit_key(
         .get("key")
         .and_then(|key| key.get("scope"))
         .and_then(Value::as_array)
+        .filter(|scope| !scope.is_empty())
         .cloned()
         .unwrap_or_else(|| {
             vec![
@@ -2952,19 +7646,6 @@ fn rate_limit_key(
                     Value::String(operation_name(operation).to_string()),
                 );
             }
-            item if item.starts_with("operation.") => {
-                let field = item.trim_start_matches("operation.");
-                material.insert(
-                    item.to_string(),
-                    Value::String(
-                        operation
-                            .get(field)
-                            .and_then(Value::as_str)
-                            .unwrap_or_default()
-                            .to_string(),
-                    ),
-                );
-            }
             _ => {}
         }
     }
@@ -2986,7 +7667,7 @@ fn rate_limit_key(
             );
         }
     }
-    sha256_prefixed(canonical_json(&Value::Object(material)).as_bytes())
+    sha256_prefixed(canonical_json_ensure_ascii(&Value::Object(material)).as_bytes())
 }
 
 fn enforce_rate_limit(
@@ -3056,41 +7737,90 @@ fn enforce_rate_limit(
         .constraint_rate_counters
         .lock()
         .expect("constraint rate counter lock poisoned");
-    let counter = counters.entry(key).or_insert(ConstraintRateCounter {
-        window_start_ms: now,
-        count: 0,
-    });
-    if now >= counter.window_start_ms + window_ms {
-        counter.window_start_ms = now;
-        counter.count = 0;
+    if counters
+        .get(&key)
+        .is_some_and(|counter| counter.expires_at_ms <= now)
+    {
+        counters.remove(&key);
     }
-    if counter.count >= max {
-        let retry_after = ((counter.window_start_ms + window_ms).saturating_sub(now) / 1000).max(1);
+    if let Some(counter) = counters.get(&key) {
+        if counter.count >= max {
+            let retry_after = (counter.expires_at_ms.saturating_sub(now) / 1000).max(1);
+            let mut extra = Map::new();
+            extra.insert("max".to_string(), json!(max));
+            extra.insert("windowSeconds".to_string(), json!(window_seconds));
+            extra.insert("retry_after_seconds".to_string(), json!(retry_after));
+            extra.insert(
+                "store".to_string(),
+                Value::String(
+                    constraint
+                        .get("store")
+                        .and_then(Value::as_str)
+                        .unwrap_or("local")
+                        .to_string(),
+                ),
+            );
+            return Err(constraint_payload(
+                constraint,
+                "credential_rate_limit_exceeded",
+                "credential use rate limit exceeded",
+                extra,
+            ));
+        }
+    }
+    if !consume {
+        return Ok(());
+    }
+    if !counters.contains_key(&key) && counters.len() >= MAX_LOCAL_RATE_COUNTERS {
+        counters.retain(|_, counter| counter.expires_at_ms > now);
+    }
+    if !counters.contains_key(&key) && counters.len() >= MAX_LOCAL_RATE_COUNTERS {
         let mut extra = Map::new();
-        extra.insert("max".to_string(), json!(max));
-        extra.insert("windowSeconds".to_string(), json!(window_seconds));
-        extra.insert("retry_after_seconds".to_string(), json!(retry_after));
-        extra.insert(
-            "store".to_string(),
-            Value::String(
-                constraint
-                    .get("store")
-                    .and_then(Value::as_str)
-                    .unwrap_or("local")
-                    .to_string(),
-            ),
-        );
+        extra.insert("status_code".to_string(), json!(503));
+        extra.insert("capacity".to_string(), json!(MAX_LOCAL_RATE_COUNTERS));
         return Err(constraint_payload(
             constraint,
-            "credential_rate_limit_exceeded",
-            "credential use rate limit exceeded",
+            "local_rate_limit_capacity_exhausted",
+            "local rate-limit counter capacity is exhausted",
             extra,
         ));
     }
-    if consume {
-        counter.count += 1;
-    }
+    let counter = counters.entry(key).or_insert(ConstraintRateCounter {
+        expires_at_ms: now.saturating_add(window_ms),
+        count: 0,
+    });
+    counter.count = counter.count.saturating_add(1);
     Ok(())
+}
+
+fn shared_rate_limit_request(
+    constraint: &Value,
+    route: &Route,
+    principal_id: &str,
+    credential_ref: Option<&str>,
+    credential_version: u64,
+    policy_hash: &str,
+    operation: &Value,
+    consume: bool,
+    key: &str,
+    max: u64,
+    window_seconds: u64,
+) -> Value {
+    json!({
+        "counterKey": key,
+        "principalId": principal_id,
+        "routeId": route.id,
+        "credentialRef": credential_ref.unwrap_or_default(),
+        "credentialVersion": credential_version,
+        "policyHash": policy_hash,
+        "constraintId": constraint.get("id").and_then(Value::as_str).unwrap_or("unnamed"),
+        "operation": operation_name(operation),
+        "operationContext": operation,
+        "max": max,
+        "windowSeconds": window_seconds,
+        "consume": consume,
+        "actorId": "decision-gate-rs",
+    })
 }
 
 fn enforce_shared_rate_limit(
@@ -3134,21 +7864,20 @@ fn enforce_shared_rate_limit(
             unavailable,
         ));
     };
-    let body = serde_json::to_vec(&json!({
-        "counterKey": key,
-        "principalId": principal_id,
-        "routeId": route.id,
-        "credentialRef": credential_ref.unwrap_or_default(),
-        "credentialVersion": credential_version,
-        "policyHash": policy_hash,
-        "constraintId": constraint.get("id").and_then(Value::as_str).unwrap_or("unnamed"),
-        "operation": operation_name(operation),
-        "max": max,
-        "windowSeconds": window_seconds,
-        "consume": consume,
-        "actorId": "decision-gate-rs",
-    }))
-    .map_err(|err| {
+    let request = shared_rate_limit_request(
+        constraint,
+        route,
+        principal_id,
+        credential_ref,
+        credential_version,
+        policy_hash,
+        operation,
+        consume,
+        key,
+        max,
+        window_seconds,
+    );
+    let body = serde_json::to_vec(&request).map_err(|err| {
         let mut extra = Map::new();
         extra.insert("status_code".to_string(), json!(503));
         extra.insert("store".to_string(), Value::String("shared".to_string()));
@@ -3322,30 +8051,26 @@ fn enforce_operation_policy(constraint: &Value, operation: &Value) -> Result<(),
     Ok(())
 }
 
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let year = year - if month <= 2 { 1 } else { 0 };
-    let era = if year >= 0 { year } else { year - 399 } / 400;
-    let yoe = year - era * 400;
-    let month = month as i64;
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5 + day as i64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
-}
-
-fn parse_datetime_ms(value: &Value) -> Option<i128> {
+fn parse_datetime_ms(value: &Value, formats: &HashSet<&str>) -> Option<i128> {
     if let Some(number) = value.as_i64() {
-        return Some(if number > 10_000_000_000 {
-            number as i128
+        let milliseconds = number.unsigned_abs() >= 10_000_000_000;
+        return if milliseconds && formats.contains("epochMillis") {
+            Some(number as i128)
+        } else if !milliseconds && formats.contains("epochSeconds") {
+            Some(number as i128 * 1000)
         } else {
-            number as i128 * 1000
-        });
+            None
+        };
     }
     if let Some(number) = value.as_u64() {
-        return Some(if number > 10_000_000_000 {
-            number as i128
+        let milliseconds = number >= 10_000_000_000;
+        return if milliseconds && formats.contains("epochMillis") {
+            Some(number as i128)
+        } else if !milliseconds && formats.contains("epochSeconds") {
+            Some(number as i128 * 1000)
         } else {
-            number as i128 * 1000
-        });
+            None
+        };
     }
     let text = value.as_str()?.trim();
     if text.is_empty() {
@@ -3353,35 +8078,211 @@ fn parse_datetime_ms(value: &Value) -> Option<i128> {
     }
     if text.chars().all(|ch| ch.is_ascii_digit()) {
         let number = text.parse::<i128>().ok()?;
-        return Some(if number > 10_000_000_000 {
-            number
+        let milliseconds = number.unsigned_abs() >= 10_000_000_000;
+        return if milliseconds && formats.contains("epochMillis") {
+            Some(number)
+        } else if !milliseconds && formats.contains("epochSeconds") {
+            Some(number * 1000)
         } else {
-            number * 1000
-        });
+            None
+        };
     }
-    parse_datetime_text_ms(text)
+    if formats.contains("date") {
+        if let Some(parsed) = parse_date_ms(text) {
+            return Some(parsed);
+        }
+    }
+    if formats.contains("rfc3339") {
+        return parse_rfc3339_ms(text);
+    }
+    None
 }
 
-fn parse_datetime_text_ms(text: &str) -> Option<i128> {
-    if text.len() < 10 {
+fn parse_date_ms(text: &str) -> Option<i128> {
+    if text.len() != 10
+        || text.as_bytes().get(4) != Some(&b'-')
+        || text.as_bytes().get(7) != Some(&b'-')
+    {
         return None;
     }
-    let year = text.get(0..4)?.parse::<i64>().ok()?;
-    let month = text.get(5..7)?.parse::<u32>().ok()?;
-    let day = text.get(8..10)?.parse::<u32>().ok()?;
-    if text.as_bytes().get(4) != Some(&b'-') || text.as_bytes().get(7) != Some(&b'-') {
+    let year = text.get(0..4)?.parse::<i32>().ok()?;
+    let month = Month::try_from(text.get(5..7)?.parse::<u8>().ok()?).ok()?;
+    let day = text.get(8..10)?.parse::<u8>().ok()?;
+    let date = Date::from_calendar_date(year, month, day).ok()?;
+    Some(date.midnight().assume_utc().unix_timestamp_nanos() / 1_000_000)
+}
+
+fn parse_rfc3339_ms(text: &str) -> Option<i128> {
+    let parsed = OffsetDateTime::parse(text, &Rfc3339).ok()?;
+    Some(parsed.unix_timestamp_nanos() / 1_000_000)
+}
+
+fn parse_clock_minutes(text: &str) -> Option<u16> {
+    if text.len() != 5 || text.as_bytes().get(2) != Some(&b':') {
         return None;
     }
-    let mut hour = 0_i128;
-    let mut minute = 0_i128;
-    let mut second = 0_i128;
-    if text.len() >= 19 && matches!(text.as_bytes().get(10), Some(b'T') | Some(b' ')) {
-        hour = text.get(11..13)?.parse::<i128>().ok()?;
-        minute = text.get(14..16)?.parse::<i128>().ok()?;
-        second = text.get(17..19)?.parse::<i128>().ok()?;
+    let hour = text.get(0..2)?.parse::<u16>().ok()?;
+    let minute = text.get(3..5)?.parse::<u16>().ok()?;
+    if hour > 23 || minute > 59 {
+        return None;
     }
-    let days = days_from_civil(year, month, day) as i128;
-    Some((days * 86_400 + hour * 3600 + minute * 60 + second) * 1000)
+    Some(hour * 60 + minute)
+}
+
+fn weekday_code(weekday: Weekday) -> &'static str {
+    match weekday {
+        Weekday::Monday => "mon",
+        Weekday::Tuesday => "tue",
+        Weekday::Wednesday => "wed",
+        Weekday::Thursday => "thu",
+        Weekday::Friday => "fri",
+        Weekday::Saturday => "sat",
+        Weekday::Sunday => "sun",
+    }
+}
+
+fn enforce_request_time_window_at_ms(constraint: &Value, now_ms: i128) -> Result<(), Value> {
+    let invalid = || {
+        constraint_error(
+            constraint,
+            "constraint_invalid_request_time_window",
+            "request time-window constraint is invalid",
+        )
+    };
+    if constraint.get("timezone").and_then(Value::as_str) != Some("UTC")
+        || !["notBefore", "notAfter", "weekdays", "dailyWindows"]
+            .iter()
+            .any(|field| {
+                constraint.get(*field).is_some_and(|value| match value {
+                    Value::Array(items) => !items.is_empty(),
+                    Value::String(text) => !text.is_empty(),
+                    _ => false,
+                })
+            })
+    {
+        return Err(invalid());
+    }
+    let parse_bound = |field: &str| -> Result<Option<i128>, Value> {
+        let Some(value) = constraint.get(field) else {
+            return Ok(None);
+        };
+        let parsed = value
+            .as_str()
+            .and_then(parse_rfc3339_ms)
+            .ok_or_else(invalid)?;
+        Ok(Some(parsed))
+    };
+    let not_before = parse_bound("notBefore")?;
+    let not_after = parse_bound("notAfter")?;
+    if not_before
+        .zip(not_after)
+        .is_some_and(|(start, end)| start >= end)
+    {
+        return Err(invalid());
+    }
+    if not_before.is_some_and(|start| now_ms < start) {
+        let mut extra = Map::new();
+        extra.insert(
+            "notBefore".to_string(),
+            constraint.get("notBefore").cloned().unwrap_or(Value::Null),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "request_time_before_window",
+            "request is before the allowed time window",
+            extra,
+        ));
+    }
+    if not_after.is_some_and(|end| now_ms >= end) {
+        let mut extra = Map::new();
+        extra.insert(
+            "notAfter".to_string(),
+            constraint.get("notAfter").cloned().unwrap_or(Value::Null),
+        );
+        return Err(constraint_payload(
+            constraint,
+            "request_time_after_window",
+            "request is after the allowed time window",
+            extra,
+        ));
+    }
+    let seconds = i64::try_from(now_ms / 1000).map_err(|_| invalid())?;
+    let now = OffsetDateTime::from_unix_timestamp(seconds).map_err(|_| invalid())?;
+    let weekday = weekday_code(now.weekday());
+    if let Some(weekdays) = constraint.get("weekdays") {
+        let weekdays = weekdays.as_array().ok_or_else(invalid)?;
+        if weekdays.is_empty()
+            || weekdays.iter().any(|day| {
+                !matches!(
+                    day.as_str(),
+                    Some("mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun")
+                )
+            })
+        {
+            return Err(invalid());
+        }
+        if !weekdays.iter().any(|day| day.as_str() == Some(weekday)) {
+            let mut extra = Map::new();
+            extra.insert("weekday".to_string(), Value::String(weekday.to_string()));
+            return Err(constraint_payload(
+                constraint,
+                "request_time_weekday_denied",
+                "request weekday is outside the allowed schedule",
+                extra,
+            ));
+        }
+    }
+    if let Some(windows) = constraint.get("dailyWindows") {
+        let windows = windows.as_array().ok_or_else(invalid)?;
+        if windows.is_empty() {
+            return Err(invalid());
+        }
+        let mut intervals = Vec::new();
+        for window in windows {
+            let window = window.as_object().ok_or_else(invalid)?;
+            if window.len() != 2 || !window.contains_key("start") || !window.contains_key("end") {
+                return Err(invalid());
+            }
+            let start = window
+                .get("start")
+                .and_then(Value::as_str)
+                .and_then(parse_clock_minutes)
+                .ok_or_else(invalid)?;
+            let end = window
+                .get("end")
+                .and_then(Value::as_str)
+                .and_then(parse_clock_minutes)
+                .ok_or_else(invalid)?;
+            if start >= end {
+                return Err(invalid());
+            }
+            intervals.push((start, end));
+        }
+        intervals.sort_unstable();
+        if intervals.windows(2).any(|pair| pair[1].0 < pair[0].1) {
+            return Err(invalid());
+        }
+        let minute = now.hour() as u16 * 60 + now.minute() as u16;
+        if !intervals
+            .iter()
+            .any(|(start, end)| *start <= minute && minute < *end)
+        {
+            let mut extra = Map::new();
+            extra.insert("minuteOfDay".to_string(), json!(minute));
+            extra.insert("timezone".to_string(), Value::String("UTC".to_string()));
+            return Err(constraint_payload(
+                constraint,
+                "request_time_daily_window_denied",
+                "request time is outside the allowed daily windows",
+                extra,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn enforce_request_time_window(constraint: &Value) -> Result<(), Value> {
+    enforce_request_time_window_at_ms(constraint, now_epoch_ms() as i128)
 }
 
 fn query_values(url: &Url, parameter: &str) -> Vec<String> {
@@ -3421,6 +8322,20 @@ fn enforce_query_date_window(constraint: &Value, url: &Url) -> Result<(), Value>
         .get("required")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let formats = constraint
+        .get("formats")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    if formats.is_empty() {
+        return Err(constraint_error(
+            constraint,
+            "constraint_invalid_query_date_window",
+            "query date-window constraint is invalid",
+        ));
+    }
     for parameter in parameters {
         let values = query_values(url, parameter);
         if values.is_empty() {
@@ -3440,7 +8355,7 @@ fn enforce_query_date_window(constraint: &Value, url: &Url) -> Result<(), Value>
             continue;
         }
         for value in values {
-            let Some(parsed) = parse_datetime_ms(&Value::String(value.clone())) else {
+            let Some(parsed) = parse_datetime_ms(&Value::String(value.clone()), &formats) else {
                 let mut extra = Map::new();
                 extra.insert(
                     "parameter".to_string(),
@@ -3539,7 +8454,11 @@ fn enforce_query_numeric_bounds(constraint: &Value, url: &Url) -> Result<(), Val
                     extra,
                 ));
             }
-            let Ok(parsed) = value.parse::<f64>() else {
+            let Some(parsed) = value
+                .parse::<f64>()
+                .ok()
+                .filter(|parsed| parsed.is_finite())
+            else {
                 let mut extra = Map::new();
                 extra.insert(
                     "parameter".to_string(),
@@ -3747,6 +8666,18 @@ fn enforce_json_field_rule(
                     ));
                 }
             }
+            if let Some(pattern) = rule.get("pattern").and_then(Value::as_str) {
+                if bounded_pattern_matches(pattern, text) != Some(true) {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(
+                        constraint,
+                        "json_body_field_pattern_denied",
+                        "JSON body field does not match pattern",
+                        extra,
+                    ));
+                }
+            }
         }
         if let Some(number) = value.as_f64() {
             if rule
@@ -3922,6 +8853,435 @@ fn enforce_json_body(
     Ok(())
 }
 
+fn strict_form_integer(value: &str) -> Option<i64> {
+    let digits = value.strip_prefix('-').unwrap_or(value);
+    if digits.is_empty()
+        || (digits.len() > 1 && digits.starts_with('0'))
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    value.parse::<i64>().ok()
+}
+
+fn coerce_form_value(values: &[String], expected: &str) -> Option<Value> {
+    if expected == "array" {
+        return Some(Value::Array(
+            values.iter().cloned().map(Value::String).collect(),
+        ));
+    }
+    if values.len() != 1 {
+        return None;
+    }
+    let value = &values[0];
+    match expected {
+        "string" => Some(Value::String(value.clone())),
+        "integer" => strict_form_integer(value).map(|value| json!(value)),
+        "number" => value
+            .parse::<f64>()
+            .ok()
+            .filter(|value| value.is_finite())
+            .and_then(serde_json::Number::from_f64)
+            .map(Value::Number),
+        "boolean" if value == "true" => Some(Value::Bool(true)),
+        "boolean" if value == "false" => Some(Value::Bool(false)),
+        _ => None,
+    }
+}
+
+fn set_form_payload_value(
+    payload: &mut Map<String, Value>,
+    field: &str,
+    value: Value,
+) -> Result<(), ()> {
+    let parts = field.split('.').collect::<Vec<_>>();
+    let Some((last, parents)) = parts.split_last() else {
+        return Err(());
+    };
+    let mut current = payload;
+    for part in parents {
+        let entry = current
+            .entry((*part).to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        current = entry.as_object_mut().ok_or(())?;
+    }
+    if current.contains_key(*last) {
+        return Err(());
+    }
+    current.insert((*last).to_string(), value);
+    Ok(())
+}
+
+type SimpleBoundedPattern = (String, Vec<(u8, u8)>, usize, usize);
+
+fn simple_bounded_pattern(pattern: &str) -> Option<SimpleBoundedPattern> {
+    let pattern = pattern.strip_prefix('^')?.strip_suffix('$')?;
+    let class_start = pattern.find('[')?;
+    let class_end = pattern[class_start + 1..].find(']')? + class_start + 1;
+    let prefix = &pattern[..class_start];
+    if prefix.contains(['\\', '[', ']', '{', '}']) {
+        return None;
+    }
+    let class = &pattern.as_bytes()[class_start + 1..class_end];
+    if class.is_empty() {
+        return None;
+    }
+    let quantifier = &pattern[class_end + 1..];
+    let bounds = quantifier.strip_prefix('{')?.strip_suffix('}')?;
+    let (minimum, maximum) = bounds.split_once(',')?;
+    let minimum = minimum.parse::<usize>().ok()?;
+    let maximum = maximum.parse::<usize>().ok()?;
+    if minimum > maximum || maximum > 4096 {
+        return None;
+    }
+    let mut ranges = Vec::new();
+    let mut index = 0;
+    while index < class.len() {
+        if index + 2 < class.len() && class[index + 1] == b'-' {
+            if class[index] > class[index + 2] {
+                return None;
+            }
+            ranges.push((class[index], class[index + 2]));
+            index += 3;
+        } else {
+            ranges.push((class[index], class[index]));
+            index += 1;
+        }
+    }
+    Some((prefix.to_string(), ranges, minimum, maximum))
+}
+
+fn bounded_pattern_matches(pattern: &str, value: &str) -> Option<bool> {
+    let (prefix, ranges, minimum, maximum) = simple_bounded_pattern(pattern)?;
+    let remainder = value.strip_prefix(&prefix)?;
+    let bytes = remainder.as_bytes();
+    Some(
+        bytes.len() >= minimum
+            && bytes.len() <= maximum
+            && bytes.iter().all(|byte| {
+                ranges
+                    .iter()
+                    .any(|(start, end)| byte >= start && byte <= end)
+            }),
+    )
+}
+
+fn enforce_form_field_rule(
+    constraint: &Value,
+    payload: &Value,
+    field: &str,
+    rule: &Value,
+) -> Result<(), Value> {
+    let values = values_at_path(payload, field);
+    if rule
+        .get("required")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        && values.is_empty()
+    {
+        let mut extra = Map::new();
+        extra.insert("field".to_string(), Value::String(field.to_string()));
+        return Err(constraint_payload(
+            constraint,
+            "form_body_required_field_missing",
+            "form body is missing a required field",
+            extra,
+        ));
+    }
+    for value in values {
+        if let Some(expected) = rule.get("type").and_then(Value::as_str) {
+            if !matches_json_type(value, expected) {
+                let mut extra = Map::new();
+                extra.insert("field".to_string(), Value::String(field.to_string()));
+                extra.insert(
+                    "expectedType".to_string(),
+                    Value::String(expected.to_string()),
+                );
+                return Err(constraint_payload(
+                    constraint,
+                    "form_body_field_type_denied",
+                    "form body field has the wrong type",
+                    extra,
+                ));
+            }
+        }
+        for (rule_name, error, reason) in [
+            (
+                "enum",
+                "form_body_field_enum_denied",
+                "form body field value is not in the allowed set",
+            ),
+            (
+                "equals",
+                "form_body_field_equals_denied",
+                "form body field does not match required value",
+            ),
+        ] {
+            let denied = match rule_name {
+                "enum" => rule
+                    .get(rule_name)
+                    .and_then(Value::as_array)
+                    .is_some_and(|allowed| !allowed.iter().any(|item| item == value)),
+                _ => rule
+                    .get(rule_name)
+                    .is_some_and(|expected| expected != value),
+            };
+            if denied {
+                let mut extra = Map::new();
+                extra.insert("field".to_string(), Value::String(field.to_string()));
+                return Err(constraint_payload(constraint, error, reason, extra));
+            }
+        }
+        if let Some(text) = value.as_str() {
+            for (key, too_far, error, reason) in [
+                (
+                    "minLength",
+                    text.chars().count()
+                        < rule.get("minLength").and_then(Value::as_u64).unwrap_or(0) as usize,
+                    "form_body_field_min_length",
+                    "form body field is too short",
+                ),
+                (
+                    "maxLength",
+                    rule.get("maxLength")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|max| text.chars().count() > max as usize),
+                    "form_body_field_max_length",
+                    "form body field is too long",
+                ),
+            ] {
+                if rule.get(key).is_some() && too_far {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(constraint, error, reason, extra));
+                }
+            }
+            if let Some(pattern) = rule.get("pattern").and_then(Value::as_str) {
+                if bounded_pattern_matches(pattern, text) != Some(true) {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(
+                        constraint,
+                        "form_body_field_pattern_denied",
+                        "form body field does not match pattern",
+                        extra,
+                    ));
+                }
+            }
+        }
+        if let Some(number) = value.as_f64() {
+            for (key, denied, error, reason) in [
+                (
+                    "min",
+                    rule.get("min")
+                        .and_then(Value::as_f64)
+                        .is_some_and(|min| number < min),
+                    "form_body_field_min",
+                    "form body field is below policy minimum",
+                ),
+                (
+                    "max",
+                    rule.get("max")
+                        .and_then(Value::as_f64)
+                        .is_some_and(|max| number > max),
+                    "form_body_field_max",
+                    "form body field exceeds policy maximum",
+                ),
+            ] {
+                if rule.get(key).is_some() && denied {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(constraint, error, reason, extra));
+                }
+            }
+        }
+        if let Some(items) = value.as_array() {
+            for (key, denied, error, reason) in [
+                (
+                    "minItems",
+                    rule.get("minItems")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|min| items.len() < min as usize),
+                    "form_body_field_min_items",
+                    "form body array has too few items",
+                ),
+                (
+                    "maxItems",
+                    rule.get("maxItems")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|max| items.len() > max as usize),
+                    "form_body_field_max_items",
+                    "form body array has too many items",
+                ),
+            ] {
+                if rule.get(key).is_some() && denied {
+                    let mut extra = Map::new();
+                    extra.insert("field".to_string(), Value::String(field.to_string()));
+                    return Err(constraint_payload(constraint, error, reason, extra));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn enforce_form_body(
+    constraint: &Value,
+    req: &DecisionRequest,
+    headers: &BTreeMap<String, String>,
+) -> Result<(), Value> {
+    let required = constraint
+        .get("requiredFields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    if req.body.is_empty() {
+        return if required.is_empty() {
+            Ok(())
+        } else {
+            Err(constraint_error(
+                constraint,
+                "form_body_missing",
+                "form body is required",
+            ))
+        };
+    }
+    let allowed_content_types = constraint
+        .get("contentTypes")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_ascii_lowercase)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_else(|| HashSet::from(["application/x-www-form-urlencoded".to_string()]));
+    let content_type = request_content_type(headers);
+    if !allowed_content_types.contains(&content_type) {
+        let mut extra = Map::new();
+        extra.insert("contentType".to_string(), Value::String(content_type));
+        return Err(constraint_payload(
+            constraint,
+            "form_body_content_type_denied",
+            "request content type is not allowed for form body policy",
+            extra,
+        ));
+    }
+    let pairs = parse_form_urlencoded(req).map_err(|_| {
+        constraint_error(
+            constraint,
+            "form_body_invalid",
+            "request body is not valid form data",
+        )
+    })?;
+    let mut values = BTreeMap::<String, Vec<String>>::new();
+    for (field, value) in pairs {
+        values.entry(field).or_default().push(value);
+    }
+    let allowed = constraint
+        .get("allowedFields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    if !allowed.is_empty() {
+        if let Some(field) = values
+            .keys()
+            .find(|field| !allowed.contains(field.as_str()))
+        {
+            let mut extra = Map::new();
+            extra.insert("field".to_string(), Value::String(field.clone()));
+            return Err(constraint_payload(
+                constraint,
+                "form_body_field_not_allowed",
+                "form body contains a field outside the allowlist",
+                extra,
+            ));
+        }
+    }
+    let denied = constraint
+        .get("deniedFields")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    if let Some(field) = values.keys().find(|field| denied.contains(field.as_str())) {
+        let mut extra = Map::new();
+        extra.insert("field".to_string(), Value::String(field.clone()));
+        return Err(constraint_payload(
+            constraint,
+            "form_body_field_denied",
+            "form body contains a denied field",
+            extra,
+        ));
+    }
+    if let Some(field) = required.iter().find(|field| !values.contains_key(**field)) {
+        let mut extra = Map::new();
+        extra.insert("field".to_string(), Value::String((*field).to_string()));
+        return Err(constraint_payload(
+            constraint,
+            "form_body_required_field_missing",
+            "form body is missing a required field",
+            extra,
+        ));
+    }
+    let rules = constraint.get("fields").and_then(Value::as_object);
+    let mut payload = Map::new();
+    for (field, found) in values {
+        let rule = rules.and_then(|rules| rules.get(&field));
+        let expected = rule
+            .and_then(|rule| rule.get("type"))
+            .and_then(Value::as_str)
+            .unwrap_or("string");
+        if found.len() > 1 && expected != "array" {
+            let mut extra = Map::new();
+            extra.insert("field".to_string(), Value::String(field));
+            return Err(constraint_payload(
+                constraint,
+                "form_body_duplicate_field_denied",
+                "form body repeats a scalar field",
+                extra,
+            ));
+        }
+        let value = coerce_form_value(&found, expected).ok_or_else(|| {
+            let mut extra = Map::new();
+            extra.insert("field".to_string(), Value::String(field.clone()));
+            extra.insert(
+                "expectedType".to_string(),
+                Value::String(expected.to_string()),
+            );
+            constraint_payload(
+                constraint,
+                "form_body_field_type_denied",
+                "form body field has the wrong type",
+                extra,
+            )
+        })?;
+        set_form_payload_value(&mut payload, &field, value).map_err(|_| {
+            let mut extra = Map::new();
+            extra.insert("field".to_string(), Value::String(field.clone()));
+            constraint_payload(
+                constraint,
+                "form_body_field_invalid",
+                "form body contains conflicting field paths",
+                extra,
+            )
+        })?;
+    }
+    let payload = Value::Object(payload);
+    if let Some(rules) = rules {
+        for (field, rule) in rules {
+            enforce_form_field_rule(constraint, &payload, field, rule)?;
+        }
+    }
+    Ok(())
+}
+
 fn evaluate_request_constraints(
     state: &GateState,
     route: &Route,
@@ -3961,7 +9321,9 @@ fn evaluate_request_constraints(
             "operationPolicy" => enforce_operation_policy(constraint, operation)?,
             "queryDateWindow" => enforce_query_date_window(constraint, url)?,
             "queryNumericBounds" => enforce_query_numeric_bounds(constraint, url)?,
+            "requestTimeWindow" => enforce_request_time_window(constraint)?,
             "jsonBody" => enforce_json_body(constraint, req, headers)?,
+            "formBody" => enforce_form_body(constraint, req, headers)?,
             _ => {}
         }
     }
@@ -4001,6 +9363,20 @@ fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), V
         .get("required")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    let formats = constraint
+        .get("formats")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    if formats.is_empty() {
+        return Err(constraint_error(
+            constraint,
+            "constraint_invalid_response_date_window",
+            "response date-window constraint is invalid",
+        ));
+    }
     let mut items = Vec::new();
     if let Some(item_paths) = constraint.get("items").and_then(Value::as_array) {
         for item_path in item_paths.iter().filter_map(Value::as_str) {
@@ -4051,7 +9427,7 @@ fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), V
                 continue;
             }
             for value in values {
-                let Some(parsed) = parse_datetime_ms(value) else {
+                let Some(parsed) = parse_datetime_ms(value, &formats) else {
                     let mut extra = Map::new();
                     extra.insert("field".to_string(), Value::String((*field).to_string()));
                     extra.insert("value".to_string(), value.clone());
@@ -4094,13 +9470,36 @@ fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), V
     Ok(())
 }
 
-fn validate_response_constraints(route: &Route, body: &[u8]) -> Result<(), Value> {
+fn validate_response_constraints(
+    route: &Route,
+    body: &[u8],
+    operation: Option<&str>,
+) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
             continue;
         };
         if !constraint_phase_includes(constraint, "response") {
             continue;
+        }
+        if let Some(operations) = constraint.get("operations").and_then(Value::as_array) {
+            let Some(operation) = operation else {
+                let mut extra = Map::new();
+                extra.insert("status_code".to_string(), json!(502));
+                return Err(constraint_payload(
+                    constraint,
+                    "response_operation_context_missing",
+                    "response operation context is missing",
+                    extra,
+                ));
+            };
+            if !operations
+                .iter()
+                .filter_map(Value::as_str)
+                .any(|allowed| allowed == operation)
+            {
+                continue;
+            }
         }
         if kind == "responseDateWindow" {
             enforce_response_date_window(constraint, body)?;
@@ -4110,18 +9509,38 @@ fn validate_response_constraints(route: &Route, body: &[u8]) -> Result<(), Value
 }
 
 fn decide(state: &GateState, req: DecisionRequest) -> Value {
-    decide_internal(state, req, None)
+    let snapshot = current_snapshot(state);
+    decide_internal(state, &snapshot, req, None)
 }
 
 fn decide_internal(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     req: DecisionRequest,
     authenticated_principal_id: Option<&str>,
 ) -> Value {
     let started = Instant::now();
+    if !policy_trust_is_fresh(state) {
+        return deny(
+            503,
+            "attested control-plane trust root is stale",
+            json!({"error":"policy_trust_root_stale"}),
+            started,
+        );
+    }
     let mut req = req;
-    let snapshot = current_snapshot(state);
     let headers = lower_headers(&req.headers);
+    let path_validation = match validate_request_target_path(&req.url) {
+        Ok(validation) => validation,
+        Err(err) => {
+            return deny(
+                400,
+                "invalid request path",
+                json!({"error":"invalid_request_path","detail":err}),
+                started,
+            )
+        }
+    };
     let url = match Url::parse(&req.url) {
         Ok(url) => url,
         Err(err) => {
@@ -4133,6 +9552,14 @@ fn decide_internal(
             )
         }
     };
+    if !url.username().is_empty() || url.password().is_some() || url.fragment().is_some() {
+        return deny(
+            400,
+            "invalid url authority",
+            json!({"error":"invalid_url_authority"}),
+            started,
+        );
+    }
     let principal = if let Some(principal_id) = authenticated_principal_id {
         snapshot
             .principals
@@ -4158,8 +9585,16 @@ fn decide_internal(
         );
     };
     let route = route_match.route;
-    if route.adapter_type == "gmail.v1" {
-        merge_gmail_proofs(state, &mut req, &principal.id, &route.id);
+    if path_validation.has_encoded_slash && route.adapter_type != "npm.registry" {
+        return deny(
+            400,
+            "encoded path separator is not allowed for this adapter",
+            json!({
+                "error":"encoded_path_separator_denied",
+                "adapter":route.adapter_type,
+            }),
+            started,
+        );
     }
     let credential_ref = route.credential_ref.clone();
     let injection = if let Some(credential_id) = credential_ref.as_ref() {
@@ -4175,54 +9610,88 @@ fn decide_internal(
     } else {
         json!(null)
     };
-    let credential_version = if let Some(credential_id) = credential_ref.as_ref() {
-        match credential_generation(state, credential_id) {
-            Some(Some(version)) => version,
-            Some(None) => {
-                return deny(
-                    410,
-                    "credential has been deleted",
-                    json!({"error":"credential_deleted","credential_ref":credential_id}),
-                    started,
-                )
+    let (credential_version, secret_available) =
+        if let Some(credential_id) = credential_ref.as_ref() {
+            let scope = CredentialLeaseScope::new(&principal.id, &route.id, credential_id);
+            match ensure_scoped_credential_lease(state, snapshot, &scope) {
+                Ok(info) => {
+                    req.credential_metadata
+                        .insert(credential_id.clone(), info.metadata);
+                    (info.version, info.secret_available)
+                }
+                Err(err) => {
+                    return deny(
+                        503,
+                        "credential lease is unavailable",
+                        json!({
+                            "error":"credential_lease_missing",
+                            "credential_ref":credential_id,
+                            "principal_id":principal.id,
+                            "route_id":route.id,
+                            "detail":err,
+                        }),
+                        started,
+                    )
+                }
             }
-            None => {
-                return deny(
-                    503,
-                    "credential generation is unavailable",
-                    json!({"error":"credential_generation_missing","credential_ref":credential_id}),
-                    started,
-                )
-            }
-        }
-    } else {
-        0
-    };
-    let secret_lease = if let Some(credential_id) = credential_ref.as_ref() {
-        match credential_lease(state, credential_id, credential_version) {
-            Some(lease) => {
-                req.credential_metadata
-                    .insert(credential_id.clone(), lease.metadata.clone());
-                Some(lease)
-            }
-            None => {
-                return deny(
-                    503,
-                    "credential lease is unavailable",
-                    json!({
-                        "error":"credential_lease_missing",
-                        "credential_ref":credential_id,
-                        "credential_version":credential_version,
-                    }),
-                    started,
-                )
-            }
-        }
-    } else {
-        None
-    };
+        } else {
+            (0, false)
+        };
 
-    let (operation, rewrite) = match validate_adapter(&req, &headers, &url, &route_match) {
+    if route.adapter_type == "gmail.v1" {
+        merge_gmail_proofs(
+            state,
+            snapshot,
+            &mut req,
+            &principal.id,
+            credential_ref.as_deref().unwrap_or_default(),
+            credential_version,
+            route_match
+                .params
+                .get("user")
+                .map(String::as_str)
+                .unwrap_or("me"),
+            &route.id,
+            config_u64(&route.adapter_config, "maxAgeDays", 30),
+        );
+    }
+
+    let body_length = match decision_request_body_length(&req) {
+        Ok(length) => length,
+        Err(err) => {
+            return deny(
+                400,
+                "invalid request framing",
+                json!({"error":"invalid_request_framing","detail":err}),
+                started,
+            )
+        }
+    };
+    let forwarded_headers =
+        match canonical_forwarded_request_headers(&req.headers, &url, body_length, &injection) {
+            Ok(headers) => headers,
+            Err(err) => {
+                return deny(
+                    400,
+                    "invalid forwarding headers",
+                    json!({"error":"invalid_forwarding_headers","detail":err}),
+                    started,
+                )
+            }
+        };
+    let proof_requested = headers.contains_key(RESPONSE_PROOF_NONCE_HEADER);
+    if proof_requested != req.client_request_digest.is_some() {
+        return deny(
+            400,
+            "invalid response proof request binding",
+            json!({"error":"invalid_response_proof_request_binding"}),
+            started,
+        );
+    }
+    let client_request_digest = req.client_request_digest.clone();
+
+    let (operation, rewrite) = match validate_adapter(&req, &forwarded_headers, &url, &route_match)
+    {
         Ok(value) => value,
         Err(payload) => {
             let status = payload
@@ -4265,7 +9734,7 @@ fn decide_internal(
 
     let canonical = canonical_request(
         &req,
-        &headers,
+        &forwarded_headers,
         &url,
         principal,
         route,
@@ -4281,6 +9750,13 @@ fn decide_internal(
         "request_digest":request_digest,
         "operation_digest":operation_digest,
         "now_ms":now_epoch_ms(),
+    }));
+    let grant_attempt_id = digest_json(&json!({
+        "v":1,
+        "purpose":"grant-consume",
+        "flow_id":flow_id,
+        "request_digest":request_digest,
+        "operation_digest":operation_digest,
     }));
     let redacted_display = json!({
         "method": req.method.clone(),
@@ -4299,15 +9775,27 @@ fn decide_internal(
         .get("required")
         .and_then(Value::as_bool)
         .unwrap_or(false);
-    if jit_required && audit_queue_full(state) {
-        return deny(
-            503,
-            "required audit spool is full",
-            json!({"error":"audit_spool_full","required_event":"data_plane.jit.grant_consumed"}),
-            started,
-        );
-    }
-    let (consumed_grant, grant_store, pending_approval) = if jit_required {
+    let mut grant_audit_reservation = if jit_required {
+        match reserve_required_audit(state) {
+            Some(reservation) => Some(reservation),
+            None => {
+                let error = if audit_enabled(state) {
+                    "audit_spool_full"
+                } else {
+                    "required_audit_delivery_disabled"
+                };
+                return deny(
+                    503,
+                    "required JIT audit delivery is unavailable",
+                    json!({"error":error,"required_event":"data_plane.jit.grant_consumed"}),
+                    started,
+                );
+            }
+        }
+    } else {
+        None
+    };
+    let (available_grant, grant_store, mut pending_approval) = if jit_required {
         match consume_grant(
             state,
             &principal.id,
@@ -4318,10 +9806,12 @@ fn decide_internal(
             &request_digest,
             &operation_digest,
             &flow_id,
+            &grant_attempt_id,
             &req.method,
             url.as_str(),
             &canonical,
             &redacted_display,
+            false,
         ) {
             Ok(result) => result,
             Err(err) => {
@@ -4336,37 +9826,11 @@ fn decide_internal(
     } else {
         (None, "none", None)
     };
-    let allowed = !jit_required || consumed_grant.is_some();
-    let action = if allowed { "allow" } else { "jit_required" };
-    if let Some(ref grant) = consumed_grant {
-        if !enqueue_required_audit(
-            state,
-            "data_plane.jit.grant_consumed",
-            json!({
-                "component":"serverware-decision-gate-rs",
-                "grant_id":grant.id.clone(),
-                "approval_id":grant.approval_id.clone(),
-                "principal_id":principal.id.clone(),
-                "route_id":route.id.clone(),
-                "adapter":route.adapter_type.clone(),
-                "policy_hash":snapshot.hash.clone(),
-                "credential_ref":credential_ref.clone(),
-                "credential_version":credential_version,
-                "request_digest":request_digest.clone(),
-                "operation_digest":operation_digest.clone(),
-                "flow_id":flow_id.clone(),
-                "grant_store":grant_store,
-            }),
-        ) {
-            return deny(
-                503,
-                "required audit event could not be queued",
-                json!({"error":"audit_required_event_failed","required_event":"data_plane.jit.grant_consumed"}),
-                started,
-            );
-        }
-    }
-    if allowed {
+    let grant_available = !jit_required || available_grant.is_some();
+    if grant_available {
+        // Shared quota and JIT grant consumption are separate control-plane transactions today.
+        // Consume quota first so a partial failure can burn capacity but can never authorize an
+        // unmetered operation. This must become one control-plane transaction when that endpoint exists.
         if let Err(payload) = evaluate_request_constraints(
             state,
             route,
@@ -4393,6 +9857,103 @@ fn decide_internal(
             return deny(status, &reason, payload, started);
         }
     }
+    let consumed_grant = if jit_required && grant_available {
+        match consume_grant(
+            state,
+            &principal.id,
+            &route.id,
+            credential_ref.as_deref().unwrap_or_default(),
+            credential_version,
+            &snapshot.hash,
+            &request_digest,
+            &operation_digest,
+            &flow_id,
+            &grant_attempt_id,
+            &req.method,
+            url.as_str(),
+            &canonical,
+            &redacted_display,
+            true,
+        ) {
+            Ok((consumed, _, pending)) => {
+                if pending.is_some() {
+                    pending_approval = pending;
+                }
+                consumed
+            }
+            Err(err) => {
+                return deny(
+                    503,
+                    "shared JIT grant store unavailable",
+                    json!({"error":"shared_jit_grant_store_unavailable","detail":err}),
+                    started,
+                )
+            }
+        }
+    } else {
+        None
+    };
+    if jit_required && grant_available && consumed_grant.is_none() {
+        return deny(
+            409,
+            "approved JIT grant changed before final consumption",
+            json!({
+                "error":"jit_grant_commit_race",
+                "approval_id":pending_approval.as_ref().map(|approval| approval.id.clone()),
+            }),
+            started,
+        );
+    }
+    let allowed = !jit_required || consumed_grant.is_some();
+    if allowed && !snapshot_is_active(state, snapshot) {
+        return deny(
+            409,
+            "policy snapshot was revoked during decision",
+            json!({
+                "error":"policy_snapshot_revoked",
+                "snapshot_epoch":snapshot.epoch,
+            }),
+            started,
+        );
+    }
+    let grant_audit_enqueued = if let Some(ref grant) = consumed_grant {
+        let committed = grant_audit_reservation.as_mut().is_some_and(|reservation| {
+            reservation.commit(
+                "data_plane.jit.grant_consumed",
+                json!({
+                "component":"serverware-decision-gate-rs",
+                "grant_id":grant.id.clone(),
+                "approval_id":grant.approval_id.clone(),
+                "principal_id":principal.id.clone(),
+                "route_id":route.id.clone(),
+                "adapter":route.adapter_type.clone(),
+                "policy_hash":snapshot.hash.clone(),
+                "credential_ref":credential_ref.clone(),
+                "credential_version":credential_version,
+                "request_digest":request_digest.clone(),
+                "operation_digest":operation_digest.clone(),
+                "flow_id":flow_id.clone(),
+                "grant_store":grant_store,
+                }),
+            )
+        });
+        if !committed {
+            return deny(
+                503,
+                "required JIT audit reservation could not be committed",
+                json!({
+                    "error":"required_audit_commit_failed",
+                    "required_event":"data_plane.jit.grant_consumed",
+                    "grant_id":grant.id,
+                }),
+                started,
+            );
+        }
+        true
+    } else {
+        true
+    };
+    let action = if allowed { "allow" } else { "jit_required" };
     json!({
         "action": action,
         "allowed": allowed,
@@ -4401,15 +9962,17 @@ fn decide_internal(
         "route_id": route.id,
         "adapter": route.adapter_type,
         "policy_hash": snapshot.hash,
+        "snapshot_epoch": snapshot.epoch,
         "credential_ref": credential_ref,
         "credential_version": credential_version,
+        "client_request_digest": client_request_digest,
         "request_digest": request_digest,
         "operation_digest": operation_digest,
         "operation": operation,
         "rewrite": rewrite,
         "jit": if jit_required {
             match consumed_grant {
-                Some(ref grant) => json!({"required":true,"grant_consumed":true,"grant_id":grant.id,"approval_id":grant.approval_id,"grant_store":grant_store}),
+                Some(ref grant) => json!({"required":true,"grant_consumed":true,"grant_id":grant.id,"approval_id":grant.approval_id,"grant_store":grant_store,"secondary_audit_enqueued":grant_audit_enqueued}),
                 None => json!({
                     "required":true,
                     "grant_consumed":false,
@@ -4428,7 +9991,7 @@ fn decide_internal(
             json!({
                 "credential_ref":route.credential_ref,
                 "credential_version":credential_version,
-                "secret_available":secret_lease.as_ref().is_some_and(|lease| !lease.secret.is_empty()),
+                "secret_available":secret_available,
                 "plan":injection,
             })
         } else {
@@ -4455,7 +10018,7 @@ fn http_binary_response_with_headers(
     status: StatusCode,
     content_type: Option<&str>,
     body: Vec<u8>,
-    headers: &[(&str, String)],
+    headers: &[(String, String)],
 ) -> Vec<u8> {
     let reason = status.canonical_reason().unwrap_or("Status");
     let mut response = format!(
@@ -4726,6 +10289,10 @@ fn error_chain(error: &dyn Error) -> String {
     parts.join(": ")
 }
 
+fn redacted_reqwest_error(error: reqwest::Error) -> String {
+    error_chain(&error.without_url())
+}
+
 fn status_from_decision(decision: &Value) -> StatusCode {
     let code = decision
         .get("status_code")
@@ -4736,52 +10303,41 @@ fn status_from_decision(decision: &Value) -> StatusCode {
 
 fn apply_rewrite(url: &mut Url, rewrite: &Value) {
     if let Some(query) = rewrite.get("query").and_then(Value::as_object) {
-        let mut existing = url.query_pairs().into_owned().collect::<BTreeMap<_, _>>();
+        let mut existing = url.query_pairs().into_owned().collect::<Vec<_>>();
         for (key, value) in query {
+            existing.retain(|(existing_key, _)| existing_key != key);
             if value.is_null() {
-                existing.remove(key);
             } else if let Some(value) = value.as_str() {
-                existing.insert(key.clone(), value.to_string());
+                existing.push((key.clone(), value.to_string()));
             } else {
-                existing.insert(key.clone(), value.to_string());
+                existing.push((key.clone(), value.to_string()));
             }
         }
         url.query_pairs_mut().clear().extend_pairs(existing.iter());
     }
 }
 
-fn filtered_forward_headers(headers: &BTreeMap<String, String>) -> HeaderMap {
+fn filtered_forward_headers(
+    headers: &BTreeMap<String, String>,
+    injection: &Value,
+) -> Result<HeaderMap, String> {
     let mut forwarded = HeaderMap::new();
-    for (name, value) in headers {
-        let lower = name.to_ascii_lowercase();
-        if lower == "connection"
-            || lower == "proxy-connection"
-            || lower == "proxy-authorization"
-            || lower == "authorization"
-            || lower == "x-serverware-agent"
-            || lower == "x-serverware-data-plane-token"
-            || lower.starts_with("proxy-")
-            || lower == HOST.as_str()
-            || lower == CONTENT_LENGTH.as_str()
-        {
-            continue;
-        }
-        let Ok(name) = HeaderName::from_bytes(lower.as_bytes()) else {
-            continue;
-        };
-        let Ok(value) = HeaderValue::from_str(value) else {
-            continue;
-        };
+    for (name, value) in client_forward_header_material(headers, injection)? {
+        let name = HeaderName::from_bytes(name.as_bytes())
+            .map_err(|err| format!("invalid forwarding header {name}: {err}"))?;
+        let value = HeaderValue::from_str(&value)
+            .map_err(|err| format!("invalid forwarding value: {err}"))?;
         forwarded.insert(name, value);
     }
-    forwarded
+    Ok(forwarded)
 }
 
-fn insert_header(headers: &mut HeaderMap, name: &str, value: String) -> Result<(), String> {
+fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<(), String> {
     let name = HeaderName::from_bytes(name.as_bytes())
         .map_err(|err| format!("invalid injection header {name}: {err}"))?;
-    let value =
-        HeaderValue::from_str(&value).map_err(|err| format!("invalid injection value: {err}"))?;
+    let mut value =
+        HeaderValue::from_str(value).map_err(|err| format!("invalid injection value: {err}"))?;
+    value.set_sensitive(true);
     headers.insert(name, value);
     Ok(())
 }
@@ -4806,23 +10362,20 @@ fn secret_field_path_parts(field: &str) -> Result<Vec<&str>, String> {
     Ok(parts)
 }
 
-fn secret_for_injection(lease: &SecretLease, injection: &Value) -> Result<String, String> {
+fn secret_for_injection(
+    lease: &SecretLease,
+    injection: &Value,
+) -> Result<Zeroizing<String>, String> {
     let Some(field) = injection.get("field").and_then(Value::as_str) else {
-        return Ok(lease.secret.clone());
+        if lease.secret.is_empty() {
+            return Err("credential secret is empty".to_string());
+        }
+        return Ok(Zeroizing::new(lease.secret.as_str().to_string()));
     };
-    let payload: Value = serde_json::from_str(&lease.secret)
+    let payload: SecretJsonValue = serde_json::from_str(&lease.secret)
         .map_err(|err| format!("credential secret is not JSON for field {field}: {err}"))?;
-    let mut value = &payload;
-    for part in secret_field_path_parts(field)? {
-        let Some(object) = value.as_object() else {
-            return Err(format!("credential secret missing field {field}"));
-        };
-        let Some(next) = object.get(part) else {
-            return Err(format!("credential secret missing field {field}"));
-        };
-        value = next;
-    }
-    let Some(value) = value.as_str() else {
+    let parts = secret_field_path_parts(field)?;
+    let Some(value) = payload.path_string(&parts) else {
         return Err(format!(
             "credential secret field {field} is not a non-empty string"
         ));
@@ -4832,7 +10385,7 @@ fn secret_for_injection(lease: &SecretLease, injection: &Value) -> Result<String
             "credential secret field {field} is not a non-empty string"
         ));
     }
-    Ok(value.to_string())
+    Ok(Zeroizing::new(value.to_string()))
 }
 
 fn apply_credential_injection(
@@ -4840,12 +10393,17 @@ fn apply_credential_injection(
     url: &mut Url,
     injection: &Value,
     lease: &SecretLease,
-) -> Result<(), String> {
+) -> Result<ResponseSecretGuard, String> {
     let injection_type = injection
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or("bearer");
     let secret = secret_for_injection(lease, injection)?;
+    if secret.len() > MAX_INJECTED_CREDENTIAL_BYTES {
+        return Err("credential secret exceeds injection size limit".to_string());
+    }
+    let mut response_guard = ResponseSecretGuard::default();
+    response_guard.add_text_encodings(secret.as_str());
     match injection_type {
         "bearer" => {
             let header = injection
@@ -4856,7 +10414,9 @@ fn apply_credential_injection(
                 .get("prefix")
                 .and_then(Value::as_str)
                 .unwrap_or("Bearer ");
-            insert_header(headers, header, format!("{prefix}{secret}"))
+            let value = Zeroizing::new(format!("{prefix}{}", secret.as_str()));
+            insert_header(headers, header, value.as_str())?;
+            response_guard.add_text_encodings(value.as_str());
         }
         "header" => {
             let header = injection
@@ -4867,7 +10427,9 @@ fn apply_credential_injection(
                 .get("prefix")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            insert_header(headers, header, format!("{prefix}{secret}"))
+            let value = Zeroizing::new(format!("{prefix}{}", secret.as_str()));
+            insert_header(headers, header, value.as_str())?;
+            response_guard.add_text_encodings(value.as_str());
         }
         "query" => {
             let name = injection
@@ -4875,37 +10437,46 @@ fn apply_credential_injection(
                 .and_then(Value::as_str)
                 .unwrap_or("access_token");
             url.query_pairs_mut().append_pair(name, &secret);
-            Ok(())
         }
         "cookie" => {
             let name = injection
                 .get("name")
                 .and_then(Value::as_str)
                 .unwrap_or("serverware_token");
-            let mut value = headers
-                .get("cookie")
-                .and_then(|value| value.to_str().ok())
-                .unwrap_or("")
-                .to_string();
+            let mut value = Zeroizing::new(
+                headers
+                    .get("cookie")
+                    .and_then(|value| value.to_str().ok())
+                    .unwrap_or("")
+                    .to_string(),
+            );
             if !value.is_empty() {
                 value.push_str("; ");
             }
             value.push_str(name);
             value.push('=');
             value.push_str(&secret);
-            insert_header(headers, "cookie", value)
+            insert_header(headers, "cookie", value.as_str())?;
+            let injected_pair = Zeroizing::new(format!("{name}={}", secret.as_str()));
+            response_guard.add_text_encodings(injected_pair.as_str());
         }
         "basic" => {
             let username = injection
                 .get("username")
                 .and_then(Value::as_str)
-                .or_else(|| lease.metadata.get("username").map(String::as_str))
+                .or_else(|| lease.metadata.get("username").and_then(Value::as_str))
                 .ok_or("basic credential missing username")?;
-            let token = general_purpose::STANDARD.encode(format!("{username}:{secret}"));
-            insert_header(headers, "authorization", format!("Basic {token}"))
+            let raw = Zeroizing::new(format!("{username}:{}", secret.as_str()));
+            let token = Zeroizing::new(general_purpose::STANDARD.encode(raw.as_bytes()));
+            let value = Zeroizing::new(format!("Basic {}", token.as_str()));
+            insert_header(headers, "authorization", value.as_str())?;
+            response_guard.add_text_encodings(raw.as_str());
+            response_guard.add_text_encodings(token.as_str());
+            response_guard.add_text_encodings(value.as_str());
         }
-        other => Err(format!("unknown injection type {other}")),
+        other => return Err(format!("unknown injection type {other}")),
     }
+    Ok(response_guard)
 }
 
 fn internal_date_ms(value: &Value) -> Option<i128> {
@@ -4917,6 +10488,12 @@ fn internal_date_ms(value: &Value) -> Option<i128> {
 
 fn gmail_cutoff_ms(days: u64) -> i128 {
     now_epoch_ms() as i128 - (days as i128 * 86_400_000)
+}
+
+fn gmail_cache_cutoff_epoch_ms(days: u64) -> u128 {
+    const DAY_MS: u128 = 86_400_000;
+    let cutoff = now_epoch_ms().saturating_sub(days as u128 * DAY_MS);
+    cutoff / DAY_MS * DAY_MS
 }
 
 fn validate_gmail_internal_date(item: &Value, days: u64) -> Result<(), Value> {
@@ -4936,12 +10513,22 @@ fn validate_gmail_internal_date_value(raw_value: Option<&Value>, days: u64) -> R
     Ok(())
 }
 
-fn prune_gmail_proofs(cache: &mut HashMap<(String, String, String), u128>, now: u128) {
-    cache.retain(|_, expires_at_ms| *expires_at_ms > now);
+fn prune_gmail_proofs(cache: &mut HashMap<GmailProofKey, GmailProof>, now: u128) {
+    cache.retain(|_, proof| proof.expires_at_ms > now);
 }
 
-fn active_gmail_proofs(state: &GateState, principal_id: &str, route_id: &str) -> Vec<String> {
+fn active_gmail_proofs(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    principal_id: &str,
+    credential_ref: &str,
+    credential_version: u64,
+    gmail_user: &str,
+    route_id: &str,
+    max_age_days: u64,
+) -> Vec<String> {
     let now = now_epoch_ms();
+    let cutoff_epoch_ms = gmail_cache_cutoff_epoch_ms(max_age_days);
     let mut cache = state
         .gmail_proofs
         .lock()
@@ -4949,9 +10536,18 @@ fn active_gmail_proofs(state: &GateState, principal_id: &str, route_id: &str) ->
     prune_gmail_proofs(&mut cache, now);
     cache
         .iter()
-        .filter_map(|((principal, route, message_id), expires_at_ms)| {
-            if principal == principal_id && route == route_id && *expires_at_ms > now {
-                Some(message_id.clone())
+        .filter_map(|(key, proof)| {
+            if key.principal_id == principal_id
+                && key.credential_ref == credential_ref
+                && key.credential_version == credential_version
+                && key.gmail_user == gmail_user
+                && key.route_id == route_id
+                && key.policy_hash == snapshot.hash
+                && key.cutoff_epoch_ms == cutoff_epoch_ms
+                && proof.expires_at_ms > now
+                && proof.snapshot_epoch == snapshot.epoch
+            {
+                Some(key.message_id.clone())
             } else {
                 None
             }
@@ -4961,15 +10557,25 @@ fn active_gmail_proofs(state: &GateState, principal_id: &str, route_id: &str) ->
 
 fn merge_gmail_proofs(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     req: &mut DecisionRequest,
     principal_id: &str,
+    credential_ref: &str,
+    credential_version: u64,
+    gmail_user: &str,
     route_id: &str,
+    max_age_days: u64,
 ) {
-    let mut proofs = active_gmail_proofs(state, principal_id, route_id);
-    proofs.extend(req.gmail_proofs.iter().cloned());
-    proofs.sort();
-    proofs.dedup();
-    req.gmail_proofs = proofs;
+    req.gmail_proofs = active_gmail_proofs(
+        state,
+        snapshot,
+        principal_id,
+        credential_ref,
+        credential_version,
+        gmail_user,
+        route_id,
+        max_age_days,
+    );
 }
 
 fn gmail_proof_ttl_ms(route: &Route) -> u128 {
@@ -4978,16 +10584,22 @@ fn gmail_proof_ttl_ms(route: &Route) -> u128 {
 
 fn remember_gmail_proofs(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     principal_id: &str,
+    credential_ref: &str,
+    credential_version: u64,
+    gmail_user: &str,
     route_id: &str,
     route: &Route,
+    max_age_days: u64,
     message_ids: Vec<String>,
 ) {
-    if message_ids.is_empty() {
+    if message_ids.is_empty() || !snapshot_is_active(state, snapshot) {
         return;
     }
     let now = now_epoch_ms();
     let expires_at_ms = now.saturating_add(gmail_proof_ttl_ms(route));
+    let cutoff_epoch_ms = gmail_cache_cutoff_epoch_ms(max_age_days);
     let mut cache = state
         .gmail_proofs
         .lock()
@@ -5004,8 +10616,20 @@ fn remember_gmail_proofs(
             cache.remove(&key);
         }
         cache.insert(
-            (principal_id.to_string(), route_id.to_string(), message_id),
-            expires_at_ms,
+            GmailProofKey {
+                principal_id: principal_id.to_string(),
+                credential_ref: credential_ref.to_string(),
+                credential_version,
+                gmail_user: gmail_user.to_string(),
+                route_id: route_id.to_string(),
+                policy_hash: snapshot.hash.clone(),
+                cutoff_epoch_ms,
+                message_id,
+            },
+            GmailProof {
+                expires_at_ms,
+                snapshot_epoch: snapshot.epoch,
+            },
         );
     }
 }
@@ -6669,13 +12293,57 @@ impl Read for JsonNestedRedactorReader {
     }
 }
 
-fn filter_gmail_message_fields(message: &Value, paths: &[Vec<String>]) -> Value {
+fn filter_gmail_message_fields(
+    message: &Value,
+    paths: &[Vec<String>],
+    response_config: &Value,
+) -> Value {
+    if message.get("serverwareAgeProof").and_then(Value::as_str) == Some("pending") {
+        let mut pending = Map::new();
+        if let Some(id) = message.get("id") {
+            pending.insert("id".to_string(), id.clone());
+        }
+        pending.insert(
+            "serverwareAgeProof".to_string(),
+            Value::String("pending".to_string()),
+        );
+        return Value::Object(pending);
+    }
+
     let mut filtered = match redact_json_value(message, paths) {
         Value::Object(object) => object,
         _ => Map::new(),
     };
     if let Some(proof) = message.get("serverwareAgeProof") {
         filtered.insert("serverwareAgeProof".to_string(), proof.clone());
+    }
+    let allowed_header_names = response_config
+        .get("allowedMessageHeaderNames")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_lowercase)
+        .collect::<HashSet<_>>();
+    if let Some(headers) = filtered
+        .get_mut("payload")
+        .and_then(Value::as_object_mut)
+        .and_then(|payload| payload.get_mut("headers"))
+        .and_then(Value::as_array_mut)
+    {
+        *headers = headers
+            .iter()
+            .filter_map(|header| {
+                let name = header.get("name")?.as_str()?;
+                if !allowed_header_names.contains(&name.to_lowercase()) {
+                    return None;
+                }
+                Some(json!({
+                    "name":name,
+                    "value":header.get("value").and_then(Value::as_str).unwrap_or_default(),
+                }))
+            })
+            .collect();
     }
     Value::Object(filtered)
 }
@@ -6694,7 +12362,7 @@ fn apply_gmail_allowed_fields(payload: &mut Value, response_config: &Value, is_l
                     .iter()
                     .map(|item| {
                         if item.is_object() {
-                            filter_gmail_message_fields(item, &paths)
+                            filter_gmail_message_fields(item, &paths, response_config)
                         } else {
                             item.clone()
                         }
@@ -6710,7 +12378,7 @@ fn apply_gmail_allowed_fields(payload: &mut Value, response_config: &Value, is_l
         *payload = Value::Object(filtered);
         true
     } else {
-        *payload = filter_gmail_message_fields(payload, &paths);
+        *payload = filter_gmail_message_fields(payload, &paths, response_config);
         true
     }
 }
@@ -6719,16 +12387,93 @@ fn response_violation(payload: Value) -> Vec<u8> {
     json_status_response(StatusCode::BAD_GATEWAY, payload)
 }
 
+fn decision_route_context<'a>(
+    snapshot: &'a Snapshot,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+) -> Result<RouteMatch<'a>, Value> {
+    let principal_id = decision
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| json!({"error":"response_principal_context_missing"}))?;
+    let route_id = decision
+        .get("route_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| json!({"error":"response_route_context_missing"}))?;
+    let decision_epoch = decision
+        .get("snapshot_epoch")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| json!({"error":"response_snapshot_context_missing"}))?;
+    let decision_policy_hash = decision
+        .get("policy_hash")
+        .and_then(Value::as_str)
+        .ok_or_else(|| json!({"error":"response_policy_context_missing"}))?;
+    if decision_epoch != snapshot.epoch || decision_policy_hash != snapshot.hash {
+        return Err(json!({
+            "error":"response_snapshot_context_mismatch",
+            "decision_epoch":decision_epoch,
+            "snapshot_epoch":snapshot.epoch,
+        }));
+    }
+    let route_match = snapshot
+        .match_route(principal_id, method, url)
+        .ok_or_else(|| json!({"error":"response_route_context_missing"}))?;
+    if route_match.route.id != route_id {
+        return Err(json!({"error":"response_route_context_mismatch"}));
+    }
+    Ok(route_match)
+}
+
+fn validate_response_release_context<'a>(
+    state: &GateState,
+    snapshot: &'a Arc<Snapshot>,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+) -> Result<RouteMatch<'a>, Value> {
+    if !snapshot_is_active(state, snapshot) {
+        return Err(json!({
+            "error":"response_snapshot_revoked",
+            "snapshot_epoch":snapshot.epoch,
+        }));
+    }
+    decision_route_context(snapshot, decision, method, url)
+}
+
 fn release_forward_response(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     decision: &Value,
     method: &str,
     url: &Url,
     status: StatusCode,
     content_type: Option<&str>,
+    released_headers: &[(String, String)],
     body: Vec<u8>,
+    response_secret_guard: &ResponseSecretGuard,
     validation: Value,
 ) -> Vec<u8> {
+    if let Err(payload) = validate_response_release_context(state, snapshot, decision, method, url)
+    {
+        return block_forward_response(state, decision, method, url, status, payload);
+    }
+    if response_secret_guard.detects(&body)
+        || content_type.is_some_and(|value| response_secret_guard.detects(value.as_bytes()))
+        || released_headers.iter().any(|(name, value)| {
+            response_secret_guard.detects(name.as_bytes())
+                || response_secret_guard.detects(value.as_bytes())
+        })
+    {
+        return block_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            json!({"error":"response_credential_reflection"}),
+        );
+    }
     enqueue_audit(
         state,
         "data_plane.response.released",
@@ -6746,38 +12491,47 @@ fn release_forward_response(
         ),
     );
     let response_body_sha256 = sha256_prefixed(&body);
-    http_binary_response_with_headers(
-        status,
-        content_type,
-        body,
-        &[
-            (
-                "X-Serverware-Policy-Hash",
-                decision
-                    .get("policy_hash")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
-            (
-                "X-Serverware-Request-Digest",
-                decision
-                    .get("request_digest")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
-            (
-                "X-Serverware-Operation-Digest",
-                decision
-                    .get("operation_digest")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-            ),
-            ("X-Serverware-Response-Body-SHA256", response_body_sha256),
-        ],
-    )
+    let mut headers = released_headers.to_vec();
+    if let Some(client_request_digest) = decision
+        .get("client_request_digest")
+        .and_then(Value::as_str)
+    {
+        headers.push((
+            "X-Serverware-Client-Request-Digest".to_string(),
+            client_request_digest.to_string(),
+        ));
+    }
+    headers.extend([
+        (
+            "X-Serverware-Policy-Hash".to_string(),
+            decision
+                .get("policy_hash")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        (
+            "X-Serverware-Request-Digest".to_string(),
+            decision
+                .get("request_digest")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        (
+            "X-Serverware-Operation-Digest".to_string(),
+            decision
+                .get("operation_digest")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        ),
+        (
+            "X-Serverware-Response-Body-SHA256".to_string(),
+            response_body_sha256,
+        ),
+    ]);
+    http_binary_response_with_headers(status, content_type, body, &headers)
 }
 
 fn block_forward_response(
@@ -6807,18 +12561,12 @@ fn block_forward_response(
 }
 
 fn response_policy_for_decision(
-    state: &GateState,
+    snapshot: &Arc<Snapshot>,
     decision: &Value,
     method: &str,
     url: &Url,
 ) -> Option<ResponsePolicy> {
-    let principal_id = decision.get("principal_id").and_then(Value::as_str)?;
-    let route_id = decision.get("route_id").and_then(Value::as_str)?;
-    let snapshot = current_snapshot(state);
-    let route_match = snapshot.match_route(principal_id, method, url)?;
-    if route_match.route.id != route_id {
-        return None;
-    }
+    let route_match = decision_route_context(snapshot, decision, method, url).ok()?;
     Some(ResponsePolicy {
         adapter_type: route_match.route.adapter_type.clone(),
         response_config: route_match
@@ -6827,7 +12575,98 @@ fn response_policy_for_decision(
             .get("response")
             .cloned()
             .unwrap_or(Value::Null),
+        has_response_constraints: route_match
+            .route
+            .constraints
+            .iter()
+            .any(|constraint| constraint_phase_includes(constraint, "response")),
     })
+}
+
+fn response_config_for_status(response_config: &Value, status: StatusCode) -> Result<Value, Value> {
+    if status.is_success() {
+        return Ok(response_config.clone());
+    }
+    if status.is_redirection() {
+        return Err(json!({
+            "error":"response_redirect_not_allowed",
+            "upstreamStatus":status.as_u16(),
+        }));
+    }
+    if status.is_client_error() || status.is_server_error() {
+        return response_config
+            .get("error")
+            .filter(|value| value.is_object())
+            .cloned()
+            .ok_or_else(|| {
+                json!({
+                    "error":"response_error_policy_missing",
+                    "upstreamStatus":status.as_u16(),
+                })
+            });
+    }
+    Err(json!({
+        "error":"response_status_invalid",
+        "upstreamStatus":status.as_u16(),
+    }))
+}
+
+fn canonical_response_content_type(content_type: Option<&str>) -> String {
+    let media_type = content_type
+        .unwrap_or_default()
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let valid = media_type.split_once('/').is_some_and(|(kind, subtype)| {
+        !kind.is_empty()
+            && !subtype.is_empty()
+            && kind
+                .bytes()
+                .chain(subtype.bytes())
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$&^_.+-".contains(&byte))
+    });
+    if valid {
+        media_type
+    } else {
+        "application/octet-stream".to_string()
+    }
+}
+
+fn released_response_headers(
+    response_config: &Value,
+    upstream_headers: &HeaderMap,
+) -> Result<Vec<(String, String)>, Value> {
+    let configured = response_config
+        .get("allowedHeaders")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mut released = Vec::new();
+    for name in SAFE_RESPONSE_HEADERS {
+        if !configured.contains(name) {
+            continue;
+        }
+        let values = upstream_headers.get_all(name).iter().collect::<Vec<_>>();
+        if values.len() > 1 {
+            return Err(json!({"error":"response_header_ambiguous","header":name}));
+        }
+        let Some(value) = values.first() else {
+            continue;
+        };
+        let value = value
+            .to_str()
+            .map_err(|_| json!({"error":"response_header_invalid","header":name}))?;
+        if value.len() > 8192 || value.contains('\r') || value.contains('\n') {
+            return Err(json!({"error":"response_header_invalid","header":name}));
+        }
+        released.push((name.to_string(), value.to_string()));
+    }
+    Ok(released)
 }
 
 fn streaming_response_policy(policy: &ResponsePolicy) -> Option<StreamingResponsePolicy> {
@@ -6837,6 +12676,9 @@ fn streaming_response_policy(policy: &ResponsePolicy) -> Option<StreamingRespons
         .and_then(Value::as_str)
         .unwrap_or("any");
     if policy.adapter_type == "gmail.v1" {
+        return None;
+    }
+    if policy.has_response_constraints {
         return None;
     }
     let allowed_fields = allowed_field_paths(&policy.response_config);
@@ -6860,10 +12702,13 @@ fn streaming_response_policy(policy: &ResponsePolicy) -> Option<StreamingRespons
     Some(StreamingResponsePolicy {
         adapter_type: policy.adapter_type.clone(),
         mode: mode.to_string(),
-        max_body_bytes: policy
-            .response_config
-            .get("maxBodyBytes")
-            .and_then(Value::as_u64),
+        max_body_bytes: Some(
+            policy
+                .response_config
+                .get("maxBodyBytes")
+                .and_then(Value::as_u64)
+                .unwrap_or(MAX_BUFFERED_RESPONSE_BODY_BYTES),
+        ),
         max_line_bytes: json_lines_max_line_bytes(&policy.response_config),
         max_item_bytes: json_array_max_item_bytes(&policy.response_config),
         max_event_bytes: json_sse_max_event_bytes(&policy.response_config),
@@ -6909,20 +12754,46 @@ fn release_streamed_forward_response(
     );
 }
 
-fn write_chunked_bytes(writer: &mut dyn Write, body: &[u8]) -> Result<(), String> {
-    if body.is_empty() {
-        return Ok(());
+struct ActiveSnapshotWriter<'a> {
+    state: &'a GateState,
+    snapshot: &'a Arc<Snapshot>,
+    inner: &'a mut dyn Write,
+}
+
+impl Write for ActiveSnapshotWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        if !snapshot_is_active(self.state, self.snapshot) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "policy snapshot revoked before response release",
+            ));
+        }
+        self.inner.write(buffer)
     }
-    writer
-        .write_all(format!("{:x}\r\n", body.len()).as_bytes())
-        .map_err(|err| format!("write chunk header: {err}"))?;
-    writer
-        .write_all(body)
-        .map_err(|err| format!("write chunk body: {err}"))?;
-    writer
-        .write_all(b"\r\n")
-        .map_err(|err| format!("write chunk trailer: {err}"))?;
-    Ok(())
+
+    fn flush(&mut self) -> io::Result<()> {
+        if !snapshot_is_active(self.state, self.snapshot) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "policy snapshot revoked before response flush",
+            ));
+        }
+        self.inner.flush()
+    }
+}
+
+fn write_snapshot_guarded_response(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    writer: &mut dyn Write,
+    response: &[u8],
+) -> bool {
+    let mut writer = ActiveSnapshotWriter {
+        state,
+        snapshot,
+        inner: writer,
+    };
+    writer.write_all(response).is_ok() && writer.flush().is_ok()
 }
 
 struct HashingLimitResponseReader {
@@ -7028,6 +12899,78 @@ impl Write for ChunkedHashWriter<'_> {
     }
 }
 
+struct DirectHashWriter<'a> {
+    writer: &'a mut dyn Write,
+    hasher: Sha256,
+    body_bytes: u64,
+}
+
+impl<'a> DirectHashWriter<'a> {
+    fn new(writer: &'a mut dyn Write) -> Self {
+        Self {
+            writer,
+            hasher: Sha256::new(),
+            body_bytes: 0,
+        }
+    }
+
+    fn finish(self) -> Result<(String, u64), String> {
+        self.writer
+            .flush()
+            .map_err(|err| format!("flush streamed response: {err}"))?;
+        Ok((
+            format!("sha256:{}", hex::encode(self.hasher.finalize())),
+            self.body_bytes,
+        ))
+    }
+}
+
+impl Write for DirectHashWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writer.write_all(buf)?;
+        self.hasher.update(buf);
+        self.body_bytes = self.body_bytes.saturating_add(buf.len() as u64);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+fn copy_guarded_stream_body(
+    response: &mut reqwest::blocking::Response,
+    writer: &mut dyn Write,
+    response_secret_guard: &ResponseSecretGuard,
+    max_body_bytes: Option<u64>,
+) -> Result<(), String> {
+    let mut guarded_writer = ResponseSecretWriter::new(writer, response_secret_guard);
+    let mut body_bytes = 0u64;
+    let mut buffer = [0u8; 16 * 1024];
+    loop {
+        let read = response
+            .read(&mut buffer)
+            .map_err(|err| format!("read upstream stream: {err}"))?;
+        if read == 0 {
+            break;
+        }
+        body_bytes = body_bytes.saturating_add(read as u64);
+        if let Some(max_body) = max_body_bytes {
+            if body_bytes > max_body {
+                return Err(format!(
+                    "streamed response exceeded maxBodyBytes {max_body}"
+                ));
+            }
+        }
+        guarded_writer
+            .write_all(&buffer[..read])
+            .map_err(|err| format!("stream_response_guard_failed: {err}"))?;
+    }
+    guarded_writer
+        .finish()
+        .map_err(|err| format!("stream_response_guard_failed: {err}"))
+}
+
 fn stream_json_nested_forward_response(
     state: &GateState,
     decision: &Value,
@@ -7038,17 +12981,25 @@ fn stream_json_nested_forward_response(
     writer: &mut dyn Write,
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Result<(), String> {
     write_stream_response_headers(writer, status, Some("application/json"), None, keep_alive)?;
     let mut raw_reader = HashingLimitResponseReader::new(response, policy.max_body_bytes);
     let mut chunk_writer = ChunkedHashWriter::new(writer);
-    redact_json_nested_to_writer(
-        &mut raw_reader,
-        &mut chunk_writer,
-        &policy.allowed_fields,
-        policy.max_nested_bytes,
-    )
-    .map_err(|err| format!("json_nested_response_redaction_failed: {err}"))?;
+    {
+        let mut guarded_writer =
+            ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
+        redact_json_nested_to_writer(
+            &mut raw_reader,
+            &mut guarded_writer,
+            &policy.allowed_fields,
+            policy.max_nested_bytes,
+        )
+        .map_err(|err| format!("json_nested_response_redaction_failed: {err}"))?;
+        guarded_writer
+            .finish()
+            .map_err(|err| format!("json_nested_response_guard_failed: {err}"))?;
+    }
     let raw_body_sha256 = raw_reader.sha256();
     let raw_body_bytes = raw_reader.body_bytes;
     let (body_sha256, body_bytes) = chunk_writer.finish()?;
@@ -7083,6 +13034,7 @@ fn stream_json_lines_forward_response(
     writer: &mut dyn Write,
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Result<(), String> {
     write_stream_response_headers(
         writer,
@@ -7092,9 +13044,9 @@ fn stream_json_lines_forward_response(
         keep_alive,
     )?;
     let mut raw_hasher = Sha256::new();
-    let mut out_hasher = Sha256::new();
     let mut raw_body_bytes = 0u64;
-    let mut out_body_bytes = 0u64;
+    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut pending = Vec::<u8>::new();
     let mut buffer = [0u8; 16 * 1024];
     loop {
@@ -7121,9 +13073,9 @@ fn stream_json_lines_forward_response(
             }
             let out = redact_json_line(&line, &policy.allowed_fields)
                 .map_err(|err| format!("json_lines_response_redaction_failed: {err}"))?;
-            out_body_bytes += out.len() as u64;
-            out_hasher.update(&out);
-            write_chunked_bytes(writer, &out)?;
+            guarded_writer
+                .write_all(&out)
+                .map_err(|err| format!("json_lines_response_guard_failed: {err}"))?;
         }
         if pending.len() > policy.max_line_bytes {
             return Err("json_lines_response_line_too_large".to_string());
@@ -7136,24 +13088,22 @@ fn stream_json_lines_forward_response(
         let line = std::mem::take(&mut pending);
         let out = redact_json_line(&line, &policy.allowed_fields)
             .map_err(|err| format!("json_lines_response_redaction_failed: {err}"))?;
-        out_body_bytes += out.len() as u64;
-        out_hasher.update(&out);
-        write_chunked_bytes(writer, &out)?;
+        guarded_writer
+            .write_all(&out)
+            .map_err(|err| format!("json_lines_response_guard_failed: {err}"))?;
     }
-    writer
-        .write_all(b"0\r\n\r\n")
-        .map_err(|err| format!("write final chunk: {err}"))?;
-    writer
-        .flush()
-        .map_err(|err| format!("flush json lines stream: {err}"))?;
+    guarded_writer
+        .finish()
+        .map_err(|err| format!("json_lines_response_guard_failed: {err}"))?;
+    let (body_sha256, body_bytes) = chunk_writer.finish()?;
     release_streamed_forward_response(
         state,
         decision,
         method,
         url,
         status,
-        format!("sha256:{}", hex::encode(out_hasher.finalize())),
-        out_body_bytes,
+        body_sha256,
+        body_bytes,
         json!({
             "ok":true,
             "mode":"jsonlStream",
@@ -7177,12 +13127,13 @@ fn stream_json_array_forward_response(
     writer: &mut dyn Write,
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Result<(), String> {
     write_stream_response_headers(writer, status, Some("application/json"), None, keep_alive)?;
     let mut raw_hasher = Sha256::new();
-    let mut out_hasher = Sha256::new();
     let mut raw_body_bytes = 0u64;
-    let mut out_body_bytes = 0u64;
+    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut core = JsonArrayRedactorCore::new(policy.max_item_bytes, policy.allowed_fields.clone());
     let mut buffer = [0u8; 16 * 1024];
     loop {
@@ -7205,33 +13156,31 @@ fn stream_json_array_forward_response(
             .push(&buffer[..read])
             .map_err(|err| format!("json_array_response_redaction_failed: {err}"))?;
         for chunk in chunks {
-            out_body_bytes += chunk.len() as u64;
-            out_hasher.update(&chunk);
-            write_chunked_bytes(writer, &chunk)?;
+            guarded_writer
+                .write_all(&chunk)
+                .map_err(|err| format!("json_array_response_guard_failed: {err}"))?;
         }
     }
     let chunks = core
         .finish()
         .map_err(|err| format!("json_array_response_redaction_failed: {err}"))?;
     for chunk in chunks {
-        out_body_bytes += chunk.len() as u64;
-        out_hasher.update(&chunk);
-        write_chunked_bytes(writer, &chunk)?;
+        guarded_writer
+            .write_all(&chunk)
+            .map_err(|err| format!("json_array_response_guard_failed: {err}"))?;
     }
-    writer
-        .write_all(b"0\r\n\r\n")
-        .map_err(|err| format!("write final chunk: {err}"))?;
-    writer
-        .flush()
-        .map_err(|err| format!("flush json array stream: {err}"))?;
+    guarded_writer
+        .finish()
+        .map_err(|err| format!("json_array_response_guard_failed: {err}"))?;
+    let (body_sha256, body_bytes) = chunk_writer.finish()?;
     release_streamed_forward_response(
         state,
         decision,
         method,
         url,
         status,
-        format!("sha256:{}", hex::encode(out_hasher.finalize())),
-        out_body_bytes,
+        body_sha256,
+        body_bytes,
         json!({
             "ok":true,
             "mode":"jsonArrayStream",
@@ -7255,12 +13204,13 @@ fn stream_json_sse_forward_response(
     writer: &mut dyn Write,
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Result<(), String> {
     write_stream_response_headers(writer, status, Some("text/event-stream"), None, keep_alive)?;
     let mut raw_hasher = Sha256::new();
-    let mut out_hasher = Sha256::new();
     let mut raw_body_bytes = 0u64;
-    let mut out_body_bytes = 0u64;
+    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut core = JsonSseRedactorCore::new(
         policy.max_line_bytes,
         policy.max_event_bytes,
@@ -7287,33 +13237,31 @@ fn stream_json_sse_forward_response(
             .push(&buffer[..read])
             .map_err(|err| format!("json_sse_response_redaction_failed: {err}"))?;
         for chunk in chunks {
-            out_body_bytes += chunk.len() as u64;
-            out_hasher.update(&chunk);
-            write_chunked_bytes(writer, &chunk)?;
+            guarded_writer
+                .write_all(&chunk)
+                .map_err(|err| format!("json_sse_response_guard_failed: {err}"))?;
         }
     }
     let chunks = core
         .finish()
         .map_err(|err| format!("json_sse_response_redaction_failed: {err}"))?;
     for chunk in chunks {
-        out_body_bytes += chunk.len() as u64;
-        out_hasher.update(&chunk);
-        write_chunked_bytes(writer, &chunk)?;
+        guarded_writer
+            .write_all(&chunk)
+            .map_err(|err| format!("json_sse_response_guard_failed: {err}"))?;
     }
-    writer
-        .write_all(b"0\r\n\r\n")
-        .map_err(|err| format!("write final chunk: {err}"))?;
-    writer
-        .flush()
-        .map_err(|err| format!("flush json sse stream: {err}"))?;
+    guarded_writer
+        .finish()
+        .map_err(|err| format!("json_sse_response_guard_failed: {err}"))?;
+    let (body_sha256, body_bytes) = chunk_writer.finish()?;
     release_streamed_forward_response(
         state,
         decision,
         method,
         url,
         status,
-        format!("sha256:{}", hex::encode(out_hasher.finalize())),
-        out_body_bytes,
+        body_sha256,
+        body_bytes,
         json!({
             "ok":true,
             "mode":"jsonSseStream",
@@ -7338,6 +13286,7 @@ fn stream_form_urlencoded_forward_response(
     writer: &mut dyn Write,
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Result<(), String> {
     write_stream_response_headers(
         writer,
@@ -7347,9 +13296,9 @@ fn stream_form_urlencoded_forward_response(
         keep_alive,
     )?;
     let mut raw_hasher = Sha256::new();
-    let mut out_hasher = Sha256::new();
     let mut raw_body_bytes = 0u64;
-    let mut out_body_bytes = 0u64;
+    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut core =
         FormUrlencodedRedactorCore::new(policy.max_pair_bytes, policy.allowed_fields.clone());
     let mut buffer = [0u8; 16 * 1024];
@@ -7373,33 +13322,31 @@ fn stream_form_urlencoded_forward_response(
             .push(&buffer[..read])
             .map_err(|err| format!("form_urlencoded_response_redaction_failed: {err}"))?;
         for chunk in chunks {
-            out_body_bytes += chunk.len() as u64;
-            out_hasher.update(&chunk);
-            write_chunked_bytes(writer, &chunk)?;
+            guarded_writer
+                .write_all(&chunk)
+                .map_err(|err| format!("form_urlencoded_response_guard_failed: {err}"))?;
         }
     }
     let chunks = core
         .finish()
         .map_err(|err| format!("form_urlencoded_response_redaction_failed: {err}"))?;
     for chunk in chunks {
-        out_body_bytes += chunk.len() as u64;
-        out_hasher.update(&chunk);
-        write_chunked_bytes(writer, &chunk)?;
+        guarded_writer
+            .write_all(&chunk)
+            .map_err(|err| format!("form_urlencoded_response_guard_failed: {err}"))?;
     }
-    writer
-        .write_all(b"0\r\n\r\n")
-        .map_err(|err| format!("write final chunk: {err}"))?;
-    writer
-        .flush()
-        .map_err(|err| format!("flush form-url-encoded stream: {err}"))?;
+    guarded_writer
+        .finish()
+        .map_err(|err| format!("form_urlencoded_response_guard_failed: {err}"))?;
+    let (body_sha256, body_bytes) = chunk_writer.finish()?;
     release_streamed_forward_response(
         state,
         decision,
         method,
         url,
         status,
-        format!("sha256:{}", hex::encode(out_hasher.finalize())),
-        out_body_bytes,
+        body_sha256,
+        body_bytes,
         json!({
             "ok":true,
             "mode":"formUrlencodedStream",
@@ -7423,6 +13370,7 @@ fn stream_csv_forward_response(
     writer: &mut dyn Write,
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Result<(), String> {
     write_stream_response_headers(writer, status, Some("text/csv"), None, keep_alive)?;
     let raw_stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
@@ -7439,6 +13387,8 @@ fn stream_csv_forward_response(
         policy.allowed_fields.clone(),
         output_stats.clone(),
     );
+    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut buffer = [0u8; 16 * 1024];
     loop {
         let read = reader
@@ -7447,16 +13397,15 @@ fn stream_csv_forward_response(
         if read == 0 {
             break;
         }
-        write_chunked_bytes(writer, &buffer[..read])?;
+        guarded_writer
+            .write_all(&buffer[..read])
+            .map_err(|err| format!("csv_response_guard_failed: {err}"))?;
     }
-    writer
-        .write_all(b"0\r\n\r\n")
-        .map_err(|err| format!("write final chunk: {err}"))?;
-    writer
-        .flush()
-        .map_err(|err| format!("flush csv stream: {err}"))?;
+    guarded_writer
+        .finish()
+        .map_err(|err| format!("csv_response_guard_failed: {err}"))?;
+    let (body_sha256, body_bytes) = chunk_writer.finish()?;
     let (raw_body_sha256, raw_body_bytes) = request_stream_stats_snapshot(&raw_stats);
-    let (body_sha256, body_bytes) = request_stream_stats_snapshot(&output_stats);
     release_streamed_forward_response(
         state,
         decision,
@@ -7480,6 +13429,7 @@ fn stream_csv_forward_response(
 
 fn stream_forward_response(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     decision: &Value,
     method: &str,
     url: &Url,
@@ -7490,90 +13440,132 @@ fn stream_forward_response(
     writer: &mut dyn Write,
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Result<(), String> {
+    validate_response_release_context(state, snapshot, decision, method, url)
+        .map_err(|payload| payload.to_string())?;
+    let mut guarded_writer = ActiveSnapshotWriter {
+        state,
+        snapshot,
+        inner: writer,
+    };
+    let writer: &mut dyn Write = &mut guarded_writer;
+    if content_type.is_some_and(|value| response_secret_guard.detects(value.as_bytes())) {
+        return Err("response_credential_reflection".to_string());
+    }
     if policy.mode == "jsonlStream" {
         return stream_json_lines_forward_response(
-            state, decision, method, url, status, response, writer, keep_alive, policy,
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
         );
     }
     if policy.mode == "jsonArrayStream" {
         return stream_json_array_forward_response(
-            state, decision, method, url, status, response, writer, keep_alive, policy,
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
         );
     }
     if policy.mode == "jsonSseStream" {
         return stream_json_sse_forward_response(
-            state, decision, method, url, status, response, writer, keep_alive, policy,
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
         );
     }
     if policy.mode == "jsonNestedStream" {
         return stream_json_nested_forward_response(
-            state, decision, method, url, status, response, writer, keep_alive, policy,
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
         );
     }
     if policy.mode == "formUrlencodedStream" {
         return stream_form_urlencoded_forward_response(
-            state, decision, method, url, status, response, writer, keep_alive, policy,
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
         );
     }
     if policy.mode == "csvStream" {
         return stream_csv_forward_response(
-            state, decision, method, url, status, response, writer, keep_alive, policy,
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
         );
     }
     let chunked =
         write_stream_response_headers(writer, status, content_type, content_length, keep_alive)?;
-    let mut hasher = Sha256::new();
-    let mut body_bytes = 0u64;
-    let mut buffer = [0u8; 16 * 1024];
-    loop {
-        let read = response
-            .read(&mut buffer)
-            .map_err(|err| format!("read upstream stream: {err}"))?;
-        if read == 0 {
-            break;
-        }
-        body_bytes += read as u64;
-        if let Some(max_body) = policy.max_body_bytes {
-            if body_bytes > max_body {
-                return Err(format!(
-                    "streamed response exceeded maxBodyBytes {max_body}"
-                ));
-            }
-        }
-        hasher.update(&buffer[..read]);
-        if chunked {
-            writer
-                .write_all(format!("{read:x}\r\n").as_bytes())
-                .map_err(|err| format!("write chunk header: {err}"))?;
-            writer
-                .write_all(&buffer[..read])
-                .map_err(|err| format!("write chunk body: {err}"))?;
-            writer
-                .write_all(b"\r\n")
-                .map_err(|err| format!("write chunk trailer: {err}"))?;
-        } else {
-            writer
-                .write_all(&buffer[..read])
-                .map_err(|err| format!("write streamed body: {err}"))?;
-        }
-    }
-    if chunked {
-        writer
-            .write_all(b"0\r\n\r\n")
-            .map_err(|err| format!("write final chunk: {err}"))?;
-    }
-    writer
-        .flush()
-        .map_err(|err| format!("flush streamed response: {err}"))?;
+    let (body_sha256, released_body_bytes) = if chunked {
+        let mut body_writer = ChunkedHashWriter::new(writer);
+        copy_guarded_stream_body(
+            &mut response,
+            &mut body_writer,
+            response_secret_guard,
+            policy.max_body_bytes,
+        )?;
+        body_writer.finish()?
+    } else {
+        let mut body_writer = DirectHashWriter::new(writer);
+        copy_guarded_stream_body(
+            &mut response,
+            &mut body_writer,
+            response_secret_guard,
+            policy.max_body_bytes,
+        )?;
+        body_writer.finish()?
+    };
     release_streamed_forward_response(
         state,
         decision,
         method,
         url,
         status,
-        format!("sha256:{}", hex::encode(hasher.finalize())),
-        body_bytes,
+        body_sha256,
+        released_body_bytes,
         json!({"ok":true,"mode":"stream","adapter":policy.adapter_type.clone(),"streamed":true}),
     );
     Ok(())
@@ -7581,28 +13573,44 @@ fn stream_forward_response(
 
 fn validate_policy_json_response(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     decision: &Value,
     method: &str,
     url: &Url,
     status: StatusCode,
     content_type: Option<&str>,
+    released_headers: &[(String, String)],
     body: Vec<u8>,
     response_config: &Value,
     adapter_type: &str,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Vec<u8> {
     let mode = response_config
         .get("mode")
         .and_then(Value::as_str)
         .unwrap_or("any");
-    if mode == "headersOnly" {
-        return release_forward_response(
+    if !matches!(mode, "any" | "headersOnly" | "json") {
+        return block_forward_response(
             state,
             decision,
             method,
             url,
             status,
+            json!({"error":"response_mode_unsupported","mode":mode}),
+        );
+    }
+    if mode == "headersOnly" {
+        return release_forward_response(
+            state,
+            snapshot,
+            decision,
+            method,
+            url,
+            status,
             None,
+            released_headers,
             Vec::new(),
+            response_secret_guard,
             json!({"ok":true,"mode":"headers_only","body_redacted":true,"adapter":adapter_type}),
         );
     }
@@ -7611,12 +13619,15 @@ fn validate_policy_json_response(
     if !requires_json {
         return release_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
             status,
             content_type,
+            released_headers,
             body,
+            response_secret_guard,
             json!({"ok":true,"mode":"adapter_passthrough","adapter":adapter_type}),
         );
     }
@@ -7640,12 +13651,15 @@ fn validate_policy_json_response(
     match serde_json::to_vec(&payload) {
         Ok(bytes) => release_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
             status,
             Some("application/json"),
+            released_headers,
             bytes,
+            response_secret_guard,
             json!({"ok":true,"mode":"json","allowed_fields_redacted":redacted,"adapter":adapter_type}),
         ),
         Err(_) => block_forward_response(
@@ -7661,103 +13675,101 @@ fn validate_policy_json_response(
 
 fn validate_forward_response(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     decision: &Value,
     method: &str,
     url: &Url,
     status: StatusCode,
     content_type: Option<&str>,
+    released_headers: &[(String, String)],
     body: Vec<u8>,
+    response_secret_guard: &ResponseSecretGuard,
 ) -> Vec<u8> {
-    let Some(principal_id) = decision.get("principal_id").and_then(Value::as_str) else {
-        return release_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            content_type,
-            body,
-            json!({"ok":true,"mode":"decision_context_missing"}),
-        );
-    };
-    let Some(route_id) = decision.get("route_id").and_then(Value::as_str) else {
-        return release_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            content_type,
-            body,
-            json!({"ok":true,"mode":"decision_context_missing"}),
-        );
-    };
-    let snapshot = current_snapshot(state);
-    let Some(route_match) = snapshot.match_route(principal_id, method, url) else {
-        return block_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            json!({"error":"response_route_context_missing"}),
-        );
-    };
-    if route_match.route.id != route_id {
-        return block_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            json!({"error":"response_route_context_mismatch"}),
-        );
-    }
-    let response_config = route_match
+    let route_match =
+        match validate_response_release_context(state, snapshot, decision, method, url) {
+            Ok(route_match) => route_match,
+            Err(payload) => {
+                return block_forward_response(state, decision, method, url, status, payload)
+            }
+        };
+    let principal_id = decision
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .expect("validated response principal context");
+    let route_id = decision
+        .get("route_id")
+        .and_then(Value::as_str)
+        .expect("validated response route context");
+    let base_response_config = route_match
         .route
         .adapter_config
         .get("response")
         .unwrap_or(&Value::Null);
-    if let Some(max_body) = response_config.get("maxBodyBytes").and_then(Value::as_u64) {
-        if body.len() as u64 > max_body {
-            return block_forward_response(
-                state,
-                decision,
-                method,
-                url,
-                status,
-                json!({"error":"response_body_too_large","maxBodyBytes":max_body}),
-            );
+    let response_config = match response_config_for_status(base_response_config, status) {
+        Ok(config) => config,
+        Err(payload) => {
+            return block_forward_response(state, decision, method, url, status, payload)
         }
+    };
+    let Some(max_body) = response_config.get("maxBodyBytes").and_then(Value::as_u64) else {
+        return block_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            json!({"error":"response_body_limit_missing"}),
+        );
+    };
+    if body.len() as u64 > max_body {
+        return block_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            json!({"error":"response_body_too_large","maxBodyBytes":max_body}),
+        );
     }
     if status.as_u16() < 400 {
-        if let Err(payload) = validate_response_constraints(route_match.route, &body) {
+        let operation = decision
+            .get("operation")
+            .and_then(|value| value.get("operation"))
+            .and_then(Value::as_str);
+        if let Err(payload) = validate_response_constraints(route_match.route, &body, operation) {
             return block_forward_response(state, decision, method, url, status, payload);
         }
     }
     if route_match.route.adapter_type != "gmail.v1" {
         return validate_policy_json_response(
             state,
+            snapshot,
             decision,
             method,
             url,
             status,
             content_type,
+            released_headers,
             body,
-            response_config,
+            &response_config,
             &route_match.route.adapter_type,
+            response_secret_guard,
         );
     }
-    if status.as_u16() >= 400 {
-        return release_forward_response(
+    if !status.is_success() {
+        return validate_policy_json_response(
             state,
+            snapshot,
             decision,
             method,
             url,
             status,
             content_type,
+            released_headers,
             body,
-            json!({"ok":true,"mode":"adapter_passthrough","adapter":"gmail.v1"}),
+            &response_config,
+            "gmail.v1",
+            response_secret_guard,
         );
     }
     let validate_internal_date = response_config
@@ -7771,12 +13783,15 @@ fn validate_forward_response(
     if !validate_internal_date && !has_allowed_fields {
         return release_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
             status,
             content_type,
+            released_headers,
             body,
+            response_secret_guard,
             json!({"ok":true,"mode":"validation_disabled"}),
         );
     }
@@ -7817,6 +13832,8 @@ fn validate_forward_response(
                         continue;
                     };
                     if object.get("internalDate").is_none() && validate_missing_by_metadata {
+                        object.clear();
+                        object.insert("id".to_string(), Value::String(id.clone()));
                         object.insert(
                             "serverwareAgeProof".to_string(),
                             Value::String("pending".to_string()),
@@ -7849,24 +13866,44 @@ fn validate_forward_response(
         }
     }
     if is_list_response {
+        let credential_ref = decision
+            .get("credential_ref")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let credential_version = decision
+            .get("credential_version")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
         remember_gmail_proofs(
             state,
+            snapshot,
             principal_id,
+            credential_ref,
+            credential_version,
+            route_match
+                .params
+                .get("user")
+                .map(String::as_str)
+                .unwrap_or("me"),
             route_id,
             route_match.route,
+            days,
             validated_message_ids,
         );
     }
-    let redacted = apply_gmail_allowed_fields(&mut payload, response_config, is_list_response);
+    let redacted = apply_gmail_allowed_fields(&mut payload, &response_config, is_list_response);
     match serde_json::to_vec(&payload) {
         Ok(bytes) => release_forward_response(
             state,
+            snapshot,
             decision,
             method,
             url,
             status,
             Some("application/json"),
+            released_headers,
             bytes,
+            response_secret_guard,
             json!({"ok":true,"mode":"gmail_internal_date","allowed_fields_redacted":redacted}),
         ),
         Err(_) => block_forward_response(
@@ -7882,23 +13919,125 @@ fn validate_forward_response(
 
 fn finalize_upstream_response(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     decision: &Value,
     request_method: &str,
     upstream_url: &Url,
     response: reqwest::blocking::Response,
+    response_secret_guard: &ResponseSecretGuard,
     stream_writer: Option<&mut dyn Write>,
-    keep_alive: bool,
+    _keep_alive: bool,
 ) -> ForwardResult {
     let status = response.status();
+    let upstream_headers = response.headers().clone();
     let content_type = response
         .headers()
         .get("content-type")
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
+    let content_encoding = response
+        .headers()
+        .get("content-encoding")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.eq_ignore_ascii_case("identity"));
     let content_length = response_content_length(response.headers());
-    let stream_policy = response_policy_for_decision(state, decision, request_method, upstream_url)
-        .as_ref()
-        .and_then(streaming_response_policy);
+    if let Err(payload) =
+        validate_response_release_context(state, snapshot, decision, request_method, upstream_url)
+    {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            payload,
+        ));
+    }
+    if content_encoding.is_some() {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            json!({"error":"response_content_encoding_forbidden"}),
+        ));
+    }
+    if !response_secret_guard.is_empty() && status == StatusCode::PARTIAL_CONTENT {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            json!({"error":"credential_response_partial_content_forbidden"}),
+        ));
+    }
+    let base_response_policy =
+        response_policy_for_decision(snapshot, decision, request_method, upstream_url)
+            .expect("validated response policy context");
+    let response_config =
+        match response_config_for_status(&base_response_policy.response_config, status) {
+            Ok(config) => config,
+            Err(payload) => {
+                return ForwardResult::Buffered(block_forward_response(
+                    state,
+                    decision,
+                    request_method,
+                    upstream_url,
+                    status,
+                    payload,
+                ))
+            }
+        };
+    let released_headers = match released_response_headers(&response_config, &upstream_headers) {
+        Ok(headers) => headers,
+        Err(payload) => {
+            return ForwardResult::Buffered(block_forward_response(
+                state,
+                decision,
+                request_method,
+                upstream_url,
+                status,
+                payload,
+            ))
+        }
+    };
+    let response_policy = ResponsePolicy {
+        adapter_type: base_response_policy.adapter_type,
+        response_config,
+        has_response_constraints: base_response_policy.has_response_constraints,
+    };
+    let Some(response_body_limit) = response_policy
+        .response_config
+        .get("maxBodyBytes")
+        .and_then(Value::as_u64)
+    else {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            json!({"error":"response_body_limit_missing"}),
+        ));
+    };
+    if content_length.is_some_and(|length| length > response_body_limit) {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            json!({
+                "error":"response_body_too_large",
+                "maxBodyBytes":response_body_limit,
+                "contentLength":content_length,
+            }),
+        ));
+    }
+    let stream_policy = streaming_response_policy(&response_policy);
     if let Some(policy) = stream_policy {
         if let Some(max_body) = policy.max_body_bytes {
             match content_length {
@@ -7928,16 +14067,18 @@ fn finalize_upstream_response(
         if let Some(writer) = stream_writer {
             match stream_forward_response(
                 state,
+                snapshot,
                 decision,
                 request_method,
                 upstream_url,
                 status,
-                content_type.as_deref(),
+                Some(canonical_response_content_type(content_type.as_deref()).as_str()),
                 content_length,
                 response,
                 writer,
-                keep_alive,
+                false,
                 &policy,
+                response_secret_guard,
             ) {
                 Ok(()) => return ForwardResult::Streamed,
                 Err(err) => {
@@ -7957,17 +14098,35 @@ fn finalize_upstream_response(
             }
         }
     }
-    match response.bytes() {
-        Ok(bytes) => ForwardResult::Buffered(validate_forward_response(
+    let mut body = Vec::new();
+    match response
+        .take(response_body_limit.saturating_add(1))
+        .read_to_end(&mut body)
+    {
+        Ok(_) if body.len() as u64 <= response_body_limit => {
+            ForwardResult::Buffered(validate_forward_response(
+                state,
+                snapshot,
+                decision,
+                request_method,
+                upstream_url,
+                status,
+                Some(canonical_response_content_type(content_type.as_deref()).as_str()),
+                &released_headers,
+                body,
+                response_secret_guard,
+            ))
+        }
+        Ok(_) => ForwardResult::Buffered(block_forward_response(
             state,
             decision,
             request_method,
             upstream_url,
             status,
-            content_type.as_deref(),
-            bytes.to_vec(),
+            json!({"error":"response_body_too_large","maxBodyBytes":response_body_limit}),
         )),
         Err(err) => {
+            let detail = err.to_string();
             enqueue_audit(
                 state,
                 "data_plane.response.blocked",
@@ -7976,12 +14135,12 @@ fn finalize_upstream_response(
                     request_method,
                     upstream_url,
                     "blocked",
-                    json!({"stage":"upstream_body","error":"upstream_body_failed","detail":err.to_string()}),
+                    json!({"stage":"upstream_body","error":"upstream_body_failed","detail":detail}),
                 ),
             );
             ForwardResult::Buffered(json_status_response(
                 StatusCode::BAD_GATEWAY,
-                json!({"error":"upstream_body_failed","detail":err.to_string()}),
+                json!({"error":"upstream_body_failed"}),
             ))
         }
     }
@@ -7989,8 +14148,10 @@ fn finalize_upstream_response(
 
 fn forward_absolute_request_inner(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     request: IncomingRequest,
     authenticated_principal_id: Option<&str>,
+    client_request_digest: Option<&str>,
     stream_writer: Option<&mut dyn Write>,
     keep_alive: bool,
 ) -> ForwardResult {
@@ -8022,10 +14183,18 @@ fn forward_absolute_request_inner(
         headers: request.headers.clone(),
         body: String::from_utf8_lossy(&request.body).to_string(),
         body_sha256: Some(body_sha_bytes(&request.body)),
+        forwarded_body_length: Some(request.body.len() as u64),
+        forwarded_body_utf8_valid: Some(std::str::from_utf8(&request.body).is_ok()),
         credential_metadata: BTreeMap::new(),
         gmail_proofs: Vec::new(),
+        client_request_digest: client_request_digest.map(ToString::to_string),
     };
-    let decision = decide_internal(state, decision_request, authenticated_principal_id);
+    let decision = decide_internal(
+        state,
+        snapshot,
+        decision_request,
+        authenticated_principal_id,
+    );
     if !decision
         .get("allowed")
         .and_then(Value::as_bool)
@@ -8047,68 +14216,102 @@ fn forward_absolute_request_inner(
             decision
         ));
     }
+    if client_request_digest.is_some()
+        && decision
+            .get("client_request_digest")
+            .and_then(Value::as_str)
+            != client_request_digest
+    {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"response_proof_request_binding_mismatch"}),
+        ));
+    }
     let mut upstream_url = target_url;
     apply_rewrite(
         &mut upstream_url,
         decision.get("rewrite").unwrap_or(&Value::Null),
     );
-    let mut headers = filtered_forward_headers(&request.headers);
+    let injection_plan = decision
+        .get("injection")
+        .and_then(|value| value.get("plan"))
+        .unwrap_or(&Value::Null);
+    let mut headers = match filtered_forward_headers(&request.headers, injection_plan) {
+        Ok(headers) => headers,
+        Err(err) => buffered!(json_status_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error":"invalid_forwarding_headers","detail":err}),
+        )),
+    };
+    let mut response_secret_guard = ResponseSecretGuard::default();
+    let mut credential_release_binding = None;
     if let Some(credential_ref) = decision.get("credential_ref").and_then(Value::as_str) {
         let credential_version = decision
             .get("credential_version")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let Some(lease) = credential_lease(state, credential_ref, credential_version) else {
-            enqueue_audit(
-                state,
-                "data_plane.request.denied",
-                decision_audit_event(
-                    &decision,
-                    &request.method,
-                    &upstream_url,
-                    "denied",
+        let lease = match credential_lease_for_release(
+            state,
+            snapshot,
+            &decision,
+            credential_ref,
+            credential_version,
+        ) {
+            Ok(lease) => lease,
+            Err(error) => {
+                enqueue_audit(
+                    state,
+                    "data_plane.request.denied",
+                    decision_audit_event(
+                        &decision,
+                        &request.method,
+                        &upstream_url,
+                        "denied",
+                        json!({
+                            "stage":"credential_lease",
+                            "error":error,
+                            "credential_ref":credential_ref,
+                            "credential_version":credential_version,
+                        }),
+                    ),
+                );
+                buffered!(json_status_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
                     json!({
-                        "stage":"credential_lease",
-                        "error":"credential_lease_missing",
+                        "error":error,
                         "credential_ref":credential_ref,
                         "credential_version":credential_version,
                     }),
-                ),
-            );
-            buffered!(json_status_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({
-                    "error":"credential_lease_missing",
-                    "credential_ref":credential_ref,
-                    "credential_version":credential_version,
-                }),
-            ));
+                ));
+            }
         };
-        if let Err(err) = apply_credential_injection(
-            &mut headers,
-            &mut upstream_url,
-            decision
-                .get("injection")
-                .and_then(|value| value.get("plan"))
-                .unwrap_or(&Value::Null),
-            &lease,
-        ) {
-            enqueue_audit(
-                state,
-                "data_plane.request.denied",
-                decision_audit_event(
-                    &decision,
-                    &request.method,
-                    &upstream_url,
-                    "denied",
-                    json!({"stage":"credential_injection","error":"credential_injection_failed","detail":err.clone()}),
-                ),
-            );
-            buffered!(json_status_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({"error":"credential_injection_failed","detail":err}),
-            ));
+        credential_release_binding = Some(credential_lease_release_binding(&lease));
+        match apply_credential_injection(&mut headers, &mut upstream_url, injection_plan, &lease) {
+            Ok(guard) => response_secret_guard = guard,
+            Err(err) => {
+                enqueue_audit(
+                    state,
+                    "data_plane.request.denied",
+                    decision_audit_event(
+                        &decision,
+                        &request.method,
+                        &upstream_url,
+                        "denied",
+                        json!({"stage":"credential_injection","error":"credential_injection_failed","detail":err.clone()}),
+                    ),
+                );
+                buffered!(json_status_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({"error":"credential_injection_failed","detail":err}),
+                ));
+            }
         }
+    }
+    if !snapshot_is_active(state, snapshot) {
+        buffered!(json_status_response(
+            StatusCode::CONFLICT,
+            json!({"error":"policy_snapshot_revoked","snapshot_epoch":snapshot.epoch}),
+        ));
     }
     let method = match Method::from_bytes(request.method.as_bytes()) {
         Ok(method) => method,
@@ -8127,9 +14330,42 @@ fn forward_absolute_request_inner(
     if !request.body.is_empty() {
         builder = builder.body(request.body);
     }
+    if credential_release_binding
+        .as_ref()
+        .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
+    {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"credential_lease_changed_before_release"}),
+        ));
+    }
+    if credential_release_binding.as_ref().is_some_and(|binding| {
+        !record_required_credential_release_start(
+            state,
+            &decision,
+            &request_method,
+            &upstream_url,
+            binding,
+        )
+    }) {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"required_credential_audit_unavailable"}),
+        ));
+    }
+    if credential_release_binding
+        .as_ref()
+        .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
+    {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"credential_lease_changed_before_release"}),
+        ));
+    }
     let response = match builder.send() {
         Ok(response) => response,
         Err(err) => {
+            let detail = redacted_reqwest_error(err);
             enqueue_audit(
                 state,
                 "data_plane.response.blocked",
@@ -8138,21 +14374,23 @@ fn forward_absolute_request_inner(
                     &request_method,
                     &upstream_url,
                     "blocked",
-                    json!({"stage":"upstream_request","error":"upstream_request_failed","detail":error_chain(&err)}),
+                    json!({"stage":"upstream_request","error":"upstream_request_failed","detail":detail}),
                 ),
             );
             buffered!(json_status_response(
                 StatusCode::BAD_GATEWAY,
-                json!({"error":"upstream_request_failed","detail":error_chain(&err)}),
+                json!({"error":"upstream_request_failed"}),
             ));
         }
     };
     finalize_upstream_response(
         state,
+        snapshot,
         &decision,
         &request_method,
         &upstream_url,
         response,
+        &response_secret_guard,
         stream_writer,
         keep_alive,
     )
@@ -8160,6 +14398,7 @@ fn forward_absolute_request_inner(
 
 fn forward_absolute_streaming_request_to(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     request: RequestHead,
     body_stream: RequestBodyStream,
     stats: Arc<Mutex<RequestBodyStreamStats>>,
@@ -8197,10 +14436,18 @@ fn forward_absolute_streaming_request_to(
         headers: request.headers.clone(),
         body: String::new(),
         body_sha256: Some(sha256_prefixed(b"")),
+        forwarded_body_length: Some(request.content_length as u64),
+        forwarded_body_utf8_valid: Some(true),
         credential_metadata: BTreeMap::new(),
         gmail_proofs: Vec::new(),
+        client_request_digest: None,
     };
-    let decision = decide_internal(state, decision_request, authenticated_principal_id);
+    let decision = decide_internal(
+        state,
+        snapshot,
+        decision_request,
+        authenticated_principal_id,
+    );
     if !decision
         .get("allowed")
         .and_then(Value::as_bool)
@@ -8227,64 +14474,87 @@ fn forward_absolute_streaming_request_to(
         &mut upstream_url,
         decision.get("rewrite").unwrap_or(&Value::Null),
     );
-    let mut headers = filtered_forward_headers(&request.headers);
+    let injection_plan = decision
+        .get("injection")
+        .and_then(|value| value.get("plan"))
+        .unwrap_or(&Value::Null);
+    let mut headers = match filtered_forward_headers(&request.headers, injection_plan) {
+        Ok(headers) => headers,
+        Err(err) => write_buffered!(json_status_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error":"invalid_forwarding_headers","detail":err}),
+        )),
+    };
+    let mut response_secret_guard = ResponseSecretGuard::default();
+    let mut credential_release_binding = None;
     if let Some(credential_ref) = decision.get("credential_ref").and_then(Value::as_str) {
         let credential_version = decision
             .get("credential_version")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let Some(lease) = credential_lease(state, credential_ref, credential_version) else {
-            enqueue_audit(
-                state,
-                "data_plane.request.denied",
-                decision_audit_event(
-                    &decision,
-                    &request.method,
-                    &upstream_url,
-                    "denied",
+        let lease = match credential_lease_for_release(
+            state,
+            snapshot,
+            &decision,
+            credential_ref,
+            credential_version,
+        ) {
+            Ok(lease) => lease,
+            Err(error) => {
+                enqueue_audit(
+                    state,
+                    "data_plane.request.denied",
+                    decision_audit_event(
+                        &decision,
+                        &request.method,
+                        &upstream_url,
+                        "denied",
+                        json!({
+                            "stage":"credential_lease",
+                            "error":error,
+                            "credential_ref":credential_ref,
+                            "credential_version":credential_version,
+                            "request_body_mode":request_policy.mode,
+                        }),
+                    ),
+                );
+                write_buffered!(json_status_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
                     json!({
-                        "stage":"credential_lease",
-                        "error":"credential_lease_missing",
+                        "error":error,
                         "credential_ref":credential_ref,
                         "credential_version":credential_version,
-                        "request_body_mode":request_policy.mode,
                     }),
-                ),
-            );
-            write_buffered!(json_status_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({
-                    "error":"credential_lease_missing",
-                    "credential_ref":credential_ref,
-                    "credential_version":credential_version,
-                }),
-            ));
+                ));
+            }
         };
-        if let Err(err) = apply_credential_injection(
-            &mut headers,
-            &mut upstream_url,
-            decision
-                .get("injection")
-                .and_then(|value| value.get("plan"))
-                .unwrap_or(&Value::Null),
-            &lease,
-        ) {
-            enqueue_audit(
-                state,
-                "data_plane.request.denied",
-                decision_audit_event(
-                    &decision,
-                    &request.method,
-                    &upstream_url,
-                    "denied",
-                    json!({"stage":"credential_injection","error":"credential_injection_failed","detail":err.clone(),"request_body_mode":request_policy.mode}),
-                ),
-            );
-            write_buffered!(json_status_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({"error":"credential_injection_failed","detail":err}),
-            ));
+        credential_release_binding = Some(credential_lease_release_binding(&lease));
+        match apply_credential_injection(&mut headers, &mut upstream_url, injection_plan, &lease) {
+            Ok(guard) => response_secret_guard = guard,
+            Err(err) => {
+                enqueue_audit(
+                    state,
+                    "data_plane.request.denied",
+                    decision_audit_event(
+                        &decision,
+                        &request.method,
+                        &upstream_url,
+                        "denied",
+                        json!({"stage":"credential_injection","error":"credential_injection_failed","detail":err.clone(),"request_body_mode":request_policy.mode}),
+                    ),
+                );
+                write_buffered!(json_status_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({"error":"credential_injection_failed","detail":err}),
+                ));
+            }
         }
+    }
+    if !snapshot_is_active(state, snapshot) {
+        write_buffered!(json_status_response(
+            StatusCode::CONFLICT,
+            json!({"error":"policy_snapshot_revoked","snapshot_epoch":snapshot.epoch}),
+        ));
     }
     let method = match Method::from_bytes(request.method.as_bytes()) {
         Ok(method) => method,
@@ -8347,9 +14617,42 @@ fn forward_absolute_streaming_request_to(
         .request(method, upstream_url.as_str())
         .headers(headers)
         .body(upstream_body);
+    if credential_release_binding
+        .as_ref()
+        .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
+    {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"credential_lease_changed_before_release"}),
+        ));
+    }
+    if credential_release_binding.as_ref().is_some_and(|binding| {
+        !record_required_credential_release_start(
+            state,
+            &decision,
+            &request_method,
+            &upstream_url,
+            binding,
+        )
+    }) {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"required_credential_audit_unavailable"}),
+        ));
+    }
+    if credential_release_binding
+        .as_ref()
+        .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
+    {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"credential_lease_changed_before_release"}),
+        ));
+    }
     let response = match builder.send() {
         Ok(response) => response,
         Err(err) => {
+            let detail = redacted_reqwest_error(err);
             let (body_sha256, body_bytes) = request_stream_stats_snapshot(&stats);
             let (mutated_body_sha256, mutated_body_bytes) = output_stats
                 .as_ref()
@@ -8366,7 +14669,7 @@ fn forward_absolute_streaming_request_to(
                     json!({
                         "stage":"upstream_request",
                         "error":"upstream_request_failed",
-                        "detail":error_chain(&err),
+                        "detail":detail,
                         "request_body_mode":request_policy.mode,
                         "request_body_sha256":body_sha256,
                         "body_sha256":body_sha256,
@@ -8380,7 +14683,7 @@ fn forward_absolute_streaming_request_to(
             );
             write_buffered!(json_status_response(
                 StatusCode::BAD_GATEWAY,
-                json!({"error":"upstream_request_failed","detail":error_chain(&err)}),
+                json!({"error":"upstream_request_failed"}),
             ));
         }
     };
@@ -8444,23 +14747,26 @@ fn forward_absolute_streaming_request_to(
     });
     match finalize_upstream_response(
         state,
+        snapshot,
         &decision,
         &request_method,
         &upstream_url,
         response,
+        &response_secret_guard,
         Some(writer),
         keep_alive,
     ) {
         ForwardResult::Buffered(response) => {
             let response = override_response_connection(response, keep_alive);
-            writer.write_all(&response).is_ok() && writer.flush().is_ok()
+            write_snapshot_guarded_response(state, snapshot, writer, &response)
         }
-        ForwardResult::Streamed => true,
+        ForwardResult::Streamed => false,
     }
 }
 
 fn forward_intercepted_streaming_request_to<R: Read + Write>(
-    state: &GateState,
+    state: &Arc<GateState>,
+    snapshot: &Arc<Snapshot>,
     mut request: RequestHead,
     tls: &mut R,
     request_policy: StreamingRequestPolicy,
@@ -8497,10 +14803,18 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
         headers: request.headers.clone(),
         body: String::new(),
         body_sha256: Some(sha256_prefixed(b"")),
+        forwarded_body_length: Some(request.content_length as u64),
+        forwarded_body_utf8_valid: Some(true),
         credential_metadata: BTreeMap::new(),
         gmail_proofs: Vec::new(),
+        client_request_digest: None,
     };
-    let decision = decide_internal(state, decision_request, authenticated_principal_id);
+    let decision = decide_internal(
+        state,
+        snapshot,
+        decision_request,
+        authenticated_principal_id,
+    );
     if !decision
         .get("allowed")
         .and_then(Value::as_bool)
@@ -8527,65 +14841,88 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
         &mut upstream_url,
         decision.get("rewrite").unwrap_or(&Value::Null),
     );
-    let mut headers = filtered_forward_headers(&request.headers);
+    let injection_plan = decision
+        .get("injection")
+        .and_then(|value| value.get("plan"))
+        .unwrap_or(&Value::Null);
+    let mut headers = match filtered_forward_headers(&request.headers, injection_plan) {
+        Ok(headers) => headers,
+        Err(err) => write_buffered!(json_status_response(
+            StatusCode::BAD_REQUEST,
+            json!({"error":"invalid_forwarding_headers","detail":err}),
+        )),
+    };
+    let mut response_secret_guard = ResponseSecretGuard::default();
+    let mut credential_release_binding = None;
     if let Some(credential_ref) = decision.get("credential_ref").and_then(Value::as_str) {
         let credential_version = decision
             .get("credential_version")
             .and_then(Value::as_u64)
             .unwrap_or(0);
-        let Some(lease) = credential_lease(state, credential_ref, credential_version) else {
-            enqueue_audit(
-                state,
-                "data_plane.request.denied",
-                decision_audit_event(
-                    &decision,
-                    &request.method,
-                    &upstream_url,
-                    "denied",
+        let lease = match credential_lease_for_release(
+            state,
+            snapshot,
+            &decision,
+            credential_ref,
+            credential_version,
+        ) {
+            Ok(lease) => lease,
+            Err(error) => {
+                enqueue_audit(
+                    state,
+                    "data_plane.request.denied",
+                    decision_audit_event(
+                        &decision,
+                        &request.method,
+                        &upstream_url,
+                        "denied",
+                        json!({
+                            "stage":"credential_lease",
+                            "error":error,
+                            "credential_ref":credential_ref,
+                            "credential_version":credential_version,
+                            "request_body_mode":request_policy.mode,
+                            "intercepted_connect":true,
+                        }),
+                    ),
+                );
+                write_buffered!(json_status_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
                     json!({
-                        "stage":"credential_lease",
-                        "error":"credential_lease_missing",
+                        "error":error,
                         "credential_ref":credential_ref,
                         "credential_version":credential_version,
-                        "request_body_mode":request_policy.mode,
-                        "intercepted_connect":true,
                     }),
-                ),
-            );
-            write_buffered!(json_status_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({
-                    "error":"credential_lease_missing",
-                    "credential_ref":credential_ref,
-                    "credential_version":credential_version,
-                }),
-            ));
+                ));
+            }
         };
-        if let Err(err) = apply_credential_injection(
-            &mut headers,
-            &mut upstream_url,
-            decision
-                .get("injection")
-                .and_then(|value| value.get("plan"))
-                .unwrap_or(&Value::Null),
-            &lease,
-        ) {
-            enqueue_audit(
-                state,
-                "data_plane.request.denied",
-                decision_audit_event(
-                    &decision,
-                    &request.method,
-                    &upstream_url,
-                    "denied",
-                    json!({"stage":"credential_injection","error":"credential_injection_failed","detail":err.clone(),"request_body_mode":request_policy.mode,"intercepted_connect":true}),
-                ),
-            );
-            write_buffered!(json_status_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({"error":"credential_injection_failed","detail":err}),
-            ));
+        credential_release_binding = Some(credential_lease_release_binding(&lease));
+        match apply_credential_injection(&mut headers, &mut upstream_url, injection_plan, &lease) {
+            Ok(guard) => response_secret_guard = guard,
+            Err(err) => {
+                enqueue_audit(
+                    state,
+                    "data_plane.request.denied",
+                    decision_audit_event(
+                        &decision,
+                        &request.method,
+                        &upstream_url,
+                        "denied",
+                        json!({"stage":"credential_injection","error":"credential_injection_failed","detail":err.clone(),"request_body_mode":request_policy.mode,"intercepted_connect":true}),
+                    ),
+                );
+                write_buffered!(json_status_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({"error":"credential_injection_failed","detail":err}),
+                ));
+            }
         }
+    }
+    if !snapshot_is_active(state, snapshot) {
+        write_buffered!(json_status_response(
+            StatusCode::CONFLICT,
+            json!({"error":"policy_snapshot_revoked","snapshot_epoch":snapshot.epoch}),
+        ));
     }
     let method = match Method::from_bytes(request.method.as_bytes()) {
         Ok(method) => method,
@@ -8609,6 +14946,31 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
     };
     let request_policy_for_thread = request_policy.clone();
     let output_stats_for_thread = output_stats.clone();
+    if credential_release_binding
+        .as_ref()
+        .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
+    {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"credential_lease_changed_before_release"}),
+        ));
+    }
+    if credential_release_binding.as_ref().is_some_and(|binding| {
+        !record_required_credential_release_start(
+            state,
+            &decision,
+            &request_method,
+            &upstream_url,
+            binding,
+        )
+    }) {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"required_credential_audit_unavailable"}),
+        ));
+    }
+    let sender_state = Arc::clone(state);
+    let sender_snapshot = Arc::clone(snapshot);
     let sender_thread = thread::spawn(move || {
         let body_reader = ChannelBodyReader::new(body_receiver);
         let body = match (
@@ -8654,12 +15016,17 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
             )),
             _ => Body::sized(body_reader, content_length),
         };
+        if credential_release_binding.as_ref().is_some_and(|binding| {
+            !credential_lease_still_releasable(&sender_state, &sender_snapshot, binding)
+        }) {
+            return Err("credential_lease_changed_before_release".to_string());
+        }
         client
             .request(method, upstream_url_text)
             .headers(headers)
             .body(body)
             .send()
-            .map_err(|err| error_chain(&err))
+            .map_err(redacted_reqwest_error)
     });
     let pump_result = pump_request_body_to_channel(
         tls,
@@ -8798,45 +15165,155 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
     });
     match finalize_upstream_response(
         state,
+        snapshot,
         &decision,
         &request_method,
         &upstream_url,
         response,
+        &response_secret_guard,
         Some(tls),
         keep_alive,
     ) {
         ForwardResult::Buffered(response) => {
             let response = override_response_connection(response, keep_alive);
-            tls.write_all(&response).is_ok() && tls.flush().is_ok()
+            write_snapshot_guarded_response(state, snapshot, tls, &response)
         }
-        ForwardResult::Streamed => true,
+        ForwardResult::Streamed => false,
     }
 }
 
 fn forward_absolute_request_to(
     state: &GateState,
+    snapshot: &Arc<Snapshot>,
     request: IncomingRequest,
     authenticated_principal_id: Option<&str>,
     keep_alive: bool,
     writer: &mut dyn Write,
+    response_proof: Option<&ResponseProofContext>,
 ) -> bool {
-    match forward_absolute_request_inner(
-        state,
-        request,
-        authenticated_principal_id,
-        Some(writer),
-        keep_alive,
-    ) {
-        ForwardResult::Buffered(response) => {
-            let response = override_response_connection(response, keep_alive);
-            writer.write_all(&response).is_ok() && writer.flush().is_ok()
+    let client_request_digest = if let Some(context) = response_proof {
+        match client_proof_request_digest(&request, context) {
+            Ok(digest) => Some(digest),
+            Err(err) => {
+                enqueue_audit(
+                    state,
+                    "data_plane.response_proof.denied",
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "outcome":"denied",
+                        "error":"response_proof_request_binding_invalid",
+                        "detail":err,
+                        "policy_hash":snapshot.hash,
+                    }),
+                );
+                let response = json_status_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({"error":"response_proof_request_binding_invalid"}),
+                );
+                let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
+                return false;
+            }
         }
-        ForwardResult::Streamed => true,
+    } else {
+        None
+    };
+    let result = if response_proof.is_some() {
+        forward_absolute_request_inner(
+            state,
+            snapshot,
+            request,
+            authenticated_principal_id,
+            client_request_digest.as_deref(),
+            None,
+            keep_alive,
+        )
+    } else {
+        forward_absolute_request_inner(
+            state,
+            snapshot,
+            request,
+            authenticated_principal_id,
+            None,
+            Some(writer),
+            keep_alive,
+        )
+    };
+    match result {
+        ForwardResult::Buffered(mut response) => {
+            let mut attached_proof = None;
+            if let Some(context) = response_proof {
+                let Some(expected_client_request_digest) = client_request_digest.as_deref() else {
+                    return false;
+                };
+                match attach_response_proof(
+                    state,
+                    snapshot,
+                    context,
+                    expected_client_request_digest,
+                    response,
+                ) {
+                    Ok(ResponseProofAttachment::Attached {
+                        response: attached_response,
+                        runtime_proof_sha256,
+                        client_request_digest,
+                    }) => {
+                        response = attached_response;
+                        attached_proof = Some((runtime_proof_sha256, client_request_digest));
+                    }
+                    Ok(ResponseProofAttachment::Skipped {
+                        response: skipped_response,
+                    }) => response = skipped_response,
+                    Err(err) => {
+                        enqueue_audit(
+                            state,
+                            "data_plane.response_proof.failed",
+                            json!({
+                                "component":"serverware-decision-gate-rs",
+                                "outcome":"denied",
+                                "error":"response_proof_unavailable",
+                                "detail":err,
+                                "policy_hash":snapshot.hash,
+                            }),
+                        );
+                        let response = json_status_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            json!({"error":"response_proof_unavailable"}),
+                        );
+                        let _ = writer.write_all(&response);
+                        let _ = writer.flush();
+                        return false;
+                    }
+                }
+            }
+            let response = override_response_connection(response, keep_alive);
+            let written = write_snapshot_guarded_response(state, snapshot, writer, &response);
+            if written {
+                if let (Some(context), Some((runtime_proof_sha256, client_request_digest))) =
+                    (response_proof, attached_proof)
+                {
+                    enqueue_audit(
+                        state,
+                        "data_plane.response_proof.emitted",
+                        json!({
+                            "component":"serverware-decision-gate-rs",
+                            "outcome":"emitted",
+                            "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
+                            "client_request_digest":client_request_digest,
+                            "policy_hash":snapshot.hash,
+                            "runtime_proof_sha256":runtime_proof_sha256,
+                            "response_signing_key_id":state.response_proof_signing_key_id,
+                        }),
+                    );
+                }
+            }
+            written
+        }
+        ForwardResult::Streamed => false,
     }
 }
 
 fn request_streaming_preflight(
-    state: &GateState,
+    snapshot: &Arc<Snapshot>,
     request: &RequestHead,
     authenticated_principal_id: Option<&str>,
 ) -> RequestStreamingPreflight {
@@ -8845,7 +15322,6 @@ fn request_streaming_preflight(
         _ => return RequestStreamingPreflight::Buffer,
     };
     let headers = lower_headers(&request.headers);
-    let snapshot = current_snapshot(state);
     let principal = if let Some(principal_id) = authenticated_principal_id {
         snapshot
             .principals
@@ -8897,7 +15373,7 @@ fn request_streaming_preflight(
             json!({"error":"streaming_request_jit_unsupported","route_id":route.id}),
         ));
     }
-    if headers.get("transfer-encoding").is_some() {
+    if headers.contains_key("transfer-encoding") {
         return RequestStreamingPreflight::Reject(json_status_response(
             StatusCode::BAD_REQUEST,
             json!({"error":"streaming_request_transfer_encoding_unsupported"}),
@@ -8950,6 +15426,46 @@ fn request_streaming_preflight(
     })
 }
 
+fn buffered_route_body_limit(
+    snapshot: &Arc<Snapshot>,
+    request: &RequestHead,
+    authenticated_principal_id: Option<&str>,
+) -> u64 {
+    let Ok(target_url) = Url::parse(&request.target) else {
+        return MAX_BUFFERED_REQUEST_BODY_BYTES;
+    };
+    let headers = lower_headers(&request.headers);
+    let principal = if let Some(principal_id) = authenticated_principal_id {
+        snapshot
+            .principals
+            .iter()
+            .find(|principal| principal.id == principal_id)
+    } else {
+        snapshot.identify_principal(request.client_ip.as_deref(), &headers)
+    };
+    let Some(principal) = principal else {
+        return MAX_BUFFERED_REQUEST_BODY_BYTES;
+    };
+    let Some(route_match) = snapshot.match_route(&principal.id, &request.method, &target_url)
+    else {
+        return MAX_BUFFERED_REQUEST_BODY_BYTES;
+    };
+    if route_match.route.adapter_type != "generic.rest" {
+        return MAX_BUFFERED_REQUEST_BODY_BYTES;
+    }
+    let Some(request_config) = get_object(&route_match.route.adapter_config, "request") else {
+        return MAX_BUFFERED_REQUEST_BODY_BYTES;
+    };
+    if request_config.get("bodyMode").and_then(Value::as_str) == Some("none") {
+        return 0;
+    }
+    request_config
+        .get("maxBodyBytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(MAX_BUFFERED_REQUEST_BODY_BYTES)
+        .min(MAX_BUFFERED_REQUEST_BODY_BYTES)
+}
+
 fn read_request_head_from<R: Read>(
     reader: &mut R,
     client_ip: Option<String>,
@@ -8965,36 +15481,102 @@ fn read_request_head_from<R: Read>(
         buffer.extend_from_slice(&chunk[..read]);
         if let Some(index) = buffer.windows(4).position(|window| window == b"\r\n\r\n") {
             header_end = index + 4;
+            if header_end > MAX_REQUEST_HEADER_BYTES {
+                return Err("headers too large".to_string());
+            }
             break;
         }
-        if buffer.len() > 1024 * 1024 {
+        if buffer.len() > MAX_REQUEST_HEADER_BYTES {
             return Err("headers too large".to_string());
         }
     }
-    let header_text = String::from_utf8_lossy(&buffer[..header_end]).to_string();
+    let header_text = std::str::from_utf8(&buffer[..header_end])
+        .map_err(|_| "request headers are not valid UTF-8".to_string())?;
     let mut lines = header_text.split("\r\n");
     let request_line = lines.next().ok_or("missing request line")?;
-    let mut parts = request_line.split_whitespace();
-    let method = parts.next().ok_or("missing method")?.to_string();
-    let target = parts.next().ok_or("missing request target")?.to_string();
+    let parts = request_line.split(' ').collect::<Vec<_>>();
+    if parts.len() != 3 || parts.iter().any(|part| part.is_empty()) {
+        return Err("request line must contain exactly method, target, and version".to_string());
+    }
+    let method = parts[0].to_string();
+    Method::from_bytes(method.as_bytes()).map_err(|err| format!("invalid method: {err}"))?;
+    let target = parts[1].to_string();
+    if target.bytes().any(|byte| byte < 0x20 || byte == 0x7f) {
+        return Err("request target contains a control byte".to_string());
+    }
+    let version = parts[2];
+    if version != "HTTP/1.1" && version != "HTTP/1.0" {
+        return Err("unsupported HTTP version".to_string());
+    }
     let mut content_length = 0usize;
     let mut has_content_length = false;
-    let mut headers = BTreeMap::new();
+    let mut headers: BTreeMap<String, String> = BTreeMap::new();
+    let mut header_count = 0usize;
+    let singleton_headers = [
+        "host",
+        "content-length",
+        "authorization",
+        "proxy-authorization",
+        "x-serverware-data-plane-token",
+        RESPONSE_PROOF_NONCE_HEADER,
+    ];
     for line in lines {
-        if let Some((name, value)) = line.split_once(':') {
-            headers.insert(name.trim().to_string(), value.trim().to_string());
-            if name.eq_ignore_ascii_case("content-length") {
-                has_content_length = true;
-                content_length = value
-                    .trim()
-                    .parse::<usize>()
-                    .map_err(|err| err.to_string())?;
+        if line.is_empty() {
+            continue;
+        }
+        header_count += 1;
+        if header_count > MAX_REQUEST_HEADER_COUNT {
+            return Err("too many request headers".to_string());
+        }
+        if line.starts_with(' ') || line.starts_with('\t') {
+            return Err("obsolete folded request headers are not allowed".to_string());
+        }
+        let (raw_name, raw_value) = line
+            .split_once(':')
+            .ok_or_else(|| "request header is missing colon".to_string())?;
+        if raw_name.is_empty()
+            || raw_name
+                .as_bytes()
+                .last()
+                .is_some_and(|byte| byte.is_ascii_whitespace())
+        {
+            return Err("whitespace before request header colon is not allowed".to_string());
+        }
+        HeaderName::from_bytes(raw_name.as_bytes())
+            .map_err(|err| format!("invalid request header name: {err}"))?;
+        let name = raw_name.to_ascii_lowercase();
+        let value = raw_value.trim_matches([' ', '\t']);
+        HeaderValue::from_str(value)
+            .map_err(|err| format!("invalid request header value for {name}: {err}"))?;
+        if singleton_headers.contains(&name.as_str()) && headers.contains_key(&name) {
+            return Err(format!("duplicate singleton request header: {name}"));
+        }
+        if let Some(existing) = headers.get_mut(&name) {
+            existing.push_str(", ");
+            existing.push_str(value);
+        } else {
+            headers.insert(name.clone(), value.to_string());
+        }
+        if name == "content-length" {
+            has_content_length = true;
+            if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Err("invalid content-length".to_string());
             }
+            content_length = value
+                .parse::<usize>()
+                .map_err(|err| format!("invalid content-length: {err}"))?;
         }
     }
-    let lowered = lower_headers(&headers);
-    if lowered.get("transfer-encoding").is_some() {
+    if version == "HTTP/1.1" && headers.get("host").is_none_or(String::is_empty) {
+        return Err("HTTP/1.1 request requires exactly one Host header".to_string());
+    }
+    if headers.contains_key("transfer-encoding") {
         return Err("transfer-encoding request bodies are not supported".to_string());
+    }
+    for nominated in connection_nominated_headers(&headers) {
+        if headers.contains_key(&nominated) {
+            return Err(format!("Connection nominates supplied header {nominated}"));
+        }
     }
     Ok(RequestHead {
         method,
@@ -9010,7 +15592,13 @@ fn read_request_head_from<R: Read>(
 fn read_request_body_from_head<R: Read>(
     reader: &mut R,
     head: RequestHead,
+    max_body_bytes: u64,
 ) -> Result<IncomingRequest, String> {
+    if head.content_length as u64 > max_body_bytes {
+        return Err(format!(
+            "request body exceeds maximum of {max_body_bytes} bytes"
+        ));
+    }
     if head.prefetched_body.len() > head.content_length {
         return Err("request pipelining is not supported".to_string());
     }
@@ -9034,16 +15622,6 @@ fn read_request_body_from_head<R: Read>(
         body,
         client_ip: head.client_ip,
     })
-}
-
-fn read_request_head(
-    stream: &mut TcpStream,
-    client_ip: Option<String>,
-) -> Result<RequestHead, String> {
-    stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
-        .map_err(|err| err.to_string())?;
-    read_request_head_from(stream, client_ip)
 }
 
 fn request_target_parts(target: &str) -> (String, BTreeMap<String, String>) {
@@ -9101,23 +15679,95 @@ fn signed_json_digest(path: &Option<String>, digest_field: &str) -> Value {
     Value::String(sha256_prefixed(&bytes))
 }
 
-fn runtime_manifest(state: &GateState) -> Value {
-    let snapshot = current_snapshot(state);
-    let provenance_digest = release_provenance_digest(&state.release_provenance_path);
-    let image_signature_digest = image_signatures_digest(&state.image_signatures_path);
-    let source_digest = source_tree_digest(&state.release_provenance_path);
+fn resolve_command_artifact(value: &str) -> Option<PathBuf> {
+    let candidate = Path::new(value);
+    if candidate.is_file() {
+        return fs::canonicalize(candidate).ok();
+    }
+    if candidate.components().count() != 1 {
+        return None;
+    }
+    env::var_os("PATH")?
+        .to_string_lossy()
+        .split(':')
+        .find_map(|entry| {
+            let path = Path::new(entry).join(candidate);
+            path.is_file()
+                .then(|| fs::canonicalize(path).ok())
+                .flatten()
+        })
+}
+
+fn command_artifact_measurements(command: Option<&String>) -> Value {
+    let Some(command) = command else {
+        return Value::Null;
+    };
+    let Some(argv) = shlex::split(command) else {
+        return json!({"command_sha256":sha256_prefixed(command.as_bytes()),"artifacts":[]});
+    };
+    let mut seen = HashSet::new();
+    let artifacts = argv
+        .iter()
+        .filter_map(|value| resolve_command_artifact(value))
+        .filter(|path| seen.insert(path.clone()))
+        .filter_map(|path| {
+            let bytes = fs::read(&path).ok()?;
+            Some(json!({
+                "path":path.to_string_lossy(),
+                "sha256":sha256_prefixed(&bytes),
+                "size_bytes":bytes.len(),
+            }))
+        })
+        .collect::<Vec<_>>();
+    json!({
+        "command_sha256":sha256_prefixed(command.as_bytes()),
+        "artifacts":artifacts,
+    })
+}
+
+fn build_runtime_manifest(
+    state: &GateState,
+    snapshot: &Snapshot,
+    provenance_digest: &Value,
+    image_signature_digest: &Value,
+    source_digest: &Value,
+) -> Value {
+    let policy_high_water = state
+        .policy_high_water
+        .lock()
+        .expect("policy high-water mutex poisoned")
+        .clone();
     json!({
         "component":"serverware-decision-gate-rs",
         "version":env!("CARGO_PKG_VERSION"),
         "binary_digest":state.binary_digest,
         "policy_hash":snapshot.hash,
+        "policy_id":snapshot.policy_id,
+        "policy_sequence":snapshot.policy_sequence,
+        "policy_rollback_epoch":snapshot.rollback_epoch,
+        "policy_high_water":policy_high_water,
+        "policy_high_water_persisted":state.policy_high_water_path.is_some(),
         "policy_signing_key_id":snapshot.policy_signing_key_id,
         "policy_trust_root_source":state.policy_trust_root_source.label(),
         "provenance_digest":provenance_digest,
         "image_signatures_digest":image_signature_digest,
         "source_tree_digest":source_digest,
         "routes":snapshot.routes.len(),
-        "credential_lease_cache":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
+        "credential_lease_protocol":"scoped-recipient-bound-pull/v2",
+        "credential_lease_renewal":{
+            "mode":"background-bounded",
+            "poll_interval_ms":state.credential_lease_renewal_poll_interval_ms,
+            "renew_before_ms":CREDENTIAL_LEASE_RENEW_BEFORE.as_millis(),
+            "workers":state.credential_lease_renewal_workers,
+            "queue_capacity":state.credential_lease_renewal_queue_capacity,
+            "cache_capacity":state.credential_lease_cache_max,
+        },
+        "credential_lease_recipient_attestation_command_sha256":state.credential_lease_recipient_attestation_command.as_ref().map(|command| sha256_prefixed(command.as_bytes())),
+        "credential_lease_recipient_attestation_command_measurement":command_artifact_measurements(state.credential_lease_recipient_attestation_command.as_ref()),
+        "response_proof_signing_key_id":state.response_proof_signing_key_id,
+        "response_proof_attestation_command_sha256":state.response_proof_attestation_command.as_ref().map(|command| sha256_prefixed(command.as_bytes())),
+        "response_proof_attestation_command_measurement":command_artifact_measurements(state.response_proof_attestation_command.as_ref()),
+        "server_instance_id":state.server_instance_id,
         "jit_grant_store": if state.grant_consume_url.is_some() {"shared"} else {"local"},
         "shared_rate_limit_store": state.rate_limit_consume_url.is_some(),
         "absolute_form_forwarder":true,
@@ -9130,11 +15780,10 @@ fn runtime_manifest(state: &GateState) -> Value {
         "form_urlencoded_streaming_request_response_redaction":true,
         "csv_streaming_request_response_redaction":true,
         "connect_mitm_interceptor":state.mitm_authority.is_some(),
-        "leaf_config_cache":state.leaf_configs.lock().expect("leaf config cache mutex poisoned").len(),
-        "audit":audit_status(state),
-        "policy_reload":{
-            "success":state.policy_reload_success.load(Ordering::Relaxed),
-            "failed":state.policy_reload_failed.load(Ordering::Relaxed),
+        "audit":{
+            "enabled":audit_enabled(state),
+            "queue_max":state.audit_queue_max,
+            "batch_max":state.audit_batch_max,
         },
         "hot_path":{
             "sqlite_calls":0,
@@ -9144,25 +15793,63 @@ fn runtime_manifest(state: &GateState) -> Value {
 }
 
 fn attestation(state: &GateState, nonce: Option<String>) -> Value {
-    let manifest = runtime_manifest(state);
     let snapshot = current_snapshot(state);
     let provenance_digest = release_provenance_digest(&state.release_provenance_path);
     let image_signature_digest = image_signatures_digest(&state.image_signatures_path);
     let source_digest = source_tree_digest(&state.release_provenance_path);
+    let manifest = build_runtime_manifest(
+        state,
+        &snapshot,
+        &provenance_digest,
+        &image_signature_digest,
+        &source_digest,
+    );
+    let manifest_digest = sha256_prefixed(canonical_json(&manifest).as_bytes());
+    let policy_high_water = manifest
+        .get("policy_high_water")
+        .cloned()
+        .unwrap_or(Value::Null);
     json!({
         "tee_platform":"none-dev",
         "quote":null,
         "runtime_manifest":manifest,
-        "runtime_manifest_digest":sha256_prefixed(canonical_json(&manifest).as_bytes()),
+        "runtime_manifest_digest":manifest_digest,
         "data_plane_binary_digest":state.binary_digest,
         "policy_bundle_digest":snapshot.hash,
+        "policy_id":snapshot.policy_id,
+        "policy_sequence":snapshot.policy_sequence,
+        "policy_rollback_epoch":snapshot.rollback_epoch,
+        "policy_high_water":policy_high_water,
+        "policy_high_water_persisted":state.policy_high_water_path.is_some(),
         "policy_signing_key_id":snapshot.policy_signing_key_id,
         "policy_trust_root_source":state.policy_trust_root_source.label(),
         "provenance_digest":provenance_digest,
         "image_signatures_digest":image_signature_digest,
         "source_tree_digest":source_digest,
-        "credential_generations":state.credential_generations.lock().expect("credential generation mutex poisoned").len(),
+        "response_proof_signing_key_id":state.response_proof_signing_key_id,
+        "response_proof_signing_public_key_pem":state.response_proof_public_key_pem,
+        "server_instance_id":state.server_instance_id,
         "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
+        "credential_lease_earliest_expiry_epoch_ms":earliest_credential_lease_expiry_epoch_ms(state),
+        "credential_lease_protocol":"scoped-recipient-bound-pull/v2",
+        "credential_lease_renewal":{
+            "mode":"background-bounded",
+            "poll_interval_ms":state.credential_lease_renewal_poll_interval_ms,
+            "renew_before_ms":CREDENTIAL_LEASE_RENEW_BEFORE.as_millis(),
+            "workers":state.credential_lease_renewal_workers,
+            "queue_capacity":state.credential_lease_renewal_queue_capacity,
+            "cache_capacity":state.credential_lease_cache_max,
+        },
+        "credential_lease_refresh":{
+            "success":state.credential_lease_refresh_success.load(Ordering::Relaxed),
+            "failed":state.credential_lease_refresh_failed.load(Ordering::Relaxed),
+            "queued":state.credential_lease_renewal_queued.load(Ordering::Relaxed),
+            "queue_full":state.credential_lease_renewal_queue_full.load(Ordering::Relaxed),
+        },
+        "policy_reload":{
+            "success":state.policy_reload_success.load(Ordering::Relaxed),
+            "failed":state.policy_reload_failed.load(Ordering::Relaxed),
+        },
         "connect_mitm_interceptor":state.mitm_authority.is_some(),
         "leaf_config_cache":state.leaf_configs.lock().expect("leaf config cache mutex poisoned").len(),
         "audit":audit_status(state),
@@ -9199,10 +15886,15 @@ fn connect_inner_absolute_target(
     Ok(format!("https://{authority}{target}"))
 }
 
-fn handle_connect_request(mut stream: TcpStream, state: Arc<GateState>, request: IncomingRequest) {
+fn handle_connect_request(
+    mut stream: DeadlineIo<TcpStream>,
+    state: Arc<GateState>,
+    snapshot: Arc<Snapshot>,
+    request: IncomingRequest,
+) {
     let client_ip = request.client_ip.clone();
     let decision = connect_preflight(
-        &state,
+        &snapshot,
         request.client_ip.as_deref(),
         &request.target,
         &request.headers,
@@ -9232,6 +15924,15 @@ fn handle_connect_request(mut stream: TcpStream, state: Arc<GateState>, request:
         } else {
             http_response("403 Forbidden", decision)
         };
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    }
+    if !snapshot_is_active(&state, &snapshot) {
+        let response = json_status_response(
+            StatusCode::CONFLICT,
+            json!({"error":"policy_snapshot_revoked","snapshot_epoch":snapshot.epoch}),
+        );
         let _ = stream.write_all(&response);
         let _ = stream.flush();
         return;
@@ -9328,6 +16029,8 @@ fn handle_connect_request(mut stream: TcpStream, state: Arc<GateState>, request:
     let mut tls = StreamOwned::new(tls_conn, stream);
     let mut handled_requests = 0u64;
     loop {
+        tls.sock.reset_read_deadline(state.request_head_deadline);
+        tls.sock.reset_write_deadline(state.response_write_deadline);
         let head = match read_request_head_from(&mut tls, client_ip.clone()) {
             Ok(head) => head,
             Err(err) if err == "connection closed before headers" => break,
@@ -9343,17 +16046,75 @@ fn handle_connect_request(mut stream: TcpStream, state: Arc<GateState>, request:
         };
         let close_after = request_head_wants_close(&head);
         let mut head = head;
+        let response_proof =
+            if lower_headers(&head.headers).contains_key(RESPONSE_PROOF_NONCE_HEADER) {
+                if !matches!(head.method.as_str(), "GET" | "HEAD") {
+                    let response = json_status_response(
+                        StatusCode::BAD_REQUEST,
+                        json!({"error":"response_proof_requires_safe_method"}),
+                    );
+                    let _ = tls.write_all(&response);
+                    let _ = tls.flush();
+                    break;
+                }
+                if head.content_length != 0 {
+                    let response = json_status_response(
+                        StatusCode::BAD_REQUEST,
+                        json!({"error":"response_proof_requires_empty_body"}),
+                    );
+                    let _ = tls.write_all(&response);
+                    let _ = tls.flush();
+                    break;
+                }
+                match response_proof_context(&state, &head.headers, &tls.conn) {
+                    Ok(context) => context,
+                    Err(err) => {
+                        enqueue_audit(
+                            &state,
+                            "data_plane.response_proof.denied",
+                            json!({
+                                "component":"serverware-decision-gate-rs",
+                                "outcome":"denied",
+                                "error":"response_proof_request_invalid",
+                                "detail":err,
+                                "client_ip":client_ip,
+                            }),
+                        );
+                        let response = json_status_response(
+                            StatusCode::BAD_REQUEST,
+                            json!({"error":"response_proof_request_invalid"}),
+                        );
+                        let _ = tls.write_all(&response);
+                        let _ = tls.flush();
+                        break;
+                    }
+                }
+            } else {
+                None
+            };
+        tls.sock.reset_read_deadline(state.request_body_deadline);
         let forwarded = match connect_inner_absolute_target(&authority, &head.target, &host, port) {
             Ok(target) => {
                 head.target = target;
+                let request_snapshot = current_snapshot(&state);
                 match request_streaming_preflight(
-                    &state,
+                    &request_snapshot,
                     &head,
                     authenticated_principal_id.as_deref(),
                 ) {
                     RequestStreamingPreflight::Stream(policy) => {
+                        if response_proof.is_some() {
+                            let response = json_status_response(
+                                StatusCode::BAD_REQUEST,
+                                json!({"error":"response_proof_requires_buffered_request_route"}),
+                            );
+                            let _ = tls.write_all(&response);
+                            let _ = tls.flush();
+                            break;
+                        }
                         forward_intercepted_streaming_request_to(
                             &state,
+                            &request_snapshot,
                             head,
                             &mut tls,
                             policy,
@@ -9363,10 +16124,17 @@ fn handle_connect_request(mut stream: TcpStream, state: Arc<GateState>, request:
                     }
                     RequestStreamingPreflight::Reject(response) => {
                         let response = override_response_connection(response, false);
-                        tls.write_all(&response).is_ok() && tls.flush().is_ok() && false
+                        let _ = tls.write_all(&response);
+                        let _ = tls.flush();
+                        false
                     }
                     RequestStreamingPreflight::Buffer => {
-                        let inner = match read_request_body_from_head(&mut tls, head) {
+                        let body_limit = buffered_route_body_limit(
+                            &request_snapshot,
+                            &head,
+                            authenticated_principal_id.as_deref(),
+                        );
+                        let inner = match read_request_body_from_head(&mut tls, head, body_limit) {
                             Ok(inner) => inner,
                             Err(err) => {
                                 let response = override_response_connection(
@@ -9383,10 +16151,12 @@ fn handle_connect_request(mut stream: TcpStream, state: Arc<GateState>, request:
                         };
                         forward_absolute_request_to(
                             &state,
+                            &request_snapshot,
                             inner,
                             authenticated_principal_id.as_deref(),
                             !close_after,
                             &mut tls,
+                            response_proof.as_ref(),
                         )
                     }
                 }
@@ -9435,9 +16205,14 @@ fn handle_connect_request(mut stream: TcpStream, state: Arc<GateState>, request:
     }
 }
 
-fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_listener: bool) {
+fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listener: bool) {
     let client_ip = stream.peer_addr().ok().map(|addr| addr.ip().to_string());
-    let head = match read_request_head(&mut stream, client_ip) {
+    let mut stream = DeadlineIo::new(
+        stream,
+        state.request_head_deadline,
+        state.response_write_deadline,
+    );
+    let head = match read_request_head_from(&mut stream, client_ip) {
         Ok(head) => head,
         Err(err) => {
             let response = http_response(
@@ -9449,6 +16224,7 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_li
             return;
         }
     };
+    stream.reset_read_deadline(state.request_body_deadline);
     let (origin_path, _) = request_target_parts(&head.target);
     let public_read =
         head.method == "GET" && matches!(origin_path.as_str(), "/healthz" | "/attestation");
@@ -9479,7 +16255,8 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_li
         return;
     }
     if head.method == "CONNECT" {
-        let request = match read_request_body_from_head(&mut stream, head) {
+        let snapshot = current_snapshot(&state);
+        let request = match read_request_body_from_head(&mut stream, head, 0) {
             Ok(request) => request,
             Err(err) => {
                 let response = http_response(
@@ -9491,15 +16268,25 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_li
                 return;
             }
         };
-        handle_connect_request(stream, state, request);
+        handle_connect_request(stream, state, snapshot, request);
         return;
     }
     if absolute_form_target(&head.target) {
-        match request_streaming_preflight(&state, &head, None) {
+        if lower_headers(&head.headers).contains_key(RESPONSE_PROOF_NONCE_HEADER) {
+            let response = json_status_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error":"response_proof_requires_connect_tls"}),
+            );
+            let _ = stream.write_all(&response);
+            let _ = stream.flush();
+            return;
+        }
+        let snapshot = current_snapshot(&state);
+        match request_streaming_preflight(&snapshot, &head, None) {
             RequestStreamingPreflight::Stream(policy) => {
                 let mut request = head;
                 let prefetched = std::mem::take(&mut request.prefetched_body);
-                let reader_stream = match stream.try_clone() {
+                let reader_stream = match stream.inner.try_clone() {
                     Ok(reader_stream) => reader_stream,
                     Err(err) => {
                         let response = json_status_response(
@@ -9513,13 +16300,18 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_li
                 };
                 let stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
                 let body_stream = RequestBodyStream::new(
-                    Box::new(reader_stream),
+                    Box::new(DeadlineIo::new(
+                        reader_stream,
+                        state.request_body_deadline,
+                        state.response_write_deadline,
+                    )),
                     prefetched,
                     request.content_length,
                     stats.clone(),
                 );
                 let _ = forward_absolute_streaming_request_to(
                     &state,
+                    &snapshot,
                     request,
                     body_stream,
                     stats,
@@ -9537,7 +16329,8 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_li
             }
             RequestStreamingPreflight::Buffer => {}
         }
-        let request = match read_request_body_from_head(&mut stream, head) {
+        let body_limit = buffered_route_body_limit(&snapshot, &head, None);
+        let request = match read_request_body_from_head(&mut stream, head, body_limit) {
             Ok(request) => request,
             Err(err) => {
                 let response = http_response(
@@ -9549,10 +16342,16 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_li
                 return;
             }
         };
-        let _ = forward_absolute_request_to(&state, request, None, false, &mut stream);
+        let _ =
+            forward_absolute_request_to(&state, &snapshot, request, None, false, &mut stream, None);
         return;
     }
-    let request = match read_request_body_from_head(&mut stream, head) {
+    let body_limit = if management_post {
+        MAX_MANAGEMENT_REQUEST_BODY_BYTES
+    } else {
+        0
+    };
+    let request = match read_request_body_from_head(&mut stream, head, body_limit) {
         Ok(request) => request,
         Err(err) => {
             let response = http_response(
@@ -9579,8 +16378,23 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_li
                         "data_plane_binary_digest":state.binary_digest,
                         "routes":snapshot.routes.len(),
                         "grants":state.grants.lock().expect("grant cache mutex poisoned").len(),
-                        "credential_generations":state.credential_generations.lock().expect("credential generation mutex poisoned").len(),
                         "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
+                        "credential_lease_earliest_expiry_epoch_ms":earliest_credential_lease_expiry_epoch_ms(&state),
+                        "credential_lease_protocol":"scoped-recipient-bound-pull/v2",
+                        "credential_lease_renewal":{
+                            "mode":"background-bounded",
+                            "poll_interval_ms":state.credential_lease_renewal_poll_interval_ms,
+                            "renew_before_ms":CREDENTIAL_LEASE_RENEW_BEFORE.as_millis(),
+                            "workers":state.credential_lease_renewal_workers,
+                            "queue_capacity":state.credential_lease_renewal_queue_capacity,
+                            "cache_capacity":state.credential_lease_cache_max,
+                        },
+                        "credential_lease_refresh":{
+                            "success":state.credential_lease_refresh_success.load(Ordering::Relaxed),
+                            "failed":state.credential_lease_refresh_failed.load(Ordering::Relaxed),
+                            "queued":state.credential_lease_renewal_queued.load(Ordering::Relaxed),
+                            "queue_full":state.credential_lease_renewal_queue_full.load(Ordering::Relaxed),
+                        },
                         "jit_grant_store": if state.grant_consume_url.is_some() {"shared"} else {"local"},
                         "shared_rate_limit_store":state.rate_limit_consume_url.is_some(),
                         "leaf_config_cache":state.leaf_configs.lock().expect("leaf config cache mutex poisoned").len(),
@@ -9631,6 +16445,104 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_li
     let _ = stream.flush();
 }
 
+fn production_mode(release_channel: Option<&str>) -> bool {
+    !matches!(
+        release_channel
+            .map(str::trim)
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("dev" | "development" | "local" | "test")
+    )
+}
+
+fn management_bind_is_loopback(host: &str) -> bool {
+    host.eq_ignore_ascii_case("localhost")
+        || host
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+}
+
+fn bounded_duration_env(
+    name: &str,
+    default_ms: u64,
+    min_ms: u64,
+    max_ms: u64,
+) -> Result<Duration, String> {
+    let value = match env::var(name) {
+        Ok(raw) => raw
+            .parse::<u64>()
+            .map_err(|err| format!("{name} must be an integer number of milliseconds: {err}"))?,
+        Err(env::VarError::NotPresent) => default_ms,
+        Err(err) => return Err(format!("read {name}: {err}")),
+    };
+    if !(min_ms..=max_ms).contains(&value) {
+        return Err(format!(
+            "{name} must be between {min_ms} and {max_ms} milliseconds"
+        ));
+    }
+    Ok(Duration::from_millis(value))
+}
+
+fn serve_listener(
+    listener: TcpListener,
+    state: Arc<GateState>,
+    management_listener: bool,
+    worker_count: usize,
+    queue_capacity: usize,
+) -> Result<(), String> {
+    let (sender, receiver) = mpsc::sync_channel::<TcpStream>(queue_capacity);
+    let receiver = Arc::new(Mutex::new(receiver));
+    let listener_name = if management_listener {
+        "management"
+    } else {
+        "proxy"
+    };
+    for worker_index in 0..worker_count {
+        let receiver = Arc::clone(&receiver);
+        let state = Arc::clone(&state);
+        thread::Builder::new()
+            .name(format!("{listener_name}-worker-{worker_index}"))
+            .spawn(move || loop {
+                let stream = receiver
+                    .lock()
+                    .expect("connection receiver mutex poisoned")
+                    .recv();
+                match stream {
+                    Ok(stream) => {
+                        handle_connection(stream, Arc::clone(&state), management_listener)
+                    }
+                    Err(_) => break,
+                }
+            })
+            .map_err(|err| format!("spawn {listener_name} worker: {err}"))?;
+    }
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => match sender.try_send(stream) {
+                Ok(()) => {}
+                Err(mpsc::TrySendError::Full(rejected)) => {
+                    let response = json_status_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json!({"error":"connection_capacity_exhausted"}),
+                    );
+                    let mut rejected = DeadlineIo::new(
+                        rejected,
+                        state.request_head_deadline,
+                        state.response_write_deadline,
+                    );
+                    let _ = rejected.write_all(&response);
+                    let _ = rejected.flush();
+                }
+                Err(mpsc::TrySendError::Disconnected(_)) => {
+                    return Err(format!("{listener_name} worker queue disconnected"));
+                }
+            },
+            Err(err) => eprintln!("{listener_name} accept failed: {err}"),
+        }
+    }
+    Err(format!("{listener_name} listener stopped"))
+}
+
 fn main() -> Result<(), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let policy_path = env::var("SERVERWARE_POLICY_BUNDLE")
@@ -9647,6 +16559,10 @@ fn main() -> Result<(), String> {
                 .ok()
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
+            verify_command: env::var("SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND")
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty()),
         }
     } else {
         PolicyTrustRootSource::File(
@@ -9654,18 +16570,101 @@ fn main() -> Result<(), String> {
                 .unwrap_or_else(|_| "/data/policy-signing-ed25519.pub.pem".to_string()),
         )
     };
-    let generation_path = env::var("SERVERWARE_CREDENTIAL_GENERATIONS")
-        .unwrap_or_else(|_| "/data/credential-generations.json".to_string());
-    let lease_path = env::var("SERVERWARE_CREDENTIAL_LEASES")
-        .unwrap_or_else(|_| "/data/credential-leases.json".to_string());
-    let generation_poll_seconds = env::var("SERVERWARE_CREDENTIAL_GENERATION_POLL_SECONDS")
+    let credential_lease_url = env::var("SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL")
         .ok()
-        .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(0.25);
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let credential_lease_recipient_attestation_command =
+        env::var("SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    let response_proof_attestation_command =
+        env::var("SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
+    let server_instance_id = env::var("SERVERWARE_DATA_PLANE_INSTANCE_ID")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let allow_insecure_dev_credential_leases =
+        env::var("SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES").as_deref() == Ok("1");
+    let release_channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();
+    let is_production = production_mode(release_channel.as_deref());
+    if is_production && allow_insecure_dev_credential_leases {
+        return Err(
+            "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES is forbidden outside an explicit development release channel"
+                .to_string(),
+        );
+    }
     let policy_poll_seconds = env::var("SERVERWARE_POLICY_POLL_SECONDS")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
-        .unwrap_or(generation_poll_seconds);
+        .unwrap_or(0.25);
+    let credential_lease_poll_seconds = env::var("SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS")
+        .ok()
+        .map(|value| {
+            value.parse::<f64>().map_err(|_| {
+                "SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS must be a number".to_string()
+            })
+        })
+        .transpose()?
+        .unwrap_or(0.25);
+    if !credential_lease_poll_seconds.is_finite()
+        || !(0.05..=1.0).contains(&credential_lease_poll_seconds)
+    {
+        return Err(
+            "SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS must be between 0.05 and 1 for five-second leases"
+                .to_string(),
+        );
+    }
+    let credential_lease_renewal_workers = env::var("SERVERWARE_CREDENTIAL_LEASE_REFRESH_WORKERS")
+        .ok()
+        .map(|value| {
+            value.parse::<usize>().map_err(|_| {
+                "SERVERWARE_CREDENTIAL_LEASE_REFRESH_WORKERS must be an integer".to_string()
+            })
+        })
+        .transpose()?
+        .unwrap_or(4);
+    if !(1..=32).contains(&credential_lease_renewal_workers) {
+        return Err(
+            "SERVERWARE_CREDENTIAL_LEASE_REFRESH_WORKERS must be between 1 and 32".to_string(),
+        );
+    }
+    let credential_lease_renewal_queue_capacity =
+        env::var("SERVERWARE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY")
+            .ok()
+            .map(|value| {
+                value.parse::<usize>().map_err(|_| {
+                    "SERVERWARE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY must be an integer"
+                        .to_string()
+                })
+            })
+            .transpose()?
+            .unwrap_or(1024);
+    if !(1..=65_536).contains(&credential_lease_renewal_queue_capacity) {
+        return Err(
+            "SERVERWARE_CREDENTIAL_LEASE_REFRESH_QUEUE_CAPACITY must be between 1 and 65536"
+                .to_string(),
+        );
+    }
+    let credential_lease_cache_max = env::var("SERVERWARE_CREDENTIAL_LEASE_CACHE_MAX")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| "SERVERWARE_CREDENTIAL_LEASE_CACHE_MAX must be an integer".to_string())
+        })
+        .transpose()?
+        .unwrap_or(10_000);
+    if !(1..=1_000_000).contains(&credential_lease_cache_max) {
+        return Err(
+            "SERVERWARE_CREDENTIAL_LEASE_CACHE_MAX must be between 1 and 1000000".to_string(),
+        );
+    }
+    let credential_lease_renewal_interval = Duration::from_secs_f64(credential_lease_poll_seconds);
     let audit_url = env::var("SERVERWARE_CONTROL_PLANE_AUDIT_URL")
         .ok()
         .map(|value| value.trim().to_string())
@@ -9680,6 +16679,12 @@ fn main() -> Result<(), String> {
                 .to_string(),
         );
     }
+    if credential_lease_url.is_some() && audit_token.is_none() {
+        return Err(
+            "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL requires SERVERWARE_DATA_PLANE_AUDIT_TOKEN"
+                .to_string(),
+        );
+    }
     let grant_consume_url = env::var("SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL")
         .ok()
         .map(|value| value.trim().to_string())
@@ -9687,6 +16692,12 @@ fn main() -> Result<(), String> {
     if grant_consume_url.is_some() && audit_token.is_none() {
         return Err(
             "SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL requires SERVERWARE_DATA_PLANE_AUDIT_TOKEN"
+                .to_string(),
+        );
+    }
+    if is_production && grant_consume_url.is_none() {
+        return Err(
+            "production requires SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL for shared JIT grants"
                 .to_string(),
         );
     }
@@ -9699,6 +16710,59 @@ fn main() -> Result<(), String> {
             "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL requires SERVERWARE_DATA_PLANE_AUDIT_TOKEN"
                 .to_string(),
         );
+    }
+    if credential_lease_url.is_some() && !allow_insecure_dev_credential_leases {
+        if credential_lease_recipient_attestation_command.is_none() {
+            return Err(
+                "credential leases require SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND"
+                    .to_string(),
+            );
+        }
+        if env::var("SERVERWARE_CONTROL_PLANE_CA_BUNDLE")
+            .ok()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err(
+                "credential leases require SERVERWARE_CONTROL_PLANE_CA_BUNDLE outside explicit development mode"
+                    .to_string(),
+            );
+        }
+        if matches!(
+            &policy_trust_root_source,
+            PolicyTrustRootSource::AttestedControlPlane {
+                expected_quote_key_id: None,
+                verify_command: None,
+                ..
+            }
+        ) {
+            return Err(
+                "credential leases require a pinned quote key or SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND"
+                    .to_string(),
+            );
+        }
+        let mut control_plane_urls = Vec::new();
+        if let PolicyTrustRootSource::AttestedControlPlane { url, .. } = &policy_trust_root_source {
+            control_plane_urls.push(("policy trust root", url.as_str()));
+        }
+        for (label, value) in [
+            ("credential lease", credential_lease_url.as_deref()),
+            ("audit", audit_url.as_deref()),
+            ("grant consume", grant_consume_url.as_deref()),
+            ("rate-limit consume", rate_limit_consume_url.as_deref()),
+        ] {
+            if let Some(value) = value {
+                control_plane_urls.push((label, value));
+            }
+        }
+        for (label, value) in control_plane_urls {
+            let parsed =
+                Url::parse(value).map_err(|err| format!("parse {label} URL {value}: {err}"))?;
+            if parsed.scheme() != "https" {
+                return Err(format!(
+                    "{label} URL must use HTTPS unless SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES=1"
+                ));
+            }
+        }
     }
     let audit_queue_max = env::var("SERVERWARE_DATA_PLANE_AUDIT_QUEUE_MAX")
         .ok()
@@ -9720,44 +16784,177 @@ fn main() -> Result<(), String> {
         .and_then(|value| value.parse::<u64>().ok())
         .unwrap_or(100)
         .max(10);
+    let request_head_deadline = bounded_duration_env(
+        "SERVERWARE_DATA_PLANE_REQUEST_HEAD_DEADLINE_MS",
+        DEFAULT_REQUEST_HEAD_DEADLINE_MS,
+        100,
+        30_000,
+    )?;
+    let request_body_deadline = bounded_duration_env(
+        "SERVERWARE_DATA_PLANE_REQUEST_BODY_DEADLINE_MS",
+        DEFAULT_REQUEST_BODY_DEADLINE_MS,
+        1_000,
+        600_000,
+    )?;
+    let response_write_deadline = bounded_duration_env(
+        "SERVERWARE_DATA_PLANE_RESPONSE_WRITE_DEADLINE_MS",
+        DEFAULT_RESPONSE_WRITE_DEADLINE_MS,
+        1_000,
+        600_000,
+    )?;
     let host = env::var("SERVERWARE_DECISION_GATE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = env::var("SERVERWARE_DECISION_GATE_PORT").unwrap_or_else(|_| "9090".to_string());
     let management_host = env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_HOST")
         .unwrap_or_else(|_| "127.0.0.1".to_string());
     let management_port =
         env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_PORT").unwrap_or_else(|_| "9091".to_string());
+    if is_production && !management_bind_is_loopback(&management_host) {
+        return Err(format!(
+            "production management listener must bind to loopback, got {management_host}"
+        ));
+    }
+    if response_proof_attestation_command.is_some() != server_instance_id.is_some() {
+        return Err(
+            "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND and SERVERWARE_DATA_PLANE_INSTANCE_ID must be set together"
+                .to_string(),
+        );
+    }
+    if let Some(instance_id) = server_instance_id.as_deref() {
+        if !instance_id.starts_with("spiffe://") || instance_id.len() <= "spiffe://".len() {
+            return Err(
+                "SERVERWARE_DATA_PLANE_INSTANCE_ID must be a non-empty SPIFFE ID".to_string(),
+            );
+        }
+    }
+    if is_production && response_proof_attestation_command.is_none() {
+        return Err(
+            "production requires SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND and SERVERWARE_DATA_PLANE_INSTANCE_ID"
+                .to_string(),
+        );
+    }
+    let policy_high_water_path = env::var("SERVERWARE_POLICY_HIGH_WATER_FILE")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .map(PathBuf::from);
+    if is_production && policy_high_water_path.is_none() {
+        return Err("production requires SERVERWARE_POLICY_HIGH_WATER_FILE".to_string());
+    }
+    let policy_minimum_sequence = env::var("SERVERWARE_POLICY_MIN_SEQUENCE")
+        .ok()
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                "SERVERWARE_POLICY_MIN_SEQUENCE must be a positive integer".to_string()
+            })
+        })
+        .transpose()?
+        .unwrap_or(1);
+    let policy_minimum_rollback_epoch = env::var("SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH")
+        .ok()
+        .map(|value| {
+            value.parse::<u64>().map_err(|_| {
+                "SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH must be a positive integer".to_string()
+            })
+        })
+        .transpose()?
+        .unwrap_or(1);
+    if policy_minimum_sequence == 0 || policy_minimum_rollback_epoch == 0 {
+        return Err("policy monotonic floors must be positive integers".to_string());
+    }
+    if is_production
+        && (env::var("SERVERWARE_POLICY_MIN_SEQUENCE").is_err()
+            || env::var("SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH").is_err())
+    {
+        return Err(
+            "production requires SERVERWARE_POLICY_MIN_SEQUENCE and SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH"
+                .to_string(),
+        );
+    }
+    let proxy_workers = env::var("SERVERWARE_DECISION_GATE_PROXY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(16)
+        .clamp(1, 192);
+    if is_production && proxy_workers > 24 {
+        return Err(
+            "production SERVERWARE_DECISION_GATE_PROXY_WORKERS must not exceed 24 under the 512 MiB container memory limit"
+                .to_string(),
+        );
+    }
+    let management_workers = env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_WORKERS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(8)
+        .clamp(1, 32);
+    let proxy_queue_capacity = env::var("SERVERWARE_DECISION_GATE_PROXY_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(256)
+        .clamp(1, 4096);
+    let management_queue_capacity = env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_QUEUE_CAPACITY")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(32)
+        .clamp(1, 256);
     let release_provenance_path = env::var("SERVERWARE_RELEASE_PROVENANCE").ok();
     let image_signatures_path = env::var("SERVERWARE_IMAGE_SIGNATURES").ok();
     let initial_policy_mtime = file_mtime(&policy_path);
-    let snapshot = Arc::new(load_snapshot(&policy_path, &policy_trust_root_source)?);
     let binary_digest = current_binary_digest()?;
+    let mut initial_snapshot =
+        load_snapshot(&policy_path, &policy_trust_root_source, &binary_digest)?;
+    initial_snapshot.epoch = 1;
+    initial_snapshot.trust_generation = 1;
+    let policy_high_water = initialize_policy_high_water(
+        &initial_snapshot,
+        policy_high_water_path.as_deref(),
+        policy_minimum_sequence,
+        policy_minimum_rollback_epoch,
+    )?;
+    let snapshot = Arc::new(initial_snapshot);
+    let (response_proof_signing_key, response_proof_public_key_pem, response_proof_signing_key_id) =
+        response_proof_signing_material()?;
     let upstream_client = build_upstream_client()?;
     let audit_client = build_audit_client()?;
+    let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
     let state = Arc::new(GateState {
         snapshot: RwLock::new(snapshot),
         policy_path,
         policy_trust_root_source,
         policy_mtime: Mutex::new(initial_policy_mtime),
+        policy_trust_refresh_due: Mutex::new(Instant::now() + POLICY_TRUST_REFRESH_INTERVAL),
+        policy_trust_last_success: Mutex::new(Instant::now()),
         policy_reload_success: AtomicU64::new(0),
         policy_reload_failed: AtomicU64::new(0),
+        policy_high_water_path,
+        policy_high_water: Mutex::new(policy_high_water),
         grants: Mutex::new(HashMap::new()),
         gmail_proofs: Mutex::new(HashMap::new()),
         gmail_proof_cache_max,
         constraint_rate_counters: Mutex::new(HashMap::new()),
-        credential_generations: Mutex::new(HashMap::new()),
-        generation_mtime: Mutex::new(None),
-        generation_path,
         credential_leases: Mutex::new(HashMap::new()),
-        lease_mtime: Mutex::new(None),
-        lease_path,
+        credential_lease_flights: Mutex::new(HashMap::new()),
+        credential_lease_url,
+        credential_lease_recipient_attestation_command,
+        credential_lease_refresh_success: AtomicU64::new(0),
+        credential_lease_refresh_failed: AtomicU64::new(0),
+        credential_lease_renewal_poll_interval_ms: u64::try_from(
+            credential_lease_renewal_interval.as_millis(),
+        )
+        .unwrap_or(u64::MAX),
+        credential_lease_renewal_workers,
+        credential_lease_renewal_queue_capacity,
+        credential_lease_renewal_queued: AtomicU64::new(0),
+        credential_lease_renewal_queue_full: AtomicU64::new(0),
+        credential_lease_cache_max,
         upstream_client,
         audit_client,
+        credential_lease_client,
         audit_url,
         audit_token,
         grant_consume_url,
         rate_limit_consume_url,
         audit_queue: Mutex::new(VecDeque::new()),
+        audit_reserved: AtomicU64::new(0),
         audit_queue_max,
         audit_batch_max,
         audit_enqueued: AtomicU64::new(0),
@@ -9765,14 +16962,20 @@ fn main() -> Result<(), String> {
         audit_required_failed: AtomicU64::new(0),
         audit_sent: AtomicU64::new(0),
         audit_send_failed: AtomicU64::new(0),
+        request_head_deadline,
+        request_body_deadline,
+        response_write_deadline,
         mitm_authority: mitm_authority.map(Mutex::new),
         leaf_configs: Mutex::new(HashMap::new()),
         binary_digest,
         release_provenance_path,
         image_signatures_path,
+        response_proof_signing_key,
+        response_proof_public_key_pem,
+        response_proof_signing_key_id,
+        response_proof_attestation_command,
+        server_instance_id,
     });
-    refresh_generation_cache(&state, true)?;
-    refresh_lease_cache(&state, true)?;
     let policy_state = Arc::clone(&state);
     thread::spawn(move || {
         policy_worker(
@@ -9780,20 +16983,14 @@ fn main() -> Result<(), String> {
             Duration::from_secs_f64(policy_poll_seconds.max(0.05)),
         )
     });
-    let generation_state = Arc::clone(&state);
-    thread::spawn(move || {
-        generation_worker(
-            generation_state,
-            Duration::from_secs_f64(generation_poll_seconds.max(0.05)),
-        )
-    });
-    let lease_state = Arc::clone(&state);
-    thread::spawn(move || {
-        lease_worker(
-            lease_state,
-            Duration::from_secs_f64(generation_poll_seconds.max(0.05)),
-        )
-    });
+    if state.credential_lease_url.is_some() {
+        start_credential_lease_renewal(
+            Arc::clone(&state),
+            credential_lease_renewal_interval,
+            credential_lease_renewal_workers,
+            credential_lease_renewal_queue_capacity,
+        )?;
+    }
     if audit_enabled(&state) {
         let audit_state = Arc::clone(&state);
         thread::spawn(move || audit_worker(audit_state, Duration::from_millis(audit_flush_ms)));
@@ -9804,43 +17001,2768 @@ fn main() -> Result<(), String> {
         .map_err(|err| format!("bind decision gate management listener: {err}"))?;
     let snapshot = current_snapshot(&state);
     eprintln!(
-        "serverware decision gate listening proxy={host}:{port} management={management_host}:{management_port} policy_hash={} binary_digest={} routes={} generations={} leases={} connect_mitm={} audit={}",
+        "serverware decision gate listening proxy={host}:{port} management={management_host}:{management_port} policy_hash={} binary_digest={} routes={} leases={} credential_lease_protocol={} connect_mitm={} audit={}",
         snapshot.hash,
         state.binary_digest,
         snapshot.routes.len(),
-        state
-            .credential_generations
-            .lock()
-            .expect("credential generation mutex poisoned")
-            .len(),
         state
             .credential_leases
             .lock()
             .expect("credential lease mutex poisoned")
             .len(),
+        if state.credential_lease_url.is_some() {"scoped-recipient-bound-pull/v2"} else {"disabled"},
         state.mitm_authority.is_some(),
         audit_enabled(&state)
     );
     let management_state = Arc::clone(&state);
     thread::spawn(move || {
-        for stream in management_listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let state = Arc::clone(&management_state);
-                    thread::spawn(move || handle_connection(stream, state, true));
-                }
-                Err(err) => eprintln!("management accept failed: {err}"),
-            }
+        if let Err(err) = serve_listener(
+            management_listener,
+            management_state,
+            true,
+            management_workers,
+            management_queue_capacity,
+        ) {
+            eprintln!("management listener stopped: {err}");
         }
     });
-    for stream in proxy_listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                let state = Arc::clone(&state);
-                thread::spawn(move || handle_connection(stream, state, false));
-            }
-            Err(err) => eprintln!("proxy accept failed: {err}"),
+    serve_listener(
+        proxy_listener,
+        state,
+        false,
+        proxy_workers,
+        proxy_queue_capacity,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn test_snapshot(epoch: u64) -> Arc<Snapshot> {
+        Arc::new(Snapshot {
+            epoch,
+            hash: format!("sha256:policy-{epoch}"),
+            policy_id: "policy:test".to_string(),
+            policy_sequence: epoch.max(1),
+            rollback_epoch: 1,
+            trust_generation: 1,
+            policy_signing_key_id: "sha256:policy-key".to_string(),
+            response_verifying_key: None,
+            response_signing_key_id: None,
+            attested_response_context: None,
+            principals: vec![Principal {
+                id: "agent:test".to_string(),
+                source_cidrs: Vec::new(),
+                required_headers: BTreeMap::new(),
+                proxy_authorization: None,
+            }],
+            credentials: HashMap::new(),
+            routes: vec![Route {
+                id: "route:test".to_string(),
+                principals: vec!["agent:test".to_string()],
+                scheme: "https".to_string(),
+                host: "example.test".to_string(),
+                port: 443,
+                methods: HashSet::from(["GET".to_string(), "POST".to_string()]),
+                paths: vec![compile_template("/resource").expect("test route template")],
+                credential_ref: None,
+                adapter_type: "generic.rest".to_string(),
+                adapter_config: json!({
+                    "request": {
+                        "allowedHeaders": [],
+                        "allowedQueryKeys": [],
+                        "bodyMode": "none",
+                        "maxBodyBytes": 0
+                    },
+                    "response": {"mode":"json","maxBodyBytes":1024}
+                }),
+                constraints: Vec::new(),
+                jit: json!({"required":false}),
+            }],
+        })
+    }
+
+    fn test_gate_state(snapshot: Arc<Snapshot>) -> GateState {
+        let client = Client::builder().build().expect("test client");
+        let policy_high_water = policy_high_water_for(&snapshot);
+        let (
+            response_proof_signing_key,
+            response_proof_public_key_pem,
+            response_proof_signing_key_id,
+        ) = response_proof_signing_material().expect("test response proof key");
+        GateState {
+            snapshot: RwLock::new(snapshot),
+            policy_path: "/unused/test-policy.json".to_string(),
+            policy_trust_root_source: PolicyTrustRootSource::File(
+                "/unused/test-policy-key.pem".to_string(),
+            ),
+            policy_mtime: Mutex::new(None),
+            policy_trust_refresh_due: Mutex::new(Instant::now()),
+            policy_trust_last_success: Mutex::new(Instant::now()),
+            policy_reload_success: AtomicU64::new(0),
+            policy_reload_failed: AtomicU64::new(0),
+            policy_high_water_path: None,
+            policy_high_water: Mutex::new(policy_high_water),
+            grants: Mutex::new(HashMap::new()),
+            gmail_proofs: Mutex::new(HashMap::new()),
+            gmail_proof_cache_max: 16,
+            constraint_rate_counters: Mutex::new(HashMap::new()),
+            credential_leases: Mutex::new(HashMap::new()),
+            credential_lease_flights: Mutex::new(HashMap::new()),
+            credential_lease_url: None,
+            credential_lease_recipient_attestation_command: None,
+            credential_lease_refresh_success: AtomicU64::new(0),
+            credential_lease_refresh_failed: AtomicU64::new(0),
+            credential_lease_renewal_poll_interval_ms: 250,
+            credential_lease_renewal_workers: 4,
+            credential_lease_renewal_queue_capacity: 1_024,
+            credential_lease_renewal_queued: AtomicU64::new(0),
+            credential_lease_renewal_queue_full: AtomicU64::new(0),
+            credential_lease_cache_max: 10_000,
+            upstream_client: client.clone(),
+            audit_client: client.clone(),
+            credential_lease_client: client,
+            audit_url: None,
+            audit_token: None,
+            grant_consume_url: None,
+            rate_limit_consume_url: None,
+            audit_queue: Mutex::new(VecDeque::new()),
+            audit_reserved: AtomicU64::new(0),
+            audit_queue_max: 16,
+            audit_batch_max: 4,
+            audit_enqueued: AtomicU64::new(0),
+            audit_dropped: AtomicU64::new(0),
+            audit_required_failed: AtomicU64::new(0),
+            audit_sent: AtomicU64::new(0),
+            audit_send_failed: AtomicU64::new(0),
+            request_head_deadline: Duration::from_secs(10),
+            request_body_deadline: Duration::from_secs(120),
+            response_write_deadline: Duration::from_secs(120),
+            mitm_authority: None,
+            leaf_configs: Mutex::new(HashMap::new()),
+            binary_digest: "sha256:test-binary".to_string(),
+            release_provenance_path: None,
+            image_signatures_path: None,
+            response_proof_signing_key,
+            response_proof_public_key_pem,
+            response_proof_signing_key_id,
+            response_proof_attestation_command: None,
+            server_instance_id: None,
         }
     }
-    Ok(())
+
+    fn parse_head(raw: &[u8]) -> Result<RequestHead, String> {
+        read_request_head_from(&mut Cursor::new(raw), Some("127.0.0.1".to_string()))
+    }
+
+    fn decision_request_with_body(body: &str) -> DecisionRequest {
+        DecisionRequest {
+            client_ip: None,
+            method: "POST".to_string(),
+            url: "https://api.stripe.com/v1/payment_intents".to_string(),
+            headers: BTreeMap::new(),
+            body: body.to_string(),
+            body_sha256: None,
+            forwarded_body_length: Some(body.len() as u64),
+            forwarded_body_utf8_valid: Some(true),
+            credential_metadata: BTreeMap::new(),
+            gmail_proofs: Vec::new(),
+            client_request_digest: None,
+        }
+    }
+
+    fn policy_with_route(route: Value) -> Value {
+        json!({
+            "metadata": {},
+            "defaults": {
+                "action":"deny",
+                "failMode":"closed",
+                "unknownHosts":"block",
+                "unknownPaths":"block",
+                "validationFailure":"block"
+            },
+            "principals":[{"id":"agent:test","sourceCidrs":["127.0.0.1/32"]}],
+            "routes":[route]
+        })
+    }
+
+    fn generic_policy_route(body_mode: &str, response_max_body_bytes: Value) -> Value {
+        json!({
+            "id":"route:test",
+            "principals":["agent:test"],
+            "match":{
+                "scheme":"https",
+                "host":"example.test",
+                "port":443,
+                "methods":["POST"],
+                "paths":["/resource"]
+            },
+            "adapter":{
+                "type":"generic.rest",
+                "config":{
+                    "request":{
+                        "allowedHeaders":[],
+                        "allowedQueryKeys":[],
+                        "bodyMode":body_mode,
+                        "maxBodyBytes":1024,
+                        "allowedFields":["safe"]
+                    },
+                    "response":{"mode":"json","maxBodyBytes":response_max_body_bytes}
+                }
+            }
+        })
+    }
+
+    fn route_with_path(id: &str, path: &str) -> Route {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.id = id.to_string();
+        route.paths = vec![compile_template(path).expect("route template")];
+        route
+    }
+
+    struct SlowIo {
+        input: Cursor<Vec<u8>>,
+        output: Vec<u8>,
+        delay: Duration,
+    }
+
+    impl ConfigureIoTimeout for SlowIo {
+        fn configure_read_timeout(&self, _timeout: Duration) -> io::Result<()> {
+            Ok(())
+        }
+
+        fn configure_write_timeout(&self, _timeout: Duration) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Read for SlowIo {
+        fn read(&mut self, output: &mut [u8]) -> io::Result<usize> {
+            thread::sleep(self.delay);
+            if output.is_empty() {
+                return Ok(0);
+            }
+            self.input.read(&mut output[..1])
+        }
+    }
+
+    impl Write for SlowIo {
+        fn write(&mut self, input: &[u8]) -> io::Result<usize> {
+            thread::sleep(self.delay);
+            if input.is_empty() {
+                return Ok(0);
+            }
+            self.output.push(input[0]);
+            Ok(1)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn lease_envelope() -> Value {
+        json!({
+            "apiVersion": "serverware.credentialLeaseEnvelope/v2",
+            "algorithm": "X25519-HKDF-SHA256-AES-256-GCM",
+            "recipientKeyId": "sha256:recipient",
+            "recipientNonce": "canonical-nonce",
+            "policyHash": "sha256:policy",
+            "dataPlaneBinaryDigest": "sha256:binary",
+            "principalId": "agent:test",
+            "routeId": "route:test",
+            "credentialId": "google-oauth",
+            "issuedAtEpochMs": 1,
+            "expiresAtEpochMs": 2,
+            "serverEphemeralPublicKey": "key",
+            "aeadNonce": "nonce",
+            "ciphertext": "ciphertext",
+            "ciphertextSha256": "sha256:ciphertext"
+        })
+    }
+
+    #[test]
+    fn credential_lease_envelope_rejects_unknown_fields() {
+        let mut value = lease_envelope();
+        value["unexpected"] = json!(true);
+        let error = serde_json::from_value::<CredentialLeaseEnvelope>(value)
+            .err()
+            .expect("unknown envelope field must fail");
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn credential_lease_set_accepts_typed_oauth_metadata() {
+        let value = json!({
+            "apiVersion": "serverware.credentialLeaseSet/v2",
+            "recipientKeyId": "sha256:recipient",
+            "recipientNonce": "canonical-nonce",
+            "policyHash": "sha256:policy",
+            "dataPlaneBinaryDigest": "sha256:binary",
+            "principalId": "agent:test",
+            "routeId": "route:test",
+            "credentialId": "google-oauth",
+            "issuedAtEpochMs": 1,
+            "expiresAtEpochMs": 2,
+            "credentials": [{
+                "credentialId": "google-oauth",
+                "credentialVersion": 7,
+                "secret": "{\"access_token\":\"secret\"}",
+                "metadata": {
+                    "managed": true,
+                    "expires_at_epoch_ms": 1234,
+                    "scopes": ["gmail.readonly"]
+                }
+            }]
+        });
+        let set: CredentialLeaseSet =
+            serde_json::from_value(value).expect("typed metadata must parse");
+        assert_eq!(set.credentials[0].metadata["managed"], json!(true));
+        assert_eq!(
+            set.credentials[0].metadata["scopes"],
+            json!(["gmail.readonly"])
+        );
+    }
+
+    #[test]
+    fn credential_lease_v2_request_binds_exact_scope() {
+        let request = CredentialLeaseRequest {
+            api_version: "serverware.credentialLeaseRequest/v2".to_string(),
+            principal_id: "agent:test".to_string(),
+            route_id: "route:test".to_string(),
+            credential_id: "credential:test".to_string(),
+            recipient_public_key: "public-key".to_string(),
+            recipient_key_id: "sha256:recipient".to_string(),
+            recipient_nonce: "nonce".to_string(),
+            policy_hash: "sha256:policy".to_string(),
+            data_plane_binary_digest: "sha256:binary".to_string(),
+            max_ttl_seconds: 5,
+            recipient_attestation: Some(json!({
+                "principalId":"agent:test",
+                "routeId":"route:test",
+                "credentialId":"credential:test",
+            })),
+        };
+        let value = serde_json::to_value(request).expect("serialize lease request");
+        assert_eq!(value["apiVersion"], "serverware.credentialLeaseRequest/v2");
+        assert_eq!(value["principalId"], "agent:test");
+        assert_eq!(value["routeId"], "route:test");
+        assert_eq!(value["credentialId"], "credential:test");
+        assert_eq!(
+            value["recipientAttestation"]["credentialId"],
+            "credential:test"
+        );
+    }
+
+    #[test]
+    fn credential_lease_v2_accepts_exactly_one_matching_credential() {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                injection: json!({}),
+            },
+        );
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let entry = |credential_id: &str| CredentialLeaseEntry {
+            credential_id: credential_id.to_string(),
+            credential_version: 7,
+            secret: Zeroizing::new("secret".to_string()),
+            metadata: BTreeMap::new(),
+        };
+        assert!(
+            exactly_one_matching_credential(&snapshot, &scope, vec![entry("credential:test")])
+                .is_ok()
+        );
+        assert!(exactly_one_matching_credential(
+            &snapshot,
+            &scope,
+            vec![entry("credential:test"), entry("credential:test")]
+        )
+        .is_err());
+        assert!(exactly_one_matching_credential(
+            &snapshot,
+            &scope,
+            vec![entry("credential:other")]
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn response_statement_rejects_unknown_context_fields() {
+        let value = json!({
+            "version": "serverware.response-signature.v1",
+            "issued_at_ms": 1,
+            "request": {"method": "POST", "path": "/leases", "query": ""},
+            "status_code": 200,
+            "body_sha256": "sha256:body",
+            "nonce": "canonical-nonce",
+            "response_signing_key_id": "sha256:key",
+            "context": {
+                "runtime_manifest_digest": "sha256:manifest",
+                "policy_bundle_digest": "sha256:policy",
+                "provenance_digest": null,
+                "image_signatures_digest": null,
+                "source_tree_digest": null,
+                "unexpected": true
+            }
+        });
+        let error = serde_json::from_value::<CredentialLeaseResponseStatement>(value)
+            .err()
+            .expect("unknown response context field must fail");
+        assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn secret_json_path_only_returns_string_leaves() {
+        let value: SecretJsonValue = serde_json::from_str(
+            r#"{"oauth":{"access_token":"secret","expires":1234},"scopes":["mail"]}"#,
+        )
+        .expect("secret JSON must parse");
+        assert_eq!(
+            value.path_string(&["oauth", "access_token"]),
+            Some("secret")
+        );
+        assert_eq!(value.path_string(&["oauth", "expires"]), None);
+        assert_eq!(value.path_string(&["scopes"]), None);
+    }
+
+    #[test]
+    fn attested_digests_require_exact_lowercase_sha256() {
+        assert!(is_sha256_digest(&format!("sha256:{}", "a".repeat(64))));
+        assert!(!is_sha256_digest(&format!("sha256:{}", "A".repeat(64))));
+        assert!(!is_sha256_digest("sha256:short"));
+        assert!(!is_sha256_digest(&format!("sha512:{}", "a".repeat(64))));
+    }
+
+    #[test]
+    fn x25519_zero_public_key_is_non_contributory() {
+        let private_key = X25519StaticSecret::from([7u8; 32]);
+        let peer = X25519PublicKey::from([0u8; 32]);
+        assert!(!private_key.diffie_hellman(&peer).was_contributory());
+    }
+
+    #[test]
+    fn reqwest_transport_errors_do_not_retain_url_secrets() {
+        let client = Client::builder()
+            .timeout(Duration::from_millis(100))
+            .build()
+            .expect("test client");
+        let error = client
+            .get("http://127.0.0.1:1/private?access_token=must-not-leak")
+            .send()
+            .expect_err("closed local port must fail");
+        let redacted = redacted_reqwest_error(error);
+        assert!(!redacted.contains("must-not-leak"));
+        assert!(!redacted.contains("access_token"));
+    }
+
+    #[test]
+    fn path_templates_reject_non_terminal_globs() {
+        assert!(compile_template("/prefix/**/suffix").is_err());
+        assert!(compile_template("/prefix/**").is_ok());
+    }
+
+    #[test]
+    fn request_paths_reject_ambiguous_encodings_but_allow_canonical_npm_scope() {
+        let npm = validate_request_target_path("https://registry.test/npm/@scope%2fpkg")
+            .expect("canonical npm scoped package");
+        assert!(npm.has_encoded_slash);
+        for target in [
+            "https://example.test/a%2Fb",
+            "https://example.test/a%252fb",
+            "https://example.test/a%5Cb",
+            "https://example.test/a/%2E%2E/b",
+            "https://example.test/a/../b",
+        ] {
+            assert!(validate_request_target_path(target).is_err(), "{target}");
+        }
+    }
+
+    #[test]
+    fn canonical_headers_cover_all_forwarded_non_credentials() {
+        let headers = BTreeMap::from([
+            ("Authorization".to_string(), "Bearer supplied".to_string()),
+            ("Connection".to_string(), "close".to_string()),
+            ("Content-Type".to_string(), "application/json".to_string()),
+            ("X-Custom".to_string(), "bound".to_string()),
+        ]);
+        let url = Url::parse("https://example.test/resource").expect("test URL");
+        let material =
+            canonical_forwarded_request_headers(&headers, &url, Some(7), &json!({"type":"bearer"}))
+                .expect("canonical headers");
+        assert_eq!(material["content-type"], "application/json");
+        assert_eq!(material["x-custom"], "bound");
+        assert_eq!(material["host"], "example.test");
+        assert_eq!(material["content-length"], "7");
+        assert!(!material.contains_key("authorization"));
+        assert!(!material.contains_key("connection"));
+    }
+
+    #[test]
+    fn generic_adapter_enforces_headers_and_literal_zero_body_cap() {
+        let route = Route {
+            id: "generic".to_string(),
+            principals: vec!["agent:test".to_string()],
+            scheme: "https".to_string(),
+            host: "example.test".to_string(),
+            port: 443,
+            methods: HashSet::from(["POST".to_string()]),
+            paths: vec![compile_template("/resource").expect("template")],
+            credential_ref: None,
+            adapter_type: "generic.rest".to_string(),
+            adapter_config: json!({"request":{
+                "allowedHeaders":[],
+                "allowedQueryKeys":[],
+                "bodyMode":"any",
+                "maxBodyBytes":0
+            }}),
+            constraints: Vec::new(),
+            jit: json!({}),
+        };
+        let route_match = RouteMatch {
+            route: &route,
+            params: BTreeMap::new(),
+        };
+        let req = DecisionRequest {
+            client_ip: None,
+            method: "POST".to_string(),
+            url: "https://example.test/resource".to_string(),
+            headers: BTreeMap::new(),
+            body: "x".to_string(),
+            body_sha256: None,
+            forwarded_body_length: None,
+            forwarded_body_utf8_valid: Some(true),
+            credential_metadata: BTreeMap::new(),
+            gmail_proofs: Vec::new(),
+            client_request_digest: None,
+        };
+        let url = Url::parse(&req.url).expect("URL");
+        let body_error = validate_adapter(
+            &req,
+            &BTreeMap::from([
+                ("host".to_string(), "example.test".to_string()),
+                ("content-length".to_string(), "1".to_string()),
+            ]),
+            &url,
+            &route_match,
+        )
+        .expect_err("zero maxBodyBytes must reject one byte");
+        assert_eq!(body_error["error"], "generic_body_too_large");
+
+        let header_error = validate_adapter(
+            &DecisionRequest {
+                body: String::new(),
+                ..req
+            },
+            &BTreeMap::from([
+                ("host".to_string(), "example.test".to_string()),
+                ("x-not-allowed".to_string(), "value".to_string()),
+            ]),
+            &url,
+            &route_match,
+        )
+        .expect_err("unlisted generic header must fail closed");
+        assert_eq!(header_error["error"], "generic_header_not_allowed");
+    }
+
+    #[test]
+    fn body_mode_none_rejects_content_length_before_buffering() {
+        let snapshot = test_snapshot(1);
+        let head = parse_head(
+            b"POST https://example.test/resource HTTP/1.1\r\nHost: example.test\r\nContent-Length: 1\r\n\r\nx",
+        )
+        .expect("request head");
+        assert_eq!(buffered_route_body_limit(&snapshot, &head, None), 0);
+        assert!(read_request_body_from_head(&mut Cursor::new(Vec::<u8>::new()), head, 0).is_err());
+    }
+
+    #[test]
+    fn http1_parser_rejects_ambiguous_inputs() {
+        let cases: &[&[u8]] = &[
+            b"GET / HTTP/1.1\r\nHost: a\r\nHost: a\r\n\r\n",
+            b"POST / HTTP/1.1\r\nHost: a\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: a\r\nAuthorization: a\r\nAuthorization: b\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: a\r\n Folded: value\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost : a\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: a\r\nConnection: x-forwarded-for\r\nX-Forwarded-For: 1.2.3.4\r\n\r\n",
+            b"GET / HTTP/1.1\r\nHost: \xff\r\n\r\n",
+        ];
+        for raw in cases {
+            assert!(
+                parse_head(raw).is_err(),
+                "accepted ambiguous request: {raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn snapshot_epoch_revocation_blocks_credentials_and_responses() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential".to_string(),
+            Credential {
+                injection: json!({}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential".to_string());
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        state.credential_leases.lock().expect("lease cache").insert(
+            scope.clone(),
+            SecretLease {
+                scope,
+                version: 1,
+                secret: Zeroizing::new("secret".to_string()),
+                metadata: BTreeMap::new(),
+                policy_hash: snapshot.hash.clone(),
+                expires_at_epoch_ms: now_epoch_ms() + 60_000,
+                expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation",
+        });
+        assert!(
+            credential_lease_for_release(&state, &snapshot, &decision, "credential", 1).is_ok()
+        );
+        assert!(matches!(
+            credential_lease_for_release(
+                &state,
+                &snapshot,
+                &json!({"policy_hash":snapshot.hash,"snapshot_epoch":snapshot.epoch}),
+                "credential",
+                1,
+            ),
+            Err("credential_scope_missing")
+        ));
+        *state.snapshot.write().expect("snapshot lock") = test_snapshot(2);
+        assert!(matches!(
+            credential_lease_for_release(&state, &snapshot, &decision, "credential", 1),
+            Err("policy_snapshot_revoked")
+        ));
+        let url = Url::parse("https://example.test/resource").expect("URL");
+        let response = release_forward_response(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            StatusCode::OK,
+            Some("text/plain"),
+            &[],
+            b"must-not-release".to_vec(),
+            &ResponseSecretGuard::default(),
+            json!({"ok":true}),
+        );
+        let response_text = String::from_utf8(response).expect("HTTP response");
+        assert!(response_text.starts_with("HTTP/1.1 502"));
+        assert!(response_text.contains("response_snapshot_revoked"));
+        assert!(!response_text.contains("must-not-release"));
+    }
+
+    #[test]
+    fn response_context_missing_fails_closed() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let url = Url::parse("https://example.test/resource").expect("URL");
+        let response = release_forward_response(
+            &state,
+            &snapshot,
+            &json!({"snapshot_epoch":1,"policy_hash":snapshot.hash}),
+            "GET",
+            &url,
+            StatusCode::OK,
+            Some("text/plain"),
+            &[],
+            b"must-not-release".to_vec(),
+            &ResponseSecretGuard::default(),
+            json!({"ok":true}),
+        );
+        let response_text = String::from_utf8(response).expect("HTTP response");
+        assert!(response_text.contains("response_principal_context_missing"));
+        assert!(!response_text.contains("must-not-release"));
+    }
+
+    #[test]
+    fn response_constraints_disable_streaming_and_require_dates() {
+        let policy = ResponsePolicy {
+            adapter_type: "generic.rest".to_string(),
+            response_config: json!({"mode":"stream","maxBodyBytes":1024}),
+            has_response_constraints: true,
+        };
+        assert!(streaming_response_policy(&policy).is_none());
+        let constraint = json!({
+            "id":"date-window",
+            "type":"responseDateWindow",
+            "phase":"response",
+            "maxAgeDays":7,
+            "required":true,
+            "formats":["rfc3339"],
+            "dateFields":["created_at"]
+        });
+        let error = enforce_response_date_window(&constraint, br#"{"id":"1"}"#)
+            .expect_err("required response date must fail closed");
+        assert_eq!(error["error"], "response_date_field_missing");
+    }
+
+    #[test]
+    fn response_constraints_are_operation_scoped_and_fail_without_context() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.constraints = vec![json!({
+            "id":"gmail-list-window",
+            "type":"responseDateWindow",
+            "phase":"response",
+            "operations":["gmail.messages.list"],
+            "items":["messages"],
+            "dateFields":["internalDate"],
+            "formats":["epochMillis"],
+            "maxAgeDays":30,
+            "required":true
+        })];
+        let detail = br#"{"id":"message-1","internalDate":"1784010000000"}"#;
+        let missing = validate_response_constraints(&route, detail, None)
+            .expect_err("missing response operation context must fail closed");
+        assert_eq!(missing["error"], "response_operation_context_missing");
+        assert!(validate_response_constraints(&route, detail, Some("gmail.message.get")).is_ok());
+
+        let list = format!(
+            r#"{{"messages":[{{"internalDate":"{}"}}]}}"#,
+            now_epoch_ms()
+        );
+        assert!(validate_response_constraints(
+            &route,
+            list.as_bytes(),
+            Some("gmail.messages.list")
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn gmail_and_query_rewrites_preserve_terms_and_configured_recency() {
+        assert_eq!(
+            tighten_gmail_query("from:alice newer_than:90d label:inbox", 7),
+            "from:alice newer_than:7d label:inbox"
+        );
+        let mut url =
+            Url::parse("https://example.test/resource?q=one&q=two&start_time=recent").expect("URL");
+        apply_rewrite(&mut url, &json!({"query":{"max_results":"10"}}));
+        let pairs = url.query_pairs().into_owned().collect::<Vec<_>>();
+        assert!(pairs.contains(&("q".to_string(), "one".to_string())));
+        assert!(pairs.contains(&("q".to_string(), "two".to_string())));
+        assert!(pairs.contains(&("start_time".to_string(), "recent".to_string())));
+
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.constraints = vec![json!({
+            "type":"responseDateWindow",
+            "phase":"response",
+            "maxAgeDays":7,
+            "formats":["rfc3339"],
+            "dateFields":["data.created_at"]
+        })];
+        let mut x_url = Url::parse(
+            "https://example.test/2/tweets/search/recent?query=rust&tweet.fields=id,text&max_results=10",
+        )
+        .expect("X URL");
+        let rewrite = x_response_constraint_rewrite(&x_url, "search.read", &route);
+        apply_rewrite(&mut x_url, &rewrite);
+        let x_pairs = x_url.query_pairs().into_owned().collect::<BTreeMap<_, _>>();
+        assert_eq!(x_pairs["query"], "rust");
+        assert_eq!(x_pairs["max_results"], "10");
+        assert_eq!(x_pairs["tweet.fields"], "created_at,id,text");
+    }
+
+    #[test]
+    fn x_catalog_allows_known_reads_and_denies_unknown_or_unmodeled_writes() {
+        for (operation, templates) in X_V2_READ_OPERATION_PATHS {
+            for template in *templates {
+                let concrete_path = template
+                    .split('/')
+                    .map(|segment| {
+                        if segment.starts_with('{') && segment.ends_with('}') {
+                            "catalog-value"
+                        } else {
+                            segment
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("/");
+                assert_eq!(
+                    x_read_operation(&concrete_path),
+                    Some(*operation),
+                    "{concrete_path}"
+                );
+            }
+        }
+        for (target, expected) in [
+            ("https://api.x.com/2/tweets/123", "tweets.read"),
+            ("https://api.x.com/2/tweets/analytics", "analytics.read"),
+            (
+                "https://api.x.com/2/tweets/search/recent?query=serverware",
+                "search.read",
+            ),
+            ("https://api.x.com/2/users/me", "users.read"),
+            (
+                "https://api.x.com/2/users/123/bookmarks/folders/456",
+                "bookmarks.read",
+            ),
+            ("https://api.x.com/2/users/123/owned_lists", "lists.read"),
+            ("https://api.x.com/2/dm_events", "directMessages.read"),
+            ("https://api.x.com/2/media/upload?id=123", "media.read"),
+            (
+                "https://api.x.com/2/spaces/search?query=security",
+                "spaces.read",
+            ),
+            ("https://api.x.com/2/tweets/search/stream", "streams.read"),
+        ] {
+            let url = Url::parse(target).expect("X URL");
+            assert_eq!(
+                x_operation(&url, "GET").as_deref(),
+                Some(expected),
+                "{target}"
+            );
+        }
+        assert_eq!(
+            x_operation(
+                &Url::parse("https://api.x.com/2/tweets").expect("X URL"),
+                "POST"
+            )
+            .as_deref(),
+            Some("tweets.write")
+        );
+        assert!(x_operation(
+            &Url::parse("https://api.x.com/2/future/unknown_endpoint").expect("X URL"),
+            "GET"
+        )
+        .is_none());
+        assert!(x_operation(
+            &Url::parse("https://api.x.com/2/users/123/following").expect("X URL"),
+            "POST"
+        )
+        .is_none());
+        assert!(x_operation(
+            &Url::parse("https://api.x.com/2/tweets/123").expect("X URL"),
+            "DELETE"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn npm_publish_document_fields_are_approval_bound() {
+        let url = Url::parse("https://registry.test/npm/@scope%2fpkg").expect("URL");
+        let params = BTreeMap::from([("package".to_string(), "@scope%2fpkg".to_string())]);
+        let fields = npm_operation_fields(
+            &url,
+            "PUT",
+            &params,
+            r#"{
+                "name":"@scope/pkg",
+                "dist-tags":{"latest":"1.2.3"},
+                "versions":{"1.2.3":{"version":"1.2.3","dist":{"integrity":"sha512-real"}}}
+            }"#,
+        )
+        .expect("real npm publish document");
+        assert_eq!(fields["packageName"], "@scope/pkg");
+        assert_eq!(fields["packageVersion"], "1.2.3");
+        assert_eq!(fields["tarballIntegrity"], "sha512-real");
+
+        let attachment = general_purpose::STANDARD.encode(b"tarball");
+        let fallback = npm_operation_fields(
+            &url,
+            "PUT",
+            &params,
+            &json!({
+                "name":"@scope/pkg",
+                "dist-tags":{"latest":"1.2.3"},
+                "versions":{"1.2.3":{"version":"1.2.3","dist":{}}},
+                "_attachments":{"pkg-1.2.3.tgz":{"data":attachment}}
+            })
+            .to_string(),
+        )
+        .expect("bounded attachment fallback");
+        let mut hasher = Sha512::new();
+        hasher.update(b"tarball");
+        let expected_integrity = format!(
+            "sha512-{}",
+            general_purpose::STANDARD.encode(hasher.finalize())
+        );
+        assert_eq!(fallback["tarballIntegrity"], expected_integrity);
+        assert_eq!(fallback["attachmentBytes"], 7);
+
+        let extra_version = npm_operation_fields(
+            &url,
+            "PUT",
+            &params,
+            r#"{
+                "name":"@scope/pkg",
+                "dist-tags":{"latest":"1.2.3"},
+                "versions":{
+                    "1.2.3":{"version":"1.2.3"},
+                    "9.9.9":{"version":"9.9.9"}
+                }
+            }"#,
+        )
+        .expect_err("publish document with an extra version must fail closed");
+        assert_eq!(
+            extra_version["error"],
+            "npm_publish_requires_exactly_one_version"
+        );
+
+        let mismatched_latest = npm_operation_fields(
+            &url,
+            "PUT",
+            &params,
+            r#"{
+                "name":"@scope/pkg",
+                "dist-tags":{"latest":"9.9.9"},
+                "versions":{"1.2.3":{"version":"1.2.3"}}
+            }"#,
+        )
+        .expect_err("publish latest tag outside the sole version must fail closed");
+        assert_eq!(
+            mismatched_latest["error"],
+            "npm_publish_latest_tag_mismatch"
+        );
+    }
+
+    #[test]
+    fn streamed_responses_are_connection_terminal() {
+        let mut output = Vec::new();
+        write_stream_response_headers(
+            &mut output,
+            StatusCode::OK,
+            Some("application/json"),
+            None,
+            false,
+        )
+        .expect("stream response headers");
+        let headers = String::from_utf8(output).expect("ASCII headers");
+        assert!(headers.contains("Connection: close\r\n"));
+        assert!(!headers.contains("Connection: keep-alive\r\n"));
+    }
+
+    #[test]
+    fn non_success_response_does_not_emit_response_proof_audit() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("test-token".to_string());
+        let request = IncomingRequest {
+            method: "GET".to_string(),
+            target: "https://unknown.example/resource".to_string(),
+            headers: BTreeMap::from([(
+                RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                "test-nonce".to_string(),
+            )]),
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        let context = ResponseProofContext {
+            client_nonce: "test-nonce".to_string(),
+            client_nonce_bytes: vec![7; 32],
+            tls_exporter: "test-exporter".to_string(),
+        };
+
+        let mut wire = Vec::new();
+        assert!(forward_absolute_request_to(
+            &state,
+            &snapshot,
+            request,
+            None,
+            false,
+            &mut wire,
+            Some(&context),
+        ));
+        let response = String::from_utf8(wire).expect("HTTP response");
+        assert!(response.starts_with("HTTP/1.1 403"));
+        assert!(!response.contains("X-Serverware-Response-Proof-B64"));
+        assert!(!response.contains("X-Serverware-Response-Proof-SHA256"));
+        assert!(!response.contains("X-Serverware-Response-Key-Id"));
+        let audit = state.audit_queue.lock().expect("audit queue");
+        assert!(audit
+            .iter()
+            .all(|event| event.event_type != "data_plane.response_proof.emitted"));
+    }
+
+    #[test]
+    fn response_proof_rejects_cross_wired_client_request_digest() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let context = ResponseProofContext {
+            client_nonce: "test-nonce".to_string(),
+            client_nonce_bytes: vec![7; 32],
+            tls_exporter: "test-exporter".to_string(),
+        };
+        let expected_client_digest = format!("sha256:{}", "a".repeat(64));
+        let supplied_client_digest = format!("sha256:{}", "b".repeat(64));
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nX-Serverware-Client-Request-Digest: {supplied_client_digest}\r\nX-Serverware-Request-Digest: sha256:{}\r\nX-Serverware-Operation-Digest: sha256:{}\r\nX-Serverware-Policy-Hash: {}\r\nX-Serverware-Response-Body-SHA256: {}\r\n\r\n",
+            "c".repeat(64),
+            "d".repeat(64),
+            snapshot.hash,
+            sha256_prefixed(b""),
+        )
+        .into_bytes();
+        let error = attach_response_proof(
+            &state,
+            &snapshot,
+            &context,
+            &expected_client_digest,
+            response,
+        )
+        .err()
+        .expect("cross-wired client request digest must fail before signing");
+        assert!(error.contains("client request digest mismatch"));
+    }
+
+    #[test]
+    fn response_secret_writer_blocks_matches_split_across_writes() {
+        let mut guard = ResponseSecretGuard::default();
+        guard.add_text_encodings("demo-token-from-vault");
+        let fingerprint = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(b"demo-token-from-vault"))
+        );
+        assert!(guard.detects(fingerprint.as_bytes()));
+        let mut output = Vec::new();
+        let mut writer = ResponseSecretWriter::new(&mut output, &guard);
+        writer
+            .write_all(b"safe-prefix demo-token-")
+            .expect("safe prefix is retained");
+        let error = writer
+            .write_all(b"from-vault safe-suffix")
+            .expect_err("split credential reflection must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        drop(writer);
+        assert!(!output
+            .windows(b"demo-token-from-vault".len())
+            .any(|window| window == b"demo-token-from-vault"));
+    }
+
+    #[test]
+    fn response_secret_writer_releases_safe_stream_unchanged() {
+        let mut guard = ResponseSecretGuard::default();
+        guard.add_text_encodings("demo-token-from-vault");
+        let mut output = Vec::new();
+        let mut writer = ResponseSecretWriter::new(&mut output, &guard);
+        writer.write_all(b"safe response ").expect("first write");
+        writer.write_all(b"across chunks").expect("second write");
+        writer.finish().expect("safe stream release");
+        assert_eq!(output, b"safe response across chunks");
+    }
+
+    #[test]
+    fn buffered_release_blocks_projected_credential_reflection() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation",
+        });
+        let url = Url::parse("https://example.test/resource").expect("URL");
+        let mut guard = ResponseSecretGuard::default();
+        guard.add_text_encodings("demo-token-from-vault");
+        let response = release_forward_response(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            StatusCode::OK,
+            Some("application/json"),
+            &[],
+            br#"{"data":"demo-token-from-vault"}"#.to_vec(),
+            &guard,
+            json!({"ok":true}),
+        );
+        let response_text = String::from_utf8(response).expect("HTTP response");
+        assert!(response_text.starts_with("HTTP/1.1 502"));
+        assert!(response_text.contains("response_credential_reflection"));
+        assert!(!response_text.contains("demo-token-from-vault"));
+    }
+
+    #[test]
+    fn buffered_release_exposes_the_client_request_digest() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let client_request_digest = format!("sha256:{}", "a".repeat(64));
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "client_request_digest":client_request_digest,
+            "request_digest":format!("sha256:{}", "b".repeat(64)),
+            "operation_digest":format!("sha256:{}", "c".repeat(64)),
+        });
+        let url = Url::parse("https://example.test/resource").expect("URL");
+        let response = release_forward_response(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            StatusCode::OK,
+            Some("application/json"),
+            &[],
+            br#"{"safe":true}"#.to_vec(),
+            &ResponseSecretGuard::default(),
+            json!({"ok":true}),
+        );
+        let response_text = String::from_utf8(response).expect("HTTP response");
+        assert!(response_text.starts_with("HTTP/1.1 200"));
+        assert!(response_text.contains(&format!(
+            "X-Serverware-Client-Request-Digest: {client_request_digest}\r\n"
+        )));
+    }
+
+    #[test]
+    fn shared_grant_attempt_id_is_explicit_and_stable() {
+        let canonical = json!({"request":{"method":"POST"}});
+        let display = json!({"method":"POST"});
+        let request = shared_grant_consume_request(
+            "agent:test",
+            "route:test",
+            "credential:test",
+            7,
+            "sha256:policy",
+            "sha256:request",
+            "sha256:operation",
+            "sha256:flow",
+            "sha256:attempt",
+            "POST",
+            "https://example.test/resource",
+            &canonical,
+            &display,
+            true,
+        );
+        assert_eq!(request["flowId"], "sha256:flow");
+        assert_eq!(request["attemptId"], "sha256:attempt");
+        assert_eq!(request["canonicalRequest"], canonical);
+    }
+
+    #[test]
+    fn shared_rate_limit_request_and_key_match_server_policy() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.id = "route:test".to_string();
+        route.credential_ref = Some("credential:test".to_string());
+        let constraint = json!({
+            "id":"quota:test",
+            "type":"rateLimit",
+            "max":5,
+            "windowSeconds":86400,
+            "store":"shared",
+            "key":{
+                "scope":["principal","credential","credentialVersion","route","operation"],
+                "operationFields":["amount","metadata.agent_request_id"]
+            }
+        });
+        let operation = json!({
+            "operation":"stripe.payment_intents.create",
+            "amount":"5000",
+            "metadata.agent_request_id":"req-123",
+            "unbound":"still-sent-for-server-recomputation"
+        });
+        let key = rate_limit_key(
+            &constraint,
+            &route,
+            "agent:test",
+            Some("credential:test"),
+            7,
+            &operation,
+        );
+        assert_eq!(
+            key,
+            "sha256:0d09ac666d8fc0301bdf4534736845e79a5ef84d7c48eb5c9390b21d62c3eada"
+        );
+        let request = shared_rate_limit_request(
+            &constraint,
+            &route,
+            "agent:test",
+            Some("credential:test"),
+            7,
+            &format!("sha256:{}", "a".repeat(64)),
+            &operation,
+            true,
+            &key,
+            5,
+            86400,
+        );
+        assert_eq!(request["operation"], "stripe.payment_intents.create");
+        assert_eq!(request["operationContext"], operation);
+        assert_eq!(request["counterKey"], key);
+        assert_eq!(request["max"], 5);
+        assert_eq!(request["windowSeconds"], 86400);
+    }
+
+    #[test]
+    fn generic_form_operation_and_constraints_match_stripe_policy() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.host = "api.stripe.com".to_string();
+        route.paths = vec![compile_template("/v1/payment_intents").expect("template")];
+        route.adapter_config = json!({
+            "request":{
+                "allowedHeaders":["content-type","idempotency-key"],
+                "allowedQueryKeys":[],
+                "bodyMode":"formUrlencoded",
+                "maxBodyBytes":16384,
+                "operation":{
+                    "name":"stripe.payment_intents.create",
+                    "formFields":["amount","currency","payment_method","confirm","metadata.agent_request_id"]
+                }
+            },
+            "response":{"mode":"json","maxBodyBytes":65536}
+        });
+        let route_match = RouteMatch {
+            route: &route,
+            params: BTreeMap::new(),
+        };
+        let constraint = json!({
+            "id":"payment-intent-tokenized-only",
+            "type":"formBody",
+            "contentTypes":["application/x-www-form-urlencoded"],
+            "allowedFields":["amount","currency","payment_method","confirm","metadata.agent_request_id","ratio","capture"],
+            "requiredFields":["amount","currency","payment_method","confirm"],
+            "deniedFields":["payment_method_data.card.number","source","card"],
+            "fields":{
+                "amount":{"type":"integer","min":50,"max":50000},
+                "currency":{"type":"string","equals":"usd"},
+                "payment_method":{"type":"string","pattern":"^pm_[A-Za-z0-9]{8,64}$","maxLength":67},
+                "confirm":{"type":"string","equals":"true"},
+                "metadata.agent_request_id":{"type":"string","maxLength":128},
+                "ratio":{"type":"number","min":0.5,"max":2.0},
+                "capture":{"type":"boolean","equals":true}
+            }
+        });
+        let headers = BTreeMap::from([
+            ("host".to_string(), "api.stripe.com".to_string()),
+            (
+                "content-type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ),
+        ]);
+        let request = decision_request_with_body(
+            "amount=5000&currency=usd&payment_method=pm_12345678&confirm=true&metadata%5Bagent_request_id%5D=req-123&ratio=1.5&capture=true",
+        );
+        let url = Url::parse(&request.url).expect("URL");
+        let (operation, _) = validate_adapter(&request, &headers, &url, &route_match)
+            .expect("valid generic form request");
+        assert_eq!(operation["operation"], "stripe.payment_intents.create");
+        assert_eq!(operation["amount"], "5000");
+        assert_eq!(operation["metadata.agent_request_id"], "req-123");
+        assert_eq!(operation.get("ratio"), None);
+        enforce_form_body(&constraint, &request, &headers).expect("valid form constraint");
+
+        for (body, expected) in [
+            (
+                "amount=50001&currency=usd&payment_method=pm_12345678&confirm=true",
+                "form_body_field_max",
+            ),
+            (
+                "amount=50&amount=50000&currency=usd&payment_method=pm_12345678&confirm=true",
+                "form_body_duplicate_field_denied",
+            ),
+            (
+                "amount=5000&currency=usd&confirm=true&payment_method_data%5Bcard%5D%5Bnumber%5D=4242424242424242",
+                "form_body_field_not_allowed",
+            ),
+        ] {
+            let denied = enforce_form_body(
+                &constraint,
+                &decision_request_with_body(body),
+                &headers,
+            )
+            .expect_err("unsafe Stripe form must be denied");
+            assert_eq!(denied["error"], expected);
+        }
+    }
+
+    #[test]
+    fn form_parser_is_strict_and_bounded() {
+        assert!(parse_form_urlencoded(&decision_request_with_body("amount=%GG")).is_err());
+        let mut invalid_utf8 = decision_request_with_body("amount=replacement");
+        invalid_utf8.forwarded_body_utf8_valid = Some(false);
+        assert!(parse_form_urlencoded(&invalid_utf8).is_err());
+        let too_many = (0..257)
+            .map(|index| format!("field{index}=value"))
+            .collect::<Vec<_>>()
+            .join("&");
+        assert!(parse_form_urlencoded(&decision_request_with_body(&too_many)).is_err());
+        let parsed = parse_form_urlencoded(&decision_request_with_body(
+            "metadata%5Bagent_request_id%5D=req-123",
+        ))
+        .expect("canonical bracket field");
+        assert_eq!(
+            parsed,
+            vec![(
+                "metadata.agent_request_id".to_string(),
+                "req-123".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn streamed_forms_with_whole_form_constraints_fail_policy_load() {
+        let mut route = generic_policy_route("formUrlencodedStream", json!(1024));
+        route["constraints"] = json!([{
+            "id":"form-policy",
+            "type":"formBody",
+            "phase":"request",
+            "allowedFields":["safe"],
+            "deniedFields":["secret"],
+            "fields":{"safe":{"type":"string","equals":"yes"}}
+        }]);
+        let error = validate_policy_capabilities(&policy_with_route(route))
+            .expect_err("whole-form constraints must not be admitted for streamed forms");
+        assert!(error.contains("formUrlencodedStream"));
+        assert!(error.contains("formBody"));
+    }
+
+    #[test]
+    fn response_body_limit_is_typed_and_capped_at_policy_load() {
+        let string_limit = policy_with_route(generic_policy_route("none", json!("1024")));
+        assert!(validate_policy_capabilities(&string_limit)
+            .expect_err("string response limit must be rejected")
+            .contains("unsigned integer"));
+
+        let oversized = policy_with_route(generic_policy_route(
+            "none",
+            json!(MAX_BUFFERED_RESPONSE_BODY_BYTES + 1),
+        ));
+        assert!(validate_policy_capabilities(&oversized)
+            .expect_err("oversized response limit must be rejected")
+            .contains("must be <="));
+
+        let bounded = policy_with_route(generic_policy_route(
+            "none",
+            json!(MAX_BUFFERED_RESPONSE_BODY_BYTES),
+        ));
+        validate_policy_capabilities(&bounded).expect("16 MiB response limit is supported");
+    }
+
+    #[test]
+    fn response_modes_are_explicit_and_fail_closed_at_policy_load() {
+        for invalid_mode in [Value::String("bogus".to_string()), json!(7), Value::Null] {
+            let mut route = generic_policy_route("none", json!(1024));
+            route["adapter"]["config"]["response"]["mode"] = invalid_mode;
+            assert!(validate_policy_capabilities(&policy_with_route(route))
+                .expect_err("unsupported response mode must be rejected")
+                .contains("response mode"));
+        }
+
+        let mut missing_mode = generic_policy_route("none", json!(1024));
+        missing_mode["adapter"]["config"]["response"]
+            .as_object_mut()
+            .expect("response object")
+            .remove("mode");
+        assert!(
+            validate_policy_capabilities(&policy_with_route(missing_mode))
+                .expect_err("missing response mode must be rejected")
+                .contains("response mode")
+        );
+    }
+
+    #[test]
+    fn credential_routes_reject_opaque_responses_and_mutating_request_streams() {
+        let mut opaque_response = generic_policy_route("none", json!(1024));
+        opaque_response["credentialRef"] = json!("credential:test");
+        opaque_response["adapter"]["config"]["response"]["mode"] = json!("stream");
+        assert!(
+            validate_policy_capabilities(&policy_with_route(opaque_response))
+                .expect_err("credential-bearing opaque stream must fail")
+                .contains("require projection")
+        );
+
+        let mut mutating_stream = generic_policy_route("none", json!(1024));
+        mutating_stream["credentialRef"] = json!("credential:test");
+        mutating_stream["match"]["methods"] = json!(["POST"]);
+        mutating_stream["adapter"]["config"]["request"]["bodyMode"] = json!("jsonlStream");
+        mutating_stream["adapter"]["config"]["request"]["allowedFields"] = json!(["safe"]);
+        assert!(
+            validate_policy_capabilities(&policy_with_route(mutating_stream))
+                .expect_err("credential-bearing mutating stream must fail")
+                .contains("must buffer")
+        );
+    }
+
+    #[test]
+    fn streaming_responses_reject_released_upstream_headers() {
+        let mut route = generic_policy_route("none", json!(1024));
+        route["adapter"]["config"]["response"]["mode"] = json!("jsonlStream");
+        route["adapter"]["config"]["response"]["allowedHeaders"] = json!(["etag"]);
+        assert!(validate_policy_capabilities(&policy_with_route(route))
+            .expect_err("streaming responses must not claim header release support")
+            .contains("cannot release upstream headers"));
+    }
+
+    #[test]
+    fn high_risk_adapter_invariants_are_policy_load_requirements() {
+        let gmail_route = json!({
+            "id":"gmail:test",
+            "principals":["agent:test"],
+            "match":{
+                "scheme":"https","host":"gmail.googleapis.com","port":443,
+                "methods":["GET"],"paths":["/gmail/v1/users/{user}/messages"]
+            },
+            "credentialRef":"credential:gmail",
+            "adapter":{"type":"gmail.v1","config":{
+                "maxAgeDays":30,
+                "maxResults":25,
+                "forceQuery":true,
+                "allowMessageGetOnlyFromPriorSearch":true,
+                "cacheTtlSeconds":300,
+                "response":{
+                    "validateInternalDate":true,
+                    "validateListByMetadataFetch":true,
+                    "maxBodyBytes":1048576,
+                    "allowedFields":["id","internalDate","payload.headers"],
+                    "allowedHeaders":[],
+                    "allowedMessageHeaderNames":["From","Subject"],
+                    "error":{
+                        "mode":"json",
+                        "maxBodyBytes":65536,
+                        "allowedFields":["error.code","error.message"],
+                        "allowedHeaders":["retry-after"],
+                        "onInvalid":"block"
+                    },
+                    "onViolation":"block"
+                }
+            }}
+        });
+        validate_policy_capabilities(&policy_with_route(gmail_route.clone()))
+            .expect("fully bounded Gmail policy");
+        let mut unsafe_gmail = gmail_route;
+        unsafe_gmail["adapter"]["config"]["forceQuery"] = json!(false);
+        assert!(
+            validate_policy_capabilities(&policy_with_route(unsafe_gmail))
+                .expect_err("Gmail without query forcing must fail policy load")
+                .contains("forceQuery")
+        );
+
+        let npm_route = json!({
+            "id":"npm:test",
+            "principals":["agent:test"],
+            "match":{
+                "scheme":"https","host":"registry.npmjs.org","port":443,
+                "methods":["PUT"],"paths":["/{package}"]
+            },
+            "credentialRef":"credential:npm",
+            "adapter":{"type":"npm.registry","config":{
+                "operations":["publish"],
+                "response":{
+                    "mode":"json",
+                    "maxBodyBytes":65536,
+                    "allowedFields":["ok"],
+                    "allowedHeaders":[],
+                    "error":{
+                        "mode":"json",
+                        "maxBodyBytes":65536,
+                        "allowedFields":["error","reason"],
+                        "allowedHeaders":["retry-after"],
+                        "onInvalid":"block"
+                    }
+                }
+            }},
+            "jit":{
+                "required":true,
+                "mode":"perOperation",
+                "ttlSeconds":30,
+                "maxUses":1,
+                "consumeOn":"forwardStart",
+                "binding":{"type":"operationDigest","fields":[
+                    "principal","routeId","credentialRef","credentialVersion","policyHash",
+                    "method","authority","path","bodySha256","packageName","packageVersion","tarballIntegrity"
+                ]},
+                "approvers":{"quorum":1,"users":["user:release"],"authn":{
+                    "webauthnRequired":true,
+                    "userVerification":"required",
+                    "allowedAuthenticatorClasses":["hardware"],
+                    "requireHardwareAttestation":true
+                }}
+            }
+        });
+        validate_policy_capabilities(&policy_with_route(npm_route.clone()))
+            .expect("hardware-bound npm policy");
+        let mut unsafe_npm = npm_route;
+        unsafe_npm["jit"]["approvers"]["authn"]["requireHardwareAttestation"] = json!(false);
+        assert!(validate_policy_capabilities(&policy_with_route(unsafe_npm))
+            .expect_err("npm write without hardware attestation must fail policy load")
+            .contains("hardware-attested"));
+
+        let x_read_route = json!({
+            "id":"x:read",
+            "principals":["agent:test"],
+            "match":{
+                "scheme":"https","host":"api.x.com","port":443,
+                "methods":["GET"],"paths":["/2/**"]
+            },
+            "credentialRef":"credential:x",
+            "adapter":{"type":"x.v2","config":{
+                "mode":"readOnly",
+                "blockWrites":true,
+                "appIds":["approved-app"],
+                "allowedReadOperations":["tweets.read","users.read"],
+                "response":{"mode":"json","maxBodyBytes":1048576,"allowedFields":["data","meta"]}
+            }},
+            "constraints":[{
+                "id":"x-read-operations",
+                "type":"operationPolicy",
+                "allowedOperations":["tweets.read","users.read"]
+            }]
+        });
+        validate_policy_capabilities(&policy_with_route(x_read_route.clone()))
+            .expect("explicit bounded X reads");
+        let mut unsafe_x_read = x_read_route;
+        unsafe_x_read["match"]["methods"] = json!(["GET", "POST"]);
+        assert!(
+            validate_policy_capabilities(&policy_with_route(unsafe_x_read))
+                .expect_err("X read route with a write method must fail policy load")
+                .contains("only match GET")
+        );
+
+        let x_write_route = json!({
+            "id":"x:write",
+            "principals":["agent:test"],
+            "match":{
+                "scheme":"https","host":"api.x.com","port":443,
+                "methods":["POST"],"paths":["/2/tweets"]
+            },
+            "credentialRef":"credential:x",
+            "adapter":{"type":"x.v2","config":{
+                "mode":"controlledWrite",
+                "blockWrites":false,
+                "appIds":["approved-app"],
+                "response":{"mode":"json","maxBodyBytes":65536}
+            }},
+            "constraints":[
+                {"id":"x-write-operation","type":"operationPolicy","allowedOperations":["tweets.write"]},
+                {"id":"x-write-body","type":"jsonBody","allowedFields":["text"],"requiredFields":["text"]}
+            ]
+        });
+        validate_policy_capabilities(&policy_with_route(x_write_route.clone()))
+            .expect("explicit X post write");
+        let mut unsafe_x_write = x_write_route;
+        unsafe_x_write["match"]["paths"] = json!(["/2/**"]);
+        assert!(
+            validate_policy_capabilities(&policy_with_route(unsafe_x_write))
+                .expect_err("broad X write route must fail policy load")
+                .contains("only POST /2/tweets")
+        );
+    }
+
+    #[test]
+    fn body_constraints_require_an_explicit_unknown_field_allowlist() {
+        let mut route = generic_policy_route("json", json!(1024));
+        route["constraints"] = json!([{
+            "id":"body:test",
+            "type":"jsonBody",
+            "requiredFields":["safe"],
+            "fields":{"safe":{"type":"string"}}
+        }]);
+        let error = validate_policy_capabilities(&policy_with_route(route))
+            .expect_err("body policy without allowedFields must fail policy load");
+        assert!(error.contains("allowedFields"));
+        assert!(error.contains("fail closed"));
+    }
+
+    #[test]
+    fn json_body_enforces_bounded_field_patterns() {
+        let constraint = json!({
+            "id":"payment-method",
+            "type":"jsonBody",
+            "contentTypes":["application/json"],
+            "allowedFields":["payment_method"],
+            "requiredFields":["payment_method"],
+            "fields":{
+                "payment_method":{
+                    "type":"string",
+                    "pattern":"^pm_[A-Za-z0-9]{8,64}$",
+                    "maxLength":67
+                }
+            }
+        });
+        let headers =
+            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
+        enforce_json_body(
+            &constraint,
+            &decision_request_with_body(r#"{"payment_method":"pm_12345678"}"#),
+            &headers,
+        )
+        .expect("matching bounded JSON pattern");
+        let denied = enforce_json_body(
+            &constraint,
+            &decision_request_with_body(r#"{"payment_method":"card_12345678"}"#),
+            &headers,
+        )
+        .expect_err("non-matching JSON pattern must fail closed");
+        assert_eq!(denied["error"], "json_body_field_pattern_denied");
+        assert_eq!(denied["field"], "payment_method");
+    }
+
+    #[test]
+    fn body_patterns_must_use_the_bounded_runtime_grammar() {
+        for (constraint_type, body_mode) in [("jsonBody", "json"), ("formBody", "formUrlencoded")] {
+            let mut route = generic_policy_route(body_mode, json!(1024));
+            route["constraints"] = json!([{
+                "id":"pattern-policy",
+                "type":constraint_type,
+                "allowedFields":["safe"],
+                "fields":{"safe":{
+                    "type":"string",
+                    "pattern":"^safe[0-9]+$",
+                    "maxLength":64
+                }}
+            }]);
+            let error = validate_policy_capabilities(&policy_with_route(route))
+                .expect_err("unsupported pattern must fail policy load");
+            assert!(error.contains(constraint_type));
+            assert!(error.contains("field safe"));
+            assert!(error.contains("unsupported by the Rust runtime"));
+        }
+    }
+
+    #[test]
+    fn query_numeric_bounds_reject_non_finite_values() {
+        let constraint = json!({
+            "id":"numeric",
+            "type":"queryNumericBounds",
+            "parameters":["limit"],
+            "min":0,
+            "max":10
+        });
+        for query in [
+            "limit=NaN",
+            "limit=Infinity",
+            "limit=-Infinity",
+            "limit=1e9999",
+            "limit=5&limit=NaN",
+        ] {
+            let url = Url::parse(&format!("https://example.test/resource?{query}")).expect("URL");
+            let denied = enforce_query_numeric_bounds(&constraint, &url)
+                .expect_err("non-finite query value must fail closed");
+            assert_eq!(denied["error"], "query_numeric_parameter_invalid");
+            assert_eq!(denied["parameter"], "limit");
+        }
+        for query in ["limit=0", "limit=5.5", "limit=10", "limit=0&limit=10"] {
+            let url = Url::parse(&format!("https://example.test/resource?{query}")).expect("URL");
+            enforce_query_numeric_bounds(&constraint, &url).expect("finite in-range value");
+        }
+    }
+
+    #[test]
+    fn client_proof_request_binding_is_canonical_and_sanitized() {
+        let mut request = IncomingRequest {
+            method: "GET".to_string(),
+            target: "https://EXAMPLE.test.:443/resource?b=2&a=x&a=%7E".to_string(),
+            headers: BTreeMap::from([
+                (
+                    "Authorization".to_string(),
+                    "Bearer client-secret".to_string(),
+                ),
+                ("Connection".to_string(), "keep-alive".to_string()),
+                ("Host".to_string(), "EXAMPLE.test:443".to_string()),
+                (
+                    "Proxy-Authorization".to_string(),
+                    "Basic proxy-secret".to_string(),
+                ),
+                ("X-Serverware-Agent".to_string(), "agent:test".to_string()),
+                (
+                    "X-Serverware-Data-Plane-Token".to_string(),
+                    "identity-secret".to_string(),
+                ),
+                (
+                    "X-Serverware-Proof-Nonce".to_string(),
+                    "proof-nonce".to_string(),
+                ),
+                ("X-Visible".to_string(), "visible".to_string()),
+            ]),
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        let context = ResponseProofContext {
+            client_nonce: "proof-nonce".to_string(),
+            client_nonce_bytes: vec![7; 32],
+            tls_exporter: "test-exporter".to_string(),
+        };
+        let canonical = serde_json::to_value(
+            canonical_client_proof_request(&request).expect("canonical binding"),
+        )
+        .expect("serialize binding");
+        assert_eq!(canonical["apiVersion"], "serverware.clientProofRequest/v1");
+        assert_eq!(canonical["method"], "GET");
+        assert_eq!(canonical["scheme"], "https");
+        assert_eq!(canonical["authority"], "example.test");
+        assert_eq!(canonical["path"], "/resource");
+        assert_eq!(
+            canonical["query"],
+            json!([["a", "x"], ["a", "~"], ["b", "2"]])
+        );
+        assert_eq!(canonical["headers"], json!({"x-visible":"visible"}));
+        assert_eq!(canonical["body_sha256"], sha256_prefixed(b""));
+        let digest = client_proof_request_digest(&request, &context).expect("request digest");
+
+        request.target = "https://example.test/resource?a=~&b=2&a=x".to_string();
+        request.headers.insert(
+            "X-Serverware-Proof-Nonce".to_string(),
+            "different-nonce".to_string(),
+        );
+        let equivalent_context = ResponseProofContext {
+            client_nonce: "different-nonce".to_string(),
+            ..context.clone()
+        };
+        let equivalent_digest =
+            client_proof_request_digest(&request, &equivalent_context).expect("equivalent digest");
+        assert_eq!(digest, equivalent_digest);
+
+        request
+            .headers
+            .insert("X-Visible".to_string(), "changed".to_string());
+        let changed = client_proof_request_digest(&request, &equivalent_context)
+            .expect("changed request digest");
+        assert_ne!(digest, changed);
+
+        request.method = "POST".to_string();
+        assert!(canonical_client_proof_request(&request).is_err());
+        request.method = "GET".to_string();
+        request.body = b"not-empty".to_vec();
+        assert!(canonical_client_proof_request(&request).is_err());
+    }
+
+    #[test]
+    fn client_proof_request_digest_is_preserved_in_the_decision() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let request = IncomingRequest {
+            method: "GET".to_string(),
+            target: "https://example.test/resource".to_string(),
+            headers: BTreeMap::from([(
+                RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                "proof-nonce".to_string(),
+            )]),
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        let context = ResponseProofContext {
+            client_nonce: "proof-nonce".to_string(),
+            client_nonce_bytes: vec![7; 32],
+            tls_exporter: "test-exporter".to_string(),
+        };
+        let expected = client_proof_request_digest(&request, &context).expect("request digest");
+        let decision = decide_internal(
+            &state,
+            &snapshot,
+            DecisionRequest {
+                client_ip: request.client_ip,
+                method: request.method,
+                url: request.target,
+                headers: request.headers,
+                body: String::new(),
+                body_sha256: Some(sha256_prefixed(b"")),
+                forwarded_body_length: Some(0),
+                forwarded_body_utf8_valid: Some(true),
+                credential_metadata: BTreeMap::new(),
+                gmail_proofs: Vec::new(),
+                client_request_digest: Some(expected.clone()),
+            },
+            Some("agent:test"),
+        );
+        assert_eq!(decision["allowed"], true);
+        assert_eq!(decision["client_request_digest"], expected);
+    }
+
+    #[test]
+    fn request_time_windows_are_strict_and_fail_closed() {
+        let schedule = json!({
+            "id":"weekday-hours",
+            "type":"requestTimeWindow",
+            "timezone":"UTC",
+            "notBefore":"2026-01-01T00:00:00Z",
+            "notAfter":"2027-01-01T00:00:00Z",
+            "weekdays":["mon","tue","wed","thu","fri"],
+            "dailyWindows":[{"start":"13:00","end":"15:00"}]
+        });
+        let within = parse_rfc3339_ms("2026-07-14T14:00:00Z").expect("valid timestamp");
+        enforce_request_time_window_at_ms(&schedule, within).expect("Tuesday within UTC window");
+        let end = parse_rfc3339_ms("2026-07-14T15:00:00Z").expect("valid timestamp");
+        assert_eq!(
+            enforce_request_time_window_at_ms(&schedule, end)
+                .expect_err("daily end must be exclusive")["error"],
+            "request_time_daily_window_denied"
+        );
+        let saturday = parse_rfc3339_ms("2026-07-18T14:00:00Z").expect("valid timestamp");
+        assert_eq!(
+            enforce_request_time_window_at_ms(&schedule, saturday)
+                .expect_err("weekend must be denied")["error"],
+            "request_time_weekday_denied"
+        );
+
+        let mut route = generic_policy_route("none", json!(1024));
+        route["constraints"] = json!([schedule]);
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("valid request schedule");
+        route["constraints"][0]["dailyWindows"] = json!([
+            {"start":"09:00","end":"12:00"},
+            {"start":"11:00","end":"13:00"}
+        ]);
+        assert!(validate_policy_capabilities(&policy_with_route(route))
+            .expect_err("overlapping windows must fail policy load")
+            .contains("must not overlap"));
+
+        let date_only = HashSet::from(["date"]);
+        assert!(parse_datetime_ms(&json!("2026-07-14"), &date_only).is_some());
+        assert!(parse_datetime_ms(&json!("2026-02-30"), &date_only).is_none());
+        assert!(parse_datetime_ms(&json!("2026-07-14T00:00:00Z"), &date_only).is_none());
+        let rfc3339 = HashSet::from(["rfc3339"]);
+        assert_eq!(
+            parse_datetime_ms(&json!("2026-07-14T10:00:00-04:00"), &rfc3339),
+            Some(within)
+        );
+    }
+
+    #[test]
+    fn route_matching_uses_python_per_segment_specificity() {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.routes = vec![
+            route_with_path("glob", "/items/**"),
+            route_with_path("wildcard", "/items/*/detail"),
+            route_with_path("variable", "/items/{item}/detail"),
+            route_with_path("literal", "/items/special/*"),
+        ];
+        let url = Url::parse("https://example.test/items/special/detail").expect("URL");
+        assert_eq!(
+            snapshot
+                .match_route("agent:test", "GET", &url)
+                .expect("specific route")
+                .route
+                .id,
+            "literal"
+        );
+
+        snapshot.routes.remove(3);
+        assert_eq!(
+            snapshot
+                .match_route("agent:test", "GET", &url)
+                .expect("variable route")
+                .route
+                .id,
+            "variable"
+        );
+
+        snapshot.routes.remove(2);
+        assert_eq!(
+            snapshot
+                .match_route("agent:test", "GET", &url)
+                .expect("wildcard route")
+                .route
+                .id,
+            "wildcard"
+        );
+    }
+
+    #[test]
+    fn ambiguous_equal_specificity_routes_fail_rust_load() {
+        let ambiguous = vec![
+            route_with_path("left", "/items/{left}"),
+            route_with_path("right", "/items/{right}"),
+        ];
+        assert!(validate_route_ambiguity(&ambiguous)
+            .expect_err("same-shape routes must be rejected")
+            .contains("left and right"));
+
+        let ordered = vec![
+            route_with_path("literal", "/items/special"),
+            route_with_path("variable", "/items/{item}"),
+        ];
+        validate_route_ambiguity(&ordered).expect("different specificity is deterministic");
+    }
+
+    #[test]
+    fn jit_audit_reservation_is_atomic_and_protected_from_optional_events() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("token".to_string());
+        state.audit_queue_max = 1;
+
+        let mut reservation = reserve_required_audit(&state).expect("required audit slot");
+        assert_eq!(state.audit_reserved.load(Ordering::Relaxed), 1);
+        assert!(reserve_required_audit(&state).is_none());
+        assert!(!enqueue_audit_event(
+            &state,
+            "optional",
+            json!({"optional":true}),
+            false,
+        ));
+        assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+        assert!(reservation.commit("required", json!({"required":true})));
+
+        let batch = pop_audit_batch(&state);
+        assert_eq!(batch.len(), 1);
+        assert!(batch[0].required);
+        assert_eq!(state.audit_reserved.load(Ordering::Relaxed), 1);
+        assert!(!enqueue_audit_event(
+            &state,
+            "optional",
+            json!({"optional":true}),
+            false,
+        ));
+        requeue_audit_batch(&state, batch);
+        assert_eq!(state.audit_reserved.load(Ordering::Relaxed), 0);
+        assert!(state.audit_queue.lock().expect("audit queue")[0].required);
+    }
+
+    #[test]
+    fn credential_release_requires_durable_audit_acknowledgement() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        let binding = CredentialLeaseReleaseBinding {
+            scope: CredentialLeaseScope::new("agent:test", "route:test", "credential:test"),
+            version: 7,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(5),
+        };
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":"sha256:policy",
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation",
+        });
+        let url = Url::parse("https://example.test/resource").expect("URL");
+        assert!(!record_required_credential_release_start(
+            &state, &decision, "GET", &url, &binding,
+        ));
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("audit test listener");
+        let address = listener.local_addr().expect("audit test address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("audit request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("audit read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0u8; 4096];
+            loop {
+                let count = stream.read(&mut buffer).expect("read audit request");
+                if count == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..count]);
+                let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
+                else {
+                    continue;
+                };
+                let head = String::from_utf8_lossy(&request[..header_end]);
+                let content_length = head
+                    .lines()
+                    .find_map(|line| {
+                        line.split_once(':').and_then(|(name, value)| {
+                            name.eq_ignore_ascii_case("content-length")
+                                .then(|| value.trim().parse::<usize>().ok())
+                                .flatten()
+                        })
+                    })
+                    .unwrap_or(0);
+                if request.len() >= header_end + 4 + content_length {
+                    break;
+                }
+            }
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .expect("write audit acknowledgement");
+            String::from_utf8(request).expect("audit request UTF-8")
+        });
+        state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));
+        state.audit_token = Some("token".to_string());
+        state.audit_queue_max = 1;
+        assert!(record_required_credential_release_start(
+            &state, &decision, "GET", &url, &binding,
+        ));
+        let captured = server.join().expect("audit test server");
+        assert!(captured.contains("data_plane.credential.release_started"));
+        assert!(captured.contains("credential:test"));
+        assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+        assert_eq!(state.audit_sent.load(Ordering::Relaxed), 1);
+        assert!(!record_required_credential_release_start(
+            &state, &decision, "GET", &url, &binding,
+        ));
+        assert_eq!(state.audit_required_failed.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn delayed_audit_acknowledgement_requires_lease_revalidation() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let expiry = Instant::now() + Duration::from_millis(40);
+        state.credential_leases.lock().expect("lease cache").insert(
+            scope.clone(),
+            SecretLease {
+                scope: scope.clone(),
+                version: 7,
+                secret: Zeroizing::new("secret".to_string()),
+                metadata: BTreeMap::new(),
+                policy_hash: snapshot.hash.clone(),
+                expires_at_epoch_ms: now_epoch_ms() + 40,
+                expires_at_monotonic: expiry,
+            },
+        );
+        let binding = CredentialLeaseReleaseBinding {
+            scope,
+            version: 7,
+            expires_at_monotonic: expiry,
+        };
+        assert!(credential_lease_still_releasable(
+            &state, &snapshot, &binding
+        ));
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("audit test listener");
+        let address = listener.local_addr().expect("audit test address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("audit request");
+            let mut request = Vec::with_capacity(4096);
+            while request.len() < 16 * 1024 {
+                let mut buffer = [0u8; 1024];
+                let read = stream.read(&mut buffer).expect("read audit request");
+                assert!(read > 0, "audit request ended before headers completed");
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            assert!(
+                request.windows(4).any(|window| window == b"\r\n\r\n"),
+                "audit request headers exceeded test bound"
+            );
+            thread::sleep(Duration::from_millis(80));
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .expect("write audit acknowledgement");
+        });
+        state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));
+        state.audit_token = Some("token".to_string());
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation",
+        });
+        let url = Url::parse("https://example.test/resource").expect("URL");
+        assert!(record_required_credential_release_start(
+            &state, &decision, "GET", &url, &binding,
+        ));
+        server.join().expect("audit test server");
+        assert!(!credential_lease_still_releasable(
+            &state, &snapshot, &binding
+        ));
+    }
+
+    #[test]
+    fn stale_attested_trust_revokes_credentialless_decisions() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        state.policy_trust_root_source = PolicyTrustRootSource::AttestedControlPlane {
+            url: "https://control.invalid/trust-root".to_string(),
+            expected_quote_key_id: Some("sha256:quote".to_string()),
+            verify_command: None,
+        };
+        *state
+            .policy_trust_last_success
+            .lock()
+            .expect("trust timestamp") =
+            Instant::now() - POLICY_TRUST_MAX_AGE - Duration::from_secs(1);
+        let decision = decide(
+            &state,
+            DecisionRequest {
+                client_ip: None,
+                method: "GET".to_string(),
+                url: "https://example.test/resource".to_string(),
+                headers: BTreeMap::new(),
+                body: String::new(),
+                body_sha256: None,
+                forwarded_body_length: Some(0),
+                forwarded_body_utf8_valid: Some(true),
+                credential_metadata: BTreeMap::new(),
+                gmail_proofs: Vec::new(),
+                client_request_digest: None,
+            },
+        );
+        assert_eq!(decision["allowed"], false);
+        assert_eq!(decision["payload"]["error"], "policy_trust_root_stale");
+        assert_eq!(decision["status_code"], 503);
+    }
+
+    #[test]
+    fn gmail_proofs_are_bound_to_full_security_context() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        remember_gmail_proofs(
+            &state,
+            &snapshot,
+            "agent:test",
+            "credential:test",
+            7,
+            "me",
+            "route:test",
+            &snapshot.routes[0],
+            30,
+            vec!["message-1".to_string()],
+        );
+        assert_eq!(
+            active_gmail_proofs(
+                &state,
+                &snapshot,
+                "agent:test",
+                "credential:test",
+                7,
+                "me",
+                "route:test",
+                30,
+            ),
+            vec!["message-1".to_string()]
+        );
+        for proofs in [
+            active_gmail_proofs(
+                &state,
+                &snapshot,
+                "agent:other",
+                "credential:test",
+                7,
+                "me",
+                "route:test",
+                30,
+            ),
+            active_gmail_proofs(
+                &state,
+                &snapshot,
+                "agent:test",
+                "credential:other",
+                7,
+                "me",
+                "route:test",
+                30,
+            ),
+            active_gmail_proofs(
+                &state,
+                &snapshot,
+                "agent:test",
+                "credential:test",
+                8,
+                "me",
+                "route:test",
+                30,
+            ),
+            active_gmail_proofs(
+                &state,
+                &snapshot,
+                "agent:test",
+                "credential:test",
+                7,
+                "other-user",
+                "route:test",
+                30,
+            ),
+            active_gmail_proofs(
+                &state,
+                &snapshot,
+                "agent:test",
+                "credential:test",
+                7,
+                "me",
+                "route:other",
+                30,
+            ),
+            active_gmail_proofs(
+                &state,
+                &snapshot,
+                "agent:test",
+                "credential:test",
+                7,
+                "me",
+                "route:test",
+                29,
+            ),
+        ] {
+            assert!(proofs.is_empty());
+        }
+
+        let next = test_snapshot(2);
+        *state.snapshot.write().expect("snapshot lock") = Arc::clone(&next);
+        assert!(active_gmail_proofs(
+            &state,
+            &next,
+            "agent:test",
+            "credential:test",
+            7,
+            "me",
+            "route:test",
+            30,
+        )
+        .is_empty());
+        assert_eq!(state.gmail_proofs.lock().expect("proof cache").len(), 1);
+    }
+
+    #[test]
+    fn gmail_pending_age_proof_releases_only_opaque_id() {
+        let message = json!({
+            "id":"pending-1",
+            "snippet":"must not escape",
+            "payload":{"headers":[{"name":"Subject","value":"secret"}]},
+            "serverwareAgeProof":"pending"
+        });
+        let allowed = vec![
+            vec!["id".to_string()],
+            vec!["snippet".to_string()],
+            vec!["payload".to_string(), "headers".to_string()],
+        ];
+        assert_eq!(
+            filter_gmail_message_fields(
+                &message,
+                &allowed,
+                &json!({"allowedMessageHeaderNames":["Subject"]}),
+            ),
+            json!({"id":"pending-1","serverwareAgeProof":"pending"})
+        );
+    }
+
+    #[test]
+    fn gmail_message_headers_are_filtered_case_insensitively() {
+        let message = json!({
+            "id":"message-1",
+            "payload":{"headers":[
+                {"name":"From","value":"sender@example.test","extra":"drop"},
+                {"name":"subject","value":"allowed"},
+                {"name":"Bcc","value":"must-not-release@example.test"}
+            ]}
+        });
+        let allowed = vec![
+            vec!["id".to_string()],
+            vec!["payload".to_string(), "headers".to_string()],
+        ];
+        assert_eq!(
+            filter_gmail_message_fields(
+                &message,
+                &allowed,
+                &json!({"allowedMessageHeaderNames":["from","Subject"]}),
+            ),
+            json!({
+                "id":"message-1",
+                "payload":{"headers":[
+                    {"name":"From","value":"sender@example.test"},
+                    {"name":"subject","value":"allowed"}
+                ]}
+            })
+        );
+    }
+
+    #[test]
+    fn response_status_profiles_and_headers_fail_closed() {
+        let response = json!({
+            "mode":"json",
+            "maxBodyBytes":1024,
+            "allowedHeaders":[],
+            "error":{
+                "mode":"json",
+                "maxBodyBytes":512,
+                "allowedFields":["error"],
+                "allowedHeaders":["retry-after","www-authenticate"],
+                "onInvalid":"block"
+            }
+        });
+        assert_eq!(
+            response_config_for_status(&response, StatusCode::OK).expect("success profile")
+                ["maxBodyBytes"],
+            1024
+        );
+        assert_eq!(
+            response_config_for_status(&response, StatusCode::TOO_MANY_REQUESTS)
+                .expect("error profile")["maxBodyBytes"],
+            512
+        );
+        assert_eq!(
+            response_config_for_status(&response, StatusCode::FOUND)
+                .expect_err("redirect must block")["error"],
+            "response_redirect_not_allowed"
+        );
+
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_static("30"));
+        headers.insert(
+            "www-authenticate",
+            HeaderValue::from_static("Bearer realm=\"test\""),
+        );
+        headers.insert("set-cookie", HeaderValue::from_static("session=secret"));
+        let released =
+            released_response_headers(&response["error"], &headers).expect("safe headers");
+        assert_eq!(
+            released,
+            vec![
+                ("retry-after".to_string(), "30".to_string()),
+                (
+                    "www-authenticate".to_string(),
+                    "Bearer realm=\"test\"".to_string()
+                )
+            ]
+        );
+    }
+
+    #[test]
+    fn caller_supplied_gmail_proofs_are_ignored() {
+        let request: DecisionRequest = serde_json::from_value(json!({
+            "method":"GET",
+            "url":"https://example.test/resource",
+            "gmailProofs":["attacker-controlled"]
+        }))
+        .expect("decision request");
+        assert!(request.gmail_proofs.is_empty());
+    }
+
+    #[test]
+    fn local_rate_precheck_does_not_allocate_and_expired_entries_are_swept() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let route = &snapshot.routes[0];
+        let constraint = json!({
+            "id":"local-rate",
+            "type":"rateLimit",
+            "max":1,
+            "windowSeconds":60,
+            "store":"local"
+        });
+        let operation = json!({"operation":"read"});
+        enforce_rate_limit(
+            &state,
+            &constraint,
+            route,
+            "agent:test",
+            None,
+            0,
+            &snapshot.hash,
+            &operation,
+            false,
+        )
+        .expect("precheck");
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+
+        let key = rate_limit_key(&constraint, route, "agent:test", None, 0, &operation);
+        state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .insert(
+                key,
+                ConstraintRateCounter {
+                    expires_at_ms: now_epoch_ms().saturating_sub(1),
+                    count: 1,
+                },
+            );
+        enforce_rate_limit(
+            &state,
+            &constraint,
+            route,
+            "agent:test",
+            None,
+            0,
+            &snapshot.hash,
+            &operation,
+            false,
+        )
+        .expect("precheck after sweep");
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+    }
+
+    #[test]
+    fn local_rate_counter_capacity_fails_closed() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let expires_at_ms = now_epoch_ms() + 60_000;
+        {
+            let mut counters = state
+                .constraint_rate_counters
+                .lock()
+                .expect("rate counters");
+            for index in 0..MAX_LOCAL_RATE_COUNTERS {
+                counters.insert(
+                    format!("occupied-{index}"),
+                    ConstraintRateCounter {
+                        expires_at_ms,
+                        count: 0,
+                    },
+                );
+            }
+        }
+        let error = enforce_rate_limit(
+            &state,
+            &json!({
+                "id":"local-rate",
+                "type":"rateLimit",
+                "max":1,
+                "windowSeconds":60,
+                "store":"local"
+            }),
+            &snapshot.routes[0],
+            "agent:test",
+            None,
+            0,
+            &snapshot.hash,
+            &json!({"operation":"new-key"}),
+            true,
+        )
+        .expect_err("counter capacity must fail closed");
+        assert_eq!(error["error"], "local_rate_limit_capacity_exhausted");
+        assert_eq!(error["status_code"], 503);
+    }
+
+    #[test]
+    fn shared_quota_key_uses_python_ensure_ascii_canonical_json() {
+        let route = route_with_path("route:test", "/resource");
+        let key = rate_limit_key(
+            &json!({
+                "id":"quota:test",
+                "key":{"scope":["principal","operation"]}
+            }),
+            &route,
+            "agent:\u{00e9}",
+            None,
+            0,
+            &json!({"operation":"caf\u{00e9}"}),
+        );
+        assert_eq!(
+            key,
+            "sha256:c1c3589d976f2f50b3ee448cdcc683a258c7be80778fc0444b75f7492c035636"
+        );
+    }
+
+    #[test]
+    fn credential_lease_renewal_selects_only_active_near_expiry_scopes() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let due = CredentialLeaseScope::new("agent:test", "route:test", "due");
+        let future = CredentialLeaseScope::new("agent:test", "route:test", "future");
+        let wrong_policy = CredentialLeaseScope::new("agent:test", "route:test", "wrong-policy");
+        let now_ms = now_epoch_ms();
+        let mut leases = state.credential_leases.lock().expect("lease cache");
+        for (scope, policy_hash, lifetime) in [
+            (
+                due.clone(),
+                snapshot.hash.clone(),
+                Duration::from_millis(500),
+            ),
+            (
+                future.clone(),
+                snapshot.hash.clone(),
+                Duration::from_secs(10),
+            ),
+            (
+                wrong_policy.clone(),
+                "sha256:other-policy".to_string(),
+                Duration::from_millis(500),
+            ),
+        ] {
+            leases.insert(
+                scope.clone(),
+                SecretLease {
+                    scope,
+                    version: 1,
+                    secret: Zeroizing::new("secret".to_string()),
+                    metadata: BTreeMap::new(),
+                    policy_hash,
+                    expires_at_epoch_ms: now_ms + lifetime.as_millis(),
+                    expires_at_monotonic: Instant::now() + lifetime,
+                },
+            );
+        }
+        drop(leases);
+
+        let candidates =
+            credential_lease_renewal_candidates(&state, &snapshot, Duration::from_secs(1))
+                .into_iter()
+                .collect::<HashSet<_>>();
+        assert_eq!(candidates, HashSet::from([due]));
+    }
+
+    #[test]
+    fn proactive_credential_lease_failure_preserves_valid_cached_lease() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential".to_string(),
+            Credential {
+                injection: json!({}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential".to_string());
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        state.credential_leases.lock().expect("lease cache").insert(
+            scope.clone(),
+            SecretLease {
+                scope: scope.clone(),
+                version: 7,
+                secret: Zeroizing::new("secret".to_string()),
+                metadata: BTreeMap::new(),
+                policy_hash: snapshot.hash.clone(),
+                expires_at_epoch_ms: now_epoch_ms() + 60_000,
+                expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+            },
+        );
+
+        let error = refresh_scoped_credential_lease_singleflight(&state, &snapshot, &scope)
+            .expect_err("unconfigured control plane must reject refresh");
+        assert!(error.contains("credential lease URL is not configured"));
+        assert!(cached_credential_lease_info(&state, &snapshot, &scope).is_some());
+        assert_eq!(
+            state
+                .credential_lease_refresh_failed
+                .load(Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn credential_version_mismatch_preserves_the_newer_cached_lease() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential".to_string(),
+            Credential {
+                injection: json!({}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential".to_string());
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        state.credential_leases.lock().expect("lease cache").insert(
+            scope.clone(),
+            SecretLease {
+                scope: scope.clone(),
+                version: 8,
+                secret: Zeroizing::new("rotated-secret".to_string()),
+                metadata: BTreeMap::new(),
+                policy_hash: snapshot.hash.clone(),
+                expires_at_epoch_ms: now_epoch_ms() + 60_000,
+                expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+        });
+
+        assert!(matches!(
+            credential_lease_for_release(&state, &snapshot, &decision, "credential", 7),
+            Err("credential_lease_rotated")
+        ));
+        let cached = state.credential_leases.lock().expect("lease cache");
+        assert_eq!(cached.get(&scope).map(|lease| lease.version), Some(8));
+    }
+
+    #[test]
+    fn credential_lease_cache_rejects_regression_and_unversioned_change() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        let lease = |version, secret: &str| SecretLease {
+            scope: scope.clone(),
+            version,
+            secret: Zeroizing::new(secret.to_string()),
+            metadata: BTreeMap::new(),
+            policy_hash: snapshot.hash.clone(),
+            expires_at_epoch_ms: now_epoch_ms() + 60_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+        };
+        state
+            .credential_leases
+            .lock()
+            .expect("lease cache")
+            .insert(scope.clone(), lease(7, "current"));
+
+        assert_eq!(
+            cache_scoped_credential_lease(&state, &snapshot, &scope, lease(6, "old"))
+                .expect_err("version regression must fail"),
+            "credential lease version regression rejected"
+        );
+        assert_eq!(
+            cache_scoped_credential_lease(&state, &snapshot, &scope, lease(7, "changed"))
+                .expect_err("same-version secret change must fail"),
+            "credential lease semantics changed without a version increment"
+        );
+        cache_scoped_credential_lease(&state, &snapshot, &scope, lease(8, "new"))
+            .expect("higher version must replace atomically");
+        let cached = state.credential_leases.lock().expect("lease cache");
+        assert_eq!(cached.get(&scope).map(|lease| lease.version), Some(8));
+        assert_eq!(
+            cached.get(&scope).map(|lease| lease.secret.as_str()),
+            Some("new")
+        );
+    }
+
+    #[test]
+    fn credential_lease_followers_reuse_the_scope_singleflight() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential".to_string(),
+            Credential {
+                injection: json!({}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential".to_string());
+        let snapshot = Arc::new(snapshot_value);
+        let state = Arc::new(test_gate_state(Arc::clone(&snapshot)));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+        let flight = Arc::new(CredentialLeaseFlight {
+            result: Mutex::new(None),
+            completed: Condvar::new(),
+        });
+        state
+            .credential_lease_flights
+            .lock()
+            .expect("lease flights")
+            .insert(
+                CredentialLeaseGenerationKey::new(&snapshot, &scope),
+                Arc::clone(&flight),
+            );
+
+        let waiter_state = Arc::clone(&state);
+        let waiter_snapshot = Arc::clone(&snapshot);
+        let waiter_scope = scope.clone();
+        let waiter = thread::spawn(move || {
+            ensure_scoped_credential_lease(&waiter_state, &waiter_snapshot, &waiter_scope)
+        });
+        state.credential_leases.lock().expect("lease cache").insert(
+            scope.clone(),
+            SecretLease {
+                scope,
+                version: 7,
+                secret: Zeroizing::new("secret".to_string()),
+                metadata: BTreeMap::new(),
+                policy_hash: snapshot.hash.clone(),
+                expires_at_epoch_ms: now_epoch_ms() + 60_000,
+                expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+            },
+        );
+        *flight.result.lock().expect("flight result") = Some(Ok(()));
+        flight.completed.notify_all();
+        let info = waiter.join().expect("waiter thread").expect("shared lease");
+        assert_eq!(info.version, 7);
+        assert_eq!(
+            state
+                .credential_lease_refresh_failed
+                .load(Ordering::Relaxed),
+            0
+        );
+    }
+
+    #[test]
+    fn request_and_response_deadlines_are_absolute_across_progress() {
+        let slow_reader = SlowIo {
+            input: Cursor::new(b"GET / HTTP/1.1\r\nHost: example.test\r\n\r\n".to_vec()),
+            output: Vec::new(),
+            delay: Duration::from_millis(10),
+        };
+        let mut reader = DeadlineIo::new(
+            slow_reader,
+            Duration::from_millis(25),
+            Duration::from_secs(1),
+        );
+        let error = match read_request_head_from(&mut reader, None) {
+            Ok(_) => panic!("trickled request head must hit the absolute deadline"),
+            Err(error) => error,
+        };
+        assert!(error.contains("absolute request read deadline"));
+
+        let slow_writer = SlowIo {
+            input: Cursor::new(Vec::new()),
+            output: Vec::new(),
+            delay: Duration::from_millis(10),
+        };
+        let mut writer = DeadlineIo::new(
+            slow_writer,
+            Duration::from_secs(1),
+            Duration::from_millis(25),
+        );
+        let error = writer
+            .write_all(b"response")
+            .expect_err("trickled response write must hit the absolute deadline");
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    }
+
+    #[test]
+    fn policy_high_water_rejects_signed_snapshot_replay() {
+        let current = (*test_snapshot(10)).clone();
+        let high_water = policy_high_water_for(&current);
+        validate_policy_high_water(&current, &high_water).expect("same snapshot remains valid");
+
+        let mut older_sequence = current.clone();
+        older_sequence.hash = "sha256:older-sequence".to_string();
+        older_sequence.policy_sequence = 9;
+        assert!(validate_policy_high_water(&older_sequence, &high_water)
+            .expect_err("older sequence must fail")
+            .contains("does not exceed"));
+
+        let mut older_epoch = current.clone();
+        older_epoch.hash = "sha256:older-epoch".to_string();
+        older_epoch.policy_sequence = 11;
+        older_epoch.rollback_epoch = 0;
+        assert!(validate_policy_high_water(&older_epoch, &high_water)
+            .expect_err("older rollback epoch must fail")
+            .contains("below persisted high-water"));
+
+        let mut newer = current;
+        newer.hash = "sha256:newer".to_string();
+        newer.policy_sequence = 11;
+        validate_policy_high_water(&newer, &high_water).expect("newer policy must pass");
+    }
+
+    #[test]
+    fn policy_high_water_persists_across_restart() {
+        let path = env::temp_dir().join(format!(
+            "serverware-policy-high-water-{}-{}.json",
+            std::process::id(),
+            now_epoch_ms()
+        ));
+        let current = (*test_snapshot(12)).clone();
+        initialize_policy_high_water(&current, Some(&path), 12, 1)
+            .expect("initialize policy high-water");
+
+        let mut replayed = current.clone();
+        replayed.hash = "sha256:replayed".to_string();
+        replayed.policy_sequence = 11;
+        let error = initialize_policy_high_water(&replayed, Some(&path), 1, 1)
+            .expect_err("persisted policy high-water must reject restart replay");
+        assert!(error.contains("does not exceed"));
+        fs::remove_file(path).expect("remove policy high-water fixture");
+    }
+
+    #[test]
+    fn production_management_bind_must_be_loopback() {
+        assert!(production_mode(Some("prod")));
+        assert!(!production_mode(Some("dev")));
+        assert!(management_bind_is_loopback("127.0.0.1"));
+        assert!(management_bind_is_loopback("::1"));
+        assert!(!management_bind_is_loopback("0.0.0.0"));
+    }
 }

@@ -3,22 +3,88 @@
   "$id": "https://serverware.local/schemas/adapters/npm.registry.schema.json",
   "title": "Serverware npm registry adapter config",
   "type": "object",
-  "required": ["operations"],
+  "$defs": {
+    "allowedFields": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"
+      }
+    },
+    "allowedHeaders": {
+      "type": "array",
+      "maxItems": 6,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "cache-control",
+          "content-language",
+          "etag",
+          "last-modified",
+          "retry-after",
+          "www-authenticate"
+        ]
+      }
+    },
+    "errorResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "maxBodyBytes", "allowedFields", "allowedHeaders", "onInvalid"],
+      "properties": {
+        "mode": {"const": "json"},
+        "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+        "allowedFields": {"$ref": "#/$defs/allowedFields"},
+        "allowedHeaders": {"$ref": "#/$defs/allowedHeaders"},
+        "onInvalid": {"const": "block"}
+      }
+    }
+  },
+  "required": ["operations", "response"],
   "additionalProperties": false,
   "properties": {
     "operations": {
       "type": "array",
       "minItems": 1,
+      "maxItems": 5,
+      "uniqueItems": true,
       "items": {"enum": ["publish", "distTagWrite", "tokenWrite", "metadataWrite", "read"]}
     },
     "response": {
       "type": "object",
+      "required": ["mode", "maxBodyBytes", "allowedFields", "allowedHeaders", "error"],
       "additionalProperties": false,
       "properties": {
         "mode": {"enum": ["headersOnly", "json", "any", "stream"]},
-        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
-        "allowedFields": {"type": "array", "items": {"type": "string"}}
+        "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
+        "allowedFields": {"$ref": "#/$defs/allowedFields"},
+        "allowedHeaders": {"$ref": "#/$defs/allowedHeaders"},
+        "error": {"$ref": "#/$defs/errorResponse"}
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operations": {
+            "contains": {"enum": ["publish", "distTagWrite", "tokenWrite", "metadataWrite"]}
+          }
+        },
+        "required": ["operations"]
+      },
+      "then": {
+        "properties": {
+          "response": {
+            "properties": {"mode": {"const": "json"}},
+            "required": ["mode"]
+          }
+        }
+      }
+    }
+  ]
 }

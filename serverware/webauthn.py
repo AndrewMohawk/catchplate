@@ -431,14 +431,25 @@ def _verify_attestation_statement(
     }
 
 
-def registration_options(user_id: str, label: str) -> dict[str, Any]:
+def registration_options(
+    user_id: str,
+    label: str,
+    *,
+    authorization: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     nonce = b64u(os.urandom(32))
     challenge = b64u(_sha256(canonical_json({"type": "register", "user": user_id, "nonce": nonce}).encode("utf-8")))
     db.create_webauthn_challenge(
         challenge=challenge,
         challenge_type="registration",
         user_id=user_id,
-        payload={"type": "registration", "user_id": user_id, "label": label, "nonce": nonce},
+        payload={
+            "type": "registration",
+            "user_id": user_id,
+            "label": label,
+            "nonce": nonce,
+            "authorization": authorization,
+        },
         ttl_seconds=300,
     )
     return {
@@ -454,19 +465,43 @@ def registration_options(user_id: str, label: str) -> dict[str, Any]:
                 "userVerification": "preferred",
                 "authenticatorAttachment": "cross-platform",
             },
-        }
+        },
+        "serverware": {
+            "authorizationMode": (authorization or {}).get("mode"),
+            "payloadDigest": (authorization or {}).get("payload_digest"),
+        },
     }
 
 
-def verify_registration(user_id: str, label: str, response: dict[str, Any]) -> dict[str, Any]:
+def verify_registration(
+    user_id: str,
+    label: str,
+    response: dict[str, Any],
+    *,
+    require_authorization: bool = False,
+) -> dict[str, Any]:
     credential_id = response.get("id") or response.get("rawId")
     if not isinstance(credential_id, str):
         raise WebAuthnError("registration response missing credential id")
     attestation = cbor2.loads(b64ud(response["response"]["attestationObject"]))
     client_data, client_data_raw = _parse_client_data(response["response"]["clientDataJSON"], "webauthn.create")
-    challenge = db.get_unused_webauthn_challenge(client_data["challenge"])
-    if not challenge or challenge["challenge_type"] != "registration" or challenge["user_id"] != user_id:
+    challenge = db.claim_webauthn_challenge(
+        client_data["challenge"],
+        challenge_type="registration",
+        user_id=user_id,
+    )
+    if not challenge:
         raise WebAuthnError("registration challenge not found or expired")
+    authorization = challenge.get("payload", {}).get("authorization")
+    if require_authorization:
+        if not isinstance(authorization, dict) or authorization.get("mode") not in {
+            "bootstrap-token",
+            "development-bootstrap",
+            "existing-webauthn",
+        }:
+            raise WebAuthnError("registration challenge lacks enrollment authorization")
+        if not isinstance(authorization.get("payload_digest"), str):
+            raise WebAuthnError("registration challenge authorization is not digest-bound")
     auth_data = attestation.get("authData")
     parsed = _parse_authenticator_data(auth_data)
     if not parsed["attested_credential_data"]:
@@ -508,8 +543,10 @@ def verify_registration(user_id: str, label: str, response: dict[str, Any]) -> d
         attestation_verified_at=attestation_result["verified_at"],
         transports=response.get("transports") or [],
     )
-    db.mark_webauthn_challenge_used(challenge["id"])
-    return _redact_credential(stored)
+    redacted = _redact_credential(stored)
+    if require_authorization:
+        redacted["_registration_authorization"] = authorization
+    return redacted
 
 
 def _approval_challenge_payload(approval: dict[str, Any], user_id: str) -> dict[str, Any]:
@@ -645,8 +682,13 @@ def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_poli
     verified = _verify_assertion_signature(credential, response, authn_policy)
     client_data = verified["client_data"]
     parsed = verified["parsed"]
-    challenge = db.get_unused_webauthn_challenge(client_data["challenge"])
-    if not challenge or challenge["challenge_type"] != "approval" or challenge["approval_request_id"] != approval["id"]:
+    challenge = db.claim_webauthn_challenge(
+        client_data["challenge"],
+        challenge_type="approval",
+        user_id=user_id,
+        approval_request_id=approval["id"],
+    )
+    if not challenge:
         raise WebAuthnError("approval challenge not found or expired")
     payload = challenge["payload"]
     for field in (
@@ -678,8 +720,12 @@ def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_poli
     if payload.get("redacted_display_digest") != expected_display_digest:
         raise WebAuthnError("approval challenge redacted_display_digest mismatch")
 
-    db.update_webauthn_sign_count(credential_id, parsed["sign_count"])
-    db.mark_webauthn_challenge_used(challenge["id"])
+    if not db.compare_and_swap_webauthn_sign_count(
+        credential_id,
+        expected_sign_count=credential["sign_count"],
+        new_sign_count=parsed["sign_count"],
+    ):
+        raise WebAuthnError("authenticator sign counter changed concurrently")
     return {
         "method": "webauthn",
         "user_id": user_id,
@@ -717,8 +763,12 @@ def verify_control_plane_mutation_assertion(
     verified = _verify_assertion_signature(credential, response, authn_policy)
     client_data = verified["client_data"]
     parsed = verified["parsed"]
-    challenge = db.get_unused_webauthn_challenge(client_data["challenge"])
-    if not challenge or challenge["challenge_type"] != "control-plane-mutation" or challenge["user_id"] != user_id:
+    challenge = db.claim_webauthn_challenge(
+        client_data["challenge"],
+        challenge_type="control-plane-mutation",
+        user_id=user_id,
+    )
+    if not challenge:
         raise WebAuthnError("control-plane mutation challenge not found or expired")
     payload = challenge["payload"]
     expected = {
@@ -732,8 +782,12 @@ def verify_control_plane_mutation_assertion(
         if payload.get(field) != expected_value:
             raise WebAuthnError(f"control-plane mutation challenge {field} mismatch")
 
-    db.update_webauthn_sign_count(credential_id, parsed["sign_count"])
-    db.mark_webauthn_challenge_used(challenge["id"])
+    if not db.compare_and_swap_webauthn_sign_count(
+        credential_id,
+        expected_sign_count=credential["sign_count"],
+        new_sign_count=parsed["sign_count"],
+    ):
+        raise WebAuthnError("authenticator sign counter changed concurrently")
     return {
         "method": "webauthn",
         "user_id": user_id,
@@ -771,6 +825,14 @@ def create_dev_credential(user_id: str, label: str = "Docker dev authenticator")
         sign_count=0,
         aaguid="00000000-0000-0000-0000-000000000000",
         authenticator_class="dev",
+        attestation_fmt="serverware-dev-hardware-fixture",
+        attestation_trusted=True,
+        attestation_trust_path=["serverware-dev-hardware-fixture"],
+        attestation_leaf_sha256="sha256:" + "d" * 64,
+        attestation_root_sha256="sha256:" + "d" * 64,
+        attestation_trust_bundle_digest="sha256:" + "d" * 64,
+        attestation_trust_bundle_sequence=1,
+        attestation_verified_at=db.iso_now(),
         transports=["internal"],
         dev_private_key_pem=private_pem,
     )

@@ -10,6 +10,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import build_production_images
+
 ROOT = Path(__file__).resolve().parent.parent
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -129,12 +131,39 @@ def publish_image(image: dict[str, Any], *, registry_prefix: str, tag: str, use_
         digest_ref = imagetools_repo_digest(repo, target)
     if digest_ref is None:
         raise RuntimeError(f"docker push did not expose a repo digest for {target}")
+    run(["docker", "pull", digest_ref])
+    remote_image_id = run(["docker", "image", "inspect", "--format", "{{.Id}}", digest_ref])
+    binary_digest = None
+    if service == "serverware-decision-gate":
+        expected_binary_digest = image.get("binary_digest")
+        if not isinstance(expected_binary_digest, str) or not SHA256_RE.fullmatch(expected_binary_digest):
+            raise RuntimeError("decision-gate build artifact is missing its measured binary digest")
+        binary_digest = build_production_images.image_file_sha256(
+            digest_ref,
+            "/usr/local/bin/serverware-decision-gate",
+        )
+        if binary_digest != expected_binary_digest:
+            raise RuntimeError(
+                f"published decision-gate binary digest mismatch: build has {expected_binary_digest}, registry has {binary_digest}"
+            )
     return {
         "service": service,
         "local_image_id": local_id,
         "tag": target,
         "repo_digest": digest_ref,
+        "remote_image_id": remote_image_id,
+        **({"binary_digest": binary_digest} if binary_digest else {}),
     }
+
+
+def verify_published_no_shell(images: list[dict[str, Any]]) -> dict[str, Any]:
+    command = [sys.executable, "scripts/verify_production_images_no_shell.py", "--pull"]
+    for item in images:
+        command.extend(["--image", str(item["repo_digest"])])
+    parsed = json.loads(run(command))
+    if not isinstance(parsed, dict) or parsed.get("ok") is not True:
+        raise RuntimeError(f"published production image no-shell verification failed: {parsed}")
+    return parsed
 
 
 def command_plan(build: dict[str, Any], *, registry_prefix: str, tag: str) -> list[dict[str, Any]]:
@@ -195,6 +224,7 @@ def main() -> None:
             for image in build["images"]
             if isinstance(image, dict)
         ]
+        remote_no_shell = verify_published_no_shell(images)
         production_images = [item["repo_digest"] for item in images]
         result = {
             "apiVersion": "serverware.productionImagesPublished/v1",
@@ -203,6 +233,7 @@ def main() -> None:
             "generated_at_unix": int(time.time()),
             "source_build_file": args.build_file,
             "images": images,
+            "remote_no_shell": remote_no_shell,
             "env": {"SERVERWARE_PRODUCTION_IMAGES": ",".join(production_images)},
         }
         output_path = Path(args.out)

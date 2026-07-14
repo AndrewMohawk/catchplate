@@ -60,9 +60,24 @@ def expect_http_error(label: str, func: Any, expected_status: int, expected_deta
     raise AssertionError(f"{label} unexpectedly succeeded")
 
 
+def expect_policy_error(label: str, func: Any, expected_detail: str) -> None:
+    from serverware.policy_bundle import PolicyBundleError
+
+    try:
+        func()
+    except PolicyBundleError as exc:
+        if expected_detail not in str(exc):
+            raise AssertionError(f"{label} failed with wrong error: {exc}") from exc
+        return
+    raise AssertionError(f"{label} unexpectedly succeeded")
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
+        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
         os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
         os.environ["SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "1"
         os.environ["SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED"] = "1"
@@ -71,13 +86,15 @@ def main() -> None:
 
         from serverware import app as app_module
         from serverware import db, policy_bundle, webauthn
+        from serverware.attestation import attestation_document, canonical_json, sha256_prefixed, verify_attestation_quote
         from serverware.auth import AdminIdentity
 
         db.init_db()
         user_id = "user:publisher"
         webauthn.create_dev_credential(user_id)
         identity = AdminIdentity(user_id, frozenset({"policy_publisher", "policy_author"}), "admin-token-header")
-        policy_bundle.write_policy_bundle(candidate_bundle(policy_bundle, 1))
+        initial = policy_bundle.write_policy_bundle(candidate_bundle(policy_bundle, 1))
+        policy_bundle.enforce_policy_high_water(initial)
 
         publish_payload = app_module.PolicyPublishRequest(
             bundle=candidate_bundle(policy_bundle, 2),
@@ -92,6 +109,56 @@ def main() -> None:
         active = policy_bundle.get_policy_snapshot()
         if not active or active.hash != published["policyHash"]:
             raise AssertionError("active policy snapshot was not updated after publish")
+        high_water = db.get_policy_high_water()
+        if not high_water or high_water["sequence"] != 2 or high_water["policy_hash"] != active.hash:
+            raise AssertionError(f"policy high-water state did not advance with publish: {high_water}")
+        if policy_bundle.enforce_policy_high_water(active) != high_water:
+            raise AssertionError("exact active policy was not accepted idempotently")
+        attestation = attestation_document("policy-high-water-test")
+        claims = verify_attestation_quote(attestation)
+        evidence = attestation.get("policy_high_water")
+        if not isinstance(evidence, dict):
+            raise AssertionError(f"attestation omitted policy high-water evidence: {attestation}")
+        expected_high_water_digest = sha256_prefixed(canonical_json(evidence).encode("utf-8"))
+        if attestation.get("policy_high_water_digest") != expected_high_water_digest:
+            raise AssertionError("attestation policy high-water digest was invalid")
+        for field in ("policy_sequence", "policy_high_water_digest"):
+            if claims.get(field) != attestation.get(field):
+                raise AssertionError(f"quote did not bind {field}")
+
+        original_floor = policy_bundle.POLICY_MIN_SEQUENCE
+        policy_bundle.POLICY_MIN_SEQUENCE = 3
+        try:
+            expect_policy_error(
+                "configured policy sequence floor",
+                lambda: policy_bundle.enforce_policy_high_water(active),
+                "below configured floor",
+            )
+        finally:
+            policy_bundle.POLICY_MIN_SEQUENCE = original_floor
+
+        rolled_back = policy_bundle.write_policy_bundle(candidate_bundle(policy_bundle, 1))
+        expect_policy_error(
+            "persisted policy rollback",
+            lambda: policy_bundle.enforce_policy_high_water(rolled_back),
+            "does not exceed persisted high-water",
+        )
+        restored = policy_bundle.write_policy_bundle(active.raw, enforce_high_water=True)
+        if restored.hash != active.hash:
+            raise AssertionError("failed to restore the high-water policy after rollback rejection")
+
+        changed_id = candidate_bundle(policy_bundle, 3)
+        changed_id["metadata"]["id"] = "serverware-other"
+        changed_id_snapshot = policy_bundle.compile_policy_bundle(
+            policy_bundle.sign_policy_bundle(changed_id),
+            verify_signature=True,
+            validate_schema=True,
+        )
+        expect_policy_error(
+            "policy id switch",
+            lambda: policy_bundle.enforce_policy_high_water(changed_id_snapshot),
+            "policy id changed",
+        )
         audits = db.list_audit_events(limit=20)
         policy_events = [item for item in audits if item["event_type"] == "policy.published"]
         if not policy_events:

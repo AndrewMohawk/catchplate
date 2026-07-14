@@ -22,11 +22,12 @@ def main() -> None:
     required_order = [
         "build-production-images",
         "decision-gate-bench-evidence",
-        "release-provenance",
         "publish-production-images",
-        "sign-production-images",
         "merge-production-images-env",
+        "production-release-provenance",
+        "sign-production-images",
         "prepare-aws-kms-materials",
+        "deploy-production",
         "run-production-readiness",
     ]
     positions = []
@@ -42,6 +43,10 @@ def main() -> None:
     if "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in body:
         raise AssertionError("production-release-proof enables the test-only preflight bypass")
 
+    deploy_body = target_body(makefile, "deploy-production")
+    if "PRODUCTION_DEPLOY_COMMAND" not in deploy_body or "is required" not in deploy_body:
+        raise AssertionError("deploy-production does not fail closed without an explicit deployment command")
+
     bench_body = target_body(makefile, "decision-gate-bench-evidence")
     if "$(DECISION_GATE_BENCH_FILE)" not in bench_body or "bench_decision_gate.py --self-test" not in bench_body:
         raise AssertionError("decision-gate-bench-evidence does not regenerate the configured benchmark evidence")
@@ -49,6 +54,12 @@ def main() -> None:
     release_body = target_body(makefile, "release-provenance")
     if "$(RELEASE_PROVENANCE_SUMMARY_FILE)" not in release_body or "$(RELEASE_PROVENANCE_FILE)" not in release_body:
         raise AssertionError("release-provenance target does not write the configured provenance summary/document")
+    if "--production" in release_body:
+        raise AssertionError("development release-provenance target must preserve direct requirements.txt inventory")
+
+    production_release_body = target_body(makefile, "production-release-provenance")
+    if "--production" not in production_release_body:
+        raise AssertionError("production-release-provenance target does not select the locked transitive inventory")
 
     image_body = target_body(makefile, "image-signatures")
     if "$(IMAGE_SIGNATURES_SUMMARY_FILE)" not in image_body or "$(IMAGE_SIGNATURES_FILE)" not in image_body:

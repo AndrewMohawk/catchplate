@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -61,12 +62,20 @@ import os
 from pathlib import Path
 from serverware.policy_bundle import write_policy_bundle
 from serverware.ca_material import ensure_mitm_ca_material
-from serverware.db import init_db
+from serverware.db import get_policy_high_water, init_db
 
-policy_source = Path(os.environ["SERVERWARE_POLICY_BUNDLE_SOURCE"])
-write_policy_bundle(json.loads(policy_source.read_text()))
-ensure_mitm_ca_material()
 init_db()
+policy_source = Path(os.environ["SERVERWARE_POLICY_BUNDLE_SOURCE"])
+bundle = json.loads(policy_source.read_text())
+high_water = get_policy_high_water()
+if high_water:
+    bundle["metadata"]["sequence"] = int(high_water["sequence"]) + 1
+    bundle["metadata"]["rollbackEpoch"] = max(
+        int(bundle["metadata"].get("rollbackEpoch", 0)),
+        int(high_water["rollback_epoch"]),
+    )
+snapshot = write_policy_bundle(bundle, enforce_high_water=True)
+ensure_mitm_ca_material()
 
 from serverware.attestation import attestation_document, verify_attestation_quote
 from serverware.key_release import release_material
@@ -79,6 +88,8 @@ if tee.get("verified") is not True:
 released = release_material(
     "decision-gate-ca",
     expected_policy_hash=attestation.get("policy_bundle_digest"),
+    expected_policy_sequence=attestation.get("policy_sequence"),
+    expected_policy_high_water_digest=attestation.get("policy_high_water_digest"),
     expected_ca_spki=attestation.get("ca_intermediate_spki_sha256"),
     expected_rollback_epoch=attestation.get("rollback_epoch"),
     expected_release_channel=attestation.get("release_channel"),
@@ -267,15 +278,21 @@ def main() -> None:
     if command_tee.get("verified") is not True or command_tee.get("pcrs") != FIXTURE_PCRS:
         raise AssertionError(f"Nitro attestation command quote was not verified: {command_verified}")
 
+    integration_data_dir = fixture_dir / "serverware-integration"
+    shutil.rmtree(integration_data_dir, ignore_errors=True)
+    integration_data_dir.mkdir(parents=True, exist_ok=True)
     integration_env = dict(attestation_command_env)
     integration_env.update(
         {
+            "SERVERWARE_DATA_DIR": str(integration_data_dir.resolve()),
+            "SERVERWARE_METADATA_STORE_BACKEND": "sqlite",
+            "SERVERWARE_AUDIT_STORE_BACKEND": "sqlite",
+            "SERVERWARE_GRANT_STORE_BACKEND": "sqlite",
             "SERVERWARE_TEE_QUOTE_PROVIDER": "aws-nitro-enclaves",
             "SERVERWARE_TEE_PLATFORM": "aws-nitro",
             "SERVERWARE_TEE_QUOTE_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py quote",
             "SERVERWARE_TEE_QUOTE_VERIFY_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py verify",
             "SERVERWARE_KEY_RELEASE_COMMAND": f"{sys.executable} scripts/aws_nitro_tee_provider.py release",
-            "SERVERWARE_POLICY_BUNDLE": str((fixture_dir / "policy-bundle.json").resolve()),
             "SERVERWARE_POLICY_BUNDLE_SOURCE": str(Path("policies/demo.policy.json").resolve()),
             "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": claims["data_plane_binary_digest"],
         }

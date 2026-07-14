@@ -39,6 +39,8 @@ def main() -> None:
     for field in (
         "runtime_manifest_digest",
         "policy_bundle_digest",
+        "policy_sequence",
+        "policy_high_water_digest",
         "ca_intermediate_spki_sha256",
         "data_plane_binary_digest",
         "source_tree_digest",
@@ -50,6 +52,8 @@ def main() -> None:
 
     valid_payload = {
         "expectedPolicyHash": attestation["policy_bundle_digest"],
+        "expectedPolicySequence": attestation["policy_sequence"],
+        "expectedPolicyHighWaterDigest": attestation["policy_high_water_digest"],
         "expectedCaSpki": attestation["ca_intermediate_spki_sha256"],
         "expectedRollbackEpoch": attestation["rollback_epoch"],
         "expectedReleaseChannel": attestation["release_channel"],
@@ -78,6 +82,10 @@ def main() -> None:
         record = materials[material]
         if record.get("policy_bundle_digest") != attestation.get("policy_bundle_digest"):
             raise SystemExit(f"{material} policy digest mismatch: {record}")
+        if record.get("policy_sequence") != attestation.get("policy_sequence"):
+            raise SystemExit(f"{material} policy sequence mismatch: {record}")
+        if record.get("policy_high_water_digest") != attestation.get("policy_high_water_digest"):
+            raise SystemExit(f"{material} policy high-water digest mismatch: {record}")
         if record.get("ca_intermediate_spki_sha256") != attestation.get("ca_intermediate_spki_sha256"):
             raise SystemExit(f"{material} CA SPKI mismatch: {record}")
         if record.get("data_plane_binary_digest") != attestation.get("data_plane_binary_digest"):
@@ -97,6 +105,20 @@ def main() -> None:
     )
     if code != 409 or "policy digest mismatch" not in str(denied):
         raise SystemExit(f"wrong policy hash was not denied: {code} {denied}")
+
+    code, denied = request_json(
+        "/api/key-release/verify",
+        payload={**valid_payload, "material": "broker-kek", "expectedPolicySequence": int(attestation["policy_sequence"]) + 1},
+    )
+    if code != 409 or "policy sequence mismatch" not in str(denied):
+        raise SystemExit(f"wrong policy sequence was not denied: {code} {denied}")
+
+    code, denied = request_json(
+        "/api/key-release/verify",
+        payload={**valid_payload, "material": "broker-kek", "expectedPolicyHighWaterDigest": "sha256:" + "0" * 64},
+    )
+    if code != 409 or "policy high-water digest mismatch" not in str(denied):
+        raise SystemExit(f"wrong policy high-water digest was not denied: {code} {denied}")
 
     code, denied = request_json(
         "/api/key-release/verify",

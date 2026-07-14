@@ -1,15 +1,33 @@
-FROM python:3.11-slim-bookworm AS python-deps
+FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS python-deps
+
+ARG SOURCE_DATE_EPOCH="0"
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 WORKDIR /build
-COPY requirements.txt .
-RUN python -m pip install --no-cache-dir --target=/deps -r requirements.txt
+COPY requirements.lock .
+RUN python -m pip install --no-cache-dir --no-compile --require-hashes --target=/deps -r requirements.lock \
+    && find /deps -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
-FROM gcr.io/distroless/python3-debian12:nonroot
+FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS runtime-tree
+
+ARG SOURCE_DATE_EPOCH="0"
+COPY --from=python-deps /deps /runtime/deps
+COPY serverware /runtime/app/serverware
+COPY scripts /runtime/app/scripts
+COPY schemas /runtime/app/schemas
+COPY policies /runtime/app/policies
+COPY security /runtime/app/security
+COPY docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
+RUN find /runtime -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+
+FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24ffca7bc5a82ccdac572511d5e09bda4435c89c5
 
 ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
 ARG SERVERWARE_IMAGE_REVISION="unknown"
 ARG SERVERWARE_IMAGE_CREATED="unknown"
 ARG SERVERWARE_SOURCE_TREE_DIGEST="unknown"
+ARG SOURCE_DATE_EPOCH="0"
 
 LABEL org.opencontainers.image.title="Serverware control plane" \
       org.opencontainers.image.source="${SERVERWARE_IMAGE_SOURCE}" \
@@ -22,14 +40,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/deps:/app \
     SERVERWARE_DATA_DIR=/data
 
+COPY --from=runtime-tree --chown=nonroot:nonroot /runtime/deps /deps
+COPY --from=runtime-tree --chown=nonroot:nonroot /runtime/app /app
 WORKDIR /app
-COPY --from=python-deps /deps /deps
-COPY serverware ./serverware
-COPY scripts ./scripts
-COPY schemas ./schemas
-COPY policies ./policies
-COPY security ./security
-COPY docker-compose.apparmor.yml ./docker-compose.apparmor.yml
 
 EXPOSE 3000
 

@@ -125,7 +125,6 @@ def assert_nested_result(body: bytes, expected_count: int, request_id: str) -> N
         "audit",
         "authorization_present",
         "authorization_scheme",
-        "authorization_sha256",
         "items",
         "profile",
         "requestId",
@@ -138,9 +137,9 @@ def assert_nested_result(body: bytes, expected_count: int, request_id: str) -> N
     }, doc["profile"]
     assert doc["audit"] == {"trace": f"trace-{request_id}"}, doc["audit"]
     assert doc["sawSecret"] is False, doc
-    assert doc["authorization_present"] is True, doc
-    assert doc["authorization_scheme"] == "Bearer", doc
-    assert doc["authorization_sha256"].startswith("sha256:"), doc
+    assert doc["authorization_present"] is False, doc
+    assert doc["authorization_scheme"] is None, doc
+    assert "authorization_sha256" not in doc, doc
     assert len(doc["items"]) == expected_count, len(doc["items"])
     for index, item in enumerate(doc["items"]):
         assert item == {

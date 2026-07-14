@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import threading
@@ -63,6 +64,8 @@ def _claims_from_attestation(attestation: dict[str, Any]) -> dict[str, Any]:
     checks = {
         "runtime_manifest_digest": attestation.get("runtime_manifest_digest"),
         "policy_bundle_digest": attestation.get("policy_bundle_digest"),
+        "policy_sequence": attestation.get("policy_sequence"),
+        "policy_high_water_digest": attestation.get("policy_high_water_digest"),
         "ca_intermediate_spki_sha256": attestation.get("ca_intermediate_spki_sha256"),
         "data_plane_binary_digest": attestation.get("data_plane_binary_digest"),
         "rollback_epoch": attestation.get("rollback_epoch"),
@@ -75,6 +78,11 @@ def _claims_from_attestation(attestation: dict[str, Any]) -> dict[str, Any]:
         if claims.get(field) != expected:
             raise KeyReleaseError(f"quote claim {field} does not match attestation")
     return claims
+
+
+def _tee_binding(claims: dict[str, Any], field: str) -> Any:
+    tee = claims.get("tee")
+    return tee.get(field) if isinstance(tee, dict) else None
 
 
 def _external_key_release_policy(
@@ -109,6 +117,8 @@ def _validate_claims(
     claims: dict[str, Any],
     *,
     expected_policy_hash: str | None = None,
+    expected_policy_sequence: int | None = None,
+    expected_policy_high_water_digest: str | None = None,
     expected_ca_spki: str | None = None,
     expected_rollback_epoch: int | None = None,
     expected_release_channel: str | None = None,
@@ -123,10 +133,20 @@ def _validate_claims(
         raise KeyReleaseError("release channel mismatch")
     rollback = claims.get("rollback_epoch")
     min_epoch = expected_rollback_epoch if expected_rollback_epoch is not None else KEY_RELEASE_MIN_ROLLBACK_EPOCH
-    if not isinstance(rollback, int) or rollback < min_epoch:
+    if not isinstance(rollback, int) or isinstance(rollback, bool) or rollback < min_epoch:
         raise KeyReleaseError("rollback epoch is stale")
     if expected_policy_hash and claims.get("policy_bundle_digest") != expected_policy_hash:
         raise KeyReleaseError("policy digest mismatch")
+    sequence = claims.get("policy_sequence")
+    if not isinstance(sequence, int) or isinstance(sequence, bool) or sequence < 1:
+        raise KeyReleaseError("policy sequence is required for key release")
+    if expected_policy_sequence is not None and sequence != expected_policy_sequence:
+        raise KeyReleaseError("policy sequence mismatch")
+    high_water_digest = claims.get("policy_high_water_digest")
+    if not isinstance(high_water_digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", high_water_digest):
+        raise KeyReleaseError("policy high-water digest is required for key release")
+    if expected_policy_high_water_digest and high_water_digest != expected_policy_high_water_digest:
+        raise KeyReleaseError("policy high-water digest mismatch")
     if expected_ca_spki and claims.get("ca_intermediate_spki_sha256") != expected_ca_spki:
         raise KeyReleaseError("CA SPKI mismatch")
     if expected_data_plane_binary_digest and claims.get("data_plane_binary_digest") != expected_data_plane_binary_digest:
@@ -145,6 +165,8 @@ def release_material(
     material: str,
     *,
     expected_policy_hash: str | None = None,
+    expected_policy_sequence: int | None = None,
+    expected_policy_high_water_digest: str | None = None,
     expected_ca_spki: str | None = None,
     expected_rollback_epoch: int | None = None,
     expected_release_channel: str | None = None,
@@ -160,6 +182,8 @@ def release_material(
         material,
         claims,
         expected_policy_hash=expected_policy_hash,
+        expected_policy_sequence=expected_policy_sequence,
+        expected_policy_high_water_digest=expected_policy_high_water_digest,
         expected_ca_spki=expected_ca_spki,
         expected_rollback_epoch=expected_rollback_epoch,
         expected_release_channel=expected_release_channel,
@@ -171,6 +195,8 @@ def release_material(
         claims,
         {
             "policy_bundle_digest": expected_policy_hash,
+            "policy_sequence": expected_policy_sequence,
+            "policy_high_water_digest": expected_policy_high_water_digest,
             "ca_intermediate_spki_sha256": expected_ca_spki,
             "rollback_epoch": expected_rollback_epoch,
             "release_channel": expected_release_channel,
@@ -187,11 +213,15 @@ def release_material(
         "quote_signing_key_id": quote.get("quote_signing_key_id"),
         "runtime_manifest_digest": claims.get("runtime_manifest_digest"),
         "policy_bundle_digest": claims.get("policy_bundle_digest"),
+        "policy_sequence": claims.get("policy_sequence"),
+        "policy_high_water_digest": claims.get("policy_high_water_digest"),
         "ca_intermediate_spki_sha256": claims.get("ca_intermediate_spki_sha256"),
         "data_plane_binary_digest": claims.get("data_plane_binary_digest"),
         "rollback_epoch": claims.get("rollback_epoch"),
         "release_channel": claims.get("release_channel"),
         "provenance_digest": claims.get("provenance_digest"),
+        "attestation_document_sha256": _tee_binding(claims, "raw_attestation_document_sha256"),
+        "recipient_public_key_sha256": _tee_binding(claims, "recipient_public_key_sha256"),
         "debug": claims.get("debug"),
         "key_release_provider": "external-command" if external_release else "local-dev",
         "external_release": external_release,
@@ -216,11 +246,14 @@ def ensure_material_released(material: str) -> dict[str, Any]:
     if (
         existing
         and existing.get("policy_bundle_digest") == claims.get("policy_bundle_digest")
+        and existing.get("policy_sequence") == claims.get("policy_sequence")
+        and existing.get("policy_high_water_digest") == claims.get("policy_high_water_digest")
         and existing.get("ca_intermediate_spki_sha256") == claims.get("ca_intermediate_spki_sha256")
         and existing.get("data_plane_binary_digest") == claims.get("data_plane_binary_digest")
         and existing.get("rollback_epoch") == claims.get("rollback_epoch")
         and existing.get("release_channel") == claims.get("release_channel")
         and existing.get("provenance_digest") == claims.get("provenance_digest")
+        and existing.get("recipient_public_key_sha256") == _tee_binding(claims, "recipient_public_key_sha256")
     ):
         return {"ok": True, "enabled": True, "released": True, **existing}
     return release_material(material)

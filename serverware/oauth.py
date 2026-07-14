@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import fcntl
 import hashlib
 import json
+import os
+import re
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -21,11 +26,19 @@ from serverware.config import (
     X_OAUTH_CLIENT_SECRET,
     X_OAUTH_REDIRECT_URI,
 )
+from serverware.http_client import HttpClientError, request_bytes
 
 
 MAX_OAUTH_CREDENTIAL_NAME_BYTES = 200
 MAX_OAUTH_METADATA_BYTES = 4096
 MAX_OAUTH_METADATA_KEYS = 50
+MAX_OAUTH_CODE_BYTES = 4096
+MAX_OAUTH_TOKEN_RESPONSE_BYTES = 256 * 1024
+MAX_OAUTH_REFRESH_TOKEN_BYTES = 128 * 1024
+MAX_OAUTH_TOKEN_LIFETIME_SECONDS = 366 * 24 * 60 * 60
+OAUTH_REFRESH_SKEW_SECONDS = 60
+_OAUTH_STATE_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
+_oauth_state_thread_lock = threading.RLock()
 
 
 class OAuthError(RuntimeError):
@@ -38,6 +51,7 @@ class OAuthProvider:
     display_name: str
     authorization_url: str
     token_url: str
+    identity_url: str
     client_id: str
     client_secret: str
     redirect_uri: str
@@ -57,6 +71,7 @@ def _providers() -> dict[str, OAuthProvider]:
         display_name="X / Twitter",
         authorization_url="https://twitter.com/i/oauth2/authorize",
         token_url="https://api.twitter.com/2/oauth2/token",
+        identity_url="https://api.x.com/2/users/me?user.fields=id,name,username,verified",
         client_id=X_OAUTH_CLIENT_ID,
         client_secret=X_OAUTH_CLIENT_SECRET,
         redirect_uri=X_OAUTH_REDIRECT_URI,
@@ -71,10 +86,11 @@ def _providers() -> dict[str, OAuthProvider]:
             display_name="Google",
             authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
             token_url="https://oauth2.googleapis.com/token",
+            identity_url="https://openidconnect.googleapis.com/v1/userinfo",
             client_id=GOOGLE_OAUTH_CLIENT_ID,
             client_secret=GOOGLE_OAUTH_CLIENT_SECRET,
             redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
-            default_scopes=("https://www.googleapis.com/auth/gmail.readonly",),
+            default_scopes=("openid", "email", "https://www.googleapis.com/auth/gmail.readonly"),
             token_auth="client_secret_post",
             auth_params={
                 "access_type": "offline",
@@ -116,6 +132,7 @@ def provider_status() -> list[dict[str, Any]]:
                 "configured": provider.configured,
                 "authorizationUrl": provider.authorization_url,
                 "tokenUrl": provider.token_url,
+                "identityUrl": provider.identity_url,
                 "redirectUri": provider.redirect_uri,
                 "defaultScopes": list(provider.default_scopes),
                 "metadataProvider": provider.metadata_provider,
@@ -124,6 +141,28 @@ def provider_status() -> list[dict[str, Any]]:
             }
         )
     return items
+
+
+def resolve_requested_scopes(provider_id: str, scopes: list[str] | None) -> tuple[str, ...]:
+    provider = provider_for(provider_id)
+    raw_scopes = scopes if scopes else list(provider.default_scopes)
+    requested: list[str] = []
+    for scope in raw_scopes:
+        if (
+            not isinstance(scope, str)
+            or not scope
+            or scope != scope.strip()
+            or any(character.isspace() for character in scope)
+        ):
+            raise OAuthError("OAuth scope list contains an invalid scope")
+        requested.append(scope)
+    if not requested:
+        raise OAuthError("at least one OAuth scope is required")
+    if len(requested) > 30 or any(len(scope) > 200 for scope in requested):
+        raise OAuthError("OAuth scope list is too large")
+    if len(requested) != len(set(requested)):
+        raise OAuthError("OAuth scope list contains duplicate scopes")
+    return tuple(sorted(requested))
 
 
 def _now() -> int:
@@ -182,6 +221,19 @@ def _read_states() -> dict[str, Any]:
     return loaded
 
 
+@contextlib.contextmanager
+def _oauth_state_lock():
+    OAUTH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = OAUTH_STATE_PATH.with_suffix(OAUTH_STATE_PATH.suffix + ".lock")
+    with _oauth_state_thread_lock, lock_path.open("a+", encoding="utf-8") as lock_file:
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _write_states(payload: dict[str, Any]) -> None:
     OAUTH_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = OAUTH_STATE_PATH.with_suffix(".json.tmp")
@@ -215,11 +267,7 @@ def create_authorization_url(
     provider = provider_for(provider_id)
     if not provider.configured:
         raise OAuthError(f"{provider.display_name} OAuth is not configured")
-    requested_scopes = [scope.strip() for scope in (scopes or list(provider.default_scopes)) if scope.strip()]
-    if not requested_scopes:
-        raise OAuthError("at least one OAuth scope is required")
-    if len(requested_scopes) > 30 or any(len(scope) > 200 for scope in requested_scopes):
-        raise OAuthError("OAuth scope list is too large")
+    requested_scopes = list(resolve_requested_scopes(provider_id, scopes))
     credential_label = _bounded_credential_name(
         credential_name,
         f"{provider.display_name} OAuth credential",
@@ -242,10 +290,11 @@ def create_authorization_url(
         "created_at_epoch": _now(),
         "expires_at_epoch": expires_at,
     }
-    payload = _read_states()
-    _prune_expired(payload)
-    payload["states"][state] = record
-    _write_states(payload)
+    with _oauth_state_lock():
+        payload = _read_states()
+        _prune_expired(payload)
+        payload["states"][state] = record
+        _write_states(payload)
 
     query = {
         "response_type": "code",
@@ -269,10 +318,13 @@ def create_authorization_url(
 
 def consume_state(*, provider_id: str, state: str) -> dict[str, Any]:
     provider = provider_for(provider_id)
-    payload = _read_states()
-    _prune_expired(payload)
-    record = payload["states"].pop(state, None)
-    _write_states(payload)
+    if not isinstance(state, str) or _OAUTH_STATE_RE.fullmatch(state) is None:
+        raise OAuthError("OAuth state is malformed")
+    with _oauth_state_lock():
+        payload = _read_states()
+        _prune_expired(payload)
+        record = payload["states"].pop(state, None)
+        _write_states(payload)
     if not isinstance(record, dict):
         raise OAuthError("OAuth state is unknown or expired")
     if record.get("provider") != provider.id:
@@ -303,24 +355,90 @@ def _token_request_body(provider: OAuthProvider, record: dict[str, Any], code: s
     return body
 
 
+def _refresh_token_request_body(provider: OAuthProvider, refresh_token: str) -> dict[str, str]:
+    body = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+    }
+    if provider.token_auth != "basic":
+        body["client_id"] = provider.client_id
+    if provider.token_auth == "client_secret_post" and provider.client_secret:
+        body["client_secret"] = provider.client_secret
+    return body
+
+
 def _post_token_request(provider: OAuthProvider, body: dict[str, str], headers: dict[str, str]) -> dict[str, Any]:
     encoded = urllib.parse.urlencode(body).encode("utf-8")
     request = urllib.request.Request(provider.token_url, data=encoded, headers=headers, method="POST")
     try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        response = request_bytes(
+            request,
+            timeout=20,
+            max_bytes=MAX_OAUTH_TOKEN_RESPONSE_BYTES,
+            require_https=True,
+        )
+        payload = json.loads(response.body.decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:500]
-        raise OAuthError(f"OAuth token exchange failed: HTTP {exc.code} {detail}") from exc
-    except Exception as exc:
+        raise OAuthError(f"OAuth token exchange failed: HTTP {exc.code}") from exc
+    except (HttpClientError, urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise OAuthError(f"OAuth token exchange failed: {exc}") from exc
     if not isinstance(payload, dict):
         raise OAuthError("OAuth token endpoint returned a non-object response")
     return payload
 
 
+def _fetch_provider_identity(provider: OAuthProvider, access_token: str) -> dict[str, Any]:
+    request = urllib.request.Request(
+        provider.identity_url,
+        headers={"Accept": "application/json", "Authorization": f"Bearer {access_token}"},
+        method="GET",
+    )
+    try:
+        response = request_bytes(
+            request,
+            timeout=20,
+            max_bytes=64 * 1024,
+            require_https=True,
+        )
+        payload = json.loads(response.body.decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise OAuthError(f"OAuth account identity lookup failed: HTTP {exc.code}") from exc
+    except (HttpClientError, urllib.error.URLError, TimeoutError, OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OAuthError(f"OAuth account identity lookup failed: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise OAuthError("OAuth account identity endpoint returned a non-object response")
+
+    if provider.id == "google":
+        subject = payload.get("sub")
+        account = payload.get("email") or subject
+        if not isinstance(subject, str) or not subject or not isinstance(account, str) or not account:
+            raise OAuthError("Google account identity response is missing sub or email")
+        return {
+            "provider_subject": subject,
+            "provider_account": account,
+            "provider_identity_verified": True,
+            "provider_email_verified": payload.get("email_verified") is True,
+        }
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise OAuthError("X account identity response is missing data")
+    subject = data.get("id")
+    username = data.get("username")
+    if not isinstance(subject, str) or not subject or not isinstance(username, str) or not username:
+        raise OAuthError("X account identity response is missing id or username")
+    return {
+        "provider_subject": subject,
+        "provider_account": "@" + username.lstrip("@"),
+        "provider_identity_verified": True,
+        "provider_profile_verified": data.get("verified") is True,
+    }
+
+
 def exchange_authorization_code(*, provider_id: str, code: str, state: str) -> dict[str, Any]:
     provider = provider_for(provider_id)
+    if not isinstance(code, str) or not code or len(code.encode("utf-8")) > MAX_OAUTH_CODE_BYTES:
+        raise OAuthError("OAuth authorization code is empty or too large")
     record = consume_state(provider_id=provider.id, state=state)
     token_response = _post_token_request(
         provider,
@@ -330,32 +448,68 @@ def exchange_authorization_code(*, provider_id: str, code: str, state: str) -> d
     access_token = token_response.get("access_token")
     if not isinstance(access_token, str) or not access_token:
         raise OAuthError("OAuth token endpoint did not return access_token")
+    if len(access_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+        raise OAuthError("OAuth token endpoint returned an oversized access token")
+    refresh_token = token_response.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise OAuthError("OAuth token endpoint did not return a refresh token; reconnect with offline access")
+    if len(refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+        raise OAuthError("OAuth token endpoint returned an oversized refresh token")
+    token_type = token_response.get("token_type") or "Bearer"
+    if not isinstance(token_type, str) or token_type.lower() != "bearer":
+        raise OAuthError("OAuth token endpoint returned an unsupported token type")
+    provider_identity = _fetch_provider_identity(provider, access_token)
     now = _now()
     expires_in = token_response.get("expires_in")
-    expires_at_epoch_ms = None
-    if isinstance(expires_in, (int, float)) and expires_in > 0:
-        expires_at_epoch_ms = int((now + int(expires_in)) * 1000)
+    if (
+        not isinstance(expires_in, (int, float))
+        or isinstance(expires_in, bool)
+        or expires_in <= 0
+        or expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
+    ):
+        raise OAuthError("OAuth token endpoint returned an invalid access-token lifetime")
+    expires_at_epoch_ms = int((now + int(expires_in)) * 1000)
+    refresh_token_expires_at_epoch_ms = None
+    refresh_token_expires_in = token_response.get("refresh_token_expires_in")
+    if refresh_token_expires_in is not None and (
+        not isinstance(refresh_token_expires_in, (int, float))
+        or isinstance(refresh_token_expires_in, bool)
+        or refresh_token_expires_in <= 0
+        or refresh_token_expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
+    ):
+        raise OAuthError("OAuth token endpoint returned an invalid refresh-token lifetime")
+    if refresh_token_expires_in is not None:
+        refresh_token_expires_at_epoch_ms = int((now + int(refresh_token_expires_in)) * 1000)
     scope_string = str(token_response.get("scope") or " ".join(record.get("scopes") or []))
     scopes = [scope for scope in scope_string.split(" ") if scope]
+    requested_scopes = {scope for scope in record.get("scopes") or [] if isinstance(scope, str) and scope}
+    if not scopes or not set(scopes).issubset(requested_scopes):
+        raise OAuthError("OAuth token endpoint expanded or omitted the requested scope binding")
     token_secret = {
         "access_token": access_token,
-        "refresh_token": token_response.get("refresh_token"),
-        "token_type": token_response.get("token_type") or "Bearer",
+        "refresh_token": refresh_token,
+        "token_type": "Bearer",
         "scope": scope_string,
         "expires_at_epoch_ms": expires_at_epoch_ms,
+        "refresh_token_expires_at_epoch_ms": refresh_token_expires_at_epoch_ms,
     }
     token_secret = {key: value for key, value in token_secret.items() if value not in (None, "")}
     metadata = {
         **(record.get("metadata") or {}),
         "oauth": True,
+        "refreshable": True,
         "provider": provider.metadata_provider,
         "provider_id": provider.id,
         "scopes": scopes,
         "token_type": token_secret.get("token_type", "Bearer"),
         "expires_at_epoch_ms": expires_at_epoch_ms,
+        "refresh_token_expires_at_epoch_ms": refresh_token_expires_at_epoch_ms,
         "created_by": record.get("actor_id"),
         "injection_field": "access_token",
+        **provider_identity,
     }
+    if provider.id == "x":
+        metadata["x_app_id"] = provider.client_id
     return {
         "name": str(record.get("credential_name") or f"{provider.display_name} OAuth credential"),
         "kind": "oauth2",
@@ -367,4 +521,116 @@ def exchange_authorization_code(*, provider_id: str, code: str, state: str) -> d
         "createdBy": record.get("actor_id"),
         "controlPlaneMfa": record.get("control_plane_mfa"),
         "controlPlaneApproval": record.get("control_plane_approval"),
+        "providerAccount": provider_identity["provider_account"],
+        "providerSubject": provider_identity["provider_subject"],
+    }
+
+
+def refresh_access_token(
+    *,
+    provider_id: str,
+    token_secret: dict[str, Any],
+    metadata: dict[str, Any],
+    now_epoch: int | None = None,
+) -> dict[str, Any]:
+    provider = provider_for(provider_id)
+    if not provider.configured:
+        raise OAuthError(f"{provider.display_name} OAuth is not configured")
+    if not isinstance(token_secret, dict) or not isinstance(metadata, dict):
+        raise OAuthError("OAuth credential is malformed")
+    refresh_token = token_secret.get("refresh_token")
+    if not isinstance(refresh_token, str) or not refresh_token:
+        raise OAuthError("OAuth credential has no refresh token; reconnect the account")
+    if len(refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+        raise OAuthError("OAuth refresh token is too large")
+
+    now = _now() if now_epoch is None else int(now_epoch)
+    refresh_expires_at = token_secret.get("refresh_token_expires_at_epoch_ms")
+    if refresh_expires_at is not None:
+        if not isinstance(refresh_expires_at, int) or isinstance(refresh_expires_at, bool):
+            raise OAuthError("OAuth refresh-token expiry is malformed")
+        if refresh_expires_at <= now * 1000:
+            raise OAuthError("OAuth refresh token expired; reconnect the account")
+
+    existing_scope = str(token_secret.get("scope") or "")
+    existing_scopes = {
+        scope
+        for scope in (metadata.get("scopes") or existing_scope.split(" "))
+        if isinstance(scope, str) and scope
+    }
+    if not existing_scopes:
+        raise OAuthError("OAuth credential has no bound scopes")
+
+    token_response = _post_token_request(
+        provider,
+        _refresh_token_request_body(provider, refresh_token),
+        _token_request_headers(provider),
+    )
+    access_token = token_response.get("access_token")
+    if not isinstance(access_token, str) or not access_token:
+        raise OAuthError("OAuth refresh response did not return access_token")
+    token_type = token_response.get("token_type") or token_secret.get("token_type") or "Bearer"
+    if not isinstance(token_type, str) or token_type.lower() != "bearer":
+        raise OAuthError("OAuth refresh response returned an unsupported token type")
+    expires_in = token_response.get("expires_in")
+    if (
+        not isinstance(expires_in, (int, float))
+        or isinstance(expires_in, bool)
+        or expires_in <= 0
+        or expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
+    ):
+        raise OAuthError("OAuth refresh response returned an invalid access-token lifetime")
+    expires_at_epoch_ms = int((now + int(expires_in)) * 1000)
+
+    response_scope = token_response.get("scope")
+    scope_string = str(response_scope or existing_scope or " ".join(sorted(existing_scopes)))
+    refreshed_scopes = {scope for scope in scope_string.split(" ") if scope}
+    if refreshed_scopes != existing_scopes:
+        raise OAuthError("OAuth refresh response changed the credential scope binding")
+
+    rotated_refresh_token = token_response.get("refresh_token")
+    if rotated_refresh_token is None:
+        rotated_refresh_token = refresh_token
+    if not isinstance(rotated_refresh_token, str) or not rotated_refresh_token:
+        raise OAuthError("OAuth refresh response returned an invalid refresh token")
+    if len(rotated_refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+        raise OAuthError("OAuth refresh response returned an oversized refresh token")
+
+    refresh_token_expires_at_epoch_ms = refresh_expires_at
+    refresh_token_expires_in = token_response.get("refresh_token_expires_in")
+    if refresh_token_expires_in is not None:
+        if (
+            not isinstance(refresh_token_expires_in, (int, float))
+            or isinstance(refresh_token_expires_in, bool)
+            or refresh_token_expires_in <= 0
+            or refresh_token_expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
+        ):
+            raise OAuthError("OAuth refresh response returned an invalid refresh-token lifetime")
+        refresh_token_expires_at_epoch_ms = int((now + int(refresh_token_expires_in)) * 1000)
+
+    refreshed_secret = {
+        **token_secret,
+        "access_token": access_token,
+        "refresh_token": rotated_refresh_token,
+        "token_type": "Bearer",
+        "scope": scope_string,
+        "expires_at_epoch_ms": expires_at_epoch_ms,
+    }
+    if refresh_token_expires_at_epoch_ms is not None:
+        refreshed_secret["refresh_token_expires_at_epoch_ms"] = refresh_token_expires_at_epoch_ms
+    refreshed_metadata = {
+        **metadata,
+        "refreshable": True,
+        "scopes": sorted(refreshed_scopes),
+        "token_type": "Bearer",
+        "expires_at_epoch_ms": expires_at_epoch_ms,
+    }
+    if refresh_token_expires_at_epoch_ms is not None:
+        refreshed_metadata["refresh_token_expires_at_epoch_ms"] = refresh_token_expires_at_epoch_ms
+    return {
+        "secret": json.dumps(refreshed_secret, separators=(",", ":"), sort_keys=True),
+        "metadata": refreshed_metadata,
+        "expiresAtEpochMs": expires_at_epoch_ms,
+        "scopes": sorted(refreshed_scopes),
+        "refreshTokenRotated": rotated_refresh_token != refresh_token,
     }

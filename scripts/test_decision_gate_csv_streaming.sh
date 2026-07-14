@@ -103,7 +103,6 @@ def assert_csv_result(body: bytes, expected_count: int) -> None:
         "sawSecret",
         "authorization_present",
         "authorization_scheme",
-        "authorization_sha256",
     ], reader.fieldnames
     rows = list(reader)
     assert len(rows) == expected_count, len(rows)
@@ -113,9 +112,9 @@ def assert_csv_result(body: bytes, expected_count: int) -> None:
         expected_safe = f"safe-{index}\ncontinued" if index % 57 == 0 else f"safe-{index}"
         assert row["safe_note"] == expected_safe, row
         assert row["sawSecret"] == "false", row
-        assert row["authorization_present"] == "true", row
-        assert row["authorization_scheme"] == "Bearer", row
-        assert row["authorization_sha256"].startswith("sha256:"), row
+        assert row["authorization_present"] == "false", row
+        assert row["authorization_scheme"] == "", row
+        assert "authorization_sha256" not in row, row
 
 
 def request_absolute(payload: bytes):

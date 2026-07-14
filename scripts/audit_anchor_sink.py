@@ -25,6 +25,8 @@ ANCHOR_TOKEN = os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN", "")
 SIGNING_KEY_PATH = Path(os.getenv("SERVERWARE_TRANSPARENCY_LOG_SIGNING_KEY", "/anchors/transparency-log-ed25519.pem"))
 CHECKPOINT_COMMAND = os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND", "").strip()
 CHECKPOINT_REQUIRED = os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED", "0").lower() in {"1", "true", "yes"}
+TLS_CERT_FILE = os.getenv("SERVERWARE_AUDIT_ANCHOR_TLS_CERT_FILE", "").strip()
+TLS_KEY_FILE = os.getenv("SERVERWARE_AUDIT_ANCHOR_TLS_KEY_FILE", "").strip()
 ANCHOR_LOCK = threading.Lock()
 
 app = FastAPI(title="Serverware signed audit transparency log")
@@ -168,6 +170,33 @@ def merkle_root(leaves: list[str]) -> str | None:
     return node_hash(left, right)
 
 
+class MerkleAccumulator:
+    def __init__(self) -> None:
+        self.frontier: list[str | None] = []
+        self.size = 0
+
+    def append(self, leaf: str) -> None:
+        carry = leaf
+        level = 0
+        while level < len(self.frontier) and self.frontier[level] is not None:
+            carry = node_hash(self.frontier[level] or "", carry)
+            self.frontier[level] = None
+            level += 1
+        if level == len(self.frontier):
+            self.frontier.append(carry)
+        else:
+            self.frontier[level] = carry
+        self.size += 1
+
+    def root(self) -> str | None:
+        root: str | None = None
+        for subtree in self.frontier:
+            if subtree is None:
+                continue
+            root = subtree if root is None else node_hash(subtree, root)
+        return root
+
+
 def inclusion_proof(leaves: list[str], index: int, offset: int = 0) -> list[dict[str, str]]:
     if index < offset or index >= offset + len(leaves):
         raise ValueError("leaf index is outside this subtree")
@@ -214,6 +243,7 @@ def read_anchors() -> list[dict[str, Any]]:
 
 def verify_items(items: list[dict[str, Any]]) -> dict[str, Any]:
     leaves: list[str] = []
+    accumulator = MerkleAccumulator()
     last_record = None
     for index, item in enumerate(items):
         expected_sequence = index + 1
@@ -226,7 +256,8 @@ def verify_items(items: list[dict[str, Any]]) -> dict[str, Any]:
         if item.get("leaf_hash") != expected_leaf_hash:
             return {"ok": False, "error": "leaf_hash_mismatch", "index": index}
         leaves.append(expected_leaf_hash)
-        expected_root = merkle_root(leaves)
+        accumulator.append(expected_leaf_hash)
+        expected_root = accumulator.root()
         if item.get("tree_size") != expected_sequence:
             return {"ok": False, "error": "tree_size_mismatch", "index": index}
         if item.get("tree_head_hash") != expected_root:
@@ -244,7 +275,7 @@ def verify_items(items: list[dict[str, Any]]) -> dict[str, Any]:
             if error:
                 return {"ok": False, "error": error, "index": index}
         last_record = item.get("record")
-    head = merkle_root(leaves)
+    head = accumulator.root()
     signed_tree_head = (items[-1].get("signed_tree_head") if items else None)
     return {
         "ok": True,
@@ -423,6 +454,9 @@ def anchors(
         if not verification.get("ok"):
             raise HTTPException(status_code=409, detail={"error": "anchor_log_corrupt", "verification": verification})
         leaves = [item["leaf_hash"] for item in items]
+        accumulator = MerkleAccumulator()
+        for leaf in leaves:
+            accumulator.append(leaf)
         accepted = []
         with ANCHOR_PATH.open("a", encoding="utf-8") as handle:
             for record in batch.records:
@@ -436,7 +470,8 @@ def anchors(
                 }
                 item["leaf_hash"] = leaf_hash(leaf_payload(item))
                 leaves.append(item["leaf_hash"])
-                tree_head_hash = merkle_root(leaves)
+                accumulator.append(item["leaf_hash"])
+                tree_head_hash = accumulator.root()
                 if tree_head_hash is None:
                     raise HTTPException(status_code=500, detail="empty transparency tree after append")
                 item["tree_size"] = len(leaves)
@@ -461,7 +496,7 @@ def anchors(
                         "external_checkpoint": item.get("external_checkpoint"),
                     }
                 )
-        head = merkle_root(leaves)
+        head = accumulator.root()
         signed_tree_head = items[-1]["signed_tree_head"] if items else None
     return {
         "ok": True,
@@ -485,4 +520,12 @@ def anchors_verify(
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=9100)
+    if bool(TLS_CERT_FILE) != bool(TLS_KEY_FILE):
+        raise SystemExit("audit anchor TLS certificate and key must be configured together")
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=9100,
+        ssl_certfile=TLS_CERT_FILE or None,
+        ssl_keyfile=TLS_KEY_FILE or None,
+    )

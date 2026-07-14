@@ -6,6 +6,12 @@ TMP_DIR="${TMP_DIR:-.tmp}"
 WORK_DIR="$TMP_DIR/decision-gate-trust-root"
 mkdir -p "$WORK_DIR"
 
+wrong_digest_control_plane="serverware-wrong-binary-attestation"
+cleanup() {
+  docker rm -f "$wrong_digest_control_plane" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
 python3 - "$GATE" <<'PY'
 import json
 import secrets
@@ -62,3 +68,40 @@ if ! grep -qi "control-plane quote signing key is not trusted" "$WORK_DIR/wrong-
 fi
 
 echo '{"ok":true,"wrong_quote_key_rejected":true}'
+
+bad_digest="sha256:0000000000000000000000000000000000000000000000000000000000000000"
+docker compose run -d --no-deps --name "$wrong_digest_control_plane" \
+  -e SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST="$bad_digest" \
+  serverware > "$WORK_DIR/wrong-binary-control-plane.id"
+
+for _ in $(seq 1 30); do
+  if docker exec "$wrong_digest_control_plane" \
+    curl -fsS http://localhost:3000/healthz >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.25
+done
+if ! docker exec "$wrong_digest_control_plane" \
+  curl -fsS http://localhost:3000/healthz >/dev/null 2>&1; then
+  echo "isolated wrong-binary control plane did not become healthy" >&2
+  docker logs "$wrong_digest_control_plane" >&2
+  exit 1
+fi
+
+if docker compose run --rm --no-deps \
+  -e SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL="http://$wrong_digest_control_plane:3000/attestation" \
+  decision-gate-rs > "$WORK_DIR/wrong-binary.out" 2> "$WORK_DIR/wrong-binary.err"; then
+  echo "expected attested executable mismatch to fail Rust gate startup" >&2
+  cat "$WORK_DIR/wrong-binary.out" >&2
+  cat "$WORK_DIR/wrong-binary.err" >&2
+  exit 1
+fi
+
+if ! grep -qi "running data-plane binary is not the control-plane attested executable" \
+  "$WORK_DIR/wrong-binary.err"; then
+  echo "expected attested executable mismatch in Rust gate stderr" >&2
+  cat "$WORK_DIR/wrong-binary.err" >&2
+  exit 1
+fi
+
+echo '{"attested_executable_mismatch_rejected":true,"ok":true}'

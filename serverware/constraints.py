@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import re
 import threading
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 from serverware import db
 from serverware.policies import PolicyDecision
@@ -21,7 +22,9 @@ SUPPORTED_REQUEST_CONSTRAINTS = {
     "operationPolicy",
     "queryDateWindow",
     "queryNumericBounds",
+    "requestTimeWindow",
     "jsonBody",
+    "formBody",
 }
 SUPPORTED_RESPONSE_CONSTRAINTS = {"responseDateWindow"}
 
@@ -79,8 +82,12 @@ def evaluate_request_constraints(
             decision = _enforce_query_date_window(constraint, flow.request.pretty_url)
         elif constraint_type == "queryNumericBounds":
             decision = _enforce_query_numeric_bounds(constraint, flow.request.pretty_url)
+        elif constraint_type == "requestTimeWindow":
+            decision = _enforce_request_time_window(constraint)
         elif constraint_type == "jsonBody":
             decision = _enforce_json_body(constraint, flow)
+        elif constraint_type == "formBody":
+            decision = _enforce_form_body(constraint, flow)
         else:
             decision = PolicyDecision(True)
 
@@ -97,6 +104,19 @@ def evaluate_response_constraints(flow: Any, route: Any) -> PolicyDecision:
             continue
         if not _phase_includes(constraint, "response"):
             continue
+        operations = constraint.get("operations") or []
+        if operations:
+            operation_fields = flow.metadata.get("serverware_operation") or {}
+            operation = operation_fields.get("operation") if isinstance(operation_fields, dict) else None
+            if not isinstance(operation, str) or not operation:
+                return _deny(
+                    constraint,
+                    "response operation context is missing",
+                    "response_operation_context_missing",
+                    statusCode=502,
+                )
+            if operation not in operations:
+                continue
         if constraint_type == "responseDateWindow":
             decision = _enforce_response_date_window(constraint, flow)
         else:
@@ -273,6 +293,117 @@ def _enforce_operation_policy(constraint: dict[str, Any], operation_fields: dict
             operation=operation,
             allowedOperations=sorted(allowed),
         )
+    return PolicyDecision(True)
+
+
+def _parse_policy_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    ) is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _clock_minutes(value: Any) -> int | None:
+    if not isinstance(value, str) or re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) is None:
+        return None
+    hour, minute = value.split(":", 1)
+    return int(hour) * 60 + int(minute)
+
+
+def _enforce_request_time_window(
+    constraint: dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> PolicyDecision:
+    if constraint.get("timezone") != "UTC" or not any(
+        constraint.get(field) for field in ("notBefore", "notAfter", "weekdays", "dailyWindows")
+    ):
+        return _deny(
+            constraint,
+            "request time-window constraint is invalid",
+            "constraint_invalid_request_time_window",
+        )
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    not_before = (
+        _parse_policy_timestamp(constraint.get("notBefore")) if constraint.get("notBefore") is not None else None
+    )
+    not_after = _parse_policy_timestamp(constraint.get("notAfter")) if constraint.get("notAfter") is not None else None
+    if (constraint.get("notBefore") is not None and not_before is None) or (
+        constraint.get("notAfter") is not None and not_after is None
+    ) or (not_before is not None and not_after is not None and not_before >= not_after):
+        return _deny(
+            constraint,
+            "request time-window constraint is invalid",
+            "constraint_invalid_request_time_window",
+        )
+    if not_before is not None and current < not_before:
+        return _deny(
+            constraint,
+            "request is before the allowed time window",
+            "request_time_before_window",
+            notBefore=constraint["notBefore"],
+        )
+    if not_after is not None and current >= not_after:
+        return _deny(
+            constraint,
+            "request is after the allowed time window",
+            "request_time_after_window",
+            notAfter=constraint["notAfter"],
+        )
+    weekdays = constraint.get("weekdays")
+    weekday = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")[current.weekday()]
+    if weekdays is not None and (
+        not isinstance(weekdays, list)
+        or not weekdays
+        or any(
+            not isinstance(day, str) or day not in {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+            for day in weekdays
+        )
+    ):
+        return _deny(
+            constraint,
+            "request time-window constraint is invalid",
+            "constraint_invalid_request_time_window",
+        )
+    if weekdays is not None and weekday not in weekdays:
+        return _deny(
+            constraint,
+            "request weekday is outside the allowed schedule",
+            "request_time_weekday_denied",
+            weekday=weekday,
+        )
+    daily_windows = constraint.get("dailyWindows")
+    if daily_windows is not None:
+        if not isinstance(daily_windows, list) or not daily_windows or any(
+            not isinstance(window, dict) for window in daily_windows
+        ):
+            return _deny(
+                constraint,
+                "request time-window constraint is invalid",
+                "constraint_invalid_request_time_window",
+            )
+        minute = current.hour * 60 + current.minute
+        parsed_windows = [(_clock_minutes(window.get("start")), _clock_minutes(window.get("end"))) for window in daily_windows]
+        if any(start is None or end is None or start >= end for start, end in parsed_windows):
+            return _deny(
+                constraint,
+                "request time-window constraint is invalid",
+                "constraint_invalid_request_time_window",
+            )
+        if not any(start <= minute < end for start, end in parsed_windows):
+            return _deny(
+                constraint,
+                "request time is outside the allowed daily windows",
+                "request_time_daily_window_denied",
+                minuteOfDay=minute,
+                timezone="UTC",
+            )
     return PolicyDecision(True)
 
 
@@ -462,6 +593,145 @@ def _enforce_json_body(constraint: dict[str, Any], flow: Any) -> PolicyDecision:
     return PolicyDecision(True)
 
 
+def _enforce_form_body(constraint: dict[str, Any], flow: Any) -> PolicyDecision:
+    body = _request_body(flow)
+    required_fields = [str(item) for item in constraint.get("requiredFields") or []]
+    if not body:
+        if required_fields:
+            return _deny(constraint, "form body is required", "form_body_missing")
+        return PolicyDecision(True)
+    allowed_content_types = {
+        str(item).lower()
+        for item in (constraint.get("contentTypes") or ["application/x-www-form-urlencoded"])
+    }
+    if _content_type(flow) not in allowed_content_types:
+        return _deny(
+            constraint,
+            "request content type is not allowed for form body policy",
+            "form_body_content_type_denied",
+            contentType=_content_type(flow),
+            allowedContentTypes=sorted(allowed_content_types),
+        )
+    try:
+        text = body.decode("utf-8", errors="strict")
+        if re.search(r"%(?![0-9A-Fa-f]{2})", text):
+            raise ValueError("invalid percent encoding")
+        pairs = parse_qsl(
+            text,
+            keep_blank_values=True,
+            encoding="utf-8",
+            errors="strict",
+            max_num_fields=256,
+        )
+    except (UnicodeDecodeError, ValueError):
+        return _deny(constraint, "request body is not valid form data", "form_body_invalid")
+
+    values: dict[str, list[str]] = {}
+    for raw_key, value in pairs:
+        key = _normalize_form_key(raw_key)
+        if not key:
+            return _deny(constraint, "form body contains an invalid field name", "form_body_field_invalid")
+        values.setdefault(key, []).append(value)
+
+    allowed_fields = {str(item) for item in constraint.get("allowedFields") or []}
+    if allowed_fields:
+        for field in values:
+            if field not in allowed_fields:
+                return _deny(
+                    constraint,
+                    "form body contains a field outside the allowlist",
+                    "form_body_field_not_allowed",
+                    field=field,
+                )
+    denied_fields = {str(item) for item in constraint.get("deniedFields") or []}
+    for field in values:
+        if field in denied_fields:
+            return _deny(
+                constraint,
+                "form body contains a denied field",
+                "form_body_field_denied",
+                field=field,
+            )
+    for field in required_fields:
+        if field not in values:
+            return _deny(
+                constraint,
+                "form body is missing a required field",
+                "form_body_required_field_missing",
+                field=field,
+            )
+
+    payload: dict[str, Any] = {}
+    rules = constraint.get("fields") or {}
+    for field, found in values.items():
+        rule = rules.get(field) or {}
+        if len(found) > 1 and rule.get("type") != "array":
+            return _deny(
+                constraint,
+                "form body repeats a scalar field",
+                "form_body_duplicate_field_denied",
+                field=field,
+            )
+        try:
+            value = _coerce_form_value(found, str(rule.get("type") or "string"))
+            _set_form_value(payload, field, value)
+        except ValueError:
+            return _deny(
+                constraint,
+                "form body field has the wrong type",
+                "form_body_field_type_denied",
+                field=field,
+                expectedType=rule.get("type") or "string",
+            )
+    for field, rule in rules.items():
+        decision = _enforce_field_rule(constraint, payload, str(field), rule, body_kind="form")
+        if not decision.allowed:
+            return decision
+    return PolicyDecision(True)
+
+
+def _normalize_form_key(key: str) -> str:
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]*(?:\[[A-Za-z0-9_.-]+\])*", key) is None:
+        return ""
+    parts = [part for part in re.split(r"\[([^\]]+)\]", key) if part and not part.isdigit()]
+    return ".".join(parts)
+
+
+def _coerce_form_value(values: list[str], expected_type: str) -> Any:
+    if expected_type == "array":
+        return list(values)
+    if len(values) != 1:
+        raise ValueError("scalar form field is repeated")
+    value = values[0]
+    if expected_type == "string":
+        return value
+    if expected_type == "integer" and re.fullmatch(r"-?(?:0|[1-9][0-9]*)", value):
+        return int(value)
+    if expected_type == "number":
+        parsed = float(value)
+        if math.isfinite(parsed):
+            return parsed
+    if expected_type == "boolean" and value in {"true", "false"}:
+        return value == "true"
+    raise ValueError("unsupported or invalid form field type")
+
+
+def _set_form_value(payload: dict[str, Any], field: str, value: Any) -> None:
+    parts = field.split(".")
+    current = payload
+    for part in parts[:-1]:
+        existing = current.get(part)
+        if existing is None:
+            existing = {}
+            current[part] = existing
+        if not isinstance(existing, dict):
+            raise ValueError("form field path conflicts with scalar value")
+        current = existing
+    if parts[-1] in current:
+        raise ValueError("form field path is duplicated")
+    current[parts[-1]] = value
+
+
 def _enforce_response_date_window(constraint: dict[str, Any], flow: Any) -> PolicyDecision:
     if not flow.response:
         return PolicyDecision(True)
@@ -486,21 +756,29 @@ def _enforce_response_date_window(constraint: dict[str, Any], flow: Any) -> Poli
     if not date_fields:
         return _deny(constraint, "response date fields are missing", "constraint_invalid_response_date_window")
 
-    items = []
+    items: list[Any] = []
+    item_path_found = False
     if item_paths:
         for item_path in item_paths:
-            items.extend(_values_at_path(payload, item_path))
+            values = _values_at_path(payload, item_path)
+            if values:
+                item_path_found = True
+            for value in values:
+                if isinstance(value, list):
+                    items.extend(value)
+                else:
+                    items.append(value)
     else:
         items = [payload]
 
-    if required and not items:
+    if required and item_paths and not item_path_found:
         return _deny(constraint, "response does not contain required items", "response_items_missing", statusCode=502)
 
     for item in items:
         for field in date_fields:
             values = _values_at_path(item, field)
             if not values:
-                if required:
+                if required and not (isinstance(item, list) and not item):
                     return _deny(
                         constraint,
                         "response item is missing a required date field",
@@ -543,15 +821,24 @@ def _enforce_response_date_window(constraint: dict[str, Any], flow: Any) -> Poli
     return PolicyDecision(True)
 
 
-def _enforce_field_rule(constraint: dict[str, Any], payload: Any, field: str, rule: Any) -> PolicyDecision:
+def _enforce_field_rule(
+    constraint: dict[str, Any],
+    payload: Any,
+    field: str,
+    rule: Any,
+    *,
+    body_kind: str = "json",
+) -> PolicyDecision:
+    label = "JSON" if body_kind == "json" else "form"
+    error_prefix = f"{body_kind}_body"
     if not isinstance(rule, dict):
-        return _deny(constraint, "JSON body field rule is invalid", "json_body_field_rule_invalid", field=field)
+        return _deny(constraint, f"{label} body field rule is invalid", f"{error_prefix}_field_rule_invalid", field=field)
     values = _values_at_path(payload, field)
     if rule.get("required") and not values:
         return _deny(
             constraint,
-            "JSON body is missing a required field",
-            "json_body_required_field_missing",
+            f"{label} body is missing a required field",
+            f"{error_prefix}_required_field_missing",
             field=field,
         )
     for value in values:
@@ -559,43 +846,43 @@ def _enforce_field_rule(constraint: dict[str, Any], payload: Any, field: str, ru
         if expected_type and not _matches_type(value, str(expected_type)):
             return _deny(
                 constraint,
-                "JSON body field has the wrong type",
-                "json_body_field_type_denied",
+                f"{label} body field has the wrong type",
+                f"{error_prefix}_field_type_denied",
                 field=field,
                 expectedType=expected_type,
             )
         if "enum" in rule and value not in rule["enum"]:
             return _deny(
                 constraint,
-                "JSON body field value is not in the allowed set",
-                "json_body_field_enum_denied",
+                f"{label} body field value is not in the allowed set",
+                f"{error_prefix}_field_enum_denied",
                 field=field,
             )
         if "equals" in rule and value != rule["equals"]:
             return _deny(
                 constraint,
-                "JSON body field does not match required value",
-                "json_body_field_equals_denied",
+                f"{label} body field does not match required value",
+                f"{error_prefix}_field_equals_denied",
                 field=field,
             )
         if isinstance(value, str):
             if "minLength" in rule and len(value) < int(rule["minLength"]):
-                return _deny(constraint, "JSON body field is too short", "json_body_field_min_length", field=field)
+                return _deny(constraint, f"{label} body field is too short", f"{error_prefix}_field_min_length", field=field)
             if "maxLength" in rule and len(value) > int(rule["maxLength"]):
-                return _deny(constraint, "JSON body field is too long", "json_body_field_max_length", field=field)
+                return _deny(constraint, f"{label} body field is too long", f"{error_prefix}_field_max_length", field=field)
             pattern = rule.get("pattern")
             if pattern and not re.search(str(pattern), value):
-                return _deny(constraint, "JSON body field does not match pattern", "json_body_field_pattern_denied", field=field)
+                return _deny(constraint, f"{label} body field does not match pattern", f"{error_prefix}_field_pattern_denied", field=field)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             if "min" in rule and value < float(rule["min"]):
-                return _deny(constraint, "JSON body field is below policy minimum", "json_body_field_min", field=field)
+                return _deny(constraint, f"{label} body field is below policy minimum", f"{error_prefix}_field_min", field=field)
             if "max" in rule and value > float(rule["max"]):
-                return _deny(constraint, "JSON body field exceeds policy maximum", "json_body_field_max", field=field)
+                return _deny(constraint, f"{label} body field exceeds policy maximum", f"{error_prefix}_field_max", field=field)
         if isinstance(value, list):
             if "minItems" in rule and len(value) < int(rule["minItems"]):
-                return _deny(constraint, "JSON body array has too few items", "json_body_field_min_items", field=field)
+                return _deny(constraint, f"{label} body array has too few items", f"{error_prefix}_field_min_items", field=field)
             if "maxItems" in rule and len(value) > int(rule["maxItems"]):
-                return _deny(constraint, "JSON body array has too many items", "json_body_field_max_items", field=field)
+                return _deny(constraint, f"{label} body array has too many items", f"{error_prefix}_field_max_items", field=field)
     return PolicyDecision(True)
 
 
@@ -665,38 +952,46 @@ def _values_at_parts(value: Any, parts: list[str]) -> list[Any]:
 
 
 def _parse_datetime(value: Any, formats: list[str]) -> float | None:
+    format_set = set(formats or ["rfc3339", "date", "epochSeconds", "epochMillis"])
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return _parse_epoch_number(float(value))
+        return _parse_epoch_number(float(value), format_set)
     text = str(value).strip()
     if not text:
         return None
     if text.isdigit():
-        return _parse_epoch_number(float(text))
-    format_set = set(formats or ["rfc3339", "date", "epochSeconds", "epochMillis"])
+        return _parse_epoch_number(float(text), format_set)
     if "rfc3339" in format_set:
         parsed = _parse_rfc3339(text)
         if parsed is not None:
             return parsed
     if "date" in format_set:
         try:
-            return datetime.combine(date.fromisoformat(text[:10]), datetime.min.time(), tzinfo=timezone.utc).timestamp()
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+                raise ValueError("date must use YYYY-MM-DD")
+            return datetime.combine(date.fromisoformat(text), datetime.min.time(), tzinfo=timezone.utc).timestamp()
         except ValueError:
             pass
     return None
 
 
-def _parse_epoch_number(value: float) -> float:
-    if value > 10_000_000_000:
+def _parse_epoch_number(value: float, formats: set[str]) -> float | None:
+    is_millis = abs(value) >= 10_000_000_000
+    if is_millis and "epochMillis" in formats:
         return value / 1000.0
-    return value
+    if not is_millis and "epochSeconds" in formats:
+        return value
+    return None
 
 
 def _parse_rfc3339(text: str) -> float | None:
+    if not re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        text,
+    ):
+        return None
     try:
-        normalized = text.replace("Z", "+00:00")
+        normalized = text[:-1] + "+00:00" if text.endswith("Z") else text
         parsed = datetime.fromisoformat(normalized)
-        if parsed.tzinfo is None:
-            parsed = parsed.replace(tzinfo=timezone.utc)
         return parsed.timestamp()
     except ValueError:
         return None

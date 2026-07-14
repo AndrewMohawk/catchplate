@@ -11,6 +11,8 @@ FROM debian:bookworm-slim
 RUN groupadd --gid 10001 serverware \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin serverware
 COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/serverware-decision-gate
+COPY --from=build /src/target/release/serverware-proof-client /usr/local/bin/serverware-proof-client
+COPY --from=build /src/target/release/serverware-response-proof-fixture /usr/local/bin/serverware-response-proof-fixture
 USER serverware
 EXPOSE 9090
 ENTRYPOINT ["/usr/local/bin/serverware-decision-gate"]

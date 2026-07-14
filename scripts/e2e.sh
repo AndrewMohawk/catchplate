@@ -110,13 +110,67 @@ PY
 curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/echo" > "$TMP_DIR/echo.json"
 python3 - "$TMP_DIR/echo.json" <<'PY'
-import hashlib, json, sys
+import json, sys
 data = json.load(open(sys.argv[1]))
 assert data["authorization_present"] is True, data
 assert data["authorization_scheme"] == "Bearer", data
-assert data["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), data
+assert data["credential_marker"] == "initial", data
+assert "authorization_sha256" not in data, data
 for key in ("authorization", "serverware_agent", "proxy_authorization", "cookie", "x_api_key"):
     assert key not in data, data
+PY
+
+docker compose stop serverware >/dev/null
+sleep 6
+set +e
+expired_lease_code="$(curl -sS -o "$TMP_DIR/expired-credential-lease.json" -w "%{http_code}" \
+  --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+  "https://demo-upstream:8443/echo")"
+expired_lease_curl_status=$?
+set -e
+docker compose start serverware >/dev/null
+./scripts/wait_for_serverware.sh
+
+if [[ "$expired_lease_curl_status" != "0" || "$expired_lease_code" != "503" ]]; then
+  echo "expected expired credential lease to fail closed with 503, got curl=$expired_lease_curl_status code=$expired_lease_code" >&2
+  cat "$TMP_DIR/expired-credential-lease.json" >&2
+  exit 1
+fi
+python3 - "$TMP_DIR/expired-credential-lease.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+payload = data.get("payload") if isinstance(data.get("payload"), dict) else data
+assert payload["error"] == "credential_lease_missing", data
+PY
+
+recovered_lease=0
+for _ in $(seq 1 20); do
+  recovered_lease_code="$(curl -sS -o "$TMP_DIR/credential-lease-recovered.json" -w "%{http_code}" \
+    --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+    "https://demo-upstream:8443/echo")"
+  if python3 - "$TMP_DIR/credential-lease-recovered.json" <<'PY'
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+except (OSError, ValueError):
+    raise SystemExit(1)
+raise SystemExit(0 if data.get("authorization_present") is True else 1)
+PY
+  then
+    recovered_lease=1
+    break
+  fi
+  sleep 1
+done
+if [[ "$recovered_lease" != "1" ]]; then
+  echo "credential lease did not recover within 20 seconds; last HTTP status was $recovered_lease_code" >&2
+  cat "$TMP_DIR/credential-lease-recovered.json" >&2
+  exit 1
+fi
+python3 - "$TMP_DIR/credential-lease-recovered.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["authorization_present"] is True, data
 PY
 
 curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
@@ -149,21 +203,20 @@ assert all(item["serverwareAgeProof"] == "validated" for item in data["messages"
 assert all("raw" not in item and "body" not in item["payload"] for item in data["messages"]), data
 PY
 
-curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
-  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=from%3Asecurity%40example.com&omitInternalDate=1" \
-  > "$TMP_DIR/gmail-pending-list.json"
+gmail_missing_date_code="$(curl -sS -o "$TMP_DIR/gmail-pending-list.json" -w "%{http_code}" \
+  --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+  "https://demo-upstream:8443/gmail/v1/users/me/messages?q=from%3Asecurity%40example.com&omitInternalDate=1")"
+if [[ "$gmail_missing_date_code" != "502" ]]; then
+  echo "expected Gmail list without age evidence to fail with 502, got $gmail_missing_date_code" >&2
+  cat "$TMP_DIR/gmail-pending-list.json" >&2
+  exit 1
+fi
 python3 - "$TMP_DIR/gmail-pending-list.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
-assert set(data) == {"messages", "serverwarePendingAgeProof"}, data
-assert data["serverwarePendingAgeProof"] == ["pending-message-1", "pending-message-2"], data
-for item in data["messages"]:
-    assert item["serverwareAgeProof"] == "pending", item
-    assert "internalDate" not in item, item
-    assert item["payload"]["headers"][0]["name"] == "From", item
-    assert "body" not in item["payload"], item
-    for key in ("authorization", "proxy_authorization", "serverware_agent", "cookie", "query", "raw", "secretDebug", "serverDebugSecret"):
-        assert key not in item, item
+assert data["error"] == "response_date_field_missing", data
+assert data["constraint_id"] == "gmail-list-response-30d", data
+assert data["field"] == "internalDate", data
 PY
 
 pending_get_code="$(curl -sS -o "$TMP_DIR/gmail-pending-get-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
@@ -199,11 +252,11 @@ fi
 curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/2/tweets" > "$TMP_DIR/x-read.json"
 python3 - "$TMP_DIR/x-read.json" <<'PY'
-import hashlib, json, sys
+import json, sys
 data = json.load(open(sys.argv[1]))
 assert data["authorization_present"] is True, data
 assert data["authorization_scheme"] == "Bearer", data
-assert data["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), data
+assert "authorization_sha256" not in data, data
 assert "authorization" not in data, data
 assert data["data"][0]["id"] == "tweet-1", data
 assert data["data"][0]["text"] == "demo", data
@@ -218,16 +271,16 @@ if [[ "$x_write_code" != "403" ]]; then
 fi
 
 x_unknown_read_code="$(curl -sS -o "$TMP_DIR/x-unknown-read-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
-  "https://demo-upstream:8443/2/users")"
+  "https://demo-upstream:8443/2/future/unknown_endpoint")"
 if [[ "$x_unknown_read_code" != "403" ]]; then
   echo "expected unconfigured X read operation to fail with 403, got $x_unknown_read_code" >&2
   cat "$TMP_DIR/x-unknown-read-block.json" >&2
   exit 1
 fi
 
-npm_body='{"name":"demo-package","version":"1.2.3","tarball_integrity":"sha512-demo"}'
+npm_body='{"name":"demo-package","dist-tags":{"latest":"1.2.3"},"versions":{"1.2.3":{"version":"1.2.3","dist":{"integrity":"sha512-demo"}}}}'
 npm_url="https://demo-upstream:8443/npm/demo-package"
-bad_npm_body='{"name":"demo-package","version":"1.2.3"}'
+bad_npm_body='{"name":"demo-package","dist-tags":{"latest":"1.2.3"},"versions":{"1.2.3":{"version":"1.2.3","dist":{}}}}'
 bad_npm_code="$(curl -sS -o "$TMP_DIR/npm-missing-fields-block.json" -w "%{http_code}" -X PUT --data "$bad_npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "$npm_url")"
 if [[ "$bad_npm_code" != "403" ]]; then
@@ -286,6 +339,7 @@ data = json.load(open(sys.argv[1]))
 assert data["approved_by"] == "user:demo", data
 assert data["approval_authn"]["method"] == "webauthn", data
 assert data["approval_authn"]["authenticator_class"] == "dev", data
+assert data["approval_authn"]["attestation_trusted"] is True, data
 assert data["approval_challenge_id"], data
 assert data["credential_id"] == "cred-demo-bearer", data
 assert isinstance(data["credential_version"], int) and data["credential_version"] >= 1, data
@@ -303,11 +357,11 @@ fi
 curl -fsS -X PUT --data "$npm_body" -H "Content-Type: application/json" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "$npm_url" > "$TMP_DIR/approval-pass.json"
 python3 - "$TMP_DIR/approval-pass.json" <<'PY'
-import hashlib, json, sys
+import json, sys
 data = json.load(open(sys.argv[1]))
 assert data["authorization_present"] is True, data
 assert data["authorization_scheme"] == "Bearer", data
-assert data["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer demo-token-from-vault").hexdigest(), data
+assert "authorization_sha256" not in data, data
 assert "authorization" not in data, data
 assert data["published"] is True, data
 PY
@@ -321,7 +375,7 @@ if [[ "$reuse_code" != "428" ]]; then
 fi
 
 curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X PUT \
-  --data '{"secret":"rotated-token-from-vault","metadata":{"x_app_id":"demo-x-app"}}' \
+  --data '{"secret":"rotated-token-from-vault"}' \
   "$BASE/api/credentials/cred-demo-bearer" > "$TMP_DIR/credential-rotated.json"
 python3 - "$TMP_DIR/credential-rotated.json" "$TMP_DIR/credential-version-before-rotation.txt" <<'PY'
 import json, sys
@@ -333,17 +387,21 @@ PY
 
 rotated_seen=0
 for _ in $(seq 1 30); do
-  curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
-    "https://demo-upstream:8443/echo" > "$TMP_DIR/echo-rotated.json"
-  if python3 - "$TMP_DIR/echo-rotated.json" <<'PY'
-import hashlib, json, sys
+  rotated_code="$(curl -sS -o "$TMP_DIR/echo-rotated.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+    "https://demo-upstream:8443/echo")"
+  if [[ "$rotated_code" == "200" ]] && python3 - "$TMP_DIR/echo-rotated.json" <<'PY'
+import json, sys
 data = json.load(open(sys.argv[1]))
-expected = "sha256:" + hashlib.sha256(b"Bearer rotated-token-from-vault").hexdigest()
-raise SystemExit(0 if data.get("authorization_sha256") == expected and "authorization" not in data else 1)
+raise SystemExit(0 if data.get("credential_marker") == "rotated" and "authorization" not in data and "authorization_sha256" not in data else 1)
 PY
   then
     rotated_seen=1
     break
+  fi
+  if [[ "$rotated_code" != "200" && "$rotated_code" != "503" ]]; then
+    echo "expected credential rotation polling to return 200 or fail closed with 503, got $rotated_code" >&2
+    cat "$TMP_DIR/echo-rotated.json" >&2
+    exit 1
   fi
   sleep 0.2
 done
@@ -357,8 +415,8 @@ curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/runtime/metrics" > "$TMP_DIR/runtime-m
 python3 - "$TMP_DIR/runtime-metrics.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
-assert data["credential_generation_count"] >= 1, data
-assert data["credential_generation_updates"] >= 1, data
+assert data["credential_lease_count"] >= 1, data
+assert "credential_lease_replay_count" not in data, data
 PY
 
 curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/audit/verify" > "$TMP_DIR/audit-verify.json"

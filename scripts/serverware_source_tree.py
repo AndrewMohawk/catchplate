@@ -7,7 +7,23 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-SOURCE_SUFFIXES = {".py", ".sh", ".json", ".toml", ".lock", ".md", ".yml", ".yaml"}
+SOURCE_SUFFIXES = {
+    ".py",
+    ".rs",
+    ".sh",
+    ".json",
+    ".toml",
+    ".lock",
+    ".md",
+    ".yml",
+    ".yaml",
+    ".html",
+    ".css",
+    ".js",
+    ".sql",
+    ".svg",
+    ".png",
+}
 SOURCE_NAMES = {"Dockerfile", "Dockerfile.production", "Makefile", "requirements.txt", ".dockerignore"}
 EXCLUDED_PARTS = (".git", ".tmp", "__pycache__", "target")
 

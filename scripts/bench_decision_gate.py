@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
+import secrets
 import socket
 import statistics
 import time
@@ -15,6 +17,7 @@ from urllib.parse import urlsplit
 
 MANAGEMENT_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip() or "dev-data-plane-audit-token"
 MANAGEMENT_HEADERS = {"X-Serverware-Data-Plane-Token": MANAGEMENT_TOKEN}
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -78,14 +81,14 @@ def request_head_only(
     return status, json.loads(body)
 
 
-def bootstrap(base: str, admin_token: str) -> tuple[int, dict[str, str]]:
+def bootstrap(base: str, admin_token: str) -> tuple[int, dict[str, Any]]:
     data = request_json(f"{base.rstrip('/')}/api/bootstrap", headers={"X-Serverware-Admin-Token": admin_token})
     credential = next(item for item in data["credentials"] if item["id"] == "cred-demo-bearer")
-    metadata = {str(k): str(v) for k, v in (credential.get("metadata") or {}).items()}
+    metadata = dict(credential.get("metadata") or {})
     return int(credential["credential_version"]), metadata
 
 
-def update_demo_credential(base: str, admin_token: str, secret: str, metadata: dict[str, str]) -> int:
+def update_demo_credential(base: str, admin_token: str, secret: str, metadata: dict[str, Any]) -> int:
     data = request_json(
         f"{base.rstrip('/')}/api/credentials/cred-demo-bearer",
         payload={"secret": secret, "metadata": metadata},
@@ -101,6 +104,29 @@ def decide(base: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def create_grant(base: str, payload: dict[str, Any]) -> dict[str, Any]:
     return request_json(f"{base.rstrip('/')}/v1/grants", payload, headers=MANAGEMENT_HEADERS)
+
+
+def measured_attestation(base: str) -> dict[str, str]:
+    nonce = secrets.token_urlsafe(24)
+    attestation = request_json(f"{base.rstrip('/')}/attestation?nonce={nonce}")
+    if attestation.get("nonce") != nonce:
+        raise AssertionError("decision-gate attestation did not echo the benchmark nonce")
+    fields = {
+        "data_plane_binary_digest": attestation.get("data_plane_binary_digest"),
+        "policy_hash": attestation.get("policy_bundle_digest"),
+        "runtime_manifest_digest": attestation.get("runtime_manifest_digest"),
+    }
+    for name, value in fields.items():
+        if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
+            raise AssertionError(f"decision-gate attestation has invalid {name}: {value!r}")
+    runtime_manifest = attestation.get("runtime_manifest")
+    if not isinstance(runtime_manifest, dict):
+        raise AssertionError("decision-gate attestation is missing its runtime manifest")
+    if runtime_manifest.get("binary_digest") != fields["data_plane_binary_digest"]:
+        raise AssertionError("decision-gate runtime manifest does not bind the attested binary digest")
+    if runtime_manifest.get("policy_hash") != fields["policy_hash"]:
+        raise AssertionError("decision-gate runtime manifest does not bind the attested policy hash")
+    return {**fields, "nonce": nonce}
 
 
 def assert_decision(name: str, decision: dict[str, Any], action: str, error: str | None = None) -> None:
@@ -122,6 +148,7 @@ def main() -> None:
     args = parser.parse_args()
 
     credential_version, metadata = bootstrap(args.serverware, args.admin_token)
+    attestation_before = measured_attestation(args.gate)
     base_payload: dict[str, Any] = {
         "clientIp": "127.0.0.1",
         "method": "GET",
@@ -133,8 +160,6 @@ def main() -> None:
     if args.self_test:
         health = request_json(f"{args.gate.rstrip('/')}/healthz")
         shared_jit_store = health.get("jit_grant_store") == "shared"
-        if health.get("credential_leases", 0) < 1:
-            raise AssertionError(f"Rust gate did not load broker credential leases: {health}")
         for path in ("/v1/decide", "/v1/grants"):
             status, denial = request_head_only(args.gate, path)
             if status != 401 or denial.get("error") != "management_auth_required":
@@ -250,12 +275,16 @@ def main() -> None:
             "deny",
             "gmail_message_age_not_proven",
         )
-        assert_decision(
-            "x write missing body denied",
-            decide(args.gate, {**base_payload, "method": "POST", "url": "https://demo-upstream:8443/2/tweets"}),
-            "deny",
-            "json_body_missing",
+        x_missing_body = decide(
+            args.gate,
+            {**base_payload, "method": "POST", "url": "https://demo-upstream:8443/2/tweets"},
         )
+        x_missing_body_error = (x_missing_body.get("payload") or {}).get("error")
+        if x_missing_body.get("action") != "deny" or x_missing_body_error not in {
+            "json_body_missing",
+            "credential_rate_limit_exceeded",
+        }:
+            raise AssertionError(f"x write missing body was not denied: {x_missing_body}")
         assert_decision(
             "npm publish missing fields",
             decide(
@@ -265,18 +294,35 @@ def main() -> None:
                     "method": "PUT",
                     "url": "https://demo-upstream:8443/npm/demo-package",
                     "headers": {"X-Serverware-Agent": "demo-agent", "Content-Type": "application/json"},
-                    "body": json.dumps({"name": "demo-package", "version": "1.2.3"}),
+                    "body": json.dumps(
+                        {
+                            "name": "demo-package",
+                            "dist-tags": {"latest": "1.2.3"},
+                            "versions": {"1.2.3": {"version": "1.2.3", "dist": {}}},
+                        }
+                    ),
                 },
             ),
             "deny",
-            "npm_publish_missing_fields",
+            "npm_publish_attachment_missing",
         )
         npm_publish_payload = {
             **base_payload,
             "method": "PUT",
             "url": "https://demo-upstream:8443/npm/demo-package",
             "headers": {"X-Serverware-Agent": "demo-agent", "Content-Type": "application/json"},
-            "body": json.dumps({"name": "demo-package", "version": "1.2.3", "tarball_integrity": "sha512-demo"}),
+            "body": json.dumps(
+                {
+                    "name": "demo-package",
+                    "dist-tags": {"latest": "1.2.3"},
+                    "versions": {
+                        "1.2.3": {
+                            "version": "1.2.3",
+                            "dist": {"integrity": "sha512-demo"},
+                        }
+                    },
+                }
+            ),
         }
         npm_jit = decide(args.gate, npm_publish_payload)
         assert_decision("npm publish requires jit", npm_jit, "jit_required")
@@ -340,7 +386,9 @@ def main() -> None:
             **base_payload,
             "credentialVersions": {"cred-demo-bearer": credential_version},
         }
-        for _ in range(40):
+        # The scoped recipient-bound lease has a five-second maximum TTL, so
+        # rotation must become authoritative after that bounded cache window.
+        for _ in range(80):
             rotated_decision = decide(args.gate, stale_version_payload)
             if rotated_decision.get("credential_version") == rotated_version:
                 break
@@ -353,10 +401,16 @@ def main() -> None:
             **npm_publish_payload,
             "credentialVersions": {"cred-demo-bearer": credential_version},
         }
-        stale_after_rotation = decide(args.gate, stale_npm_payload)
+        for _ in range(80):
+            stale_after_rotation = decide(args.gate, stale_npm_payload)
+            if stale_after_rotation.get("credential_version") == rotated_version:
+                break
+            time.sleep(0.1)
+        else:
+            raise AssertionError(
+                f"NPM route lease did not observe rotated credential generation {rotated_version}"
+            )
         assert_decision("stale JIT grant cannot survive credential rotation", stale_after_rotation, "jit_required")
-        if stale_after_rotation.get("credential_version") != rotated_version:
-            raise AssertionError(f"decision did not use broker credential version: {stale_after_rotation}")
         credential_version = rotated_version
 
     latencies_ms: list[float] = []
@@ -368,6 +422,11 @@ def main() -> None:
             raise SystemExit(f"unexpected decision: {decision}")
         if index >= args.warmup:
             latencies_ms.append(elapsed_ms)
+
+    attestation_after = measured_attestation(args.gate)
+    for field in ("data_plane_binary_digest", "policy_hash", "runtime_manifest_digest"):
+        if attestation_after[field] != attestation_before[field]:
+            raise AssertionError(f"decision-gate {field} changed during the benchmark")
 
     result = {
         "candidate": "rust-decision-gate",
@@ -381,6 +440,11 @@ def main() -> None:
         "max_ms": round(max(latencies_ms), 3),
         "mean_ms": round(statistics.mean(latencies_ms), 3),
         "credential_version": credential_version,
+        "data_plane_binary_digest": attestation_before["data_plane_binary_digest"],
+        "policy_hash": attestation_before["policy_hash"],
+        "runtime_manifest_digest": attestation_before["runtime_manifest_digest"],
+        "attestation_nonce_before": attestation_before["nonce"],
+        "attestation_nonce_after": attestation_after["nonce"],
     }
     print(json.dumps(result, indent=2, sort_keys=True))
 

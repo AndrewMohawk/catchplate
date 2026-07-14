@@ -8,8 +8,10 @@ import ipaddress
 import json
 import os
 import re
+import tempfile
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -20,6 +22,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 from serverware.config import (
     POLICY_BUNDLE_PATH,
+    POLICY_MIN_ROLLBACK_EPOCH,
+    POLICY_MIN_SEQUENCE,
     POLICY_SIGNING_KEY_PATH,
     POLICY_SIGNING_PUBLIC_KEY_PATH,
     SCHEMA_DIR,
@@ -28,12 +32,40 @@ from serverware.config import (
 
 
 SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "x.v2", "npm.registry"}
+X_V2_BOUNDED_READ_OPERATIONS = frozenset(
+    {
+        "accountActivity.read",
+        "activity.read",
+        "analytics.read",
+        "bookmarks.read",
+        "chat.read",
+        "communities.read",
+        "compliance.read",
+        "connections.read",
+        "directMessages.read",
+        "insights.read",
+        "lists.read",
+        "media.read",
+        "news.read",
+        "notes.read",
+        "schema.read",
+        "search.read",
+        "spaces.read",
+        "trends.read",
+        "tweets.read",
+        "usage.read",
+        "users.read",
+        "webhooks.read",
+    }
+)
 SUPPORTED_CONSTRAINTS = {
     "rateLimit",
     "operationPolicy",
     "queryDateWindow",
     "queryNumericBounds",
+    "requestTimeWindow",
     "jsonBody",
+    "formBody",
     "responseDateWindow",
 }
 REQUEST_CONSTRAINTS = SUPPORTED_CONSTRAINTS - {"responseDateWindow"}
@@ -53,7 +85,57 @@ REQUIRED_JIT_BINDING_FIELDS = {
     "method",
     "authority",
     "path",
+    "query",
+    "selectedHeaders",
     "bodySha256",
+}
+STREAMING_RESPONSE_MODES = {
+    "stream",
+    "jsonlStream",
+    "jsonArrayStream",
+    "jsonSseStream",
+    "jsonNestedStream",
+    "formUrlencodedStream",
+    "csvStream",
+}
+BUFFERED_RESPONSE_MODES = {"any", "headersOnly", "json"}
+SUPPORTED_RESPONSE_MODES = BUFFERED_RESPONSE_MODES | STREAMING_RESPONSE_MODES
+FORBIDDEN_AGENT_CREDENTIAL_HEADERS = {
+    "authorization",
+    "cookie",
+    "proxy-authorization",
+}
+SAFE_RESPONSE_HEADERS = frozenset(
+    {
+        "cache-control",
+        "content-language",
+        "etag",
+        "last-modified",
+        "retry-after",
+        "www-authenticate",
+    }
+)
+MAX_PROVIDER_RESPONSE_BODY_BYTES = 1024 * 1024
+MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024
+RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
+CONSTRAINT_COMMON_FIELDS = {"id", "description", "type", "phase", "statusCode", "extensions"}
+CONSTRAINT_TYPE_FIELDS = {
+    "rateLimit": {"store", "max", "windowSeconds", "key"},
+    "operationPolicy": {"allowedOperations", "deniedOperations"},
+    "queryDateWindow": {"parameters", "required", "formats", "maxAgeDays", "allowFutureSkewSeconds"},
+    "queryNumericBounds": {"parameters", "required", "min", "max", "integer"},
+    "requestTimeWindow": {"timezone", "notBefore", "notAfter", "weekdays", "dailyWindows"},
+    "jsonBody": {"contentTypes", "allowedFields", "requiredFields", "deniedFields", "fields"},
+    "formBody": {"contentTypes", "allowedFields", "requiredFields", "deniedFields", "fields"},
+    "responseDateWindow": {
+        "required",
+        "formats",
+        "maxAgeDays",
+        "allowFutureSkewSeconds",
+        "items",
+        "dateFields",
+        "operations",
+    },
 }
 
 
@@ -184,6 +266,9 @@ def validate_policy_schema(raw: dict[str, Any]) -> None:
 def _path_template_to_regex(template: str) -> re.Pattern[str]:
     if not template.startswith("/"):
         raise PolicyBundleError(f"path template must start with /: {template}")
+    segments = template.strip("/").split("/") if template != "/" else []
+    if "**" in segments[:-1]:
+        raise PolicyBundleError(f"recursive wildcard must be the final path segment: {template}")
     if template.endswith("/**"):
         prefix = re.escape(template[:-3].rstrip("/"))
         return re.compile(rf"^{prefix}(?:/.*)?$")
@@ -203,6 +288,53 @@ def _path_template_to_regex(template: str) -> re.Pattern[str]:
             parts.append(re.escape(segment))
     body = "/".join(parts)
     return re.compile(rf"^/{body}/?$")
+
+
+def _path_specificity(template: str) -> tuple[int, ...]:
+    scores: list[int] = []
+    for segment in template.strip("/").split("/"):
+        if segment == "**":
+            scores.append(0)
+        elif segment == "*":
+            scores.append(1)
+        elif segment.startswith("{") and segment.endswith("}"):
+            scores.append(2)
+        else:
+            scores.append(3)
+    return tuple(scores)
+
+
+def _path_shape(template: str) -> tuple[str, ...]:
+    shape: list[str] = []
+    for segment in template.strip("/").split("/"):
+        if segment.startswith("{") and segment.endswith("}"):
+            shape.append("{}")
+        else:
+            shape.append(segment)
+    return tuple(shape)
+
+
+def _validate_safe_pattern(route_id: str, constraint_id: str, field: str, rule: dict[str, Any]) -> None:
+    pattern = rule.get("pattern")
+    if pattern is None:
+        return
+    pattern = str(pattern)
+    if len(pattern) > 256:
+        raise PolicyBundleError(f"route {route_id} constraint {constraint_id} field {field} pattern is too long")
+    if "maxLength" not in rule or int(rule["maxLength"]) > 4096:
+        raise PolicyBundleError(
+            f"route {route_id} constraint {constraint_id} field {field} pattern requires maxLength <= 4096"
+        )
+    if "(" in pattern or ")" in pattern or "|" in pattern or "(?" in pattern or re.search(r"\\[1-9]", pattern):
+        raise PolicyBundleError(
+            f"route {route_id} constraint {constraint_id} field {field} pattern uses unsupported regex constructs"
+        )
+    try:
+        re.compile(pattern)
+    except re.error as exc:
+        raise PolicyBundleError(
+            f"route {route_id} constraint {constraint_id} field {field} pattern is invalid"
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -305,6 +437,7 @@ class PrincipalPolicy:
 class CredentialPolicy:
     id: str
     provider: str = "generic"
+    provider_subject: str | None = None
     scopes: tuple[str, ...] = ()
     injection: dict[str, Any] = field(default_factory=dict)
 
@@ -326,11 +459,16 @@ class RoutePolicy:
     jit: dict[str, Any] = field(default_factory=dict)
 
     def match_path(self, path: str) -> dict[str, str] | None:
-        for regex in self.path_regexes:
+        candidate = self.match_path_with_specificity(path)
+        return candidate[0] if candidate else None
+
+    def match_path_with_specificity(self, path: str) -> tuple[dict[str, str], tuple[int, ...]] | None:
+        matches: list[tuple[dict[str, str], tuple[int, ...]]] = []
+        for template, regex in zip(self.path_templates, self.path_regexes, strict=True):
             match = regex.match(path)
             if match:
-                return match.groupdict()
-        return None
+                matches.append((match.groupdict(), _path_specificity(template)))
+        return max(matches, key=lambda item: item[1]) if matches else None
 
 
 @dataclass(frozen=True)
@@ -356,6 +494,7 @@ class PolicySnapshot:
     def match_route(self, scheme: str, host: str, port: int, method: str, path: str, principal_id: str) -> RouteMatch | None:
         normalized_host = host.lower().rstrip(".")
         normalized_method = method.upper()
+        matches: list[tuple[tuple[int, ...], RoutePolicy, dict[str, str]]] = []
         for route in self.routes:
             if route.scheme != scheme.lower():
                 continue
@@ -365,13 +504,21 @@ class PolicySnapshot:
                 continue
             if principal_id not in route.principals and "*" not in route.principals:
                 continue
-            params = route.match_path(path)
-            if params is None:
+            path_match = route.match_path_with_specificity(path)
+            if path_match is None:
                 continue
             if normalized_method not in route.methods:
                 continue
-            return RouteMatch(route=route, params=params)
-        return None
+            params, specificity = path_match
+            matches.append((specificity, route, params))
+        if not matches:
+            return None
+        best_specificity = max(item[0] for item in matches)
+        best = [item for item in matches if item[0] == best_specificity]
+        if len(best) != 1:
+            return None
+        _, route, params = best[0]
+        return RouteMatch(route=route, params=params)
 
 
 _SNAPSHOT_CACHE: tuple[float | None, PolicySnapshot | None] = (None, None)
@@ -390,6 +537,26 @@ def _load_raw_policy(path: Path) -> dict[str, Any]:
     if not isinstance(loaded, dict):
         raise PolicyBundleError("policy bundle must be an object")
     return loaded
+
+
+def _parse_policy_timestamp(value: Any) -> datetime | None:
+    if not isinstance(value, str) or re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
+        value,
+    ) is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc)
+
+
+def _parse_clock_minutes(value: Any) -> int | None:
+    if not isinstance(value, str) or re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value) is None:
+        return None
+    hour, minute = value.split(":", 1)
+    return int(hour) * 60 + int(minute)
 
 
 def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, Any], ...]:
@@ -411,6 +578,12 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
         constraint_type = str(constraint.get("type") or "")
         if constraint_type not in SUPPORTED_CONSTRAINTS:
             raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has unsupported type {constraint_type}")
+        irrelevant_fields = sorted(set(constraint) - CONSTRAINT_COMMON_FIELDS - CONSTRAINT_TYPE_FIELDS[constraint_type])
+        if irrelevant_fields:
+            raise PolicyBundleError(
+                f"route {route_id} constraint {constraint_id} type {constraint_type} has unsupported fields: "
+                f"{', '.join(irrelevant_fields)}"
+            )
         phase = constraint.get("phase", "request")
         expected_phase = "request" if constraint_type in REQUEST_CONSTRAINTS else "response"
         if phase != expected_phase:
@@ -421,11 +594,38 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
         store = constraint.get("store", "local")
         if store not in {"local", "shared"}:
             raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has invalid store {store}")
+        if constraint.get("operations") is not None and constraint_type != "responseDateWindow":
+            raise PolicyBundleError(
+                f"route {route_id} constraint {constraint_id} operations are supported only for responseDateWindow"
+            )
         if constraint_type == "rateLimit":
-            if int(constraint.get("max") or 0) < 1:
-                raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} must define max >= 1")
-            if int(constraint.get("windowSeconds") or 0) < 1:
-                raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} must define windowSeconds >= 1")
+            max_count = constraint.get("max")
+            window_seconds = constraint.get("windowSeconds")
+            if not isinstance(max_count, int) or isinstance(max_count, bool) or not 1 <= max_count <= 1_000_000_000:
+                raise PolicyBundleError(
+                    f"route {route_id} rateLimit {constraint_id} must define integer max between 1 and 1000000000"
+                )
+            if not isinstance(window_seconds, int) or isinstance(window_seconds, bool) or not 1 <= window_seconds <= 31_536_000:
+                raise PolicyBundleError(
+                    f"route {route_id} rateLimit {constraint_id} must define windowSeconds between 1 and 31536000"
+                )
+            raw_key_policy = constraint.get("key")
+            if raw_key_policy is not None and not isinstance(raw_key_policy, dict):
+                raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} key must be an object")
+            key_policy = raw_key_policy or {}
+            scope = key_policy.get("scope") or ["principal", "credential", "route", "operation"]
+            allowed_scope = {"principal", "credential", "credentialVersion", "route", "operation"}
+            if not isinstance(scope, list) or not scope or any(
+                not isinstance(item, str) or item not in allowed_scope for item in scope
+            ):
+                raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} has unsupported key scope")
+            operation_fields = key_policy.get("operationFields") or []
+            if not isinstance(operation_fields, list) or any(
+                not isinstance(field, str)
+                or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", field) is None
+                for field in operation_fields
+            ):
+                raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} has invalid operationFields")
         elif constraint_type == "operationPolicy":
             if not (constraint.get("allowedOperations") or constraint.get("deniedOperations")):
                 raise PolicyBundleError(
@@ -436,21 +636,367 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                 raise PolicyBundleError(f"route {route_id} {constraint_type} {constraint_id} must define parameters")
             if constraint_type == "queryDateWindow" and int(constraint.get("maxAgeDays") or 0) < 1:
                 raise PolicyBundleError(f"route {route_id} queryDateWindow {constraint_id} must define maxAgeDays >= 1")
-        elif constraint_type == "jsonBody":
-            if not (
-                constraint.get("allowedFields")
-                or constraint.get("requiredFields")
-                or constraint.get("deniedFields")
-                or constraint.get("fields")
+            if constraint_type == "queryDateWindow" and not constraint.get("formats"):
+                raise PolicyBundleError(f"route {route_id} queryDateWindow {constraint_id} must define formats")
+            if constraint_type == "queryDateWindow":
+                formats = constraint.get("formats")
+                allowed_formats = {"rfc3339", "date", "epochSeconds", "epochMillis"}
+                if (
+                    not isinstance(formats, list)
+                    or any(not isinstance(item, str) or item not in allowed_formats for item in formats)
+                    or len(formats) != len(set(formats))
+                ):
+                    raise PolicyBundleError(f"route {route_id} queryDateWindow {constraint_id} has invalid formats")
+            if constraint_type == "queryNumericBounds":
+                minimum = constraint.get("min")
+                maximum = constraint.get("max")
+                if minimum is None and maximum is None:
+                    raise PolicyBundleError(
+                        f"route {route_id} queryNumericBounds {constraint_id} must define min or max"
+                    )
+                if minimum is not None and maximum is not None and minimum > maximum:
+                    raise PolicyBundleError(
+                        f"route {route_id} queryNumericBounds {constraint_id} min must not exceed max"
+                    )
+        elif constraint_type == "requestTimeWindow":
+            if constraint.get("timezone") != "UTC":
+                raise PolicyBundleError(
+                    f"route {route_id} requestTimeWindow {constraint_id} must use timezone UTC"
+                )
+            if not any(constraint.get(field) for field in ("notBefore", "notAfter", "weekdays", "dailyWindows")):
+                raise PolicyBundleError(
+                    f"route {route_id} requestTimeWindow {constraint_id} must define at least one bound"
+                )
+            not_before = (
+                _parse_policy_timestamp(constraint.get("notBefore")) if constraint.get("notBefore") is not None else None
+            )
+            not_after = (
+                _parse_policy_timestamp(constraint.get("notAfter")) if constraint.get("notAfter") is not None else None
+            )
+            if constraint.get("notBefore") is not None and not_before is None:
+                raise PolicyBundleError(
+                    f"route {route_id} requestTimeWindow {constraint_id} notBefore must be RFC3339"
+                )
+            if constraint.get("notAfter") is not None and not_after is None:
+                raise PolicyBundleError(
+                    f"route {route_id} requestTimeWindow {constraint_id} notAfter must be RFC3339"
+                )
+            if not_before is not None and not_after is not None and not_before >= not_after:
+                raise PolicyBundleError(
+                    f"route {route_id} requestTimeWindow {constraint_id} notBefore must precede notAfter"
+                )
+            weekdays = constraint.get("weekdays")
+            allowed_weekdays = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+            if weekdays is not None and (
+                not isinstance(weekdays, list)
+                or not weekdays
+                or any(not isinstance(day, str) or day not in allowed_weekdays for day in weekdays)
+                or len(weekdays) != len(set(weekdays))
             ):
-                raise PolicyBundleError(f"route {route_id} jsonBody {constraint_id} must define at least one field rule")
+                raise PolicyBundleError(
+                    f"route {route_id} requestTimeWindow {constraint_id} has invalid weekdays"
+                )
+            daily_windows = constraint.get("dailyWindows")
+            if daily_windows is not None:
+                if not isinstance(daily_windows, list) or not daily_windows:
+                    raise PolicyBundleError(
+                        f"route {route_id} requestTimeWindow {constraint_id} has invalid dailyWindows"
+                    )
+                intervals: list[tuple[int, int]] = []
+                for window in daily_windows:
+                    if not isinstance(window, dict) or set(window) != {"start", "end"}:
+                        raise PolicyBundleError(
+                            f"route {route_id} requestTimeWindow {constraint_id} has invalid daily window"
+                        )
+                    start = _parse_clock_minutes(window.get("start"))
+                    end = _parse_clock_minutes(window.get("end"))
+                    if start is None or end is None or start >= end:
+                        raise PolicyBundleError(
+                            f"route {route_id} requestTimeWindow {constraint_id} daily windows must be increasing UTC times"
+                        )
+                    intervals.append((start, end))
+                intervals.sort()
+                if any(start < previous_end for (_, previous_end), (start, _) in zip(intervals, intervals[1:])):
+                    raise PolicyBundleError(
+                        f"route {route_id} requestTimeWindow {constraint_id} daily windows must not overlap"
+                    )
+        elif constraint_type in {"jsonBody", "formBody"}:
+            if not constraint.get("allowedFields"):
+                raise PolicyBundleError(
+                    f"route {route_id} {constraint_type} {constraint_id} must define non-empty allowedFields "
+                    "so unknown fields fail closed"
+                )
+            for field, rule in (constraint.get("fields") or {}).items():
+                if not isinstance(rule, dict):
+                    raise PolicyBundleError(
+                        f"route {route_id} {constraint_type} {constraint_id} field {field} rule must be an object"
+                    )
+                _validate_safe_pattern(route_id, constraint_id, str(field), rule)
         elif constraint_type == "responseDateWindow":
             if int(constraint.get("maxAgeDays") or 0) < 1:
                 raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} must define maxAgeDays >= 1")
             if not constraint.get("dateFields"):
                 raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} must define dateFields")
+            if not constraint.get("formats"):
+                raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} must define formats")
+            formats = constraint.get("formats")
+            allowed_formats = {"rfc3339", "date", "epochSeconds", "epochMillis"}
+            if (
+                not isinstance(formats, list)
+                or any(not isinstance(item, str) or item not in allowed_formats for item in formats)
+                or len(formats) != len(set(formats))
+            ):
+                raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} has invalid formats")
+            operations = constraint.get("operations")
+            if operations is not None and (
+                not isinstance(operations, list)
+                or not operations
+                or len(set(operations)) != len(operations)
+                or any(
+                    not isinstance(operation, str)
+                    or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", operation) is None
+                    for operation in operations
+                )
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} responseDateWindow {constraint_id} has invalid operations"
+                )
+        if constraint.get("extensions"):
+            raise PolicyBundleError(
+                f"route {route_id} constraint {constraint_id} declares unattested extensions"
+            )
         compiled.append(dict(constraint))
     return tuple(compiled)
+
+
+def _validate_response_body_limit(
+    route_id: str,
+    profile: dict[str, Any],
+    profile_name: str,
+    maximum: int,
+) -> None:
+    value = profile.get("maxBodyBytes")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value > maximum:
+        raise PolicyBundleError(
+            f"route {route_id} {profile_name} maxBodyBytes must be an integer between 1 and {maximum}"
+        )
+
+
+def _validate_response_field_paths(
+    route_id: str,
+    profile: dict[str, Any],
+    profile_name: str,
+) -> tuple[str, ...]:
+    fields = profile.get("allowedFields")
+    if (
+        not isinstance(fields, list)
+        or not fields
+        or len(fields) > 64
+        or any(
+            not isinstance(field, str)
+            or len(field) > 256
+            or RESPONSE_FIELD_PATH_RE.fullmatch(field) is None
+            for field in fields
+        )
+        or len(fields) != len(set(fields))
+    ):
+        raise PolicyBundleError(
+            f"route {route_id} {profile_name} must define 1-64 unique allowedFields using bounded dotted paths"
+        )
+    return tuple(fields)
+
+
+def _validate_response_headers(
+    route_id: str,
+    profile: dict[str, Any],
+    profile_name: str,
+) -> None:
+    headers = profile.get("allowedHeaders")
+    if not isinstance(headers, list) or len(headers) > len(SAFE_RESPONSE_HEADERS):
+        raise PolicyBundleError(f"route {route_id} {profile_name} must define bounded allowedHeaders")
+    if any(not isinstance(header, str) or header not in SAFE_RESPONSE_HEADERS for header in headers):
+        raise PolicyBundleError(
+            f"route {route_id} {profile_name} allowedHeaders must be lower-case safe response headers"
+        )
+    if len(headers) != len(set(headers)):
+        raise PolicyBundleError(f"route {route_id} {profile_name} allowedHeaders must be unique")
+
+
+def _validate_bounded_response_profiles(
+    route_id: str,
+    response: Any,
+    adapter_name: str,
+) -> tuple[str, ...]:
+    if not isinstance(response, dict):
+        raise PolicyBundleError(f"route {route_id} {adapter_name} policy must define response enforcement")
+    profile_name = f"{adapter_name} success response"
+    _validate_response_body_limit(route_id, response, profile_name, MAX_PROVIDER_RESPONSE_BODY_BYTES)
+    fields = _validate_response_field_paths(route_id, response, profile_name)
+    _validate_response_headers(route_id, response, profile_name)
+
+    error = response.get("error")
+    if not isinstance(error, dict):
+        raise PolicyBundleError(f"route {route_id} {adapter_name} policy must define an error response profile")
+    if error.get("mode") != "json":
+        raise PolicyBundleError(f"route {route_id} {adapter_name} error response mode must be json")
+    if error.get("onInvalid") != "block":
+        raise PolicyBundleError(f"route {route_id} {adapter_name} invalid error responses must block")
+    error_profile_name = f"{adapter_name} error response"
+    _validate_response_body_limit(route_id, error, error_profile_name, MAX_PROVIDER_ERROR_BODY_BYTES)
+    _validate_response_field_paths(route_id, error, error_profile_name)
+    _validate_response_headers(route_id, error, error_profile_name)
+    return fields
+
+
+def _validate_optional_response_release_contract(
+    route_id: str,
+    response: dict[str, Any],
+    adapter_name: str,
+) -> None:
+    if "allowedHeaders" in response:
+        _validate_response_headers(route_id, response, f"{adapter_name} success response")
+    error = response.get("error")
+    if error is None:
+        return
+    if not isinstance(error, dict) or error.get("mode") != "json" or error.get("onInvalid") != "block":
+        raise PolicyBundleError(
+            f"route {route_id} {adapter_name} error response must use bounded json and block on invalid"
+        )
+    _validate_response_body_limit(
+        route_id, error, f"{adapter_name} error response", MAX_PROVIDER_ERROR_BODY_BYTES
+    )
+    _validate_response_field_paths(route_id, error, f"{adapter_name} error response")
+    _validate_response_headers(route_id, error, f"{adapter_name} error response")
+
+
+def _validate_adapter_security_invariants(
+    route_id: str,
+    adapter_type: str,
+    adapter_config: dict[str, Any],
+    credential_ref: str | None,
+    jit: dict[str, Any],
+    methods: frozenset[str],
+    paths: tuple[str, ...],
+    constraints: tuple[dict[str, Any], ...],
+) -> None:
+    if adapter_type == "gmail.v1":
+        if not credential_ref:
+            raise PolicyBundleError(f"route {route_id} Gmail policy must bind a credential")
+        if adapter_config.get("forceQuery") is not True:
+            raise PolicyBundleError(f"route {route_id} Gmail policy must force the bounded age query")
+        if adapter_config.get("allowMessageGetOnlyFromPriorSearch") is not True:
+            raise PolicyBundleError(f"route {route_id} Gmail policy must require prior age proof for message reads")
+        for field_name in ("maxAgeDays", "maxResults", "cacheTtlSeconds"):
+            value = adapter_config.get(field_name)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+                raise PolicyBundleError(f"route {route_id} Gmail policy must define positive {field_name}")
+        response = adapter_config.get("response")
+        response_fields = _validate_bounded_response_profiles(route_id, response, "Gmail")
+        assert isinstance(response, dict)
+        if response.get("validateInternalDate") is not True:
+            raise PolicyBundleError(f"route {route_id} Gmail policy must validate response internalDate")
+        if not isinstance(response.get("validateListByMetadataFetch"), bool):
+            raise PolicyBundleError(
+                f"route {route_id} Gmail policy must explicitly configure list metadata age proof"
+            )
+        if response.get("onViolation") != "block":
+            raise PolicyBundleError(f"route {route_id} Gmail response violations must block")
+        message_header_names = response.get("allowedMessageHeaderNames")
+        if "payload.headers" in response_fields:
+            if (
+                not isinstance(message_header_names, list)
+                or not message_header_names
+                or len(message_header_names) > 64
+                or any(
+                    not isinstance(name, str)
+                    or not name
+                    or len(name) > 128
+                    or ":" in name
+                    or "\r" in name
+                    or "\n" in name
+                    for name in message_header_names
+                )
+                or len({name.lower() for name in message_header_names}) != len(message_header_names)
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} Gmail payload.headers requires 1-64 unique allowedMessageHeaderNames"
+                )
+        elif "allowedMessageHeaderNames" in response:
+            raise PolicyBundleError(
+                f"route {route_id} Gmail allowedMessageHeaderNames requires payload.headers in allowedFields"
+            )
+
+    if adapter_type == "x.v2":
+        if not credential_ref:
+            raise PolicyBundleError(f"route {route_id} X policy must bind a credential")
+        mode = adapter_config.get("mode")
+        allowed_reads = set(adapter_config.get("allowedReadOperations") or [])
+        response_mode = str((adapter_config.get("response") or {}).get("mode") or "")
+        if mode in {"readOnly", "recentSearchOnly"}:
+            if methods != {"GET"}:
+                raise PolicyBundleError(f"route {route_id} X read policy may only match GET")
+            if not allowed_reads:
+                raise PolicyBundleError(f"route {route_id} X read policy must allow explicit read operations")
+            if mode == "recentSearchOnly" and allowed_reads != {"search.read"}:
+                raise PolicyBundleError(
+                    f"route {route_id} X recent-search policy may only allow search.read"
+                )
+            if "streams.read" in allowed_reads:
+                if allowed_reads != {"streams.read"} or response_mode != "stream":
+                    raise PolicyBundleError(
+                        f"route {route_id} X streams require a dedicated stream-only route"
+                    )
+            elif response_mode == "stream":
+                raise PolicyBundleError(
+                    f"route {route_id} X bounded reads cannot use an unvalidated stream response"
+                )
+        elif mode == "controlledWrite":
+            if methods != {"POST"} or set(paths) != {"/2/tweets"}:
+                raise PolicyBundleError(
+                    f"route {route_id} controlled X writes currently support only POST /2/tweets"
+                )
+            operation_policies = [
+                set(constraint.get("allowedOperations") or [])
+                for constraint in constraints
+                if constraint.get("type") == "operationPolicy"
+            ]
+            if {"tweets.write"} not in operation_policies:
+                raise PolicyBundleError(
+                    f"route {route_id} controlled X post writes require a tweets.write operation allowlist"
+                )
+            if not any(constraint.get("type") == "jsonBody" for constraint in constraints):
+                raise PolicyBundleError(
+                    f"route {route_id} controlled X post writes require an explicit JSON body policy"
+                )
+            if response_mode == "stream":
+                raise PolicyBundleError(f"route {route_id} controlled X writes cannot stream responses")
+
+    if adapter_type == "npm.registry":
+        operations = set(adapter_config.get("operations") or [])
+        write_operations = operations.intersection({"publish", "distTagWrite", "tokenWrite", "metadataWrite"})
+        response = adapter_config.get("response")
+        _validate_bounded_response_profiles(route_id, response, "npm")
+        if not write_operations:
+            return
+        assert isinstance(response, dict)
+        if response.get("mode") != "json":
+            raise PolicyBundleError(f"route {route_id} npm writes require a bounded json success response")
+        authn = ((jit.get("approvers") or {}).get("authn") or {}) if isinstance(jit, dict) else {}
+        authenticator_classes = set(authn.get("allowedAuthenticatorClasses") or [])
+        if (
+            jit.get("required") is not True
+            or jit.get("mode") != "perOperation"
+            or jit.get("maxUses") != 1
+            or jit.get("consumeOn") != "forwardStart"
+            or authn.get("webauthnRequired") is not True
+            or authn.get("userVerification") != "required"
+            or authn.get("requireHardwareAttestation") is not True
+            or not authenticator_classes
+            or not authenticator_classes.issubset({"yubikey", "hardware"})
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} npm writes require one-use, hardware-attested WebAuthn JIT"
+            )
 
 
 def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False, validate_schema: bool = False) -> PolicySnapshot:
@@ -512,9 +1058,25 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
         credential_id = item["id"]
         if credential_id in credentials:
             raise PolicyBundleError(f"duplicate credential: {credential_id}")
+        provider = str(item.get("provider", "generic")).strip()
+        provider_subject = item.get("providerSubject")
+        if provider_subject is not None:
+            if (
+                not isinstance(provider_subject, str)
+                or not provider_subject
+                or provider_subject != provider_subject.strip()
+                or len(provider_subject) > 512
+                or any(ord(character) < 32 or ord(character) == 127 for character in provider_subject)
+            ):
+                raise PolicyBundleError(f"credential {credential_id} has an invalid provider subject")
+            if provider in {"", "generic"}:
+                raise PolicyBundleError(f"credential {credential_id} provider subject requires a concrete provider")
+        if provider.lower() in {"google", "google.oauth2", "x", "x.oauth2", "twitter"} and provider_subject is None:
+            raise PolicyBundleError(f"OAuth credential {credential_id} requires a signed provider subject")
         credentials[credential_id] = CredentialPolicy(
             id=credential_id,
-            provider=item.get("provider", "generic"),
+            provider=provider,
+            provider_subject=provider_subject,
             scopes=tuple(item.get("scopes") or ()),
             injection=dict(item.get("injection") or {"type": "bearer"}),
         )
@@ -539,19 +1101,73 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
         adapter_config = dict(adapter.get("config") or {})
         if adapter_type not in SUPPORTED_ADAPTERS:
             raise PolicyBundleError(f"route {route_id} uses unsupported adapter {adapter_type}")
+        if adapter_type != "gmail.v1":
+            response_config = adapter_config.get("response")
+            if not isinstance(response_config, dict):
+                raise PolicyBundleError(f"route {route_id} response policy missing")
+            response_mode = response_config.get("mode")
+            supported_modes = SUPPORTED_RESPONSE_MODES if adapter_type == "generic.rest" else BUFFERED_RESPONSE_MODES | {"stream"}
+            if not isinstance(response_mode, str) or response_mode not in supported_modes:
+                raise PolicyBundleError(f"route {route_id} response mode {response_mode!r} is unsupported")
+            max_response_bytes = response_config.get("maxBodyBytes")
+            if (
+                isinstance(max_response_bytes, bool)
+                or not isinstance(max_response_bytes, int)
+                or max_response_bytes < 0
+                or max_response_bytes > 16 * 1024 * 1024
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} response maxBodyBytes must be an integer between 0 and 16777216"
+                )
+            if adapter_type not in {"npm.registry"}:
+                _validate_optional_response_release_contract(
+                    route_id, response_config, adapter_type
+                )
+            if (
+                response_mode in STREAMING_RESPONSE_MODES
+                and response_config.get("allowedHeaders")
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} streaming responses cannot release upstream headers"
+                )
         credential_ref = item.get("credentialRef")
         if credential_ref and credential_ref not in credentials:
             raise PolicyBundleError(f"route {route_id} references unknown credential {credential_ref}")
-        if credential_ref and adapter_type == "generic.rest":
+        request_mode = str(((adapter_config.get("request") or {}).get("bodyMode") or ""))
+        response_mode = str(((adapter_config.get("response") or {}).get("mode") or ""))
+        if credential_ref and response_mode in {"any", "stream"}:
+            raise PolicyBundleError(
+                f"route {route_id} credential-bearing responses require projection or structured validation"
+            )
+        if (
+            credential_ref
+            and request_mode in STREAMING_RESPONSE_MODES
+            and not methods.issubset({"GET", "HEAD", "OPTIONS"})
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} credential-bearing mutating request streams must buffer before forwarding"
+            )
+        if adapter_type == "generic.rest":
             request_config = adapter_config.get("request") or {}
             response_config = adapter_config.get("response") or {}
             if not request_config or not response_config:
                 raise PolicyBundleError(
-                    f"route {route_id} uses credentialed generic.rest and must define request and response schemas"
+                    f"route {route_id} uses generic.rest and must define request and response schemas"
                 )
-            if "maxBodyBytes" not in request_config or "maxBodyBytes" not in response_config:
+            missing_request = sorted(
+                key for key in ("allowedHeaders", "allowedQueryKeys", "bodyMode", "maxBodyBytes") if key not in request_config
+            )
+            missing_response = sorted(key for key in ("mode", "maxBodyBytes") if key not in response_config)
+            if missing_request or missing_response:
                 raise PolicyBundleError(
-                    f"route {route_id} uses credentialed generic.rest and must define request/response maxBodyBytes"
+                    f"route {route_id} generic.rest policy is missing explicit controls: "
+                    f"request={missing_request} response={missing_response}"
+                )
+            allowed_headers = [str(item).strip().lower() for item in request_config.get("allowedHeaders") or []]
+            forbidden_headers = sorted(FORBIDDEN_AGENT_CREDENTIAL_HEADERS.intersection(allowed_headers))
+            if forbidden_headers:
+                raise PolicyBundleError(
+                    f"route {route_id} generic.rest allows credential headers supplied by the agent: {forbidden_headers}"
                 )
         route_principals = tuple(item.get("principals") or ())
         for principal_id in route_principals:
@@ -586,6 +1202,23 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             if authn.get("webauthnRequired") and not authn.get("allowedAuthenticatorClasses"):
                 raise PolicyBundleError(f"route {route_id} WebAuthn JIT policy must define allowed authenticator classes")
         constraints = _validate_constraints(route_id, item.get("constraints"))
+        _validate_adapter_security_invariants(
+            route_id,
+            adapter_type,
+            adapter_config,
+            credential_ref,
+            jit,
+            methods,
+            paths,
+            constraints,
+        )
+        response_mode = str((adapter_config.get("response") or {}).get("mode") or "")
+        if response_mode in STREAMING_RESPONSE_MODES and any(
+            constraint.get("phase", "request") == "response" for constraint in constraints
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} cannot stream a response that requires whole-response constraint validation"
+            )
 
         routes.append(
             RoutePolicy(
@@ -605,7 +1238,21 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             )
         )
 
-    routes.sort(key=lambda route: max(len(path) for path in route.path_templates), reverse=True)
+    for index, left in enumerate(routes):
+        for right in routes[index + 1 :]:
+            if (left.scheme, left.host, left.port) != (right.scheme, right.host, right.port):
+                continue
+            if not left.methods.intersection(right.methods):
+                continue
+            if not set(left.principals).intersection(right.principals) and "*" not in left.principals and "*" not in right.principals:
+                continue
+            for left_path in left.path_templates:
+                for right_path in right.path_templates:
+                    if _path_shape(left_path) == _path_shape(right_path) and _path_specificity(left_path) == _path_specificity(right_path):
+                        raise PolicyBundleError(
+                            f"routes {left.id} and {right.id} have ambiguous path templates {left_path} and {right_path}"
+                        )
+    routes.sort(key=lambda route: route.id)
     return PolicySnapshot(
         raw=raw,
         hash=policy_hash(raw),
@@ -634,11 +1281,82 @@ def get_policy_snapshot() -> PolicySnapshot | None:
     return snapshot
 
 
-def write_policy_bundle(raw: dict[str, Any], path: Path = POLICY_BUNDLE_PATH) -> PolicySnapshot:
+def enforce_policy_high_water(snapshot: PolicySnapshot) -> dict[str, Any]:
+    metadata = snapshot.raw.get("metadata")
+    if not isinstance(metadata, dict):
+        raise PolicyBundleError("policy metadata is missing")
+    policy_id = metadata.get("id")
+    sequence = metadata.get("sequence")
+    rollback_epoch = metadata.get("rollbackEpoch")
+    if not isinstance(policy_id, str) or not policy_id:
+        raise PolicyBundleError("policy metadata id is invalid")
+    if not isinstance(sequence, int) or isinstance(sequence, bool):
+        raise PolicyBundleError("policy metadata sequence is invalid")
+    if not isinstance(rollback_epoch, int) or isinstance(rollback_epoch, bool):
+        raise PolicyBundleError("policy metadata rollbackEpoch is invalid")
+    if sequence < POLICY_MIN_SEQUENCE:
+        raise PolicyBundleError(
+            f"policy sequence {sequence} is below configured floor {POLICY_MIN_SEQUENCE}"
+        )
+    if rollback_epoch < POLICY_MIN_ROLLBACK_EPOCH:
+        raise PolicyBundleError(
+            "policy rollbackEpoch "
+            f"{rollback_epoch} is below configured floor {POLICY_MIN_ROLLBACK_EPOCH}"
+        )
+    from serverware import db
+
+    try:
+        return db.advance_policy_high_water(
+            policy_id=policy_id,
+            sequence=sequence,
+            rollback_epoch=rollback_epoch,
+            policy_hash=snapshot.hash,
+        )
+    except db.MetadataStoreError as exc:
+        raise PolicyBundleError(f"policy rollback protection rejected bundle: {exc}") from exc
+
+
+def _atomic_write_policy(path: Path, payload: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temporary_path = Path(handle.name)
+            os.fchmod(handle.fileno(), 0o600)
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def write_policy_bundle(
+    raw: dict[str, Any],
+    path: Path = POLICY_BUNDLE_PATH,
+    *,
+    enforce_high_water: bool = False,
+) -> PolicySnapshot:
     ensure_data_dirs()
     signed = sign_policy_bundle(raw)
     snapshot = compile_policy_bundle(signed, verify_signature=True, validate_schema=True)
-    path.write_text(json.dumps(signed, indent=2, sort_keys=True) + "\n")
+    if enforce_high_water:
+        enforce_policy_high_water(snapshot)
+    _atomic_write_policy(path, json.dumps(signed, indent=2, sort_keys=True) + "\n")
     global _SNAPSHOT_CACHE
     _SNAPSHOT_CACHE = (path.stat().st_mtime, snapshot)
     return snapshot
@@ -717,8 +1435,8 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "type": "generic.rest",
                     "config": {
                         "request": {
-                            "allowedQueryKeys": [],
-                            "allowedHeaders": ["content-type"],
+                            "allowedQueryKeys": ["reflectCredential"],
+                            "allowedHeaders": ["accept", "content-type", "user-agent"],
                             "bodyMode": "any",
                             "maxBodyBytes": 65536,
                         },
@@ -731,7 +1449,8 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "query",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
+                                "credential_marker",
+                                "credential_reflection",
                             ],
                         },
                     },
@@ -747,13 +1466,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "methods": ["GET"],
                     "paths": ["/stream-bytes"],
                 },
-                "credentialRef": credential_id,
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
                         "request": {
-                            "allowedQueryKeys": ["chunks", "chunkSize"],
-                            "allowedHeaders": [],
+                            "allowedQueryKeys": ["chunks", "chunkSize", "reflectCredential"],
+                            "allowedHeaders": ["accept", "user-agent"],
                             "bodyMode": "none",
                             "maxBodyBytes": 0,
                         },
@@ -774,13 +1492,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "methods": ["POST"],
                     "paths": ["/upload-bytes"],
                 },
-                "credentialRef": credential_id,
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["content-type"],
+                            "allowedHeaders": ["accept", "content-type", "user-agent"],
                             "bodyMode": "stream",
                             "maxBodyBytes": 1048576,
                         },
@@ -792,7 +1509,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "path",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                                 "bytes",
                                 "sha256",
                             ],
@@ -810,13 +1526,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "methods": ["POST"],
                     "paths": ["/jsonl-redact"],
                 },
-                "credentialRef": credential_id,
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["content-type"],
+                            "allowedHeaders": ["accept", "content-type", "user-agent"],
                             "allowedFields": ["index", "kept", "nested.safe"],
                             "bodyMode": "jsonlStream",
                             "maxBodyBytes": 1048576,
@@ -833,7 +1548,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "sawSecret",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -849,13 +1563,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "methods": ["POST"],
                     "paths": ["/json-array-redact"],
                 },
-                "credentialRef": credential_id,
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["content-type"],
+                            "allowedHeaders": ["accept", "content-type", "user-agent"],
                             "allowedFields": ["index", "kept", "nested.safe"],
                             "bodyMode": "jsonArrayStream",
                             "maxBodyBytes": 1048576,
@@ -872,7 +1585,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "sawSecret",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -888,13 +1600,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "methods": ["POST"],
                     "paths": ["/json-sse-redact"],
                 },
-                "credentialRef": credential_id,
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["content-type"],
+                            "allowedHeaders": ["accept", "content-type", "user-agent"],
                             "allowedFields": ["index", "kept", "nested.safe"],
                             "bodyMode": "jsonSseStream",
                             "maxBodyBytes": 1048576,
@@ -913,7 +1624,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "sawSecret",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -929,13 +1639,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "methods": ["POST"],
                     "paths": ["/json-nested-redact"],
                 },
-                "credentialRef": credential_id,
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["content-type"],
+                            "allowedHeaders": ["accept", "content-type", "user-agent"],
                             "allowedFields": [
                                 "requestId",
                                 "profile.email",
@@ -962,7 +1671,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "sawSecret",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -978,13 +1686,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "methods": ["POST"],
                     "paths": ["/form-redact"],
                 },
-                "credentialRef": credential_id,
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["content-type"],
+                            "allowedHeaders": ["accept", "content-type", "user-agent"],
                             "allowedFields": ["kept", "safe"],
                             "bodyMode": "formUrlencodedStream",
                             "maxBodyBytes": 1048576,
@@ -1000,7 +1707,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "sawSecret",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -1016,13 +1722,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "methods": ["POST"],
                     "paths": ["/csv-redact"],
                 },
-                "credentialRef": credential_id,
                 "adapter": {
                     "type": "generic.rest",
                     "config": {
                         "request": {
                             "allowedQueryKeys": [],
-                            "allowedHeaders": ["content-type"],
+                            "allowedHeaders": ["accept", "content-type", "user-agent"],
                             "allowedFields": ["id", "public", "safe_note"],
                             "bodyMode": "csvStream",
                             "maxBodyBytes": 1048576,
@@ -1039,7 +1744,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "sawSecret",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -1071,6 +1775,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "response": {
                             "validateInternalDate": True,
                             "validateListByMetadataFetch": True,
+                            "maxBodyBytes": 1048576,
                             "allowedFields": [
                                 "id",
                                 "threadId",
@@ -1079,6 +1784,21 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "internalDate",
                                 "payload.headers",
                             ],
+                            "allowedHeaders": [],
+                            "allowedMessageHeaderNames": ["From", "Subject", "Date"],
+                            "error": {
+                                "mode": "json",
+                                "maxBodyBytes": 65536,
+                                "allowedFields": [
+                                    "error.code",
+                                    "error.status",
+                                    "error.message",
+                                    "error.errors.reason",
+                                    "error.errors.domain",
+                                ],
+                                "allowedHeaders": ["retry-after", "www-authenticate"],
+                                "onInvalid": "block",
+                            },
                             "onViolation": "block",
                         },
                     },
@@ -1089,11 +1809,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "type": "responseDateWindow",
                         "phase": "response",
                         "description": "List responses may only release message metadata proven to be inside the last 30 days.",
+                        "operations": ["gmail.messages.list"],
                         "items": ["messages"],
                         "dateFields": ["internalDate"],
                         "formats": ["epochMillis"],
                         "maxAgeDays": 30,
-                        "required": False,
+                        "required": True,
                     },
                 ],
             },
@@ -1122,7 +1843,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "data.text",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -1188,7 +1908,6 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "meta.result_count",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -1217,10 +1936,11 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "type": "responseDateWindow",
                         "phase": "response",
                         "description": "The upstream response must not contain tweets outside the same seven-day window.",
-                        "dateFields": ["data.created_at"],
+                        "items": ["data"],
+                        "dateFields": ["created_at"],
                         "formats": ["rfc3339", "date"],
                         "maxAgeDays": 7,
-                        "required": False,
+                        "required": True,
                     },
                 ],
             },
@@ -1231,7 +1951,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     "scheme": "https",
                     "host": "demo-upstream",
                     "port": 8443,
-                    "methods": ["GET", "POST", "DELETE"],
+                    "methods": ["GET"],
                     "paths": ["/2/**"],
                 },
                 "credentialRef": credential_id,
@@ -1241,16 +1961,21 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "mode": "readOnly",
                         "blockWrites": True,
                         "appIds": ["demo-x-app"],
-                        "allowedReadOperations": ["tweets.read"],
+                        "allowedReadOperations": sorted(X_V2_BOUNDED_READ_OPERATIONS),
                         "response": {
                             "mode": "json",
-                            "maxBodyBytes": 65536,
+                            "maxBodyBytes": 1048576,
                             "allowedFields": [
-                                "data.id",
-                                "data.text",
+                                "data",
+                                "includes",
+                                "meta",
+                                "errors",
+                                "title",
+                                "detail",
+                                "type",
+                                "status",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
                         },
                     },
@@ -1259,8 +1984,8 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     {
                         "id": "x-readonly-operation-allowlist",
                         "type": "operationPolicy",
-                        "description": "The broad X route remains read-only even if the method list is widened for compatibility.",
-                        "allowedOperations": ["tweets.read"],
+                        "description": "All currently cataloged bounded X reads are allowed; unknown and streaming endpoints remain blocked.",
+                        "allowedOperations": sorted(X_V2_BOUNDED_READ_OPERATIONS),
                     },
                 ],
             },
@@ -1289,8 +2014,15 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                                 "dist_tag_written",
                                 "authorization_present",
                                 "authorization_scheme",
-                                "authorization_sha256",
                             ],
+                            "allowedHeaders": [],
+                            "error": {
+                                "mode": "json",
+                                "maxBodyBytes": 65536,
+                                "allowedFields": ["error", "reason", "code"],
+                                "allowedHeaders": ["retry-after", "www-authenticate"],
+                                "onInvalid": "block",
+                            },
                         },
                     },
                 },
@@ -1320,6 +2052,8 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                             "method",
                             "authority",
                             "path",
+                            "query",
+                            "selectedHeaders",
                             "bodySha256",
                             "packageName",
                             "packageVersion",
@@ -1331,9 +2065,9 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "users": ["user:demo"],
                         "authn": {
                             "webauthnRequired": True,
-                            "userVerification": "discouraged",
-                            "allowedAuthenticatorClasses": ["dev"],
-                            "requireHardwareAttestation": False,
+                            "userVerification": "required",
+                            "allowedAuthenticatorClasses": ["yubikey", "hardware"],
+                            "requireHardwareAttestation": True,
                         },
                     },
                 },

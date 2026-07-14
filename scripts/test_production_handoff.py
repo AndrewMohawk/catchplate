@@ -91,14 +91,20 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
                     "service": "serverware-decision-gate",
                     "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
                     "image_id": digest("b"),
+                    "binary_digest": digest("9"),
                 },
             ],
             "no_shell": {"ok": True, "results": [{"ok": True}, {"ok": True}]},
         },
     )
     provenance_payload = {
+        "source": "serverware-digest-pinned-production-release",
         "source_tree": {"digest": source_tree_digest},
         "compose_config_sha256": digest("c"),
+        "compose": {
+            "file": "docker-compose.production.yml",
+            "sha256": digest("c"),
+        },
         "sbom": {"cyclonedx": {"sha256": digest("d"), "components": 204}},
     }
     release_key = release_key_info()
@@ -240,6 +246,11 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             "p50_ms": 1.0,
             "p95_ms": 2.0,
             "p99_ms": p99_ms,
+            "data_plane_binary_digest": digest("9"),
+            "policy_hash": digest("8"),
+            "runtime_manifest_digest": digest("7"),
+            "attestation_nonce_before": "benchmark-nonce-before",
+            "attestation_nonce_after": "benchmark-nonce-after",
         },
     )
     images_env.write_text("SERVERWARE_PRODUCTION_IMAGES=" + ",".join([control_ref, gate_ref]) + "\n", encoding="utf-8")
@@ -256,14 +267,18 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
                     "local_image_id": digest("a"),
                     "tag": "registry.prod.serverware.dev/serverware/control:production-candidate",
                     "repo_digest": control_ref,
+                    "remote_image_id": digest("c"),
                 },
                 {
                     "service": "serverware-decision-gate",
                     "local_image_id": digest("b"),
                     "tag": "registry.prod.serverware.dev/serverware/decision-gate:production-candidate",
                     "repo_digest": gate_ref,
+                    "remote_image_id": digest("d"),
+                    "binary_digest": digest("9"),
                 },
             ],
+            "remote_no_shell": {"ok": True},
             "env": {"SERVERWARE_PRODUCTION_IMAGES": ",".join([control_ref, gate_ref])},
         },
     )
@@ -361,10 +376,10 @@ def main() -> None:
         required_order = [
             "build-production-images",
             "decision-gate-bench-evidence",
-            "release-provenance",
             "publish-production-images",
-            "sign-production-images",
             "merge-production-images-env",
+            "production-release-provenance",
+            "sign-production-images",
             "prepare-aws-kms-materials",
             "production-host-preflight",
             "run-production-readiness",

@@ -35,6 +35,7 @@ fi
 
 abs_work_dir="$(cd "$WORK_DIR" && pwd)"
 if docker run --rm \
+  -e SERVERWARE_RELEASE_CHANNEL=test \
   -e SERVERWARE_POLICY_BUNDLE=/policy/policy-tampered.json \
   -e SERVERWARE_POLICY_SIGNING_PUBLIC_KEY=/policy/policy-signing-ed25519.pub.pem \
   -v "$abs_work_dir:/policy:ro" \
@@ -52,6 +53,7 @@ if ! grep -qi "policy signature verification failed" "$WORK_DIR/tampered.err"; t
 fi
 
 if docker run --rm \
+  -e SERVERWARE_RELEASE_CHANNEL=test \
   -e SERVERWARE_POLICY_BUNDLE=/policy/policy-valid.json \
   -e SERVERWARE_POLICY_SIGNING_PUBLIC_KEY=/policy/policy-signing-ed25519.pub.pem \
   -e SERVERWARE_EXPECTED_POLICY_SIGNING_KEY_ID=sha256:0000000000000000000000000000000000000000000000000000000000000000 \

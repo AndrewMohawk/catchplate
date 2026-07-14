@@ -25,17 +25,21 @@ class ServerwareAddon:
             json.dumps({"error": "unknown_connect_denied", "host": host, "port": port}).encode("utf-8"),
             {"Content-Type": "application/json"},
         )
+        flow.metadata["serverware_blocked_response"] = True
         runtime.log_request(None, "CONNECT", f"{host}:{port}", "blocked", 403, "unknown CONNECT denied")
 
     def request(self, flow: http.HTTPFlow) -> None:
         evaluation = evaluate_request(flow)
         decision = evaluation.decision
         if not decision.allowed:
+            flow.metadata["serverware_blocked_response"] = True
             flow.response = http.Response.make(
                 decision.status_code,
                 json.dumps(decision.payload or {"error": decision.reason}).encode("utf-8"),
                 {"Content-Type": "application/json"},
             )
+        else:
+            flow.metadata.pop("serverware_blocked_response", None)
 
     def response(self, flow: http.HTTPFlow) -> None:
         decision = evaluate_response(flow)

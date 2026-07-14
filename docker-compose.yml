@@ -27,6 +27,7 @@ services:
       SERVERWARE_AUDIT_ANCHOR_URL: http://audit-anchor:9100/anchors
       SERVERWARE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
       SERVERWARE_AUDIT_ANCHOR_INTERVAL_SECONDS: "0.5"
+      SERVERWARE_AUDIT_ANCHOR_TIMEOUT_SECONDS: "30"
       SERVERWARE_AUDIT_STORE_BACKEND: postgres
       SERVERWARE_AUDIT_STORE_POSTGRES_DSN: postgresql://serverware:serverware@grant-store:5432/serverware
       SERVERWARE_METADATA_STORE_BACKEND: postgres
@@ -39,7 +40,7 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:e3e042e99c86156d4a8ee7a5453321d7626571589e2c846d963a7e8557a047e6
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:736c67df41a8590d30033e82bfdf4261bfec6d3bf4f3a186c34358c60e4925e3
     ports:
       - "3000:3000"
     volumes:
@@ -170,12 +171,13 @@ services:
     environment:
       SERVERWARE_POLICY_BUNDLE: /data/policy-bundle.json
       SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL: http://serverware:3000/attestation
-      SERVERWARE_CREDENTIAL_GENERATIONS: /data/credential-generations.json
-      SERVERWARE_CREDENTIAL_LEASES: /data/credential-leases.json
+      SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL: http://serverware:3000/api/data-plane/credential-leases
+      SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES: "1"
+      SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_UPSTREAM_CA_BUNDLE: /data/demo-upstream/ca.pem
       SERVERWARE_MITM_CA_CERT: /data/decision-gate-ca-cert.pem
       SERVERWARE_MITM_CA_KEY: /data/decision-gate-ca-key.pem
-      SERVERWARE_CREDENTIAL_GENERATION_POLL_SECONDS: "0.25"
+      SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS: "0.25"
       SERVERWARE_POLICY_POLL_SECONDS: "0.25"
       SERVERWARE_CONTROL_PLANE_AUDIT_URL: http://serverware:3000/api/data-plane/audit
       SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL: http://serverware:3000/api/data-plane/grants/consume
@@ -187,6 +189,8 @@ services:
       SERVERWARE_DECISION_GATE_MANAGEMENT_PORT: "9091"
       SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
       SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
+      SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND: /usr/local/bin/serverware-response-proof-fixture
+      SERVERWARE_DATA_PLANE_INSTANCE_ID: spiffe://development.serverware/decision-gate/local
     ports:
       - "8080:9090"
       - "9090:9090"

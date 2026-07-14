@@ -6,6 +6,7 @@ import json
 import os
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +51,9 @@ def main() -> None:
         user_id = "user:incident-commander"
         identity = AdminIdentity(user_id, frozenset({"approver"}), "admin-token-header")
         webauthn.create_dev_credential(user_id)
-        request_digest = "sha256:" + hashlib.sha256(b"break-glass-request").hexdigest()
-        operation_digest = "sha256:" + hashlib.sha256(b"break-glass-operation").hexdigest()
+        run_id = uuid.uuid4().hex
+        request_digest = "sha256:" + hashlib.sha256(f"break-glass-request:{run_id}".encode()).hexdigest()
+        operation_digest = "sha256:" + hashlib.sha256(f"break-glass-operation:{run_id}".encode()).hexdigest()
         payload = app_module.BreakGlassGrantRequest(
             principalId="agent:demo",
             routeId="demo.echo",
@@ -83,7 +85,7 @@ def main() -> None:
         if break_event["event"].get("control_plane_mfa", {}).get("method") != "webauthn":
             raise AssertionError(f"break-glass audit did not include WebAuthn evidence: {break_event}")
 
-        consumed = db.consume_jit_grant_result(
+        grant_lookup = dict(
             principal_id=payload.principal_id,
             route_id=payload.route_id,
             credential_id=payload.credential_id,
@@ -91,19 +93,21 @@ def main() -> None:
             policy_hash=payload.policy_hash,
             request_digest=payload.request_digest,
             operation_digest=payload.operation_digest,
-            flow_id="break-glass-flow-1",
+        )
+        available = db.find_jit_grant_result(**grant_lookup)
+        still_available = db.find_jit_grant_result(**grant_lookup)
+        if available.get("available") is not True or still_available.get("available") is not True:
+            raise AssertionError(f"non-consuming grant availability check changed the grant: {available} {still_available}")
+
+        consumed = db.consume_jit_grant_result(
+            **grant_lookup,
+            flow_id=f"break-glass-flow-1:{run_id}",
         )
         if consumed.get("consumed") is not True:
             raise AssertionError(f"break-glass grant was not consumable through JIT machinery: {consumed}")
         reused = db.consume_jit_grant_result(
-            principal_id=payload.principal_id,
-            route_id=payload.route_id,
-            credential_id=payload.credential_id,
-            credential_version=payload.credential_version,
-            policy_hash=payload.policy_hash,
-            request_digest=payload.request_digest,
-            operation_digest=payload.operation_digest,
-            flow_id="break-glass-flow-2",
+            **grant_lookup,
+            flow_id=f"break-glass-flow-2:{run_id}",
         )
         if reused.get("consumed") is True:
             raise AssertionError(f"one-use break-glass grant was reusable: {reused}")

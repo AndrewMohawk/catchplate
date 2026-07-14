@@ -10,6 +10,10 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import cbor2
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+
 
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -36,7 +40,14 @@ def request_without_digest(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def kms_request() -> dict[str, Any]:
-    raw_attestation = b"fixture-raw-nitro-attestation-document"
+    recipient_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    recipient_public_key_der = recipient_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    raw_attestation = cbor2.dumps(
+        cbor2.CBORTag(18, [b"", {}, cbor2.dumps({"public_key": recipient_public_key_der}), b""])
+    )
     tee = {
         "provider": "aws-nitro-enclaves",
         "tee_platform": "aws-nitro",
@@ -46,6 +57,9 @@ def kms_request() -> dict[str, Any]:
         "pcrs": {"0": "11" * 48, "1": "22" * 48},
         "raw_attestation_document_b64": b64url_e(raw_attestation),
         "raw_attestation_document_sha256": sha256_prefixed(raw_attestation),
+        "recipient_public_key_sha256": sha256_prefixed(recipient_public_key_der),
+        "recipient_public_key_algorithm": "RSAES_OAEP_SHA_256",
+        "recipient_public_key_bits": 2048,
     }
     claims = {
         "nonce": "kms-recipient-test",
@@ -118,7 +132,7 @@ def run_adapter(payload: dict[str, Any], materials_file: Path, aws_binary: Path,
             "--materials-file",
             str(materials_file),
             "--aws-binary",
-            str(aws_binary),
+            f"{sys.executable} {aws_binary}",
             "--region",
             "us-east-1",
         ],
@@ -171,8 +185,18 @@ def main() -> None:
             raise AssertionError(f"AWS KMS adapter did not bind request digest: {output}")
         if not ((output.get("key_provider") or {}).get("key_id")):
             raise AssertionError(f"AWS KMS adapter did not bind key identity: {output}")
-        if "recipient_ciphertext_sha256" not in output or "ciphertext_blob_sha256" not in output or "Plaintext" in canonical_json(output):
+        if (
+            "recipient_ciphertext_sha256" not in output
+            or "recipient_ciphertext_b64" not in output
+            or "recipient_public_key_sha256" not in output
+            or "ciphertext_blob_sha256" not in output
+            or "Plaintext" in canonical_json(output)
+        ):
             raise AssertionError(f"AWS KMS adapter leaked or omitted material evidence: {output}")
+        if base64.b64decode(output["recipient_ciphertext_b64"], validate=True) != b"recipient-ciphertext":
+            raise AssertionError(f"AWS KMS adapter did not retain CiphertextForRecipient: {output}")
+        if output.get("recipient_public_key_sha256") != payload["tee"]["recipient_public_key_sha256"]:
+            raise AssertionError(f"AWS KMS adapter did not bind the attested recipient key: {output}")
         if output.get("ciphertext_blob_sha256") != sha256_prefixed(b"kms-encrypted-dek"):
             raise AssertionError(f"AWS KMS adapter did not bind the input ciphertext digest: {output}")
         if output.get("encryption_context_sha256") != sha256_prefixed(canonical_json({"material": "decision-gate-ca", "service": "serverware"}).encode("utf-8")):
@@ -207,6 +231,14 @@ def main() -> None:
         missing_doc["claims"]["tee"].pop("raw_attestation_document_b64", None)
         missing_doc["request_digest"] = sha256_prefixed(canonical_json(request_without_digest(missing_doc)).encode("utf-8"))
         expect_failure(missing_doc, materials_file, aws, "raw_attestation_document_b64")
+
+        wrong_recipient = json.loads(json.dumps(payload))
+        wrong_recipient["tee"]["recipient_public_key_sha256"] = "sha256:" + "0" * 64
+        wrong_recipient["claims"]["tee"]["recipient_public_key_sha256"] = "sha256:" + "0" * 64
+        wrong_recipient["request_digest"] = sha256_prefixed(
+            canonical_json(request_without_digest(wrong_recipient)).encode("utf-8")
+        )
+        expect_failure(wrong_recipient, materials_file, aws, "recipient public key digest mismatch")
 
         expect_failure(payload, materials_file, aws, "plaintext material", {"SERVERWARE_FAKE_AWS_PLAINTEXT": "1"})
 

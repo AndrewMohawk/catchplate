@@ -9,7 +9,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import cbor2
+from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
@@ -23,6 +26,30 @@ def sha256_prefixed(value: bytes) -> str:
 
 def b64e(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def b64d(value: str) -> bytes:
+    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def recipient_public_key(tee: dict[str, Any]) -> tuple[rsa.RSAPublicKey, bytes, bytes]:
+    raw_b64 = tee.get("raw_attestation_document_b64")
+    if not isinstance(raw_b64, str) or not raw_b64:
+        raise SystemExit("fixture release request is missing the raw attestation document")
+    raw = b64d(raw_b64)
+    cose = cbor2.loads(raw)
+    if isinstance(cose, cbor2.CBORTag):
+        cose = cose.value
+    if not isinstance(cose, list) or len(cose) != 4 or not isinstance(cose[2], bytes):
+        raise SystemExit("fixture release request has an invalid attestation document")
+    document = cbor2.loads(cose[2])
+    public_key_der = document.get("public_key") if isinstance(document, dict) else None
+    if not isinstance(public_key_der, bytes):
+        raise SystemExit("fixture release request attestation is missing public_key")
+    public_key = serialization.load_der_public_key(public_key_der)
+    if not isinstance(public_key, rsa.RSAPublicKey):
+        raise SystemExit("fixture recipient public key must be RSA")
+    return public_key, public_key_der, raw
 
 
 def read_stdin() -> dict[str, Any]:
@@ -96,7 +123,13 @@ def release() -> None:
         raise SystemExit("request digest mismatch")
     key = load_key()
     info = key_info(key)
-    handle = sha256_prefixed(canonical_json({"material": material, "claims": claims, "tee": tee}).encode("utf-8"))
+    public_key, public_key_der, raw_attestation = recipient_public_key(tee)
+    fixture_material = (b"fixture-broker-kek-32-byte-key!!" if material == "broker-kek" else b"fixture-decision-gate-ca-key")
+    recipient_ciphertext = public_key.encrypt(
+        fixture_material,
+        padding.OAEP(mgf=padding.MGF1(algorithm=hashes.SHA256()), algorithm=hashes.SHA256(), label=None),
+    )
+    handle = sha256_prefixed(recipient_ciphertext)
     response = {
         "ok": True,
         "provider": "fixture-kms-hsm",
@@ -104,6 +137,13 @@ def release() -> None:
         "request_digest": payload["request_digest"],
         "release_handle": payload.get("release_handle"),
         "material_handle": handle,
+        "ciphertext_blob_sha256": sha256_prefixed(f"fixture-kms-ciphertext:{material}".encode("utf-8")),
+        "recipient_ciphertext_b64": base64.b64encode(recipient_ciphertext).decode("ascii"),
+        "recipient_ciphertext_sha256": handle,
+        "recipient_public_key_sha256": sha256_prefixed(public_key_der),
+        "recipient_public_key_algorithm": "RSAES_OAEP_SHA_256",
+        "recipient_public_key_bits": public_key.key_size,
+        "attestation_document_sha256": sha256_prefixed(raw_attestation),
         "key_provider": {
             "type": "fixture-hsm",
             "key_id": info["key_id"],

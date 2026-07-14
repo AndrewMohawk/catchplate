@@ -46,12 +46,13 @@ import os
 import time
 
 from serverware.config import POLICY_BUNDLE_PATH
-from serverware.policy_bundle import demo_policy_bundle, write_policy_bundle
+from serverware.policy_bundle import demo_policy_bundle, get_policy_snapshot, write_policy_bundle
 
 bundle = demo_policy_bundle("cred-demo-bearer")
-bundle["metadata"]["sequence"] = 101
+current = get_policy_snapshot()
+bundle["metadata"]["sequence"] = int(current.raw["metadata"]["sequence"]) + 1
 bundle["routes"] = [route for route in bundle["routes"] if route["id"] != "demo.echo"]
-snapshot = write_policy_bundle(bundle)
+snapshot = write_policy_bundle(bundle, enforce_high_water=True)
 now = time.time()
 os.utime(POLICY_BUNDLE_PATH, (now, now))
 print(snapshot.hash)
@@ -122,10 +123,11 @@ import os
 import time
 
 from serverware.config import POLICY_BUNDLE_PATH
-from serverware.policy_bundle import demo_policy_bundle, policy_hash, sign_policy_bundle
+from serverware.policy_bundle import demo_policy_bundle, get_policy_snapshot, policy_hash, sign_policy_bundle
 
 bundle = demo_policy_bundle("cred-demo-bearer")
-bundle["metadata"]["sequence"] = 102
+current = get_policy_snapshot()
+bundle["metadata"]["sequence"] = int(current.raw["metadata"]["sequence"]) + 1
 jit_route = next(route for route in bundle["routes"] if route["id"] == "demo.npm.publish.jit")
 jit_route["jit"]["approvers"]["quorum"] = 2
 signed = sign_policy_bundle(bundle)
@@ -274,11 +276,12 @@ import os
 import time
 
 from serverware.config import POLICY_BUNDLE_PATH
+from serverware import db
 from serverware.policy_bundle import demo_policy_bundle, write_policy_bundle
 
 bundle = demo_policy_bundle("cred-demo-bearer")
-bundle["metadata"]["sequence"] = 103
-snapshot = write_policy_bundle(bundle)
+bundle["metadata"]["sequence"] = int(db.get_policy_high_water()["sequence"]) + 1
+snapshot = write_policy_bundle(bundle, enforce_high_water=True)
 now = time.time()
 os.utime(POLICY_BUNDLE_PATH, (now, now))
 print(snapshot.hash)

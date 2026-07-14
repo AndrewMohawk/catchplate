@@ -3,20 +3,28 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import platform
+import shlex
 import stat
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from cryptography import x509
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import generate_production_handoff as handoff  # noqa: E402
+import generate_release_provenance  # noqa: E402
 import merge_production_images_env  # noqa: E402
 import prepare_aws_kms_materials  # noqa: E402
 import run_production_readiness  # noqa: E402
@@ -84,6 +92,267 @@ def host_check(*, skip_host_check: bool) -> tuple[dict[str, Any], list[str]]:
                 failures.append(message)
     status["ok"] = not failures
     return status, failures
+
+
+def runtime_trust_materials_check(
+    env: dict[str, str],
+    *,
+    skip_host_check: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    tls_dir = Path(env.get("SERVERWARE_CONTROL_PLANE_TLS_DIR", ""))
+    anchor_tls_dir = Path(env.get("SERVERWARE_AUDIT_ANCHOR_TLS_DIR", ""))
+    helper_dir = Path(env.get("SERVERWARE_ATTESTATION_HELPER_DIR", ""))
+    status: dict[str, Any] = {
+        "ok": False,
+        "skipped": skip_host_check,
+        "tls_dir": str(tls_dir),
+        "anchor_tls_dir": str(anchor_tls_dir),
+        "helper_dir": str(helper_dir),
+        "tls_files": [],
+        "helper_files": [],
+        "anchor_tls_files": [],
+        "proof_files": [],
+        "proof_collector_files": [],
+        "secret_values_redacted": True,
+    }
+    if skip_host_check:
+        status["ok"] = True
+        return status, []
+
+    failures: list[str] = []
+    tls_files = {
+        "certificate": tls_dir / "serverware.crt",
+        "private_key": tls_dir / "serverware.key",
+        "ca_bundle": tls_dir / "ca.pem",
+    }
+    for label, path in tls_files.items():
+        if not path.is_file() or path.stat().st_size == 0:
+            failures.append(f"control-plane TLS {label} is missing or empty: {path}")
+        else:
+            status["tls_files"].append(path.name)
+
+    key_path = tls_files["private_key"]
+    if key_path.is_file():
+        key_mode = stat.S_IMODE(key_path.stat().st_mode)
+        status["private_key_mode"] = oct(key_mode)
+        if key_mode & 0o077:
+            failures.append("control-plane TLS private key must not be readable or writable by group/other")
+
+    if all(path.is_file() and path.stat().st_size > 0 for path in tls_files.values()):
+        try:
+            certificate = x509.load_pem_x509_certificate(tls_files["certificate"].read_bytes())
+            private_key = serialization.load_pem_private_key(tls_files["private_key"].read_bytes(), password=None)
+            cert_public = certificate.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            key_public = private_key.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            if cert_public != key_public:
+                failures.append("control-plane TLS certificate does not match its private key")
+            now = datetime.now(timezone.utc)
+            if not (certificate.not_valid_before_utc <= now < certificate.not_valid_after_utc):
+                failures.append("control-plane TLS certificate is not currently valid")
+            try:
+                dns_names = certificate.extensions.get_extension_for_class(
+                    x509.SubjectAlternativeName
+                ).value.get_values_for_type(x509.DNSName)
+            except x509.ExtensionNotFound:
+                dns_names = []
+            status["certificate_dns_names"] = sorted(dns_names)
+            if "serverware" not in dns_names:
+                failures.append("control-plane TLS certificate must include the internal DNS SAN serverware")
+            issuers = x509.load_pem_x509_certificates(tls_files["ca_bundle"].read_bytes())
+            if not issuers:
+                failures.append("control-plane TLS CA bundle contains no certificates")
+            elif not any(_directly_issued_by(certificate, issuer) for issuer in issuers):
+                failures.append("control-plane TLS certificate is not directly issued by the supplied CA bundle")
+            status["certificate_not_after"] = certificate.not_valid_after_utc.isoformat()
+            status["ca_certificates"] = len(issuers)
+        except Exception as exc:
+            failures.append(f"control-plane TLS material is invalid: {exc}")
+
+    anchor_tls_files = {
+        "certificate": anchor_tls_dir / "audit-anchor.crt",
+        "private_key": anchor_tls_dir / "audit-anchor.key",
+    }
+    for label, path in anchor_tls_files.items():
+        if not path.is_file() or path.stat().st_size == 0:
+            failures.append(f"audit-anchor TLS {label} is missing or empty: {path}")
+        else:
+            status["anchor_tls_files"].append(path.name)
+    anchor_key_path = anchor_tls_files["private_key"]
+    if anchor_key_path.is_file():
+        anchor_key_mode = stat.S_IMODE(anchor_key_path.stat().st_mode)
+        status["anchor_private_key_mode"] = oct(anchor_key_mode)
+        if anchor_key_mode & 0o077:
+            failures.append("audit-anchor TLS private key must not be readable or writable by group/other")
+    if all(path.is_file() and path.stat().st_size > 0 for path in anchor_tls_files.values()):
+        try:
+            certificate = x509.load_pem_x509_certificate(anchor_tls_files["certificate"].read_bytes())
+            private_key = serialization.load_pem_private_key(anchor_tls_files["private_key"].read_bytes(), password=None)
+            cert_public = certificate.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            key_public = private_key.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            if cert_public != key_public:
+                failures.append("audit-anchor TLS certificate does not match its private key")
+            now = datetime.now(timezone.utc)
+            if not (certificate.not_valid_before_utc <= now < certificate.not_valid_after_utc):
+                failures.append("audit-anchor TLS certificate is not currently valid")
+            try:
+                dns_names = certificate.extensions.get_extension_for_class(
+                    x509.SubjectAlternativeName
+                ).value.get_values_for_type(x509.DNSName)
+            except x509.ExtensionNotFound:
+                dns_names = []
+            status["anchor_certificate_dns_names"] = sorted(dns_names)
+            if "audit-anchor" not in dns_names:
+                failures.append("audit-anchor TLS certificate must include the internal DNS SAN audit-anchor")
+            if tls_files["ca_bundle"].is_file():
+                issuers = x509.load_pem_x509_certificates(tls_files["ca_bundle"].read_bytes())
+                if not any(_directly_issued_by(certificate, issuer) for issuer in issuers):
+                    failures.append("audit-anchor TLS certificate is not directly issued by the control-plane CA bundle")
+            status["anchor_certificate_not_after"] = certificate.not_valid_after_utc.isoformat()
+        except Exception as exc:
+            failures.append(f"audit-anchor TLS material is invalid: {exc}")
+
+    helper_settings = (
+        "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE",
+        "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
+        "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
+        "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
+        "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
+        "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+    )
+    for name in helper_settings:
+        try:
+            words = shlex.split(env.get(name, ""))
+        except ValueError:
+            words = []
+        if not words or not Path(words[0]).is_absolute() or Path(words[0]).parent != Path("/opt/serverware/bin"):
+            failures.append(f"{name} must name an absolute executable under /opt/serverware/bin")
+            continue
+        host_path = helper_dir / Path(words[0]).name
+        if not host_path.is_file() or not os.access(host_path, os.X_OK):
+            failures.append(f"attestation helper is missing or not executable: {host_path}")
+            continue
+        helper_mode = stat.S_IMODE(host_path.stat().st_mode)
+        if helper_mode & 0o022:
+            failures.append(f"attestation helper must not be writable by group/other: {host_path}")
+        status["helper_files"].append(host_path.name)
+
+    try:
+        collector_words = shlex.split(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND", ""))
+    except ValueError:
+        collector_words = []
+    if (
+        len(collector_words) != 1
+        or not Path(collector_words[0]).is_absolute()
+        or Path(collector_words[0]).parent != Path("/opt/serverware/bin")
+    ):
+        failures.append("SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND must name one absolute executable under /opt/serverware/bin")
+    else:
+        collector_path = helper_dir / Path(collector_words[0]).name
+        if not collector_path.is_file() or not os.access(collector_path, os.X_OK):
+            failures.append(f"response-proof collector is missing or not executable: {collector_path}")
+        else:
+            collector_mode = stat.S_IMODE(collector_path.stat().st_mode)
+            if collector_mode & 0o022:
+                failures.append(f"response-proof collector must not be writable by group/other: {collector_path}")
+            status["proof_collector_files"].append(collector_path.name)
+
+    proof_paths = {
+        "ca_bundle": Path(env.get("SERVERWARE_PROXY_PROOF_CA_BUNDLE", "")),
+        "collector_private_key": Path(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY", "")),
+        "collector_public_key": Path(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY", "")),
+        "verifier_public_key": Path(env.get("SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY", "")),
+    }
+    for label, path in proof_paths.items():
+        if not path.is_file() or path.stat().st_size == 0:
+            failures.append(f"response-proof {label} is missing or empty: {path}")
+        else:
+            status["proof_files"].append(path.name)
+    collector_private_path = proof_paths["collector_private_key"]
+    if collector_private_path.is_file():
+        private_mode = stat.S_IMODE(collector_private_path.stat().st_mode)
+        status["proof_collector_private_key_mode"] = oct(private_mode)
+        if private_mode & 0o077:
+            failures.append("response-proof collector private key must not be readable or writable by group/other")
+    for label in ("collector_public_key", "verifier_public_key", "ca_bundle"):
+        path = proof_paths[label]
+        if path.is_file() and stat.S_IMODE(path.stat().st_mode) & 0o022:
+            failures.append(f"response-proof {label} must not be writable by group/other")
+
+    if proof_paths["ca_bundle"].is_file():
+        try:
+            proof_ca_certificates = x509.load_pem_x509_certificates(proof_paths["ca_bundle"].read_bytes())
+            if not proof_ca_certificates:
+                raise ValueError("contains no certificates")
+            status["proof_ca_certificates"] = len(proof_ca_certificates)
+        except Exception as exc:
+            failures.append(f"response-proof CA bundle is invalid: {exc}")
+
+    if all(proof_paths[label].is_file() for label in ("collector_private_key", "collector_public_key", "verifier_public_key")):
+        try:
+            collector_private = serialization.load_pem_private_key(
+                proof_paths["collector_private_key"].read_bytes(),
+                password=None,
+            )
+            collector_public = serialization.load_pem_public_key(proof_paths["collector_public_key"].read_bytes())
+            verifier_public = serialization.load_pem_public_key(proof_paths["verifier_public_key"].read_bytes())
+            if not isinstance(collector_private, Ed25519PrivateKey):
+                raise ValueError("collector private key is not Ed25519")
+            if not isinstance(collector_public, Ed25519PublicKey):
+                raise ValueError("collector public key is not Ed25519")
+            if not isinstance(verifier_public, Ed25519PublicKey):
+                raise ValueError("vendor verifier public key is not Ed25519")
+            collector_private_der = collector_private.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            collector_public_der = collector_public.public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            if collector_private_der != collector_public_der:
+                raise ValueError("collector private and public keys do not match")
+            verifier_public_der = verifier_public.public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+            collector_key_id = "sha256:" + hashlib.sha256(collector_public_der).hexdigest()
+            verifier_key_id = "sha256:" + hashlib.sha256(verifier_public_der).hexdigest()
+            if collector_key_id != env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID"):
+                raise ValueError("collector public key does not match SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID")
+            if verifier_key_id != env.get("SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID"):
+                raise ValueError("vendor verifier public key does not match SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID")
+            status["proof_collector_key_id"] = collector_key_id
+            status["proof_verifier_key_id"] = verifier_key_id
+        except Exception as exc:
+            failures.append(f"response-proof signing material is invalid: {exc}")
+
+    status["tls_files"] = sorted(status["tls_files"])
+    status["anchor_tls_files"] = sorted(status["anchor_tls_files"])
+    status["helper_files"] = sorted(status["helper_files"])
+    status["proof_files"] = sorted(status["proof_files"])
+    status["proof_collector_files"] = sorted(status["proof_collector_files"])
+    status["ok"] = not failures
+    return status, failures
+
+
+def _directly_issued_by(certificate: x509.Certificate, issuer: x509.Certificate) -> bool:
+    try:
+        certificate.verify_directly_issued_by(issuer)
+        return True
+    except Exception:
+        return False
 
 
 def env_check(
@@ -201,7 +470,7 @@ def published_images_check(
         if published.get("ok") is not True:
             raise ValueError("production images published artifact is not ok")
         build_by_service = {
-            str(item["service"]): str(item["image_id"])
+            str(item["service"]): item
             for item in production_images.get("images", [])
             if isinstance(item, dict) and item.get("service") and item.get("image_id")
         }
@@ -220,14 +489,20 @@ def published_images_check(
             if not service:
                 raise ValueError("published image entry is missing service")
             local_image_id = handoff.require_sha256(item.get("local_image_id"), f"{service} local_image_id")
-            expected_local_id = build_by_service.get(service)
-            if expected_local_id is None:
+            expected_build = build_by_service.get(service)
+            if expected_build is None:
                 raise ValueError(f"published image service is not in current build artifact: {service}")
-            if local_image_id != expected_local_id:
+            if local_image_id != str(expected_build["image_id"]):
                 raise ValueError(
                     "published production images do not match current no-shell build: "
-                    f"service={service} published={local_image_id} build={expected_local_id}"
+                    f"service={service} published={local_image_id} build={expected_build['image_id']}"
                 )
+            handoff.require_sha256(item.get("remote_image_id"), f"{service} remote_image_id")
+            if service == "serverware-decision-gate":
+                published_binary = handoff.require_sha256(item.get("binary_digest"), "published decision-gate binary digest")
+                expected_binary = handoff.require_sha256(expected_build.get("binary_digest"), "built decision-gate binary digest")
+                if published_binary != expected_binary:
+                    raise ValueError("published decision-gate executable does not match the measured build executable")
             repo_digest = item.get("repo_digest")
             if not isinstance(repo_digest, str):
                 raise ValueError(f"{service} repo_digest must be a digest-pinned ref")
@@ -245,6 +520,9 @@ def published_images_check(
                 "published production image refs do not match .tmp/production-images.env: "
                 f"published={sorted(published_refs)} env={expected_refs}"
             )
+        remote_no_shell = published.get("remote_no_shell")
+        if not isinstance(remote_no_shell, dict) or remote_no_shell.get("ok") is not True:
+            raise ValueError("published production images did not pass remote no-shell verification")
         env_value = published.get("env") if isinstance(published.get("env"), dict) else {}
         if env_value.get(merge_production_images_env.KEY) and env_value[merge_production_images_env.KEY] != ",".join(expected_refs):
             raise ValueError("published artifact env value does not match .tmp/production-images.env")
@@ -265,7 +543,11 @@ def published_images_check(
     return status, failures
 
 
-def artifact_check(args: argparse.Namespace, expected_images: list[dict[str, str]]) -> tuple[dict[str, Any], list[str]]:
+def artifact_check(
+    args: argparse.Namespace,
+    expected_images: list[dict[str, str]],
+    expected_binary_digest: str | None,
+) -> tuple[dict[str, Any], list[str]]:
     failures: list[str] = []
     status: dict[str, Any] = {"ok": False}
     try:
@@ -289,6 +571,23 @@ def artifact_check(args: argparse.Namespace, expected_images: list[dict[str, str
             digest_key="image_signature_bundle_digest",
         )
         bench = handoff.verify_bench(Path(args.bench))
+        production_gate_binary = next(
+            (
+                item.get("binary_digest")
+                for item in production_images["images"]
+                if item.get("service") == "serverware-decision-gate"
+            ),
+            None,
+        )
+        if production_gate_binary != bench["data_plane_binary_digest"]:
+            raise ValueError("decision-gate benchmark binary digest does not match the production image binary")
+        if not expected_binary_digest:
+            raise ValueError("production env is missing SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST")
+        if bench["data_plane_binary_digest"] != expected_binary_digest:
+            raise ValueError(
+                "decision-gate benchmark binary digest does not match "
+                "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
+            )
         release_document = handoff.verify_release_provenance_document(
             Path(args.release_provenance),
             summary_digest=release_summary["digest"],
@@ -323,6 +622,100 @@ def artifact_check(args: argparse.Namespace, expected_images: list[dict[str, str
         status["error"] = str(exc)
     status["ok"] = not failures
     return status, failures
+
+
+def release_artifact_mounts_check(
+    env: dict[str, str],
+    *,
+    release_provenance: Path,
+    image_signatures: Path,
+) -> tuple[dict[str, Any], list[str]]:
+    status: dict[str, Any] = {"ok": False, "artifacts": [], "secret_values_redacted": True}
+    failures: list[str] = []
+    expected = {
+        "release-provenance": (
+            Path(env.get("SERVERWARE_RELEASE_PROVENANCE_FILE", "")),
+            release_provenance,
+        ),
+        "image-signatures": (
+            Path(env.get("SERVERWARE_IMAGE_SIGNATURES_FILE", "")),
+            image_signatures,
+        ),
+    }
+    for label, (mounted_path, approved_path) in expected.items():
+        item: dict[str, Any] = {
+            "label": label,
+            "mounted_path": str(mounted_path),
+            "approved_path": str(approved_path),
+        }
+        if not mounted_path.is_absolute():
+            failures.append(f"{label} production mount path must be absolute")
+        elif mounted_path.is_symlink():
+            failures.append(f"{label} production mount path must not be a symlink: {mounted_path}")
+        elif not mounted_path.is_file() or mounted_path.stat().st_size == 0:
+            failures.append(f"{label} production mount artifact is missing or empty: {mounted_path}")
+        elif not approved_path.is_file():
+            failures.append(f"{label} approved release artifact is missing: {approved_path}")
+        else:
+            mounted_summary = handoff.file_summary(mounted_path, f"mounted-{label}")
+            approved_summary = handoff.file_summary(approved_path, f"approved-{label}")
+            mode = stat.S_IMODE(mounted_path.stat().st_mode)
+            item.update(
+                {
+                    "sha256": mounted_summary["sha256"],
+                    "bytes": mounted_summary["bytes"],
+                    "mode": oct(mode),
+                    "matches_approved_artifact": mounted_summary["sha256"] == approved_summary["sha256"],
+                }
+            )
+            if mode & 0o022:
+                failures.append(f"{label} production mount artifact must not be writable by group/other")
+            if mounted_summary["sha256"] != approved_summary["sha256"]:
+                failures.append(f"{label} production mount artifact does not match the approved release artifact")
+        status["artifacts"].append(item)
+    status["ok"] = not failures
+    return status, failures
+
+
+def production_compose_check(
+    *,
+    compose_file: Path,
+    env_file: Path,
+    expected_images: list[dict[str, str]],
+    expected_digest: str | None,
+    skip_host_check: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    status: dict[str, Any] = {
+        "ok": False,
+        "skipped": skip_host_check,
+        "file": str(compose_file),
+        "secret_values_redacted": True,
+    }
+    if skip_host_check:
+        status["ok"] = True
+        return status, []
+    try:
+        refs = {item.get("name"): item.get("ref") for item in expected_images}
+        images = {
+            "serverware-control": {"repo_digests": [refs["control"]]},
+            "serverware-decision-gate": {"repo_digests": [refs["decision-gate"]]},
+        }
+        _, summary = generate_release_provenance.production_compose_model(
+            compose_file=compose_file,
+            env_file=env_file,
+            images=images,
+        )
+        status.update(summary)
+        if summary["sha256"] != expected_digest:
+            raise ValueError(
+                "rendered production Compose digest does not match signed release provenance: "
+                f"rendered={summary['sha256']} provenance={expected_digest}"
+            )
+        status["ok"] = True
+        return status, []
+    except Exception as exc:
+        status["error"] = str(exc)
+        return status, [f"production Compose check failed: {exc}"]
 
 
 def ciphertext_blob(config: dict[str, Any], material: str) -> bytes:
@@ -397,6 +790,7 @@ def kms_materials_check(path: Path) -> tuple[dict[str, Any], list[str]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Preflight the production host before running Serverware's final readiness proof.")
     parser.add_argument("--env-file", default="ops/production-readiness.env")
+    parser.add_argument("--compose-file", default="docker-compose.production.yml")
     parser.add_argument("--production-images-env", default=".tmp/production-images.env")
     parser.add_argument("--production-images-published", default=".tmp/production-images-published.json")
     parser.add_argument("--production-images-build", default=".tmp/production-images-build.json")
@@ -423,6 +817,11 @@ def main() -> None:
         skip_config_gate=args.skip_config_gate,
     )
     failures.extend(env_failures)
+    runtime_trust, runtime_trust_failures = runtime_trust_materials_check(
+        loaded_env,
+        skip_host_check=args.skip_host_check,
+    )
+    failures.extend(runtime_trust_failures)
     images_env, images_value, images_failures = production_images_env_check(Path(args.production_images_env))
     failures.extend(images_failures)
     merge_status, merge_failures = env_merge_check(loaded_env, images_value) if loaded_env and images_value else (
@@ -431,8 +830,26 @@ def main() -> None:
     )
     failures.extend(merge_failures)
     expected_images = images_env.get("images") if isinstance(images_env.get("images"), list) else []
-    artifacts, artifact_failures = artifact_check(args, [item for item in expected_images if isinstance(item, dict)])
+    artifacts, artifact_failures = artifact_check(
+        args,
+        [item for item in expected_images if isinstance(item, dict)],
+        loaded_env.get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") if loaded_env else None,
+    )
     failures.extend(artifact_failures)
+    compose_status, compose_failures = production_compose_check(
+        compose_file=Path(args.compose_file),
+        env_file=Path(args.env_file),
+        expected_images=[item for item in expected_images if isinstance(item, dict)],
+        expected_digest=(artifacts.get("release_provenance_document") or {}).get("compose_config_sha256"),
+        skip_host_check=args.skip_host_check,
+    )
+    failures.extend(compose_failures)
+    artifact_mounts, artifact_mount_failures = release_artifact_mounts_check(
+        loaded_env,
+        release_provenance=Path(args.release_provenance),
+        image_signatures=Path(args.image_signatures),
+    )
+    failures.extend(artifact_mount_failures)
     kms, kms_failures = kms_materials_check(Path(args.kms_materials))
     failures.extend(kms_failures)
 
@@ -444,9 +861,12 @@ def main() -> None:
         "checks": {
             "host": host,
             "production_env": env,
+            "runtime_trust_materials": runtime_trust,
             "production_images_env": images_env,
             "production_images_env_merge": merge_status,
+            "production_compose": compose_status,
             "release_artifacts": artifacts,
+            "release_artifact_mounts": artifact_mounts,
             "kms_materials": kms,
         },
         "failures": failures,

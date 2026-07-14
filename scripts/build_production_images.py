@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import argparse
-from datetime import datetime, timezone
+import hashlib
 import json
+import os
 import subprocess
 import sys
+import tarfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -47,10 +50,18 @@ def source_tree_digest() -> str:
 
 
 def build_metadata() -> dict[str, str]:
+    raw_epoch = os.getenv("SOURCE_DATE_EPOCH") or maybe_run(["git", "show", "-s", "--format=%ct", "HEAD"]) or "0"
+    try:
+        source_date_epoch = int(raw_epoch)
+    except ValueError as exc:
+        raise RuntimeError("SOURCE_DATE_EPOCH must be an integer") from exc
+    if source_date_epoch < 0:
+        raise RuntimeError("SOURCE_DATE_EPOCH must be non-negative")
     return {
         "source": "https://github.com/example/private-deployment",
         "revision": maybe_run(["git", "rev-parse", "HEAD"]) or "unknown",
-        "created": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "created": datetime.fromtimestamp(source_date_epoch, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "source_date_epoch": str(source_date_epoch),
         "source_tree_digest": source_tree_digest(),
     }
 
@@ -69,6 +80,8 @@ def build_command(dockerfile: str, tag: str, *, platform: str | None, metadata: 
             f"SERVERWARE_IMAGE_CREATED={metadata['created']}",
             "--build-arg",
             f"SERVERWARE_SOURCE_TREE_DIGEST={metadata['source_tree_digest']}",
+            "--build-arg",
+            f"SOURCE_DATE_EPOCH={metadata['source_date_epoch']}",
         ]
     )
     command.append(".")
@@ -86,6 +99,44 @@ def verify_no_shell(image_ids: list[str]) -> dict[str, Any]:
     if parsed.get("ok") is not True:
         raise RuntimeError(f"production image no-shell verification failed: {raw}")
     return parsed
+
+
+def image_file_sha256(image: str, path: str) -> str:
+    container_id = run(["docker", "create", image])
+    process: subprocess.Popen[bytes] | None = None
+    try:
+        process = subprocess.Popen(
+            ["docker", "export", container_id],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if process.stdout is None:
+            raise RuntimeError("docker export did not provide stdout")
+        wanted = path.lstrip("/")
+        digest: str | None = None
+        with tarfile.open(fileobj=process.stdout, mode="r|*") as archive:
+            for member in archive:
+                if member.name.lstrip("./") != wanted:
+                    continue
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    raise RuntimeError(f"production image path is not a regular file: {path}")
+                hasher = hashlib.sha256()
+                while chunk := extracted.read(1024 * 1024):
+                    hasher.update(chunk)
+                digest = "sha256:" + hasher.hexdigest()
+        _, stderr = process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError(f"docker export failed for {image}: {stderr.decode(errors='replace').strip()}")
+        if digest is None:
+            raise RuntimeError(f"production image does not contain required file: {path}")
+        return digest
+    finally:
+        if process is not None and process.poll() is None:
+            process.kill()
+            process.wait()
+        maybe_run(["docker", "rm", "-f", container_id])
 
 
 def main() -> None:
@@ -119,12 +170,20 @@ def main() -> None:
     for spec in commands:
         print(f"==> building {spec['service']} with {spec['dockerfile']}", file=sys.stderr)
         run(spec["argv"])
+        built_image_id = image_id(spec["tag"])
+        binary_digest = None
+        if spec["service"] == "serverware-decision-gate":
+            binary_digest = image_file_sha256(
+                built_image_id,
+                "/usr/local/bin/serverware-decision-gate",
+            )
         images.append(
             {
                 "service": spec["service"],
                 "tag": spec["tag"],
                 "dockerfile": spec["dockerfile"],
-                "image_id": image_id(spec["tag"]),
+                "image_id": built_image_id,
+                **({"binary_digest": binary_digest} if binary_digest else {}),
             }
         )
     no_shell = verify_no_shell([str(item["image_id"]) for item in images])

@@ -179,6 +179,10 @@ def request_view(request: Request) -> dict[str, Any]:
         "authorization_present": authorization is not None,
         "authorization_scheme": authorization_scheme,
         "authorization_sha256": "sha256:" + hashlib.sha256(authorization.encode("utf-8")).hexdigest() if authorization else None,
+        "credential_marker": {
+            "Bearer demo-token-from-vault": "initial",
+            "Bearer rotated-token-from-vault": "rotated",
+        }.get(authorization, "other" if authorization else None),
         "proxy_authorization": headers.get("proxy-authorization"),
         "x_api_key": headers.get("x-api-key"),
         "serverware_agent": headers.get("x-serverware-agent"),
@@ -190,6 +194,8 @@ def request_view(request: Request) -> dict[str, Any]:
 async def echo(request: Request) -> dict[str, Any]:
     view = request_view(request)
     view["query"]["_data_plane_token_seen"] = "x-serverware-data-plane-token" in request.headers
+    if request.query_params.get("reflectCredential") == "1":
+        view["credential_reflection"] = view["authorization"]
     return view
 
 
@@ -200,6 +206,10 @@ async def approval_echo(request: Request) -> dict[str, Any]:
 
 @app.get("/stream-bytes")
 async def stream_bytes(request: Request) -> Response:
+    if request.query_params.get("reflectCredential") == "1":
+        authorization = request.headers.get("authorization", "")
+        body = b"s" * 16380 + authorization.encode("utf-8") + b"safe-tail"
+        return Response(content=body, media_type="application/octet-stream")
     chunks = max(1, min(int(request.query_params.get("chunks", "8")), 64))
     chunk_size = max(1, min(int(request.query_params.get("chunkSize", "4096")), 16384))
     body = b"".join(bytes([index % 251]) * chunk_size for index in range(chunks))

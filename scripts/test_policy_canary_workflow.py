@@ -74,6 +74,9 @@ def expect_http_error(label: str, func: Any, expected_status: int, expected_deta
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
+        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
         os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
         os.environ["SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "1"
         os.environ["SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED"] = "1"
@@ -90,7 +93,8 @@ def main() -> None:
         user_id = "user:publisher"
         identity = AdminIdentity(user_id, frozenset({"policy_publisher", "policy_author", "auditor"}), "admin-token-header")
         webauthn.create_dev_credential(user_id)
-        policy_bundle.write_policy_bundle(candidate_bundle(policy_bundle, 1))
+        initial = policy_bundle.write_policy_bundle(candidate_bundle(policy_bundle, 1))
+        policy_bundle.enforce_policy_high_water(initial)
         active_before = policy_bundle.get_policy_snapshot()
 
         full_payload = app_module.PolicyPublishRequest(
@@ -104,12 +108,27 @@ def main() -> None:
             "canary activation",
         )
 
+        empty_status = app_module.policy_canary_status(_=identity)
+        if empty_status != {"ok": True, "canary": None, "monitoring": None}:
+            raise AssertionError(f"empty canary status was not idempotent: {empty_status}")
+
         canary_payload = app_module.PolicyPublishRequest(
             bundle=candidate_bundle(policy_bundle, 2),
             dryRun=[dry_run_case(app_module)],
             activationMode="canary",
-            canaryPercent=10.0,
         )
+        try:
+            app_module.PolicyPublishRequest(
+                bundle=candidate_bundle(policy_bundle, 2),
+                dryRun=[dry_run_case(app_module)],
+                activationMode="canary",
+                canaryPercent=10.0,
+            )
+        except Exception as exc:
+            if type(exc).__name__ != "ValidationError":
+                raise
+        else:
+            raise AssertionError("removed canary traffic percentage was still accepted")
         canary_payload.mfa = {"assertion": sign_publish_assertion(app_module, webauthn, canary_payload, user_id)}
         canary = app_module.policy_publish(canary_payload, identity=identity)
         canary_id = canary["canary"]["id"]

@@ -6,11 +6,16 @@ import base64
 import hashlib
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+import cbor2
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.serialization import load_der_public_key
 
 
 SECRET_FIELD_NAMES = {
@@ -110,7 +115,36 @@ def ciphertext_blob(config: dict[str, Any]) -> bytes:
     return b64d(raw_b64, "AWS KMS material ciphertext_blob_b64")
 
 
-def attestation_document_from_request(payload: dict[str, Any]) -> bytes:
+def attested_recipient_public_key(raw: bytes) -> tuple[bytes, str, int]:
+    try:
+        cose = cbor2.loads(raw)
+        if isinstance(cose, cbor2.CBORTag):
+            if cose.tag != 18:
+                raise ValueError("unexpected COSE tag")
+            cose = cose.value
+        if not isinstance(cose, list) or len(cose) != 4 or not isinstance(cose[2], bytes):
+            raise ValueError("invalid COSE_Sign1 shape")
+        document = cbor2.loads(cose[2])
+    except Exception as exc:
+        raise SystemExit("AWS KMS release request has an invalid Nitro attestation document") from exc
+    if not isinstance(document, dict):
+        raise SystemExit("AWS KMS release request Nitro attestation payload must be an object")
+    public_key_der = document.get("public_key")
+    if not isinstance(public_key_der, bytes) or not 1 <= len(public_key_der) <= 1024:
+        raise SystemExit("AWS KMS release request Nitro attestation document is missing public_key")
+    try:
+        public_key = load_der_public_key(public_key_der)
+    except ValueError as exc:
+        raise SystemExit("AWS KMS release request Nitro public_key is not valid DER") from exc
+    if not isinstance(public_key, rsa.RSAPublicKey):
+        raise SystemExit("AWS KMS release request Nitro public_key must be RSA")
+    numbers = public_key.public_numbers()
+    if public_key.key_size < 2048 or public_key.key_size > 4096 or numbers.e != 65537:
+        raise SystemExit("AWS KMS release request Nitro RSA public_key must be 2048-4096 bits with exponent 65537")
+    return public_key_der, sha256_prefixed(public_key_der), public_key.key_size
+
+
+def attestation_document_from_request(payload: dict[str, Any]) -> tuple[bytes, str, int]:
     tee = payload.get("tee")
     claims = payload.get("claims")
     if isinstance(claims, dict) and isinstance(claims.get("tee"), dict):
@@ -124,7 +158,14 @@ def attestation_document_from_request(payload: dict[str, Any]) -> bytes:
     expected = tee.get("raw_attestation_document_sha256")
     if expected and expected != sha256_prefixed(raw):
         raise SystemExit("AWS KMS release request attestation document digest mismatch")
-    return raw
+    _, public_key_sha256, public_key_bits = attested_recipient_public_key(raw)
+    if tee.get("recipient_public_key_sha256") != public_key_sha256:
+        raise SystemExit("AWS KMS release request recipient public key digest mismatch")
+    if tee.get("recipient_public_key_algorithm") != "RSAES_OAEP_SHA_256":
+        raise SystemExit("AWS KMS release request recipient public key algorithm mismatch")
+    if tee.get("recipient_public_key_bits") != public_key_bits:
+        raise SystemExit("AWS KMS release request recipient public key size mismatch")
+    return raw, public_key_sha256, public_key_bits
 
 
 def validate_request(payload: dict[str, Any]) -> None:
@@ -156,6 +197,9 @@ def run_aws_kms_decrypt(
     region: str | None,
     timeout: float,
 ) -> dict[str, Any]:
+    aws_command = shlex.split(aws_binary)
+    if not aws_command:
+        raise SystemExit("AWS CLI command is empty")
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
         ciphertext_path = tmp / "ciphertext.bin"
@@ -163,7 +207,7 @@ def run_aws_kms_decrypt(
         ciphertext_path.write_bytes(ciphertext)
         attestation_path.write_bytes(attestation_document)
         command = [
-            aws_binary,
+            *aws_command,
             "kms",
             "decrypt",
             "--key-id",
@@ -203,7 +247,9 @@ def release(args: argparse.Namespace) -> None:
     if context is not None and not isinstance(context, dict):
         raise SystemExit("AWS KMS encryption_context must be a JSON object")
     ciphertext = ciphertext_blob(config)
-    attestation_document = attestation_document_from_request(payload)
+    attestation_document, recipient_public_key_sha256, recipient_public_key_bits = attestation_document_from_request(
+        payload
+    )
     response = run_aws_kms_decrypt(
         aws_binary=args.aws_binary,
         key_id=key_id,
@@ -224,7 +270,11 @@ def release(args: argparse.Namespace) -> None:
         "ciphertext_blob_sha256": sha256_prefixed(ciphertext),
         "encryption_context_sha256": sha256_prefixed(canonical_json(context or {}).encode("utf-8")),
         "material_handle": sha256_prefixed(recipient_ciphertext),
+        "recipient_ciphertext_b64": base64.b64encode(recipient_ciphertext).decode("ascii"),
         "recipient_ciphertext_sha256": sha256_prefixed(recipient_ciphertext),
+        "recipient_public_key_sha256": recipient_public_key_sha256,
+        "recipient_public_key_algorithm": "RSAES_OAEP_SHA_256",
+        "recipient_public_key_bits": recipient_public_key_bits,
         "attestation_document_sha256": sha256_prefixed(attestation_document),
         "key_provider": {
             "type": "aws-kms",

@@ -87,14 +87,25 @@ def fixture(debug: bool = False, materials: list[str] | None = None) -> tuple[di
         "policy_signing_key_id": policy_info["spki_sha256"],
     }
     runtime_digest = sha256_prefixed(repr(sorted(manifest.items())).encode("utf-8"))
+    high_water = {
+        "store": "postgres",
+        "policyId": "readiness-test",
+        "sequence": 1,
+        "rollbackEpoch": 7,
+        "policyHash": bundle_hash,
+        "updatedAt": "2026-07-14T12:00:00+00:00",
+    }
+    high_water_digest = sha256_prefixed(canonical_json(high_water).encode("utf-8"))
     claims = {
         "nonce": "attestation-nonce",
         "runtime_manifest_digest": runtime_digest,
         "policy_bundle_digest": bundle_hash,
+        "policy_sequence": 1,
+        "policy_high_water_digest": high_water_digest,
         "policy_signing_key_id": policy_info["spki_sha256"],
         "ca_intermediate_spki_sha256": "sha256:" + "c" * 64,
         "data_plane_binary_digest": "sha256:" + "d" * 64,
-        "service_tls_spki_sha256": None,
+        "service_tls_spki_sha256": "sha256:" + "6" * 64,
         "rollback_epoch": 7,
         "release_channel": "prod",
         "provenance_digest": "sha256:" + "e" * 64,
@@ -128,12 +139,15 @@ def fixture(debug: bool = False, materials: list[str] | None = None) -> tuple[di
         "runtime_manifest": manifest,
         "runtime_manifest_digest": runtime_digest,
         "policy_bundle_digest": bundle_hash,
+        "policy_sequence": 1,
+        "policy_high_water": high_water,
+        "policy_high_water_digest": high_water_digest,
         "policy_bundle_signature": bundle["metadata"]["signature"],
         "policy_signing_key_id": policy_info["spki_sha256"],
         "policy_signing_public_key_pem": policy_info["pem"],
         "ca_intermediate_spki_sha256": claims["ca_intermediate_spki_sha256"],
         "data_plane_binary_digest": claims["data_plane_binary_digest"],
-        "service_tls_spki_sha256": None,
+        "service_tls_spki_sha256": "sha256:" + "6" * 64,
         "rollback_epoch": claims["rollback_epoch"],
         "release_channel": claims["release_channel"],
         "provenance_digest": claims["provenance_digest"],
@@ -142,7 +156,17 @@ def fixture(debug: bool = False, materials: list[str] | None = None) -> tuple[di
         "response_signing_key_id": claims["response_signing_key_id"],
         "nonce": "attestation-nonce",
     }
-    return attestation, {"bundle": bundle, "policy_hash": bundle_hash}
+    return attestation, {
+        "bundle": bundle,
+        "policy_hash": bundle_hash,
+        "high_water": {
+            "policy_id": "readiness-test",
+            "sequence": 1,
+            "rollback_epoch": 7,
+            "policy_hash": bundle_hash,
+            "updated_at": high_water["updatedAt"],
+        },
+    }
 
 
 def expect_failure(attestation: dict[str, Any], policy_status: dict[str, Any] | None, expected: str) -> None:
@@ -162,6 +186,8 @@ def main() -> None:
         raise AssertionError(f"claims did not use the readiness nonce: {claims}")
     if claims["policy_bundle_digest"] != attestation["policy_bundle_digest"]:
         raise AssertionError(f"claims did not bind the attested policy digest: {claims}")
+    if claims["policy_sequence"] != 1 or claims["policy_high_water_digest"] != attestation["policy_high_water_digest"]:
+        raise AssertionError(f"claims did not bind the policy high-water: {claims}")
     if set(claims["materials"]) != {"broker-kek", "decision-gate-ca"}:
         raise AssertionError(f"claims did not preserve authorized release materials: {claims}")
     if claims["debug"] is not False:
@@ -198,6 +224,14 @@ def main() -> None:
     tampered_attestation = copy.deepcopy(attestation)
     tampered_attestation["source_tree_digest"] = "sha256:" + "9" * 64
     expect_failure(tampered_attestation, policy_status, "source_tree_digest")
+
+    tampered_high_water = copy.deepcopy(attestation)
+    tampered_high_water["policy_high_water"]["sequence"] = 2
+    expect_failure(tampered_high_water, policy_status, "high-water")
+
+    tampered_status = copy.deepcopy(policy_status)
+    tampered_status["high_water"]["policy_hash"] = "sha256:" + "0" * 64
+    expect_failure(attestation, tampered_status, "endpoint high-water")
 
     print(json.dumps({"ok": True, "production_readiness_claims": "pass"}, sort_keys=True))
 

@@ -14,7 +14,8 @@ sys.path.insert(0, str(ROOT))
 
 tmpdir = tempfile.TemporaryDirectory()
 os.environ["SERVERWARE_DATA_DIR"] = tmpdir.name
-os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"] = "test-data-plane-token"
+os.environ["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = "spiffe://test.serverware/decision-gate/rate-limit"
+os.environ["SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"] = "test-rate-limit-token"
 os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
@@ -147,7 +148,6 @@ def main() -> None:
                 "max": 1,
                 "windowSeconds": 60,
                 "consume": True,
-                "actorId": "decision-gate-rs",
             }
         )
         original_snapshot = app_module.get_policy_snapshot
@@ -157,15 +157,15 @@ def main() -> None:
             {"id": credential_id, "credential_version": 7} if credential_id == "cred-x" else None
         )
         try:
-            api_first = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-data-plane-token")
-            api_second = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-data-plane-token")
+            api_first = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-rate-limit-token")
+            api_second = data_plane_rate_limit_consume(payload, x_serverware_data_plane_token="test-rate-limit-token")
             assert api_first["ok"] is True and api_first["allowed"] is True, api_first
             assert api_second["ok"] is True and api_second["allowed"] is False, api_second
             tampered = payload.model_copy(update={"max_count": 999})
             try:
                 data_plane_rate_limit_consume(
                     tampered,
-                    x_serverware_data_plane_token="test-data-plane-token",
+                    x_serverware_data_plane_token="test-rate-limit-token",
                 )
             except HTTPException as exc:
                 assert exc.status_code == 409 and "parameters" in str(exc.detail), exc

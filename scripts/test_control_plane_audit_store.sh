@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE="${BASE:-http://localhost:3000}"
 ADMIN_TOKEN="${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
-DATA_PLANE_TOKEN="${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:-dev-data-plane-audit-token}"
+DATA_PLANE_TOKEN="${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:-dev-audit-ingest-token}"
 
 python3 - "$BASE" "$ADMIN_TOKEN" "$DATA_PLANE_TOKEN" <<'PY'
 import concurrent.futures
@@ -49,7 +49,6 @@ def post_event(index: int) -> dict:
         "events": [
             {
                 "event_type": "data_plane.audit_store.concurrent_append",
-                "actor_id": f"decision-gate-rs-{index % 6}",
                 "event": {
                     "marker": marker,
                     "index": index,

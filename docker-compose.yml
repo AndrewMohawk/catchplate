@@ -23,7 +23,12 @@ services:
       SERVERWARE_ADMIN_USER: user:demo
       SERVERWARE_DEV_AUTHENTICATOR: "1"
       SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9091
-      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-data-plane-audit-token
+      SERVERWARE_DATA_PLANE_INSTANCE_ID: spiffe://development.serverware/decision-gate/local
+      SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN: dev-credential-lease-token
+      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-audit-ingest-token
+      SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN: dev-grant-consume-token
+      SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN: dev-rate-limit-consume-token
+      SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN: dev-rust-management-token
       SERVERWARE_AUDIT_ANCHOR_URL: http://audit-anchor:9100/anchors
       SERVERWARE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
       SERVERWARE_AUDIT_ANCHOR_INTERVAL_SECONDS: "0.5"
@@ -40,7 +45,7 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:736c67df41a8590d30033e82bfdf4261bfec6d3bf4f3a186c34358c60e4925e3
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:acee67a8ef6ff450f8a5cebcc91a766b3fc29fb718cb66848fee33dd30463b14
     ports:
       - "3000:3000"
     volumes:
@@ -182,7 +187,11 @@ services:
       SERVERWARE_CONTROL_PLANE_AUDIT_URL: http://serverware:3000/api/data-plane/audit
       SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL: http://serverware:3000/api/data-plane/grants/consume
       SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL: http://serverware:3000/api/data-plane/rate-limits/consume
-      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-data-plane-audit-token
+      SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN: dev-credential-lease-token
+      SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-audit-ingest-token
+      SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN: dev-grant-consume-token
+      SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN: dev-rate-limit-consume-token
+      SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN: dev-rust-management-token
       SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
       SERVERWARE_DECISION_GATE_PORT: "9090"
       SERVERWARE_DECISION_GATE_MANAGEMENT_HOST: 0.0.0.0

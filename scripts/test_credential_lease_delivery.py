@@ -112,7 +112,11 @@ def recipient_attestation_verifier() -> None:
     try:
         for name in (
             "SERVERWARE_ADMIN_TOKEN",
+            "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
             "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+            "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+            "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+            "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
             "SERVERWARE_METADATA_STORE_POSTGRES_DSN",
         ):
             if os.getenv(name):
@@ -425,7 +429,8 @@ def main() -> None:
             {
                 "SERVERWARE_DATA_DIR": tmp,
                 "SERVERWARE_ADMIN_TOKEN": ADMIN_TOKEN,
-                "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": DATA_PLANE_TOKEN,
+                "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://test.serverware/decision-gate/credential-lease",
+                "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_TOKEN,
                 "SERVERWARE_DEV_AUTHENTICATOR": "1",
                 "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": DATA_PLANE_BINARY_DIGEST,
                 "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "1",
@@ -1217,6 +1222,8 @@ def main() -> None:
             raise AssertionError(f"credential lease audit counts are incorrect: {issued_audits}")
         for item in lease_audits:
             event = item["event"]
+            if item.get("actor_id") != "spiffe://test.serverware/decision-gate/credential-lease":
+                raise AssertionError(f"credential lease audit actor was not server-derived: {item}")
             if "recipient_nonce" in event or not str(event.get("recipient_nonce_sha256", "")).startswith("sha256:"):
                 raise AssertionError(f"credential lease audit did not hash the recipient nonce: {item}")
 

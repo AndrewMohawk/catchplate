@@ -116,6 +116,22 @@ def expect_failure(env: dict[str, str], expected: str) -> None:
         raise AssertionError(f"production readiness failed with wrong error, expected {expected!r}: {detail}")
 
 
+def expect_failure_without_secret(env: dict[str, str], expected: str, secret: str) -> None:
+    result = subprocess.run(
+        [sys.executable, "scripts/verify_production_readiness.py", "--mode", "config"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env=env,
+        check=False,
+    )
+    detail = result.stderr.decode("utf-8", errors="replace") + result.stdout.decode("utf-8", errors="replace")
+    if result.returncode == 0 or expected not in detail:
+        raise AssertionError(f"production readiness did not reject scoped credentials as expected: {detail}")
+    if secret in detail:
+        raise AssertionError("production readiness disclosed an internal service credential")
+
+
 def good_env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("SERVERWARE_DECISION_GATE_BASE", None)
@@ -214,7 +230,11 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_AUDIT_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@audit-store/serverware",
             "SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL": "https://serverware.internal/api/data-plane/grants/consume",
             "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL": "https://serverware.internal/api/data-plane/rate-limits/consume",
-            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": "prod-data-plane-token-32-bytes-min",
+            "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": "credential-lease-scope-0123456789-ABCDEF",
+            "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": "audit-ingest-scope-0123456789-GHIJKLMN",
+            "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": "grant-consume-scope-0123456789-OPQRST",
+            "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": "rate-limit-scope-0123456789-UVWXYZ",
+            "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": "rust-management-scope-0123456789-abcdef",
             "SERVERWARE_AGENT_EGRESS_POLICY_REQUIRED": "1",
             "SERVERWARE_AGENT_EGRESS_POLICY_MODE": "kubernetes-network-policy",
             "SERVERWARE_AGENT_EGRESS_PROXY_CIDRS": "10.42.0.10/32,10.42.0.11/32",
@@ -386,6 +406,19 @@ def main() -> None:
     dev_admin_token_env = good_env()
     dev_admin_token_env["SERVERWARE_ADMIN_TOKEN"] = "dev-admin-token"
     expect_failure(dev_admin_token_env, "development/default")
+
+    missing_scope_token_env = good_env()
+    missing_scope_token_env.pop("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN", None)
+    expect_failure(missing_scope_token_env, "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN")
+
+    weak_scope_token_env = good_env()
+    weak_scope_token_env["SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"] = "too-short"
+    expect_failure(weak_scope_token_env, "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN")
+
+    equal_scope_token_env = good_env()
+    duplicate_secret = equal_scope_token_env["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+    equal_scope_token_env["SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"] = duplicate_secret
+    expect_failure_without_secret(equal_scope_token_env, "must be distinct", duplicate_secret)
 
     no_oidc_env = good_env()
     no_oidc_env.pop("SERVERWARE_OIDC_ENABLED", None)

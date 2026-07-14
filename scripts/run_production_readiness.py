@@ -147,6 +147,24 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
             args.image_signatures,
             "--bench",
             args.bench,
+            "--policy-bundle",
+            args.policy_bundle,
+            "--policy-trusted-public-key",
+            args.policy_trusted_public_key,
+            "--policy-identity-verification",
+            args.policy_identity_verification,
+            "--policy-activation-verification",
+            args.policy_activation_verification,
+            "--policy-activation-signature",
+            args.policy_activation_signature,
+            "--policy-activation-trusted-public-key",
+            args.policy_activation_trusted_public_key,
+            "--reproducible-build-verification",
+            args.reproducible_build_verification,
+            "--reproducible-build-signature",
+            args.reproducible_build_signature,
+            "--reproducible-build-trusted-public-key",
+            args.reproducible_build_trusted_public_key,
             "--kms-materials",
             args.kms_materials,
             "--proxy-response-proof",
@@ -179,7 +197,6 @@ def command_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
     claims_file = str(Path(args.claims_file))
     nitro_evidence_out = str(Path(args.nitro_evidence_out))
     readiness_out = str(Path(args.readiness_out))
-    completion_proof_out = str(Path(args.completion_proof_out))
 
     commands: list[dict[str, Any]] = [
         {
@@ -334,6 +351,15 @@ def main() -> None:
     parser.add_argument("--image-signatures-summary", default=".tmp/image-signatures-summary.json")
     parser.add_argument("--image-signatures", default=".tmp/image-signatures.json")
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
+    parser.add_argument("--policy-bundle", required=True)
+    parser.add_argument("--policy-trusted-public-key", required=True)
+    parser.add_argument("--policy-identity-verification", required=True)
+    parser.add_argument("--policy-activation-verification", required=True)
+    parser.add_argument("--policy-activation-signature", required=True)
+    parser.add_argument("--policy-activation-trusted-public-key", required=True)
+    parser.add_argument("--reproducible-build-verification", required=True)
+    parser.add_argument("--reproducible-build-signature", required=True)
+    parser.add_argument("--reproducible-build-trusted-public-key", required=True)
     parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
     parser.add_argument("--proxy-response-proof", default=None)
     parser.add_argument("--proxy-proof-summary-out", default=".tmp/proxy-response-proof-summary.json")

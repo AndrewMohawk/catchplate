@@ -15,7 +15,7 @@ import time
 import urllib.request
 
 gate = sys.argv[1].rstrip("/")
-management_token = os.environ.get("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip() or "dev-data-plane-audit-token"
+management_token = os.environ.get("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
 
 
 def decide(text: str) -> dict:

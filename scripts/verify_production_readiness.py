@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -29,6 +30,7 @@ READINESS_CHECKS = [
     "cosign-sigstore",
     "external-transparency",
     "apparmor",
+    "internal-service-auth",
     "shared-stores",
     "agent-egress",
     "production-images-no-shell",
@@ -56,6 +58,13 @@ KMS_KEY_PREFIXES = (
     "kms://",
 )
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+INTERNAL_SERVICE_TOKEN_NAMES = (
+    "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
+    "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+    "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+    "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
+)
 
 
 def canonical_json(value: Any) -> str:
@@ -129,6 +138,10 @@ def add(failures: list[str], condition: bool, message: str) -> None:
         failures.append(message)
 
 
+def service_token_is_strong(token: str) -> bool:
+    return len(token.encode("utf-8")) >= 32 and len(set(token)) >= 8
+
+
 def valid_pcr_policy(raw: str) -> bool:
     try:
         policy = json.loads(raw)
@@ -171,9 +184,11 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     anchor_token = env.get("SERVERWARE_AUDIT_ANCHOR_TOKEN", "").strip()
     add(failures, len(anchor_token) >= 32, "SERVERWARE_AUDIT_ANCHOR_TOKEN must be at least 32 characters")
     add(failures, anchor_token != token, "audit-anchor token must be distinct from the admin token")
-    data_plane_token = env.get("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip()
-    if data_plane_token:
-        add(failures, anchor_token != data_plane_token, "audit-anchor token must be distinct from the data-plane token")
+    for name in INTERNAL_SERVICE_TOKEN_NAMES:
+        service_token = env.get(name, "").strip()
+        if service_token:
+            add(failures, anchor_token != service_token, f"audit-anchor token must be distinct from {name}")
+            add(failures, token != service_token, f"admin token must be distinct from {name}")
     roles = {role.strip() for role in env.get("SERVERWARE_ADMIN_ROLES", "").split(",") if role.strip()}
     required_roles = {"admin", "approver", "auditor", "policy_author", "policy_publisher", "credential_owner"}
     add(
@@ -688,8 +703,29 @@ def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
         bool(env.get("SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL", "").strip()),
         "shared rate-limit consume URL must be configured",
     )
-    token = env.get("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip()
-    add(failures, len(token) >= 32, "data-plane token must be configured with at least 32 characters")
+
+
+def check_internal_service_auth(env: dict[str, str], failures: list[str]) -> None:
+    instance_id = env.get("SERVERWARE_DATA_PLANE_INSTANCE_ID", "").strip()
+    add(
+        failures,
+        instance_id.startswith("spiffe://") and len(instance_id) > len("spiffe://"),
+        "SERVERWARE_DATA_PLANE_INSTANCE_ID must identify the authenticated data-plane instance",
+    )
+    tokens = [(name, env.get(name, "").strip()) for name in INTERNAL_SERVICE_TOKEN_NAMES]
+    for name, token in tokens:
+        add(
+            failures,
+            service_token_is_strong(token),
+            f"{name} must be configured with at least 32 high-entropy bytes",
+        )
+    for index, (left_name, left_token) in enumerate(tokens):
+        for right_name, right_token in tokens[index + 1 :]:
+            add(
+                failures,
+                not left_token or not right_token or not hmac.compare_digest(left_token, right_token),
+                f"internal service credentials must be distinct: {left_name} and {right_name}",
+            )
 
 
 def check_agent_egress(env: dict[str, str], failures: list[str]) -> None:
@@ -1078,6 +1114,7 @@ def main() -> None:
         check_cosign,
         check_transparency,
         check_apparmor,
+        check_internal_service_auth,
         check_shared_stores,
         check_agent_egress,
         check_production_images,

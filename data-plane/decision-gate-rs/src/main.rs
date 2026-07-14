@@ -273,9 +273,13 @@ struct GateState {
     audit_client: Client,
     credential_lease_client: Client,
     audit_url: Option<String>,
+    credential_lease_token: Option<String>,
     audit_token: Option<String>,
     grant_consume_url: Option<String>,
+    grant_consume_token: Option<String>,
     rate_limit_consume_url: Option<String>,
+    rate_limit_consume_token: Option<String>,
+    management_token: Option<String>,
     audit_queue: Mutex<VecDeque<AuditEvent>>,
     audit_reserved: AtomicU64,
     audit_queue_max: usize,
@@ -616,7 +620,6 @@ struct PolicyTrustRoot {
 #[derive(Clone, Serialize)]
 struct AuditEvent {
     event_type: String,
-    actor_id: String,
     event: Value,
     #[serde(skip)]
     required: bool,
@@ -647,7 +650,6 @@ impl AuditReservation<'_> {
         }
         queue.push_back(AuditEvent {
             event_type: event_type.to_string(),
-            actor_id: "decision-gate-rs".to_string(),
             event,
             required: true,
         });
@@ -1297,7 +1299,7 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
 }
 
 fn management_api_authorized(state: &GateState, headers: &BTreeMap<String, String>) -> bool {
-    let Some(expected) = state.audit_token.as_deref() else {
+    let Some(expected) = state.management_token.as_deref() else {
         return false;
     };
     lower_headers(headers)
@@ -4044,6 +4046,17 @@ fn is_standard_hop_by_hop_header(name: &str) -> bool {
     )
 }
 
+fn is_serverware_service_auth_header(name: &str) -> bool {
+    matches!(
+        name,
+        "x-serverware-admin-token"
+            | "x-serverware-audit-anchor-token"
+            | "x-serverware-ca-install-token"
+            | "x-serverware-csrf-token"
+            | "x-serverware-data-plane-token"
+    )
+}
+
 fn credential_injection_header(injection: &Value) -> Option<String> {
     match injection
         .get("type")
@@ -4090,7 +4103,7 @@ fn client_forward_header_material(
             || name == "host"
             || name == "content-length"
             || name == "x-serverware-agent"
-            || name == "x-serverware-data-plane-token"
+            || is_serverware_service_auth_header(&name)
             || name == RESPONSE_PROOF_NONCE_HEADER
         {
             continue;
@@ -4171,8 +4184,8 @@ fn canonical_client_proof_headers(
                     | "authorization"
                     | "proxy-authorization"
                     | "x-serverware-agent"
-                    | "x-serverware-data-plane-token"
             )
+            && !is_serverware_service_auth_header(name)
             && name != RESPONSE_PROOF_NONCE_HEADER
     });
     Ok(lowered)
@@ -4893,7 +4906,7 @@ fn fetch_scoped_credential_lease(
         .as_deref()
         .ok_or("credential lease URL is not configured")?;
     let token = state
-        .audit_token
+        .credential_lease_token
         .as_deref()
         .ok_or("credential lease data-plane token is not configured")?;
     validate_credential_lease_scope(snapshot, scope)?;
@@ -5655,7 +5668,6 @@ fn record_required_credential_release_start(
     }
     let batch = [AuditEvent {
         event_type: "data_plane.credential.release_started".to_string(),
-        actor_id: "decision-gate-rs".to_string(),
         event: decision_audit_event(
             decision,
             method,
@@ -5727,7 +5739,6 @@ fn enqueue_audit_event(state: &GateState, event_type: &str, event: Value, requir
     }
     queue.push_back(AuditEvent {
         event_type: event_type.to_string(),
-        actor_id: "decision-gate-rs".to_string(),
         event,
         required: false,
     });
@@ -6321,9 +6332,9 @@ fn consume_shared_grant(
         .as_ref()
         .ok_or("shared grant consume URL is not configured")?;
     let token = state
-        .audit_token
+        .grant_consume_token
         .as_ref()
-        .ok_or("data-plane token is not configured")?;
+        .ok_or("grant-consume token is not configured")?;
     let request = shared_grant_consume_request(
         principal_id,
         route_id,
@@ -7819,7 +7830,6 @@ fn shared_rate_limit_request(
         "max": max,
         "windowSeconds": window_seconds,
         "consume": consume,
-        "actorId": "decision-gate-rs",
     })
 }
 
@@ -7852,10 +7862,10 @@ fn enforce_shared_rate_limit(
             unavailable,
         ));
     };
-    let Some(token) = state.audit_token.as_ref() else {
+    let Some(token) = state.rate_limit_consume_token.as_ref() else {
         unavailable.insert(
             "detail".to_string(),
-            Value::String("data-plane token is not configured".to_string()),
+            Value::String("rate-limit consume token is not configured".to_string()),
         );
         return Err(constraint_payload(
             constraint,
@@ -14232,6 +14242,29 @@ fn forward_absolute_request_inner(
         &mut upstream_url,
         decision.get("rewrite").unwrap_or(&Value::Null),
     );
+    if client_request_digest.is_some()
+        && response_policy_for_decision(snapshot, &decision, &request.method, &upstream_url)
+            .is_some_and(|policy| streaming_response_policy(&policy).is_some())
+    {
+        enqueue_audit(
+            state,
+            "data_plane.response_proof.denied",
+            decision_audit_event(
+                &decision,
+                &request.method,
+                &upstream_url,
+                "denied",
+                json!({
+                    "stage":"pre_upstream",
+                    "error":"response_proof_requires_buffered_response_route",
+                }),
+            ),
+        );
+        buffered!(json_status_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({"error":"response_proof_requires_buffered_response_route"}),
+        ));
+    }
     let injection_plan = decision
         .get("injection")
         .and_then(|value| value.get("plan"))
@@ -16455,6 +16488,49 @@ fn production_mode(release_channel: Option<&str>) -> bool {
     )
 }
 
+fn configured_service_token(name: &str) -> Option<String> {
+    env::var(name)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn service_token_is_strong(token: &str) -> bool {
+    token.len() >= 32 && token.bytes().collect::<HashSet<_>>().len() >= 8
+}
+
+fn validate_internal_service_tokens(
+    is_production: bool,
+    tokens: &[(&str, &Option<String>)],
+) -> Result<(), String> {
+    if !is_production {
+        return Ok(());
+    }
+    for (name, token) in tokens {
+        let Some(token) = token.as_deref() else {
+            return Err(format!("production requires {name}"));
+        };
+        if !service_token_is_strong(token) {
+            return Err(format!(
+                "production requires {name} with at least 32 high-entropy bytes"
+            ));
+        }
+    }
+    for (index, (left_name, left_token)) in tokens.iter().enumerate() {
+        for (right_name, right_token) in &tokens[index + 1..] {
+            if constant_time_eq(
+                left_token.as_deref().unwrap_or_default(),
+                right_token.as_deref().unwrap_or_default(),
+            ) {
+                return Err(format!(
+                    "production requires distinct internal service credentials: {left_name} and {right_name}"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn management_bind_is_loopback(host: &str) -> bool {
     host.eq_ignore_ascii_case("localhost")
         || host
@@ -16669,19 +16745,41 @@ fn main() -> Result<(), String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let audit_token = env::var("SERVERWARE_DATA_PLANE_AUDIT_TOKEN")
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let credential_lease_token =
+        configured_service_token("SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN");
+    let audit_token = configured_service_token("SERVERWARE_DATA_PLANE_AUDIT_TOKEN");
+    let grant_consume_token = configured_service_token("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN");
+    let rate_limit_consume_token =
+        configured_service_token("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN");
+    let management_token = configured_service_token("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN");
+    validate_internal_service_tokens(
+        is_production,
+        &[
+            (
+                "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+                &credential_lease_token,
+            ),
+            ("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", &audit_token),
+            (
+                "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
+                &grant_consume_token,
+            ),
+            (
+                "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+                &rate_limit_consume_token,
+            ),
+            ("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", &management_token),
+        ],
+    )?;
     if audit_url.is_some() != audit_token.is_some() {
         return Err(
             "SERVERWARE_CONTROL_PLANE_AUDIT_URL and SERVERWARE_DATA_PLANE_AUDIT_TOKEN must be set together"
                 .to_string(),
         );
     }
-    if credential_lease_url.is_some() && audit_token.is_none() {
+    if credential_lease_url.is_some() && credential_lease_token.is_none() {
         return Err(
-            "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL requires SERVERWARE_DATA_PLANE_AUDIT_TOKEN"
+            "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL requires SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"
                 .to_string(),
         );
     }
@@ -16689,9 +16787,9 @@ fn main() -> Result<(), String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    if grant_consume_url.is_some() && audit_token.is_none() {
+    if grant_consume_url.is_some() && grant_consume_token.is_none() {
         return Err(
-            "SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL requires SERVERWARE_DATA_PLANE_AUDIT_TOKEN"
+            "SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL requires SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN"
                 .to_string(),
         );
     }
@@ -16705,9 +16803,9 @@ fn main() -> Result<(), String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    if rate_limit_consume_url.is_some() && audit_token.is_none() {
+    if rate_limit_consume_url.is_some() && rate_limit_consume_token.is_none() {
         return Err(
-            "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL requires SERVERWARE_DATA_PLANE_AUDIT_TOKEN"
+            "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL requires SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"
                 .to_string(),
         );
     }
@@ -16950,9 +17048,13 @@ fn main() -> Result<(), String> {
         audit_client,
         credential_lease_client,
         audit_url,
+        credential_lease_token,
         audit_token,
         grant_consume_url,
+        grant_consume_token,
         rate_limit_consume_url,
+        rate_limit_consume_token,
+        management_token,
         audit_queue: Mutex::new(VecDeque::new()),
         audit_reserved: AtomicU64::new(0),
         audit_queue_max,
@@ -17125,9 +17227,13 @@ mod tests {
             audit_client: client.clone(),
             credential_lease_client: client,
             audit_url: None,
+            credential_lease_token: None,
             audit_token: None,
             grant_consume_url: None,
+            grant_consume_token: None,
             rate_limit_consume_url: None,
+            rate_limit_consume_token: None,
+            management_token: None,
             audit_queue: Mutex::new(VecDeque::new()),
             audit_reserved: AtomicU64::new(0),
             audit_queue_max: 16,
@@ -17155,6 +17261,116 @@ mod tests {
 
     fn parse_head(raw: &[u8]) -> Result<RequestHead, String> {
         read_request_head_from(&mut Cursor::new(raw), Some("127.0.0.1".to_string()))
+    }
+
+    #[test]
+    fn internal_service_tokens_are_scoped_strong_and_distinct() {
+        let credential_lease =
+            Some("credential-lease-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-01".to_string());
+        let audit = Some("audit-ingest-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-02".to_string());
+        let grant = Some("grant-consume-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-03".to_string());
+        let rate_limit = Some("rate-limit-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-04".to_string());
+        let management = Some("rust-management-scope-ABCDEFGHIJKLMNOPQRSTUVWXYZ-05".to_string());
+        let names_and_tokens = [
+            ("credential", &credential_lease),
+            ("audit", &audit),
+            ("grant", &grant),
+            ("rate-limit", &rate_limit),
+            ("management", &management),
+        ];
+        validate_internal_service_tokens(true, &names_and_tokens)
+            .expect("distinct production service tokens");
+
+        let missing = None;
+        assert!(
+            validate_internal_service_tokens(true, &[("missing", &missing)])
+                .expect_err("missing production token")
+                .contains("missing")
+        );
+        let weak = Some("x".repeat(32));
+        assert!(validate_internal_service_tokens(true, &[("weak", &weak)])
+            .expect_err("weak production token")
+            .contains("high-entropy"));
+        let duplicate = audit.clone();
+        assert!(validate_internal_service_tokens(
+            true,
+            &[("audit", &audit), ("credential", &duplicate)],
+        )
+        .expect_err("equal production tokens")
+        .contains("distinct"));
+    }
+
+    #[test]
+    fn management_auth_rejects_every_other_scope_token() {
+        let mut state = test_gate_state(test_snapshot(1));
+        state.management_token = Some("management-only-token".to_string());
+        let mut headers = BTreeMap::new();
+        for wrong_scope in [
+            "credential-lease-token",
+            "audit-ingest-token",
+            "grant-consume-token",
+            "rate-limit-consume-token",
+        ] {
+            headers.insert(
+                "X-Serverware-Data-Plane-Token".to_string(),
+                wrong_scope.to_string(),
+            );
+            assert!(!management_api_authorized(&state, &headers));
+        }
+        headers.insert(
+            "X-Serverware-Data-Plane-Token".to_string(),
+            "management-only-token".to_string(),
+        );
+        assert!(management_api_authorized(&state, &headers));
+    }
+
+    #[test]
+    fn service_auth_headers_are_stripped_before_upstream_and_proof() {
+        let headers = BTreeMap::from([
+            (
+                "X-Serverware-Admin-Token".to_string(),
+                "admin-secret".to_string(),
+            ),
+            (
+                "X-Serverware-Audit-Anchor-Token".to_string(),
+                "anchor-secret".to_string(),
+            ),
+            (
+                "X-Serverware-CA-Install-Token".to_string(),
+                "ca-install-secret".to_string(),
+            ),
+            (
+                "X-Serverware-CSRF-Token".to_string(),
+                "csrf-secret".to_string(),
+            ),
+            (
+                "X-Serverware-Data-Plane-Token".to_string(),
+                "service-secret".to_string(),
+            ),
+            ("X-Visible".to_string(), "visible".to_string()),
+        ]);
+        let forwarded = client_forward_header_material(&headers, &json!({"type":"bearer"}))
+            .expect("forwarded headers");
+        assert_eq!(
+            forwarded,
+            BTreeMap::from([("x-visible".to_string(), "visible".to_string())])
+        );
+        let proof = canonical_client_proof_headers(&headers).expect("proof headers");
+        assert_eq!(proof, forwarded);
+    }
+
+    #[test]
+    fn audit_batches_do_not_serialize_caller_actor_identity() {
+        let event = AuditEvent {
+            event_type: "data_plane.test".to_string(),
+            event: json!({"ok":true}),
+            required: false,
+        };
+        let serialized = serde_json::to_value(event).expect("serialize audit event");
+        assert_eq!(
+            serialized,
+            json!({"event_type":"data_plane.test","event":{"ok":true}})
+        );
     }
 
     fn decision_request_with_body(body: &str) -> DecisionRequest {
@@ -17994,6 +18210,51 @@ mod tests {
     }
 
     #[test]
+    fn response_proof_rejects_streaming_route_before_upstream() {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.routes[0].adapter_config["response"] =
+            json!({"mode":"stream","maxBodyBytes":1024});
+        let snapshot = Arc::new(snapshot);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("test-token".to_string());
+        let request = IncomingRequest {
+            method: "GET".to_string(),
+            target: "https://example.test/resource".to_string(),
+            headers: BTreeMap::from([(
+                RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                "test-nonce".to_string(),
+            )]),
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        let context = ResponseProofContext {
+            client_nonce: "test-nonce".to_string(),
+            client_nonce_bytes: vec![7; 32],
+            tls_exporter: "test-exporter".to_string(),
+        };
+
+        let mut wire = Vec::new();
+        assert!(forward_absolute_request_to(
+            &state,
+            &snapshot,
+            request,
+            Some("agent:test"),
+            false,
+            &mut wire,
+            Some(&context),
+        ));
+        let response = String::from_utf8(wire).expect("HTTP response");
+        assert!(response.starts_with("HTTP/1.1 422"));
+        assert!(response.contains("response_proof_requires_buffered_response_route"));
+        let audit = state.audit_queue.lock().expect("audit queue");
+        assert!(audit.iter().any(|event| {
+            event.event_type == "data_plane.response_proof.denied"
+                && event.event.get("stage").and_then(Value::as_str) == Some("pre_upstream")
+        }));
+    }
+
+    #[test]
     fn response_proof_rejects_cross_wired_client_request_digest() {
         let snapshot = test_snapshot(1);
         let state = test_gate_state(Arc::clone(&snapshot));
@@ -18206,6 +18467,7 @@ mod tests {
         assert_eq!(request["counterKey"], key);
         assert_eq!(request["max"], 5);
         assert_eq!(request["windowSeconds"], 86400);
+        assert!(request.get("actorId").is_none());
     }
 
     #[test]

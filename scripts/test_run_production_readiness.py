@@ -42,6 +42,26 @@ def detail(result: subprocess.CompletedProcess[bytes]) -> str:
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
+        security_args = (
+            "--policy-bundle",
+            str(tmp / "policy-bundle.json"),
+            "--policy-trusted-public-key",
+            str(tmp / "policy-signing.pub.pem"),
+            "--policy-identity-verification",
+            str(tmp / "policy-identity.json"),
+            "--policy-activation-verification",
+            str(tmp / "policy-activation.json"),
+            "--policy-activation-signature",
+            str(tmp / "policy-activation.signature.json"),
+            "--policy-activation-trusted-public-key",
+            str(tmp / "policy-activation.pub.pem"),
+            "--reproducible-build-verification",
+            str(tmp / "reproducible-build.json"),
+            "--reproducible-build-signature",
+            str(tmp / "reproducible-build.signature.json"),
+            "--reproducible-build-trusted-public-key",
+            str(tmp / "reproducible-build.pub.pem"),
+        )
 
         minimal_env = tmp / "minimal.env"
         write_env(
@@ -63,7 +83,7 @@ def main() -> None:
                 "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS": "240",
             },
         )
-        dry_run = run_runner("--env-file", str(minimal_env), "--dry-run")
+        dry_run = run_runner("--env-file", str(minimal_env), "--dry-run", *security_args)
         if dry_run.returncode != 0:
             raise AssertionError(f"runner dry-run failed: {detail(dry_run)}")
         plan = json.loads(dry_run.stdout.decode("utf-8"))
@@ -89,6 +109,12 @@ def main() -> None:
             or "--production-readiness-config" not in completion_argv
             or "--production-readiness-env" not in completion_argv
             or "--production-images-env" not in completion_argv
+            or "--policy-bundle" not in completion_argv
+            or "--policy-identity-verification" not in completion_argv
+            or "--policy-activation-verification" not in completion_argv
+            or "--policy-activation-signature" not in completion_argv
+            or "--reproducible-build-verification" not in completion_argv
+            or "--reproducible-build-signature" not in completion_argv
             or "/etc/serverware/kms-materials.json" not in completion_argv
             or "--proxy-response-proof" not in completion_argv
             or "--proxy-proof-verifier-public-key" not in completion_argv
@@ -116,7 +142,7 @@ def main() -> None:
 
         missing_proof_env = tmp / "missing-proof.env"
         write_env(missing_proof_env, {"SERVERWARE_RELEASE_CHANNEL": "prod"})
-        rejected_missing_proof = run_runner("--env-file", str(missing_proof_env), "--dry-run")
+        rejected_missing_proof = run_runner("--env-file", str(missing_proof_env), "--dry-run", *security_args)
         if rejected_missing_proof.returncode == 0 or "missing production proxy proof settings" not in detail(
             rejected_missing_proof
         ):
@@ -140,19 +166,19 @@ def main() -> None:
             }.items()
         }
         write_env(invalid_proof_age_env, invalid_proof_age)
-        rejected_proof_age = run_runner("--env-file", str(invalid_proof_age_env), "--dry-run")
+        rejected_proof_age = run_runner("--env-file", str(invalid_proof_age_env), "--dry-run", *security_args)
         if rejected_proof_age.returncode == 0 or "proxy proof max age" not in detail(rejected_proof_age):
             raise AssertionError(f"runner accepted an invalid proxy proof max age: {detail(rejected_proof_age)}")
 
         placeholder_env = tmp / "placeholder.env"
         placeholder_env.write_text("SERVERWARE_ADMIN_TOKEN=CHANGE_ME\n", encoding="utf-8")
-        rejected = run_runner("--env-file", str(placeholder_env), "--dry-run")
+        rejected = run_runner("--env-file", str(placeholder_env), "--dry-run", *security_args)
         if rejected.returncode == 0 or "placeholder" not in detail(rejected):
             raise AssertionError(f"runner accepted a placeholder env file: {detail(rejected)}")
 
         example_domain_env = tmp / "example-domain.env"
         example_domain_env.write_text("SERVERWARE_PUBLIC_URL=https://serverware.example\n", encoding="utf-8")
-        rejected_example = run_runner("--env-file", str(example_domain_env), "--dry-run")
+        rejected_example = run_runner("--env-file", str(example_domain_env), "--dry-run", *security_args)
         if rejected_example.returncode == 0 or "example placeholder domain" not in detail(rejected_example):
             raise AssertionError(f"runner accepted an example-domain env file: {detail(rejected_example)}")
 
@@ -170,6 +196,7 @@ def main() -> None:
             "--config-only",
             "--config-out",
             str(config_out),
+            *security_args,
         )
         if config_run.returncode != 0:
             raise AssertionError(f"runner config-only path failed: {detail(config_run)}")

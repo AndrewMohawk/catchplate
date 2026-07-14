@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 
-MANAGEMENT_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip() or "dev-data-plane-audit-token"
+MANAGEMENT_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
 MANAGEMENT_HEADERS = {"X-Serverware-Data-Plane-Token": MANAGEMENT_TOKEN}
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 

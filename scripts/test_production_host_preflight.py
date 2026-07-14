@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_production_handoff  # noqa: E402
+import test_production_release_input_preflight  # noqa: E402
 import test_production_readiness  # noqa: E402
 import generate_release_provenance  # noqa: E402
 import production_host_preflight  # noqa: E402
@@ -235,6 +236,23 @@ def verify_runtime_trust_materials(tmp: Path) -> None:
 
 
 def run_preflight(paths: dict[str, Path], *extra: str, allow_test_bypass: bool = True) -> subprocess.CompletedProcess[bytes]:
+    if "policy_bundle" not in paths:
+        build = json.loads(paths["build"].read_text(encoding="utf-8"))
+        reproduced_images = []
+        for image in build["images"]:
+            item = {"service": image["service"], "image_id": image["image_id"]}
+            if image["service"] == "serverware-decision-gate":
+                item["rust_binary_sha256"] = image["binary_digest"]
+            reproduced_images.append(item)
+        security, policy_hash = test_production_release_input_preflight.release_security_fixture(
+            paths["build"].parent,
+            source_tree_digest=build["metadata"]["source_tree_digest"],
+            images=reproduced_images,
+        )
+        paths.update(security)
+        bench = json.loads(paths["bench"].read_text(encoding="utf-8"))
+        bench["policy_hash"] = policy_hash
+        paths["bench"].write_text(json.dumps(bench, sort_keys=True) + "\n", encoding="utf-8")
     env = os.environ.copy()
     if allow_test_bypass:
         env["SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"] = "1"
@@ -261,6 +279,24 @@ def run_preflight(paths: dict[str, Path], *extra: str, allow_test_bypass: bool =
             str(paths["image_signatures"]),
             "--bench",
             str(paths["bench"]),
+            "--policy-bundle",
+            str(paths["policy_bundle"]),
+            "--policy-trusted-public-key",
+            str(paths["policy_key"]),
+            "--policy-identity-verification",
+            str(paths["policy_identity"]),
+            "--policy-activation-verification",
+            str(paths["activation_report"]),
+            "--policy-activation-signature",
+            str(paths["activation_signature"]),
+            "--policy-activation-trusted-public-key",
+            str(paths["activation_key"]),
+            "--reproducible-build-verification",
+            str(paths["reproducibility_report"]),
+            "--reproducible-build-signature",
+            str(paths["reproducibility_signature"]),
+            "--reproducible-build-trusted-public-key",
+            str(paths["reproducibility_key"]),
             "--kms-materials",
             str(paths["kms_materials"]),
             "--config-out",

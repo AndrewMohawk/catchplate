@@ -20,6 +20,10 @@ def main() -> None:
     if "AWS_KMS_MATERIALS_OUT ?= /etc/serverware/kms-materials.json" not in makefile:
         raise AssertionError("production release proof does not default KMS materials to the production /etc path")
     required_order = [
+        "validate-production-policy-identity",
+        "validate-policy-activation-evidence",
+        "validate-reproducible-builds",
+        "production-release-input-preflight",
         "build-production-images",
         "decision-gate-bench-evidence",
         "publish-production-images",
@@ -27,6 +31,7 @@ def main() -> None:
         "production-release-provenance",
         "sign-production-images",
         "prepare-aws-kms-materials",
+        "production-host-preflight",
         "deploy-production",
         "run-production-readiness",
     ]
@@ -42,6 +47,59 @@ def main() -> None:
         raise AssertionError("production-release-proof disables final preflight")
     if "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in body:
         raise AssertionError("production-release-proof enables the test-only preflight bypass")
+    if body.find("production-host-preflight") > body.find("deploy-production"):
+        raise AssertionError("production-release-proof deploys before full host preflight")
+    if body.find("validate-production-policy-identity") > body.find("build-production-images"):
+        raise AssertionError("production-release-proof builds before validating production principal identity")
+
+    input_preflight_body = target_body(makefile, "production-release-input-preflight")
+    for required in (
+        "scripts/production_release_input_preflight.py",
+        "$(PRODUCTION_READINESS_ENV)",
+        "$(AWS_KMS_MATERIALS_SPEC)",
+        "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)",
+        "$(PRODUCTION_DEPLOY_COMMAND)",
+        "$(PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT)",
+        "$(POLICY_ACTIVATION_VERIFICATION_SIGNATURE)",
+        "$(POLICY_ACTIVATION_VERIFICATION_TRUSTED_PUBLIC_KEY)",
+        "$(REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE)",
+        "$(REPRODUCIBLE_BUILD_VERIFICATION_TRUSTED_PUBLIC_KEY)",
+    ):
+        if required not in input_preflight_body:
+            raise AssertionError(f"production release input preflight omits {required}")
+
+    identity_body = target_body(makefile, "validate-production-policy-identity")
+    for required in (
+        "scripts/verify_production_policy_identity.py",
+        "$(PRODUCTION_POLICY_BUNDLE)",
+        "$(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)",
+        "$(PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT)",
+    ):
+        if required not in identity_body:
+            raise AssertionError(f"production policy identity validation omits {required}")
+
+    activation_body = target_body(makefile, "validate-policy-activation-evidence")
+    for required in (
+        "--trusted-policy-public-key",
+        "$(POLICY_ACTIVATION_TRUSTED_POLICY_PUBLIC_KEY)",
+        "--trusted-audit-checkpoint-public-key",
+        "$(POLICY_ACTIVATION_TRUSTED_AUDIT_CHECKPOINT_PUBLIC_KEY)",
+        "--expected-data-plane-actor",
+        "$(POLICY_ACTIVATION_EXPECTED_DATA_PLANE_ACTOR)",
+    ):
+        if required not in activation_body:
+            raise AssertionError(f"production policy activation validation omits {required}")
+
+    reproducibility_body = target_body(makefile, "validate-reproducible-builds")
+    for required in (
+        "$(REPRODUCIBLE_BUILD_LEFT)",
+        "$(REPRODUCIBLE_BUILD_RIGHT)",
+        "--trusted-builder",
+        "$(REPRODUCIBLE_BUILD_TRUSTED_BUILDER_LEFT)",
+        "$(REPRODUCIBLE_BUILD_TRUSTED_BUILDER_RIGHT)",
+    ):
+        if required not in reproducibility_body:
+            raise AssertionError(f"production reproducibility validation omits {required}")
 
     deploy_body = target_body(makefile, "deploy-production")
     if "PRODUCTION_DEPLOY_COMMAND" not in deploy_body or "is required" not in deploy_body:
@@ -78,6 +136,13 @@ def main() -> None:
         raise AssertionError("production-host-preflight does not verify benchmark evidence")
     if "--production-images-published" not in preflight_body or "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" not in preflight_body:
         raise AssertionError("production-host-preflight does not verify the published image manifest")
+    for required in (
+        "--policy-identity-verification",
+        "--policy-activation-signature",
+        "--reproducible-build-signature",
+    ):
+        if required not in preflight_body:
+            raise AssertionError(f"production-host-preflight omits release binding {required}")
 
     run_body = target_body(makefile, "run-production-readiness")
     if "production-host-preflight" not in run_body:
@@ -88,6 +153,14 @@ def main() -> None:
         raise AssertionError("run-production-readiness does not pass production image build/publish evidence to completion")
     if "--production-images-env" not in run_body:
         raise AssertionError("run-production-readiness does not pass current production image env evidence to completion")
+    for required in (
+        "--policy-bundle",
+        "--policy-identity-verification",
+        "--policy-activation-verification",
+        "--reproducible-build-verification",
+    ):
+        if required not in run_body:
+            raise AssertionError(f"run-production-readiness omits release binding {required}")
     if "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in run_body:
         raise AssertionError("run-production-readiness enables the test-only preflight bypass")
     if "--skip-current-host-check" in run_body:

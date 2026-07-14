@@ -27,7 +27,9 @@ import generate_production_handoff as handoff  # noqa: E402
 import generate_release_provenance  # noqa: E402
 import merge_production_images_env  # noqa: E402
 import prepare_aws_kms_materials  # noqa: E402
+import production_release_input_preflight  # noqa: E402
 import run_production_readiness  # noqa: E402
+import verify_production_policy_identity  # noqa: E402
 
 REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 TEST_ONLY_BYPASS_ENV = "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"
@@ -624,6 +626,94 @@ def artifact_check(
     return status, failures
 
 
+def release_security_evidence_check(
+    args: argparse.Namespace,
+    release_artifacts: dict[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    status: dict[str, Any] = {"ok": False, "secret_values_redacted": True}
+    failures: list[str] = []
+    try:
+        identity = verify_production_policy_identity.verify_persisted_report(
+            bundle_path=Path(args.policy_bundle),
+            trusted_public_key_path=Path(args.policy_trusted_public_key),
+            report_path=Path(args.policy_identity_verification),
+        )
+        bench = release_artifacts.get("bench") or {}
+        if bench.get("policy_hash") != identity["policyHash"]:
+            raise ValueError("decision-gate benchmark policy hash does not match the identity-verified policy")
+
+        activation = production_release_input_preflight.verify_externally_signed_report(
+            report_path=Path(args.policy_activation_verification),
+            signature_path=Path(args.policy_activation_signature),
+            trusted_public_key_path=Path(args.policy_activation_trusted_public_key),
+            purpose=production_release_input_preflight.ACTIVATION_PURPOSE,
+            api_version=production_release_input_preflight.ACTIVATION_API_VERSION,
+            kind=production_release_input_preflight.ACTIVATION_KIND,
+        )
+        if activation["report"].get("production_mode") is not True or activation["report"].get("environment") != "production":
+            raise ValueError("policy activation verification is not production evidence")
+        if activation["report"].get("candidate_policy_hash") != identity["policyHash"]:
+            raise ValueError("policy activation candidate hash does not match the identity-verified policy")
+
+        reproducibility = production_release_input_preflight.verify_externally_signed_report(
+            report_path=Path(args.reproducible_build_verification),
+            signature_path=Path(args.reproducible_build_signature),
+            trusted_public_key_path=Path(args.reproducible_build_trusted_public_key),
+            purpose=production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
+            api_version=production_release_input_preflight.REPRODUCIBILITY_API_VERSION,
+            kind=production_release_input_preflight.REPRODUCIBILITY_KIND,
+        )
+        reproducibility_report = reproducibility["report"]
+        if reproducibility_report.get("reproducible") is not True:
+            raise ValueError("reproducible-build verification did not prove matching artifacts")
+        reproducibility_scope = reproducibility_report.get("scope")
+        if not isinstance(reproducibility_scope, dict) or reproducibility_scope.get("independent_execution_proven") is not True:
+            raise ValueError("reproducible-build verification did not prove two independent trusted builders")
+        production_images = release_artifacts.get("production_images") or {}
+        if reproducibility_report.get("source_tree_digest") != production_images.get("source_tree_digest"):
+            raise ValueError("reproducible-build source digest does not match the production build")
+        expected_images = {
+            item.get("service"): item.get("image_id")
+            for item in production_images.get("images") or []
+            if isinstance(item, dict)
+        }
+        reproduced_images = {
+            item.get("service"): item.get("image_id")
+            for item in reproducibility_report.get("images") or []
+            if isinstance(item, dict)
+        }
+        if reproduced_images != expected_images:
+            raise ValueError("reproducible-build image IDs do not match the production build")
+        production_gate = next(
+            (item for item in production_images.get("images") or [] if item.get("service") == "serverware-decision-gate"),
+            {},
+        )
+        reproduced_gate = next(
+            (item for item in reproducibility_report.get("images") or [] if item.get("service") == "serverware-decision-gate"),
+            {},
+        )
+        if reproduced_gate.get("rust_binary_sha256") != production_gate.get("binary_digest"):
+            raise ValueError("reproducible-build Rust binary digest does not match the production build")
+        status.update(
+            {
+                "policy_identity": identity,
+                "policy_activation": {key: value for key, value in activation.items() if key != "report"},
+                "reproducible_builds": {
+                    **{key: value for key, value in reproducibility.items() if key != "report"},
+                    "scope": reproducibility_scope,
+                    "sourceTreeDigest": reproducibility_report.get("source_tree_digest"),
+                    "productionBuildBound": True,
+                },
+                "benchmarkPolicyBound": True,
+            }
+        )
+    except Exception as exc:
+        failures.append(f"release security evidence check failed: {exc}")
+        status["error"] = str(exc)
+    status["ok"] = not failures
+    return status, failures
+
+
 def release_artifact_mounts_check(
     env: dict[str, str],
     *,
@@ -799,6 +889,15 @@ def main() -> None:
     parser.add_argument("--image-signatures-summary", default=".tmp/image-signatures-summary.json")
     parser.add_argument("--image-signatures", default=".tmp/image-signatures.json")
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
+    parser.add_argument("--policy-bundle", required=True)
+    parser.add_argument("--policy-trusted-public-key", required=True)
+    parser.add_argument("--policy-identity-verification", required=True)
+    parser.add_argument("--policy-activation-verification", required=True)
+    parser.add_argument("--policy-activation-signature", required=True)
+    parser.add_argument("--policy-activation-trusted-public-key", required=True)
+    parser.add_argument("--reproducible-build-verification", required=True)
+    parser.add_argument("--reproducible-build-signature", required=True)
+    parser.add_argument("--reproducible-build-trusted-public-key", required=True)
     parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
     parser.add_argument("--config-out", default=".tmp/production-host-preflight-config.json")
     parser.add_argument("--out", default=".tmp/production-host-preflight.json")
@@ -836,6 +935,8 @@ def main() -> None:
         loaded_env.get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") if loaded_env else None,
     )
     failures.extend(artifact_failures)
+    release_security, release_security_failures = release_security_evidence_check(args, artifacts)
+    failures.extend(release_security_failures)
     compose_status, compose_failures = production_compose_check(
         compose_file=Path(args.compose_file),
         env_file=Path(args.env_file),
@@ -866,6 +967,7 @@ def main() -> None:
             "production_images_env_merge": merge_status,
             "production_compose": compose_status,
             "release_artifacts": artifacts,
+            "release_security_evidence": release_security,
             "release_artifact_mounts": artifact_mounts,
             "kms_materials": kms,
         },

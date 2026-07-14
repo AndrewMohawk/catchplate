@@ -3,7 +3,7 @@ set -euo pipefail
 
 GATE="${DECISION_GATE_BASE:-http://localhost:9091}"
 BASE="${BASE:-http://localhost:3000}"
-export SERVERWARE_DATA_PLANE_AUDIT_TOKEN="${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:-dev-data-plane-audit-token}"
+export SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN="${SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN:-dev-rust-management-token}"
 
 python3 - "$GATE" <<'PY'
 import json
@@ -21,7 +21,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -77,7 +77,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -158,7 +158,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -237,7 +237,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -306,7 +306,7 @@ def request_json(path: str, payload: dict | None = None) -> dict:
         data=data,
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN"],
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:

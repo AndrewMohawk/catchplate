@@ -15,7 +15,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import build_production_images
+import production_release_input_preflight
 import run_production_readiness
+import test_production_release_input_preflight
+import verify_production_policy_identity
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_TREE_DIGEST = build_production_images.source_tree_digest()
@@ -192,6 +195,9 @@ def digest(char: str) -> str:
     return "sha256:" + char * 64
 
 
+POLICY_DIGEST = digest("8")
+
+
 PROXY_CLIENT_NONCE = b64e(b"n" * 32)
 PROXY_TLS_CHANNEL_BINDING = b64e(b"t" * 32)
 PROXY_REQUEST_DIGEST = digest("1")
@@ -327,7 +333,7 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
         "content-length": str(len(body)),
         "content-type": "application/json",
         "x-serverware-client-request-digest": client_request_digest,
-        "x-serverware-policy-hash": digest("8"),
+        "x-serverware-policy-hash": POLICY_DIGEST,
         "x-serverware-request-digest": PROXY_REQUEST_DIGEST,
         "x-serverware-operation-digest": PROXY_OPERATION_DIGEST,
         "x-serverware-response-body-sha256": body_digest,
@@ -373,7 +379,7 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
             "operation_digest": PROXY_OPERATION_DIGEST,
             "response": json.loads(json.dumps(response)),
             "tls_channel_binding": json.loads(json.dumps(tls_channel_binding)),
-            "policy_digest": digest("8"),
+            "policy_digest": POLICY_DIGEST,
             "runtime_manifest_digest": digest("7"),
             "data_plane_binary_digest": digest("9"),
             "release_digest": provenance_digest,
@@ -424,7 +430,7 @@ def benchmark_document(*, p99_ms: float = 9.0) -> dict[str, Any]:
         "p95_ms": 5.0,
         "p99_ms": p99_ms,
         "data_plane_binary_digest": digest("9"),
-        "policy_hash": digest("8"),
+        "policy_hash": POLICY_DIGEST,
         "runtime_manifest_digest": digest("7"),
         "attestation_nonce_before": "benchmark-nonce-before",
         "attestation_nonce_after": "benchmark-nonce-after",
@@ -770,7 +776,7 @@ def nitro_evidence(provenance_digest: str) -> dict[str, Any]:
                 "materials": ["broker-kek", "decision-gate-ca"],
                 "debug": False,
                 "release_channel": "prod",
-                "policy_bundle_digest": digest("8"),
+                "policy_bundle_digest": POLICY_DIGEST,
                 "policy_sequence": 12,
                 "policy_high_water_digest": digest("6"),
                 "runtime_manifest_digest": digest("7"),
@@ -1050,6 +1056,27 @@ def file_summary(path: Path, label: str) -> dict[str, Any]:
 def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_DIGEST) -> dict[str, Any]:
     control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64
     gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64
+    policy_identity = verify_production_policy_identity.verify_persisted_report(
+        bundle_path=tmp / "policy-bundle.json",
+        trusted_public_key_path=tmp / "policy-signing.pub.pem",
+        report_path=tmp / "production-policy-identity-verification.json",
+    )
+    activation = production_release_input_preflight.verify_externally_signed_report(
+        report_path=tmp / "policy-activation-verification.json",
+        signature_path=tmp / "policy-activation-verification.signature.json",
+        trusted_public_key_path=tmp / "policy-activation-verification.pub.pem",
+        purpose=production_release_input_preflight.ACTIVATION_PURPOSE,
+        api_version=production_release_input_preflight.ACTIVATION_API_VERSION,
+        kind=production_release_input_preflight.ACTIVATION_KIND,
+    )
+    reproducibility = production_release_input_preflight.verify_externally_signed_report(
+        report_path=tmp / "reproducible-build-verification.json",
+        signature_path=tmp / "reproducible-build-verification.signature.json",
+        trusted_public_key_path=tmp / "reproducible-build-verification.pub.pem",
+        purpose=production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
+        api_version=production_release_input_preflight.REPRODUCIBILITY_API_VERSION,
+        kind=production_release_input_preflight.REPRODUCIBILITY_KIND,
+    )
     return {
         "apiVersion": "serverware.productionHostPreflight/v1",
         "kind": "ProductionHostPreflight",
@@ -1136,6 +1163,19 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                 "file": "docker-compose.production.yml",
                 "sha256": digest("4"),
                 "secret_values_redacted": True,
+            },
+            "release_security_evidence": {
+                "ok": True,
+                "secret_values_redacted": True,
+                "policy_identity": policy_identity,
+                "policy_activation": {key: value for key, value in activation.items() if key != "report"},
+                "reproducible_builds": {
+                    **{key: value for key, value in reproducibility.items() if key != "report"},
+                    "scope": reproducibility["report"]["scope"],
+                    "sourceTreeDigest": reproducibility["report"]["source_tree_digest"],
+                    "productionBuildBound": True,
+                },
+                "benchmarkPolicyBound": True,
             },
             "release_artifact_mounts": {
                 "ok": True,
@@ -1288,6 +1328,24 @@ def run_verifier(
             str(tmp / "image-signatures.json"),
             "--bench",
             str(tmp / "decision-gate-rs-bench.json"),
+            "--policy-bundle",
+            str(tmp / "policy-bundle.json"),
+            "--policy-trusted-public-key",
+            str(tmp / "policy-signing.pub.pem"),
+            "--policy-identity-verification",
+            str(tmp / "production-policy-identity-verification.json"),
+            "--policy-activation-verification",
+            str(tmp / "policy-activation-verification.json"),
+            "--policy-activation-signature",
+            str(tmp / "policy-activation-verification.signature.json"),
+            "--policy-activation-trusted-public-key",
+            str(tmp / "policy-activation-verification.pub.pem"),
+            "--reproducible-build-verification",
+            str(tmp / "reproducible-build-verification.json"),
+            "--reproducible-build-signature",
+            str(tmp / "reproducible-build-verification.signature.json"),
+            "--reproducible-build-trusted-public-key",
+            str(tmp / "reproducible-build-verification.pub.pem"),
             "--kms-materials",
             str(tmp / "kms-materials.json"),
             *proxy_proof_args,
@@ -1778,15 +1836,28 @@ def test_proxy_response_proof_requirements(
 
 
 def main() -> None:
+    global POLICY_DIGEST
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
+        production_build = production_images_build()
+        reproduced_images = []
+        for image in production_build["images"]:
+            item = {"service": image["service"], "image_id": image["image_id"]}
+            if image["service"] == "serverware-decision-gate":
+                item["rust_binary_sha256"] = image["binary_digest"]
+            reproduced_images.append(item)
+        _, POLICY_DIGEST = test_production_release_input_preflight.release_security_fixture(
+            tmp,
+            source_tree_digest=SOURCE_TREE_DIGEST,
+            images=reproduced_images,
+        )
         provenance_summary, provenance_document = release_provenance()
         nitro = nitro_evidence(provenance_summary["provenance_digest"])
         image_summary, image_document = image_signatures(provenance_summary["provenance_digest"])
         write_production_env_files(tmp)
         write(tmp / "production-readiness.json", production_readiness(nitro, tmp))
         write(tmp / "nitro-kms-evidence.json", nitro)
-        write(tmp / "production-images-build.json", production_images_build())
+        write(tmp / "production-images-build.json", production_build)
         write(tmp / "production-images-published.json", production_images_published())
         write(tmp / "release-provenance-summary.json", provenance_summary)
         write(tmp / "release-provenance.json", provenance_document)

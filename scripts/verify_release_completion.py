@@ -19,7 +19,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 import build_production_images
 import merge_production_images_env
+import production_release_input_preflight
 import run_production_readiness
+import verify_production_policy_identity
 
 
 REQUIRED_READINESS_CHECKS = {
@@ -1286,6 +1288,39 @@ def verify_production_host_preflight(
     require_preflight_file_digest(preflight, paths, "image_signatures_summary", "image_signatures_summary", "file", "sha256")
     require_preflight_file_digest(preflight, paths, "image_signatures", "image_signatures", "file", "sha256")
     require_preflight_file_digest(preflight, paths, "bench", "bench", "file", "sha256")
+    release_security = checks.get("release_security_evidence") if isinstance(checks.get("release_security_evidence"), dict) else {}
+    require(release_security.get("ok") is True, "production host preflight release security evidence did not pass")
+    policy_identity = release_security.get("policy_identity") if isinstance(release_security.get("policy_identity"), dict) else {}
+    require(
+        policy_identity.get("reportSha256") == file_digest(paths["policy_identity_verification"]),
+        "production host preflight policy identity report digest does not match current artifact",
+    )
+    require(
+        policy_identity.get("policyBundleSha256") == file_digest(paths["policy_bundle"]),
+        "production host preflight policy bundle digest does not match current artifact",
+    )
+    require(
+        policy_identity.get("trustedPublicKeySha256") == file_digest(paths["policy_trusted_public_key"]),
+        "production host preflight policy trust root digest does not match current artifact",
+    )
+    activation_evidence = release_security.get("policy_activation") if isinstance(release_security.get("policy_activation"), dict) else {}
+    require(
+        activation_evidence.get("reportSha256") == file_digest(paths["policy_activation_verification"]),
+        "production host preflight activation report digest does not match current artifact",
+    )
+    require(
+        activation_evidence.get("signatureSha256") == file_digest(paths["policy_activation_signature"]),
+        "production host preflight activation signature digest does not match current artifact",
+    )
+    reproducibility_evidence = release_security.get("reproducible_builds") if isinstance(release_security.get("reproducible_builds"), dict) else {}
+    require(
+        reproducibility_evidence.get("reportSha256") == file_digest(paths["reproducible_build_verification"]),
+        "production host preflight reproducibility report digest does not match current artifact",
+    )
+    require(
+        reproducibility_evidence.get("signatureSha256") == file_digest(paths["reproducible_build_signature"]),
+        "production host preflight reproducibility signature digest does not match current artifact",
+    )
     artifact_mounts = checks.get("release_artifact_mounts") if isinstance(checks.get("release_artifact_mounts"), dict) else {}
     require(artifact_mounts.get("ok") is True, "production host preflight release artifact mount check did not pass")
     mounted_artifacts = artifact_mounts.get("artifacts") if isinstance(artifact_mounts.get("artifacts"), list) else []
@@ -1368,6 +1403,12 @@ def verify_production_host_preflight(
         "release_artifact_mounts": mounted_artifacts,
         "production_image_refs": sorted(readiness_summary["production_images"]),
         "benchmark_binary_digest": benchmark_binary_digest,
+        "release_security_evidence": {
+            "policy_identity": policy_identity,
+            "policy_activation": activation_evidence,
+            "reproducible_builds": reproducibility_evidence,
+            "benchmarkPolicyBound": release_security.get("benchmarkPolicyBound"),
+        },
         "kms_materials": sorted(REQUIRED_MATERIALS),
         "kms_material_key_ids": {material: kms_material_key_ids[material] for material in sorted(REQUIRED_MATERIALS)},
         "kms_material_bindings": {
@@ -2385,6 +2426,105 @@ def write_output(path: Path, proof: dict[str, Any]) -> str:
     return sha256_prefixed_bytes(payload)
 
 
+def verify_release_security_evidence(
+    *,
+    paths: dict[str, Path],
+    production_build: dict[str, Any],
+    benchmark: dict[str, Any],
+    attested_runtime: dict[str, Any],
+    preflight: dict[str, Any],
+) -> dict[str, Any]:
+    identity = verify_production_policy_identity.verify_persisted_report(
+        bundle_path=paths["policy_bundle"],
+        trusted_public_key_path=paths["policy_trusted_public_key"],
+        report_path=paths["policy_identity_verification"],
+    )
+    require(identity["policyHash"] == benchmark["policy_hash"], "identity-verified policy does not match benchmark policy")
+    require(identity["policyHash"] == attested_runtime["policy_digest"], "identity-verified policy does not match Nitro-attested policy")
+
+    activation = production_release_input_preflight.verify_externally_signed_report(
+        report_path=paths["policy_activation_verification"],
+        signature_path=paths["policy_activation_signature"],
+        trusted_public_key_path=paths["policy_activation_trusted_public_key"],
+        purpose=production_release_input_preflight.ACTIVATION_PURPOSE,
+        api_version=production_release_input_preflight.ACTIVATION_API_VERSION,
+        kind=production_release_input_preflight.ACTIVATION_KIND,
+    )
+    activation_report = activation["report"]
+    require(activation_report.get("production_mode") is True, "policy activation report is not production evidence")
+    require(activation_report.get("environment") == "production", "policy activation environment is not production")
+    require(
+        activation_report.get("candidate_policy_hash") == identity["policyHash"],
+        "activated candidate does not match the identity-verified policy",
+    )
+
+    reproducibility = production_release_input_preflight.verify_externally_signed_report(
+        report_path=paths["reproducible_build_verification"],
+        signature_path=paths["reproducible_build_signature"],
+        trusted_public_key_path=paths["reproducible_build_trusted_public_key"],
+        purpose=production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
+        api_version=production_release_input_preflight.REPRODUCIBILITY_API_VERSION,
+        kind=production_release_input_preflight.REPRODUCIBILITY_KIND,
+    )
+    reproducibility_report = reproducibility["report"]
+    require(reproducibility_report.get("reproducible") is True, "reproducible-build report did not pass")
+    reproducibility_scope = reproducibility_report.get("scope")
+    require(
+        isinstance(reproducibility_scope, dict)
+        and reproducibility_scope.get("independent_execution_proven") is True,
+        "reproducible-build report did not prove two independent trusted builders",
+    )
+    require(
+        reproducibility_report.get("source_tree_digest") == production_build["source_tree_digest"],
+        "reproducible-build source digest does not match the production build",
+    )
+    expected_images = {
+        item.get("service"): item.get("image_id")
+        for item in production_build.get("images") or []
+        if isinstance(item, dict)
+    }
+    reproduced_images = {
+        item.get("service"): item.get("image_id")
+        for item in reproducibility_report.get("images") or []
+        if isinstance(item, dict)
+    }
+    require(reproduced_images == expected_images, "reproducible-build image IDs do not match the production build")
+    production_gate = next(
+        (item for item in production_build.get("images") or [] if item.get("service") == "serverware-decision-gate"),
+        {},
+    )
+    reproduced_gate = next(
+        (item for item in reproducibility_report.get("images") or [] if item.get("service") == "serverware-decision-gate"),
+        {},
+    )
+    require(
+        reproduced_gate.get("rust_binary_sha256") == production_gate.get("binary_digest"),
+        "reproducible-build Rust binary digest does not match the production build",
+    )
+    preflight_security = preflight.get("release_security_evidence") or {}
+    require(preflight_security.get("policy_identity") == identity, "completion policy identity differs from host preflight")
+    require(
+        (preflight_security.get("policy_activation") or {}).get("reportSha256") == activation["reportSha256"],
+        "completion activation evidence differs from host preflight",
+    )
+    require(
+        (preflight_security.get("reproducible_builds") or {}).get("reportSha256") == reproducibility["reportSha256"],
+        "completion reproducibility evidence differs from host preflight",
+    )
+    return {
+        "policy_identity": identity,
+        "policy_activation": {key: value for key, value in activation.items() if key != "report"},
+        "reproducible_builds": {
+            **{key: value for key, value in reproducibility.items() if key != "report"},
+            "scope": reproducibility_scope,
+            "sourceTreeDigest": reproducibility_report.get("source_tree_digest"),
+            "productionBuildBound": True,
+        },
+        "benchmarkPolicyBound": True,
+        "nitroAttestedPolicyBound": True,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify the Serverware final release-completion artifact set.")
     parser.add_argument("--production-readiness", default=".tmp/production-readiness.json")
@@ -2401,6 +2541,15 @@ def main() -> None:
     parser.add_argument("--image-signatures-summary", default=".tmp/image-signatures-summary.json")
     parser.add_argument("--image-signatures", default=".tmp/image-signatures.json")
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
+    parser.add_argument("--policy-bundle", required=True)
+    parser.add_argument("--policy-trusted-public-key", required=True)
+    parser.add_argument("--policy-identity-verification", required=True)
+    parser.add_argument("--policy-activation-verification", required=True)
+    parser.add_argument("--policy-activation-signature", required=True)
+    parser.add_argument("--policy-activation-trusted-public-key", required=True)
+    parser.add_argument("--reproducible-build-verification", required=True)
+    parser.add_argument("--reproducible-build-signature", required=True)
+    parser.add_argument("--reproducible-build-trusted-public-key", required=True)
     parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
     parser.add_argument("--proxy-response-proof", default=None)
     parser.add_argument("--proxy-proof-verifier-public-key", default=None)
@@ -2445,6 +2594,15 @@ def main() -> None:
         "image_signatures_summary": Path(args.image_signatures_summary),
         "image_signatures": Path(args.image_signatures),
         "bench": Path(args.bench),
+        "policy_bundle": Path(args.policy_bundle),
+        "policy_trusted_public_key": Path(args.policy_trusted_public_key),
+        "policy_identity_verification": Path(args.policy_identity_verification),
+        "policy_activation_verification": Path(args.policy_activation_verification),
+        "policy_activation_signature": Path(args.policy_activation_signature),
+        "policy_activation_trusted_public_key": Path(args.policy_activation_trusted_public_key),
+        "reproducible_build_verification": Path(args.reproducible_build_verification),
+        "reproducible_build_signature": Path(args.reproducible_build_signature),
+        "reproducible_build_trusted_public_key": Path(args.reproducible_build_trusted_public_key),
         "kms_materials": Path(args.kms_materials),
         "proxy_response_proof": Path(args.proxy_response_proof),
         "proxy_proof_verifier_public_key": Path(args.proxy_proof_verifier_public_key),
@@ -2561,6 +2719,13 @@ def main() -> None:
         attested_runtime["source_tree_digest"] == provenance_summary_out["source_tree_digest"],
         "fresh Nitro-attested source tree digest does not match signed release provenance",
     )
+    release_security_summary = verify_release_security_evidence(
+        paths=paths,
+        production_build=production_images_build_summary,
+        benchmark=benchmark_summary,
+        attested_runtime=attested_runtime,
+        preflight=preflight_summary,
+    )
     proxy_response_summary = verify_production_proxy_response_proof(
         proxy_response_proof,
         trusted_verifier_public_key_pem=trusted_proxy_verifier_public_key_pem,
@@ -2609,6 +2774,7 @@ def main() -> None:
         "release_provenance": provenance_summary_out,
         "image_signatures": image_summary_out,
         "benchmark": benchmark_summary,
+        "release_security_evidence": release_security_summary,
         "production_proxy_response_proof": proxy_response_summary,
     }
     if args.out:

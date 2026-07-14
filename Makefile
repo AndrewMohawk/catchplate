@@ -1,4 +1,4 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-host-preflight deploy-production production-release-proof prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-host-preflight verify-production-release-proof verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
@@ -12,7 +12,28 @@ PRODUCTION_IMAGES_BUILD_FILE ?= .tmp/production-images-build.json
 PRODUCTION_IMAGES_PUBLISHED_FILE ?= .tmp/production-images-published.json
 PRODUCTION_IMAGES_ENV_OUT ?= .tmp/production-images.env
 PRODUCTION_HANDOFF_OUT ?= .tmp/production-handoff.json
+PRODUCTION_RELEASE_INPUT_PREFLIGHT_OUT ?= .tmp/production-release-input-preflight.json
 PRODUCTION_HOST_PREFLIGHT_OUT ?= .tmp/production-host-preflight.json
+PRODUCTION_POLICY_BUNDLE ?=
+PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY ?=
+PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT ?= .tmp/production-policy-identity-verification.json
+POLICY_ACTIVATION_EVIDENCE_FILE ?= .tmp/policy-activation-evidence.json
+POLICY_ACTIVATION_VERIFICATION_OUT ?= .tmp/policy-activation-verification.json
+POLICY_ACTIVATION_TRUSTED_POLICY_PUBLIC_KEY ?= $(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)
+POLICY_ACTIVATION_TRUSTED_AUDIT_CHECKPOINT_PUBLIC_KEY ?=
+POLICY_ACTIVATION_EXPECTED_DATA_PLANE_ACTOR ?=
+POLICY_ACTIVATION_VERIFICATION_SIGNATURE ?=
+POLICY_ACTIVATION_VERIFICATION_TRUSTED_PUBLIC_KEY ?=
+REPRODUCIBLE_BUILD_CAPTURE_OUT ?= .tmp/reproducible-build-manifest.json
+REPRODUCIBLE_BUILD_BUILDER_ID ?=
+REPRODUCIBLE_BUILD_SIGNING_KEY ?=
+REPRODUCIBLE_BUILD_LEFT ?=
+REPRODUCIBLE_BUILD_RIGHT ?=
+REPRODUCIBLE_BUILD_TRUSTED_BUILDER_LEFT ?=
+REPRODUCIBLE_BUILD_TRUSTED_BUILDER_RIGHT ?=
+REPRODUCIBLE_BUILD_VERIFICATION_OUT ?= .tmp/reproducible-build-verification.json
+REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE ?=
+REPRODUCIBLE_BUILD_VERIFICATION_TRUSTED_PUBLIC_KEY ?=
 PRODUCTION_IMAGE_REGISTRY_PREFIX ?=
 PRODUCTION_IMAGE_TAG ?= production-candidate
 AWS_KMS_MATERIALS_SPEC ?= ops/aws-kms-materials.spec.json
@@ -208,6 +229,30 @@ production-handoff:
 		--tag "$(PRODUCTION_IMAGE_TAG)" \
 		--out "$(PRODUCTION_HANDOFF_OUT)"
 
+production-release-input-preflight:
+	python3 scripts/production_release_input_preflight.py \
+		--env-file "$(PRODUCTION_READINESS_ENV)" \
+		--kms-spec "$(AWS_KMS_MATERIALS_SPEC)" \
+		--registry-prefix "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" \
+		--deploy-command "$(PRODUCTION_DEPLOY_COMMAND)" \
+		--policy-bundle "$(PRODUCTION_POLICY_BUNDLE)" \
+		--policy-trusted-public-key "$(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)" \
+		--policy-identity-verification "$(PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT)" \
+		--policy-activation-verification "$(POLICY_ACTIVATION_VERIFICATION_OUT)" \
+		--policy-activation-signature "$(POLICY_ACTIVATION_VERIFICATION_SIGNATURE)" \
+		--policy-activation-trusted-public-key "$(POLICY_ACTIVATION_VERIFICATION_TRUSTED_PUBLIC_KEY)" \
+		--reproducible-build-verification "$(REPRODUCIBLE_BUILD_VERIFICATION_OUT)" \
+		--reproducible-build-signature "$(REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE)" \
+		--reproducible-build-trusted-public-key "$(REPRODUCIBLE_BUILD_VERIFICATION_TRUSTED_PUBLIC_KEY)" \
+		--out "$(PRODUCTION_RELEASE_INPUT_PREFLIGHT_OUT)"
+
+validate-production-policy-identity:
+	@if [ -z "$(PRODUCTION_POLICY_BUNDLE)" ] || [ -z "$(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)" ]; then echo "PRODUCTION_POLICY_BUNDLE and PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY are required" >&2; exit 2; fi
+	python3 scripts/verify_production_policy_identity.py \
+		--bundle "$(PRODUCTION_POLICY_BUNDLE)" \
+		--trusted-public-key "$(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)" \
+		--out "$(PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT)"
+
 production-host-preflight:
 	python3 scripts/production_host_preflight.py \
 		--env-file "$(PRODUCTION_READINESS_ENV)" \
@@ -219,6 +264,15 @@ production-host-preflight:
 		--image-signatures-summary "$(IMAGE_SIGNATURES_SUMMARY_FILE)" \
 		--image-signatures "$(IMAGE_SIGNATURES_FILE)" \
 		--bench "$(DECISION_GATE_BENCH_FILE)" \
+		--policy-bundle "$(PRODUCTION_POLICY_BUNDLE)" \
+		--policy-trusted-public-key "$(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)" \
+		--policy-identity-verification "$(PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT)" \
+		--policy-activation-verification "$(POLICY_ACTIVATION_VERIFICATION_OUT)" \
+		--policy-activation-signature "$(POLICY_ACTIVATION_VERIFICATION_SIGNATURE)" \
+		--policy-activation-trusted-public-key "$(POLICY_ACTIVATION_VERIFICATION_TRUSTED_PUBLIC_KEY)" \
+		--reproducible-build-verification "$(REPRODUCIBLE_BUILD_VERIFICATION_OUT)" \
+		--reproducible-build-signature "$(REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE)" \
+		--reproducible-build-trusted-public-key "$(REPRODUCIBLE_BUILD_VERIFICATION_TRUSTED_PUBLIC_KEY)" \
 		--kms-materials "$(AWS_KMS_MATERIALS_OUT)" \
 		--out "$(PRODUCTION_HOST_PREFLIGHT_OUT)"
 
@@ -227,6 +281,10 @@ deploy-production:
 	$(PRODUCTION_DEPLOY_COMMAND)
 
 production-release-proof:
+	$(MAKE) validate-production-policy-identity
+	$(MAKE) validate-policy-activation-evidence
+	$(MAKE) validate-reproducible-builds
+	$(MAKE) production-release-input-preflight
 	$(MAKE) build-production-images
 	$(MAKE) decision-gate-bench-evidence
 	$(MAKE) publish-production-images
@@ -234,8 +292,37 @@ production-release-proof:
 	$(MAKE) production-release-provenance
 	$(MAKE) sign-production-images
 	$(MAKE) prepare-aws-kms-materials
+	$(MAKE) production-host-preflight
 	$(MAKE) deploy-production
 	$(MAKE) run-production-readiness
+
+capture-reproducible-build:
+	@if [ -z "$(REPRODUCIBLE_BUILD_BUILDER_ID)" ] || [ -z "$(REPRODUCIBLE_BUILD_SIGNING_KEY)" ]; then echo "REPRODUCIBLE_BUILD_BUILDER_ID and REPRODUCIBLE_BUILD_SIGNING_KEY are required" >&2; exit 2; fi
+	python3 scripts/verify_reproducible_builds.py capture \
+		--build "$(PRODUCTION_IMAGES_BUILD_FILE)" \
+		--builder-id "$(REPRODUCIBLE_BUILD_BUILDER_ID)" \
+		--signing-key "$(REPRODUCIBLE_BUILD_SIGNING_KEY)" \
+		--out "$(REPRODUCIBLE_BUILD_CAPTURE_OUT)"
+
+validate-reproducible-builds:
+	@if [ -z "$(REPRODUCIBLE_BUILD_LEFT)" ] || [ -z "$(REPRODUCIBLE_BUILD_RIGHT)" ] || [ -z "$(REPRODUCIBLE_BUILD_TRUSTED_BUILDER_LEFT)" ] || [ -z "$(REPRODUCIBLE_BUILD_TRUSTED_BUILDER_RIGHT)" ]; then echo "REPRODUCIBLE_BUILD_LEFT/RIGHT and both REPRODUCIBLE_BUILD_TRUSTED_BUILDER_LEFT/RIGHT identity=public-key.pem pins are required" >&2; exit 2; fi
+	python3 scripts/verify_reproducible_builds.py verify \
+		--left "$(REPRODUCIBLE_BUILD_LEFT)" \
+		--right "$(REPRODUCIBLE_BUILD_RIGHT)" \
+		--trusted-builder "$(REPRODUCIBLE_BUILD_TRUSTED_BUILDER_LEFT)" \
+		--trusted-builder "$(REPRODUCIBLE_BUILD_TRUSTED_BUILDER_RIGHT)" \
+		--out "$(REPRODUCIBLE_BUILD_VERIFICATION_OUT)"
+
+validate-policy-activation-evidence:
+	@if [ -z "$(POLICY_ACTIVATION_TRUSTED_POLICY_PUBLIC_KEY)" ] || [ -z "$(POLICY_ACTIVATION_TRUSTED_AUDIT_CHECKPOINT_PUBLIC_KEY)" ] || [ -z "$(POLICY_ACTIVATION_EXPECTED_DATA_PLANE_ACTOR)" ]; then echo "POLICY_ACTIVATION_TRUSTED_POLICY_PUBLIC_KEY, POLICY_ACTIVATION_TRUSTED_AUDIT_CHECKPOINT_PUBLIC_KEY, and POLICY_ACTIVATION_EXPECTED_DATA_PLANE_ACTOR are required" >&2; exit 2; fi
+	@mkdir -p "$(dir $(POLICY_ACTIVATION_VERIFICATION_OUT))"
+	@tmp="$(POLICY_ACTIVATION_VERIFICATION_OUT).tmp"; \
+		python3 scripts/verify_policy_activation_evidence.py \
+			--evidence-file "$(POLICY_ACTIVATION_EVIDENCE_FILE)" \
+			--trusted-policy-public-key "$(POLICY_ACTIVATION_TRUSTED_POLICY_PUBLIC_KEY)" \
+			--trusted-audit-checkpoint-public-key "$(POLICY_ACTIVATION_TRUSTED_AUDIT_CHECKPOINT_PUBLIC_KEY)" \
+			--expected-data-plane-actor "$(POLICY_ACTIVATION_EXPECTED_DATA_PLANE_ACTOR)" > "$$tmp" && \
+		chmod 600 "$$tmp" && mv "$$tmp" "$(POLICY_ACTIVATION_VERIFICATION_OUT)"
 
 prepare-aws-kms-materials:
 	python3 scripts/prepare_aws_kms_materials.py \
@@ -267,11 +354,23 @@ verify-production-images-env-merge:
 verify-production-handoff:
 	python3 scripts/test_production_handoff.py
 
+verify-production-release-input-preflight:
+	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_production_release_input_preflight.py
+
+verify-production-policy-identity:
+	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_production_policy_identity.py
+
 verify-production-host-preflight:
-	python3 scripts/test_production_host_preflight.py
+	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_production_host_preflight.py
 
 verify-production-release-proof:
 	python3 scripts/test_production_release_proof_target.py
+
+verify-reproducible-builds:
+	python3 scripts/test_reproducible_builds.py
+
+verify-policy-activation-evidence:
+	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_policy_activation_evidence.py
 
 verify-transparency-checkpoint:
 	python3 scripts/test_transparency_checkpoint.py
@@ -378,7 +477,7 @@ verify-production-readiness-runner:
 	python3 scripts/test_run_production_readiness.py
 
 verify-release-completion:
-	python3 scripts/test_release_completion.py
+	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_release_completion.py
 
 verify-production-config:
 	python3 scripts/verify_production_readiness.py --mode config
@@ -401,6 +500,15 @@ run-production-readiness:
 		--image-signatures-summary "$(IMAGE_SIGNATURES_SUMMARY_FILE)" \
 		--image-signatures "$(IMAGE_SIGNATURES_FILE)" \
 		--bench "$(DECISION_GATE_BENCH_FILE)" \
+		--policy-bundle "$(PRODUCTION_POLICY_BUNDLE)" \
+		--policy-trusted-public-key "$(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)" \
+		--policy-identity-verification "$(PRODUCTION_POLICY_IDENTITY_VERIFICATION_OUT)" \
+		--policy-activation-verification "$(POLICY_ACTIVATION_VERIFICATION_OUT)" \
+		--policy-activation-signature "$(POLICY_ACTIVATION_VERIFICATION_SIGNATURE)" \
+		--policy-activation-trusted-public-key "$(POLICY_ACTIVATION_VERIFICATION_TRUSTED_PUBLIC_KEY)" \
+		--reproducible-build-verification "$(REPRODUCIBLE_BUILD_VERIFICATION_OUT)" \
+		--reproducible-build-signature "$(REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE)" \
+		--reproducible-build-trusted-public-key "$(REPRODUCIBLE_BUILD_VERIFICATION_TRUSTED_PUBLIC_KEY)" \
 		--kms-materials "$(AWS_KMS_MATERIALS_OUT)"
 
 verify-production-readiness:

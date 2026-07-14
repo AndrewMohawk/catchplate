@@ -41,9 +41,13 @@ from serverware.config import (
     CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
     CA_INSTALL_SESSIONS_PATH,
     CA_INSTALL_SESSION_TTL_SECONDS,
-    DATA_PLANE_AUDIT_TOKEN,
+    DATA_PLANE_AUDIT_INGEST_TOKEN,
+    DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
+    DATA_PLANE_GRANT_CONSUME_TOKEN,
+    DATA_PLANE_INSTANCE_ID,
     DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED,
     DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND,
+    DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN,
     DEV_AUTHENTICATOR_ENABLED,
     DIRECT_CA_DOWNLOAD_ENABLED,
     EXPECTED_DATA_PLANE_BINARY_DIGEST,
@@ -60,6 +64,7 @@ from serverware.config import (
     RELEASE_CHANNEL,
     SECRET_LEASE_TTL_SECONDS,
     WEBAUTHN_BOOTSTRAP_TOKEN,
+    validate_internal_service_auth,
 )
 from serverware import db, grants, runtime
 from serverware.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, AdminIdentity, admin_status, issue_csrf_cookie, require_admin, require_role, rotate_generated_admin_token, validate_csrf_request
@@ -379,12 +384,15 @@ class DevAssertionRequest(BaseModel):
 
 
 class DataPlaneAuditEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     event_type: str = Field(min_length=1, max_length=128)
-    actor_id: str = Field(default="decision-gate-rs", min_length=1, max_length=128)
     event: dict[str, Any] = Field(default_factory=dict)
 
 
 class DataPlaneAuditBatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     events: list[DataPlaneAuditEvent] = Field(default_factory=list, max_length=200)
 
 
@@ -456,7 +464,6 @@ class DataPlaneRateLimitConsume(BaseModel):
     max_count: int = Field(alias="max", ge=1, le=1_000_000_000)
     window_seconds: int = Field(alias="windowSeconds", ge=1, le=31_536_000)
     consume: bool = True
-    actor_id: Literal["decision-gate-rs"] = Field(default="decision-gate-rs", alias="actorId")
 
     @model_validator(mode="after")
     def validate_operation_context_size(self) -> DataPlaneRateLimitConsume:
@@ -505,6 +512,7 @@ class KeyReleaseVerify(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
+    validate_internal_service_auth()
     db.init_db()
     snapshot = get_policy_snapshot()
     if snapshot is not None:
@@ -591,7 +599,10 @@ def _decode_unpadded_base64url(value: str, *, field_name: str, expected_length: 
 
 
 async def _bounded_credential_lease_request(request: Request) -> CredentialLeaseRequest:
-    _require_data_plane_token(request.headers.get("X-Serverware-Data-Plane-Token"))
+    _require_data_plane_token(
+        request.headers.get("X-Serverware-Data-Plane-Token"),
+        DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
+    )
     content_length = request.headers.get("content-length")
     if content_length is not None:
         try:
@@ -3270,7 +3281,7 @@ def _record_credential_lease_audit(
         f"data_plane.credential_lease.{outcome}",
         event,
         actor_type="data-plane",
-        actor_id=payload.recipient_key_id if authenticated else None,
+        actor_id=DATA_PLANE_INSTANCE_ID if authenticated else None,
     )
 
 
@@ -3693,7 +3704,7 @@ def data_plane_audit(
     batch: DataPlaneAuditBatch,
     x_serverware_data_plane_token: str | None = Header(default=None, alias="X-Serverware-Data-Plane-Token"),
 ) -> dict[str, Any]:
-    _require_data_plane_token(x_serverware_data_plane_token)
+    _require_data_plane_token(x_serverware_data_plane_token, DATA_PLANE_AUDIT_INGEST_TOKEN)
     for item in batch.events:
         if not item.event_type.startswith("data_plane."):
             raise HTTPException(status_code=400, detail="data-plane audit event_type must start with data_plane.")
@@ -3703,7 +3714,7 @@ def data_plane_audit(
             item.event_type,
             item.event,
             actor_type="data-plane",
-            actor_id=item.actor_id,
+            actor_id=DATA_PLANE_INSTANCE_ID,
         )
         accepted += 1
     return {"ok": True, "accepted": accepted}
@@ -3714,7 +3725,7 @@ def data_plane_grant_consume(
     payload: DataPlaneGrantConsume,
     x_serverware_data_plane_token: str | None = Header(default=None, alias="X-Serverware-Data-Plane-Token"),
 ) -> dict[str, Any]:
-    _require_data_plane_token(x_serverware_data_plane_token)
+    _require_data_plane_token(x_serverware_data_plane_token, DATA_PLANE_GRANT_CONSUME_TOKEN)
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
@@ -3798,7 +3809,7 @@ def data_plane_rate_limit_consume(
     payload: DataPlaneRateLimitConsume,
     x_serverware_data_plane_token: str | None = Header(default=None, alias="X-Serverware-Data-Plane-Token"),
 ) -> dict[str, Any]:
-    _require_data_plane_token(x_serverware_data_plane_token)
+    _require_data_plane_token(x_serverware_data_plane_token, DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN)
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
@@ -3858,7 +3869,7 @@ def data_plane_rate_limit_consume(
             max_count=expected_max,
             consume=payload.consume,
             actor_type="data-plane",
-            actor_id="decision-gate-rs",
+            actor_id=DATA_PLANE_INSTANCE_ID,
         )
     except Exception as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
@@ -3895,11 +3906,11 @@ def _rate_limit_counter_key(
     return "sha256:" + hashlib.sha256(_canonical_json(material).encode("utf-8")).hexdigest()
 
 
-def _require_data_plane_token(x_serverware_data_plane_token: str | None) -> None:
-    if not DATA_PLANE_AUDIT_TOKEN:
+def _require_data_plane_token(x_serverware_data_plane_token: str | None, expected_token: str) -> None:
+    if not expected_token or not DATA_PLANE_INSTANCE_ID:
         raise HTTPException(status_code=503, detail="data-plane authentication is not configured")
     if not x_serverware_data_plane_token or not hmac.compare_digest(
-        x_serverware_data_plane_token, DATA_PLANE_AUDIT_TOKEN
+        x_serverware_data_plane_token, expected_token
     ):
         raise HTTPException(status_code=401, detail="data-plane authentication required")
 

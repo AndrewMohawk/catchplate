@@ -225,7 +225,7 @@ Production completion still requires `make production-release-proof` on the real
 
 ## Current Local Evidence
 
-The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:736c67df41a8590d30033e82bfdf4261bfec6d3bf4f3a186c34358c60e4925e3`. It records p50 `0.394 ms`, p95 `0.525 ms`, p99 `0.621 ms`, mean `0.408 ms`, and maximum `4.508 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
+The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:acee67a8ef6ff450f8a5cebcc91a766b3fc29fb718cb66848fee33dd30463b14`. It records p50 `0.392 ms`, p95 `0.547 ms`, p99 `0.706 ms`, mean `0.411 ms`, and maximum `2.620 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
 
 The local provenance and image-signature records are explicitly development fixtures, and no current hardware-bound production image/quote set exists for this checkout. They cannot be combined with this benchmark as production release evidence; rebuild every source-, image-, binary-, signature-, benchmark-, and quote-bound artifact from one exact checkout on the target host.
 

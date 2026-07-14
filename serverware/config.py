@@ -129,7 +129,15 @@ METADATA_STORE_POSTGRES_DSN = os.getenv("SERVERWARE_METADATA_STORE_POSTGRES_DSN"
 METADATA_STORE_CONNECT_TIMEOUT_SECONDS = int(os.getenv("SERVERWARE_METADATA_STORE_CONNECT_TIMEOUT_SECONDS", "5"))
 DECISION_GATE_BASE = os.getenv("SERVERWARE_DECISION_GATE_BASE", "").rstrip("/")
 DECISION_GATE_TIMEOUT_SECONDS = float(os.getenv("SERVERWARE_DECISION_GATE_TIMEOUT_SECONDS", "2"))
-DATA_PLANE_AUDIT_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "")
+DATA_PLANE_INSTANCE_ID = os.getenv("SERVERWARE_DATA_PLANE_INSTANCE_ID", "").strip()
+DATA_PLANE_CREDENTIAL_LEASE_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN", "").strip()
+DATA_PLANE_AUDIT_INGEST_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip()
+DATA_PLANE_GRANT_CONSUME_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN", "").strip()
+DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN", "").strip()
+DATA_PLANE_MANAGEMENT_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip()
+# serverware.runtime still publishes development grants to the Rust management API
+# through this internal symbol. It must never reuse an ingest or consume credential.
+DATA_PLANE_AUDIT_TOKEN = DATA_PLANE_MANAGEMENT_TOKEN
 DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED = (
     os.getenv("SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED", "0") == "1"
 )
@@ -148,6 +156,31 @@ KEY_RELEASE_MIN_ROLLBACK_EPOCH = int(os.getenv("SERVERWARE_KEY_RELEASE_MIN_ROLLB
 KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST = os.getenv("SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST", "1") == "1"
 RELEASE_CHANNEL = os.getenv("SERVERWARE_RELEASE_CHANNEL", "dev")
 EXPECTED_DATA_PLANE_BINARY_DIGEST = os.getenv("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") or None
+
+
+_DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
+_INTERNAL_SERVICE_TOKENS = {
+    "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
+    "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": DATA_PLANE_AUDIT_INGEST_TOKEN,
+    "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": DATA_PLANE_GRANT_CONSUME_TOKEN,
+    "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN,
+    "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": DATA_PLANE_MANAGEMENT_TOKEN,
+}
+
+
+def validate_internal_service_auth() -> None:
+    if RELEASE_CHANNEL.strip().lower() in _DEVELOPMENT_RELEASE_CHANNELS:
+        return
+    if not DATA_PLANE_INSTANCE_ID.startswith("spiffe://") or len(DATA_PLANE_INSTANCE_ID) <= len("spiffe://"):
+        raise RuntimeError("production requires SERVERWARE_DATA_PLANE_INSTANCE_ID as a non-empty SPIFFE ID")
+    for name, token in _INTERNAL_SERVICE_TOKENS.items():
+        if len(token.encode("utf-8")) < 32 or len(set(token)) < 8:
+            raise RuntimeError(f"production requires {name} with at least 32 high-entropy bytes")
+    token_items = list(_INTERNAL_SERVICE_TOKENS.items())
+    for index, (left_name, left_token) in enumerate(token_items):
+        for right_name, right_token in token_items[index + 1 :]:
+            if left_token == right_token:
+                raise RuntimeError(f"production requires distinct internal service credentials: {left_name} and {right_name}")
 
 
 def ensure_data_dirs() -> None:

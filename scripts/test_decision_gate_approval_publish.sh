@@ -135,7 +135,9 @@ approved = json.load(open(sys.argv[1]))
 gate = sys.argv[2].rstrip("/")
 base = sys.argv[3].rstrip("/")
 body = sys.argv[4]
-management_token = os.environ.get("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip() or "dev-data-plane-audit-token"
+management_token = os.environ.get("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", "").strip() or "dev-rust-management-token"
+rate_limit_token = os.environ.get("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN", "").strip() or "dev-rate-limit-consume-token"
+grant_consume_token = os.environ.get("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN", "").strip() or "dev-grant-consume-token"
 publish = approved.get("data_plane_grant_publish") or {}
 assert publish.get("enabled") is True, approved
 assert publish.get("ok") is True, approved
@@ -167,13 +169,13 @@ def post(path, payload):
         return json.loads(response.read())
 
 
-def control_post(path, payload):
+def control_post(path, payload, token):
     req = urllib.request.Request(
         f"{base}{path}",
         data=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(),
         headers={
             "Content-Type": "application/json",
-            "X-Serverware-Data-Plane-Token": management_token,
+            "X-Serverware-Data-Plane-Token": token,
         },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
@@ -209,8 +211,8 @@ exhausted = control_post(
         "max": 1,
         "windowSeconds": 2,
         "consume": True,
-        "actorId": "decision-gate-rs",
     },
+    rate_limit_token,
 )
 assert exhausted["allowed"] is True and exhausted["remaining"] == 0, exhausted
 
@@ -234,7 +236,7 @@ grant_query = {
     "redactedDisplay": approved["redacted_display"],
     "consume": False,
 }
-available = control_post("/api/data-plane/grants/consume", grant_query)
+available = control_post("/api/data-plane/grants/consume", grant_query, grant_consume_token)
 assert available["available"] is True and available["consumed"] is False, available
 assert available["grant_id"] == f"approval:{approved['id']}", available
 

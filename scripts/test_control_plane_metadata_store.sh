@@ -6,6 +6,7 @@ ADMIN_TOKEN="${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
 
 python3 - "$BASE" "$ADMIN_TOKEN" <<'PY'
 import json
+import re
 import subprocess
 import sys
 import urllib.request
@@ -29,22 +30,13 @@ tables = status["tables"]
 assert int(tables.get("credentials") or 0) >= 1, status
 assert int(tables.get("routes") or 0) >= 12, status
 
-sql = """
-SELECT json_build_object(
-  'credentials', (SELECT COUNT(*) FROM credentials),
-  'pending_oauth_credentials', (SELECT COUNT(*) FROM pending_oauth_credentials),
-  'oidc_login_states', (SELECT COUNT(*) FROM oidc_login_states),
-  'oauth_revocation_work', (SELECT COUNT(*) FROM oauth_revocation_work),
-  'routes', (SELECT COUNT(*) FROM routes),
-  'approval_requests', (SELECT COUNT(*) FROM approval_requests),
-  'control_plane_approvals', (SELECT COUNT(*) FROM control_plane_approvals),
-  'webauthn_credentials', (SELECT COUNT(*) FROM webauthn_credentials),
-  'webauthn_challenges', (SELECT COUNT(*) FROM webauthn_challenges),
-  'gmail_message_cache', (SELECT COUNT(*) FROM gmail_message_cache),
-  'request_logs', (SELECT COUNT(*) FROM request_logs),
-  'rate_limit_counters', (SELECT COUNT(*) FROM rate_limit_counters)
-)::text;
-"""
+table_names = sorted(tables)
+assert table_names, status
+assert all(re.fullmatch(r"[a-z][a-z0-9_]{0,62}", table) for table in table_names), status
+count_expressions = ",\n  ".join(
+    f"'{table}', (SELECT COUNT(*) FROM \"{table}\")" for table in table_names
+)
+sql = f"SELECT json_build_object(\n  {count_expressions}\n)::text;"
 raw = subprocess.check_output(
     [
         "docker",

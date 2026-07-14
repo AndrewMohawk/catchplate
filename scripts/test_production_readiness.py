@@ -473,7 +473,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "0",
             "SERVERWARE_CA_INSTALL_SESSION_TTL_SECONDS": "300",
             "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
-            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.oauth.activate,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant,setup.attestation.finalize",
+            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.oauth.activate,credential.oauth.uncertain.resolve,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant,setup.attestation.finalize",
             "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN": "test-production-bootstrap-token-32-chars-minimum",
             "SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED": "1",
             "SERVERWARE_POLICY_CANARY_REQUIRED": "1",

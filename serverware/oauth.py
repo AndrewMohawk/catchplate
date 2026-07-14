@@ -53,10 +53,12 @@ class OAuthError(RuntimeError):
         *,
         setup_session_id: str | None = None,
         actor_id: str | None = None,
+        issuance_uncertain: bool = False,
     ) -> None:
         super().__init__(message)
         self.setup_session_id = setup_session_id
         self.actor_id = actor_id
+        self.issuance_uncertain = issuance_uncertain
 
 
 def browser_cookie_name(state: str) -> str:
@@ -546,9 +548,15 @@ def _post_token_request(
         UnicodeDecodeError,
         json.JSONDecodeError,
     ) as exc:
-        raise OAuthError(f"OAuth token exchange failed: {exc}") from exc
+        raise OAuthError(
+            f"OAuth token exchange failed with an uncertain provider outcome: {exc}",
+            issuance_uncertain=True,
+        ) from exc
     if not isinstance(payload, dict):
-        raise OAuthError("OAuth token endpoint returned a non-object response")
+        raise OAuthError(
+            "OAuth token endpoint returned a non-object response with an uncertain issuance outcome",
+            issuance_uncertain=True,
+        )
     return payload
 
 
@@ -661,6 +669,7 @@ def exchange_authorization_code(
 
     material_attached = False
     try:
+        db.mark_oauth_exchange_started(revocation_work_id)
         token_response = _post_token_request(
             provider,
             _token_request_body(provider, record, code),
@@ -845,6 +854,15 @@ def exchange_authorization_code(
             except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError):
                 # Held work automatically becomes due if callback processing cannot update it.
                 pass
+        elif isinstance(exc, OAuthError) and exc.issuance_uncertain:
+            try:
+                db.mark_oauth_issuance_uncertain(
+                    revocation_work_id,
+                    error=str(exc)[:500] or type(exc).__name__,
+                )
+            except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError):
+                # An in-flight marker is retained and ages into issuance-uncertain.
+                pass
         else:
             db.complete_oauth_revocation_work(revocation_work_id)
         if isinstance(exc, OAuthError):
@@ -919,6 +937,7 @@ def refresh_access_token(
 
     material_attached = False
     try:
+        db.mark_oauth_exchange_started(revocation_work_id)
         token_response = _post_token_request(
             provider,
             _refresh_token_request_body(provider, refresh_token),
@@ -1069,6 +1088,14 @@ def refresh_access_token(
         if material_attached:
             try:
                 db.mark_oauth_revocation_work_pending(
+                    revocation_work_id,
+                    error=str(exc)[:500] or type(exc).__name__,
+                )
+            except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError):
+                pass
+        elif isinstance(exc, OAuthError) and exc.issuance_uncertain:
+            try:
+                db.mark_oauth_issuance_uncertain(
                     revocation_work_id,
                     error=str(exc)[:500] or type(exc).__name__,
                 )

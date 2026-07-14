@@ -107,6 +107,23 @@ def main() -> None:
             if marker not in ui_html:
                 raise AssertionError(f"portal enrollment UI marker missing: {marker}")
 
+        oauth_uncertainty_markers = (
+            'id="oauth-uncertain-section"',
+            'id="oauth-issuance-uncertainties"',
+            "state.oauthIssuanceUncertainties",
+            "function renderOAuthIssuanceUncertainties()",
+            "function resolveOAuthIssuanceUncertainty(id)",
+            "/api/oauth/issuance-uncertainties/${id}/resolve",
+            "confirmedProviderRevocation: true",
+            "Provider issuance requires review",
+            "I confirmed the provider-side app grant was revoked.",
+        )
+        for marker in oauth_uncertainty_markers:
+            if marker not in ui_html:
+                raise AssertionError(
+                    f"portal OAuth issuance-uncertainty UI marker missing: {marker}"
+                )
+
         try:
             enrollment_verifier_fn = ui_html.split("async function copyEnrollmentVerifier()", 1)[1].split(
                 "$('admin-token').value", 1
@@ -819,6 +836,21 @@ function credentialToJson(value){return value;}
                 raise AssertionError(f"unexpected common PolicyBundle template set: {sorted(templates)}")
             if "tweet.write" not in templates["x_one_post_daily"].get("requiredScopes", []):
                 raise AssertionError("X write template does not require the provider tweet.write scope")
+            x_daily_limit = next(
+                (
+                    item
+                    for item in templates["x_one_post_daily"].get("constraints", [])
+                    if item.get("id") == "x-one-post-per-day"
+                ),
+                None,
+            )
+            if not x_daily_limit or x_daily_limit.get("key") != {
+                "scope": ["route", "operation"],
+                "operationFields": ["providerAccount"],
+            }:
+                raise AssertionError(
+                    "X one-post template quota is not stable across principal and credential rotation"
+                )
             stripe_required_headers = (
                 templates["stripe_payment_intent_jit"]["adapter"]["config"]["request"].get("requiredHeaders")
                 or {}

@@ -99,7 +99,7 @@ def main() -> None:
         )
         review = app_module.approval_review(
             current["id"],
-            _=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
+            identity=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
         )
         if review["principal_id"] != "agent:demo" or review["route_id"] != "demo.npm.publish.jit":
             raise AssertionError(f"approval review missing principal/route context: {review}")
@@ -122,13 +122,84 @@ def main() -> None:
                 raise AssertionError(f"approval review missing risk flag {expected_flag}: {review}")
         if "top-secret-value" in json.dumps(review, sort_keys=True):
             raise AssertionError(f"approval review leaked a secret value: {review}")
+        receipt = review.get("review_receipt") or {}
+        if not receipt.get("id") or not receipt.get("expires_at"):
+            raise AssertionError(f"approval review did not issue a bounded receipt: {review}")
+        if not str(review.get("review_digest") or "").startswith("sha256:"):
+            raise AssertionError(f"approval review did not bind its document digest: {review}")
+        active_receipt = db.get_active_approval_review_receipt(
+            receipt["id"],
+            approval_request_id=current["id"],
+            reviewer_id="user:demo",
+        )
+        if active_receipt is None or active_receipt["review_digest"] != review["review_digest"]:
+            raise AssertionError("server-side approval review receipt binding is missing")
+        if db.get_active_approval_review_receipt(
+            receipt["id"],
+            approval_request_id=current["id"],
+            reviewer_id="user:other",
+        ) is not None:
+            raise AssertionError("approval review receipt was transferable to another approver")
+        options = app_module.approval_webauthn_options(
+            current["id"],
+            app_module.ApprovalWebAuthnOptionsRequest(
+                reviewReceiptId=receipt["id"]
+            ),
+            AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
+        )
+        challenge_payload = options["serverware"]["payload"]
+        if (
+            challenge_payload.get("review_receipt_id") != receipt["id"]
+            or challenge_payload.get("review_digest") != review["review_digest"]
+            or challenge_payload.get("type") != "serverware.approval.reviewed"
+        ):
+            raise AssertionError(
+                f"WebAuthn challenge did not bind the review receipt: {challenge_payload}"
+            )
+
+        receipt_test = make_approval(
+            db,
+            snapshot,
+            digest_suffix="e",
+            redacted_display={"package": "@scope/pkg", "version": "1.2.4"},
+            canonical_request={
+                "principal": "agent:demo",
+                "operation": {
+                    "packageName": "@scope/pkg",
+                    "packageVersion": "1.2.4",
+                },
+            },
+        )
+        receipt_test_review = app_module.approval_review(
+            receipt_test["id"],
+            identity=AdminIdentity(
+                "user:demo", frozenset({"approver"}), "admin-token-header"
+            ),
+        )
+        receipt_test_token = receipt_test_review["review_receipt"]
+        approved = db.approve_request(
+            receipt_test["id"],
+            actor_id="user:demo",
+            authn={"method": "test-reviewed-approval"},
+            review_receipt_id=receipt_test_token["id"],
+            review_digest=receipt_test_review["review_digest"],
+            require_review_receipt=True,
+        )
+        if approved is None or approved["status"] != "approved":
+            raise AssertionError("review receipt was not consumed with approval")
+        if db.get_active_approval_review_receipt(
+            receipt_test_token["id"],
+            approval_request_id=receipt_test["id"],
+            reviewer_id="user:demo",
+        ) is not None:
+            raise AssertionError("approval review receipt remained reusable")
 
         changed_bundle = policy_bundle.demo_policy_bundle("cred-demo-bearer")
         changed_bundle["metadata"]["sequence"] = 2
         policy_bundle.write_policy_bundle(changed_bundle)
         stale_review = app_module.approval_review(
             current["id"],
-            _=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
+            identity=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
         )
         if "policy_hash_not_current" not in stale_review["risk_flags"]:
             raise AssertionError(f"stale approval review did not flag policy change: {stale_review}")
@@ -136,7 +207,9 @@ def main() -> None:
             app_module.approve(
                 current["id"],
                 ttl_seconds=30,
-                payload=None,
+                payload=app_module.ApprovalApprove(
+                    reviewReceiptId=receipt["id"]
+                ),
                 identity=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
             )
         except app_module.HTTPException as exc:

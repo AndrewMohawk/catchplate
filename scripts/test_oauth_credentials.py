@@ -670,6 +670,235 @@ def run_oauth_setup_callback_persistence_failure_tests(
                 db.complete_oauth_revocation_work(work_id)
 
 
+def run_oauth_issuance_uncertainty_tests(
+    app_module, oauth, db, identity
+) -> None:
+    original_post_token_request = oauth._post_token_request
+    original_webauthn_required = app_module.CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED
+    original_two_person_required = app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED
+    work_ids: list[str] = []
+
+    def uncertain_exchange(provider, body, headers):
+        raise oauth.OAuthError(
+            "simulated timeout after provider request",
+            issuance_uncertain=True,
+        )
+
+    try:
+        browser_nonce = "u" * 43
+        started = oauth.create_authorization_url(
+            provider_id="google",
+            credential_name="Uncertain Gmail OAuth",
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            metadata={},
+            actor_id=identity.user_id,
+            browser_nonce=browser_nonce,
+        )
+        oauth._post_token_request = uncertain_exchange
+        try:
+            oauth.exchange_authorization_code(
+                provider_id="google",
+                code="uncertain-auth-code",
+                state=str(started["state"]),
+                browser_nonce=browser_nonce,
+            )
+        except oauth.OAuthError as exc:
+            if not exc.issuance_uncertain:
+                raise AssertionError(
+                    f"uncertain authorization exchange lost its outcome marker: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("uncertain authorization exchange reported success")
+
+        uncertainties = db.list_oauth_issuance_uncertainties(
+            actor_id=identity.user_id
+        )
+        authorization_item = next(
+            (
+                item
+                for item in uncertainties
+                if item["source"] == "authorization_code_exchange"
+            ),
+            None,
+        )
+        if authorization_item is None:
+            raise AssertionError(
+                "uncertain authorization exchange did not retain durable operator work"
+            )
+        work_ids.append(str(authorization_item["id"]))
+        if authorization_item["status"] != "issuance_uncertain_unreported":
+            raise AssertionError(
+                f"uncertain exchange has the wrong initial status: {authorization_item}"
+            )
+
+        try:
+            oauth.refresh_access_token(
+                provider_id="google",
+                token_secret={
+                    "access_token": "existing-access-token",
+                    "refresh_token": "existing-refresh-token",
+                    "token_type": "Bearer",
+                    "scope": "https://www.googleapis.com/auth/gmail.readonly",
+                },
+                metadata={
+                    "created_by": identity.user_id,
+                    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+                },
+            )
+        except oauth.OAuthError as exc:
+            if not exc.issuance_uncertain:
+                raise AssertionError(
+                    f"uncertain refresh exchange lost its outcome marker: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("uncertain refresh exchange reported success")
+        refresh_item = next(
+            (
+                item
+                for item in db.list_oauth_issuance_uncertainties(
+                    actor_id=identity.user_id
+                )
+                if item["source"] == "refresh_token_exchange"
+            ),
+            None,
+        )
+        if refresh_item is None:
+            raise AssertionError(
+                "uncertain refresh exchange did not retain durable operator work"
+            )
+        work_ids.append(str(refresh_item["id"]))
+
+        interrupted_id = db.reserve_oauth_revocation_work(
+            provider_id="google",
+            actor_id=identity.user_id,
+            source="authorization_code_exchange",
+        )
+        work_ids.append(interrupted_id)
+        db.mark_oauth_exchange_started(interrupted_id)
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE oauth_revocation_work SET next_attempt_at = ? WHERE id = ?",
+                ("2000-01-01T00:00:00+00:00", interrupted_id),
+            )
+        interrupted = next(
+            (
+                item
+                for item in db.list_oauth_issuance_uncertainties(
+                    actor_id=identity.user_id
+                )
+                if item["id"] == interrupted_id
+            ),
+            None,
+        )
+        if interrupted is None or interrupted["status"] != "issuance_uncertain_unreported":
+            raise AssertionError(
+                f"interrupted in-flight exchange was not promoted to uncertainty: {interrupted}"
+            )
+
+        original_finish_uncertainty_report = (
+            db.finish_oauth_issuance_uncertainty_report
+        )
+
+        def simulate_crash_after_uncertainty_audit(work_id, *, worker_id):
+            return {"ok": False, "reason": "simulated_process_interruption"}
+
+        db.finish_oauth_issuance_uncertainty_report = (
+            simulate_crash_after_uncertainty_audit
+        )
+        try:
+            app_module._reconcile_oauth_revocations(limit=10)
+        except db.MetadataStoreError:
+            pass
+        else:
+            raise AssertionError(
+                "issuance uncertainty reporting ignored a post-audit interruption"
+            )
+        finally:
+            db.finish_oauth_issuance_uncertainty_report = (
+                original_finish_uncertainty_report
+            )
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE oauth_revocation_work SET lease_until = ? "
+                "WHERE status = 'issuance_uncertain_unreported'",
+                ("2000-01-01T00:00:00+00:00",),
+            )
+
+        reconciled = app_module._reconcile_oauth_revocations(limit=10)
+        if reconciled["uncertain"] != 3 or reconciled["revoked"] != 0:
+            raise AssertionError(
+                f"uncertain exchanges were not reported without token revocation: {reconciled}"
+            )
+        if app_module._reconcile_oauth_revocations(limit=10)["claimed"] != 0:
+            raise AssertionError("reported issuance uncertainty was claimed more than once")
+        audit_events = db.list_audit_events(limit=1000)
+        uncertain_audits = [
+            item
+            for item in audit_events
+            if item["event_type"] == "credential.oauth_issuance_uncertain"
+            and item["event"].get("revocation_work_id") in set(work_ids)
+        ]
+        if len(uncertain_audits) != 3:
+            raise AssertionError(
+                f"issuance uncertainty audit events are incomplete: {uncertain_audits}"
+            )
+        raw_rows = []
+        with db.connect() as conn:
+            for work_id in work_ids:
+                row = conn.execute(
+                    "SELECT * FROM oauth_revocation_work WHERE id = ?", (work_id,)
+                ).fetchone()
+                if row is not None:
+                    raw_rows.append(dict(row))
+        raw_text = json.dumps(raw_rows, sort_keys=True)
+        if "existing-access-token" in raw_text or "existing-refresh-token" in raw_text:
+            raise AssertionError("issuance uncertainty records leaked prior token material")
+
+        bootstrap = app_module.bootstrap(identity)
+        listed_ids = {
+            item["id"] for item in bootstrap["oauthIssuanceUncertainties"]
+        }
+        if not set(work_ids).issubset(listed_ids):
+            raise AssertionError(
+                "operator bootstrap did not expose all issuance uncertainties"
+            )
+
+        app_module.CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED = False
+        app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED = False
+        resolved = app_module.oauth_issuance_uncertainty_resolve(
+            work_ids[0],
+            app_module.OAuthIssuanceUncertaintyResolveRequest(
+                confirmedProviderRevocation=True,
+                note="Provider admin audit confirms the app grant was revoked.",
+            ),
+            identity,
+        )
+        if resolved.get("ok") is not True:
+            raise AssertionError(f"uncertain issuance resolution failed: {resolved}")
+        work_ids.remove(str(resolved["resolved"]["id"]))
+        if db.get_oauth_revocation_work_status(str(resolved["resolved"]["id"])) is not None:
+            raise AssertionError("resolved issuance uncertainty remained in the backlog")
+
+        try:
+            app_module.OAuthIssuanceUncertaintyResolveRequest(
+                confirmedProviderRevocation=False,
+                note="No provider revocation was performed.",
+            )
+        except Exception:
+            pass
+        else:
+            raise AssertionError(
+                "issuance uncertainty could be resolved without provider revocation confirmation"
+            )
+    finally:
+        oauth._post_token_request = original_post_token_request
+        app_module.CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED = original_webauthn_required
+        app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED = original_two_person_required
+        for work_id in work_ids:
+            if db.get_oauth_revocation_work_status(work_id) is not None:
+                db.complete_oauth_revocation_work(work_id)
+
+
 def main(*, setup_session_only: bool = False) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         if not setup_session_only:
@@ -880,6 +1109,8 @@ def main(*, setup_session_only: bool = False) -> None:
                 pass
             else:
                 raise AssertionError(f"malformed OAuth granted scopes were accepted: {malformed_scopes!r}")
+
+        run_oauth_issuance_uncertainty_tests(app_module, oauth, db, identity)
 
         original_request_bytes = oauth.request_bytes
 

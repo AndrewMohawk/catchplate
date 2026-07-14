@@ -159,6 +159,14 @@ MAX_PROVIDER_RESPONSE_BODY_BYTES = 1024 * 1024
 MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024
 RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
 HTTP_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+CREDENTIAL_FIELD_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
+CREDENTIAL_INJECTION_FIELDS = {
+    "bearer": frozenset({"type", "header", "field", "prefix"}),
+    "basic": frozenset({"type", "header", "field", "username"}),
+    "header": frozenset({"type", "name", "field", "prefix"}),
+    "query": frozenset({"type", "name", "field"}),
+    "cookie": frozenset({"type", "name", "field"}),
+}
 REQUIRED_REQUEST_HEADER_RULE_FIELDS = {"type", "minLength", "maxLength", "pattern"}
 FIELD_RULE_FIELDS = {
     "required",
@@ -542,10 +550,60 @@ def _validate_field_rule(
 def _validate_credential_injection(credential_id: str, raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raise PolicyBundleError(f"credential {credential_id} injection must be an object")
-    injection = dict(raw or {"type": "bearer"})
-    injection_type = injection.get("type", "bearer")
-    if injection_type not in {"bearer", "basic", "header", "query", "cookie"}:
+    injection = dict(raw)
+    injection_type = injection.get("type")
+    if not isinstance(injection_type, str) or injection_type not in CREDENTIAL_INJECTION_FIELDS:
         raise PolicyBundleError(f"credential {credential_id} has unsupported injection type {injection_type!r}")
+    unsupported_fields = set(injection) - CREDENTIAL_INJECTION_FIELDS[injection_type]
+    if unsupported_fields:
+        rendered = ", ".join(repr(name) for name in sorted(unsupported_fields, key=repr))
+        raise PolicyBundleError(
+            f"credential {credential_id} {injection_type} injection has unsupported fields: {rendered}"
+        )
+
+    field = injection.get("field")
+    if field is not None and (
+        not isinstance(field, str)
+        or len(field) > 256
+        or CREDENTIAL_FIELD_PATH_RE.fullmatch(field) is None
+    ):
+        raise PolicyBundleError(f"credential {credential_id} has an invalid injection field")
+
+    prefix = injection.get("prefix")
+    if prefix is not None and (
+        not isinstance(prefix, str)
+        or len(prefix) > 128
+        or "\r" in prefix
+        or "\n" in prefix
+    ):
+        raise PolicyBundleError(f"credential {credential_id} has an invalid injection prefix")
+
+    if injection_type == "basic":
+        username = injection.get("username")
+        if (
+            not isinstance(username, str)
+            or not username
+            or len(username) > 256
+            or any(
+                character == ":"
+                or character.isspace()
+                or ord(character) < 32
+                or ord(character) == 127
+                for character in username
+            )
+        ):
+            raise PolicyBundleError(f"credential {credential_id} has an invalid Basic username")
+
+    if injection_type in {"header", "query", "cookie"}:
+        name = injection.get("name")
+        if (
+            not isinstance(name, str)
+            or not name
+            or len(name) > 128
+            or HTTP_HEADER_NAME_RE.fullmatch(name) is None
+        ):
+            raise PolicyBundleError(f"credential {credential_id} has an invalid {injection_type} injection name")
+
     target = credential_injection_target(injection)
     if target is None:
         raise PolicyBundleError(f"credential {credential_id} has no enforceable injection target")
@@ -553,6 +611,14 @@ def _validate_credential_injection(credential_id: str, raw: Any) -> dict[str, An
     if location == "header":
         if not name or len(name) > 128 or HTTP_HEADER_NAME_RE.fullmatch(name) is None:
             raise PolicyBundleError(f"credential {credential_id} has an invalid injection header")
+        reserved_target_is_canonical = (
+            injection_type in {"bearer", "basic"} and name == "authorization"
+        ) or (injection_type == "cookie" and name == "cookie")
+        if (
+            (name in NON_FORWARDABLE_AGENT_HEADERS and not reserved_target_is_canonical)
+            or name.startswith("x-serverware-")
+        ):
+            raise PolicyBundleError(f"credential {credential_id} uses a forbidden injection header {name}")
     elif not name or len(name) > 128 or any(ord(character) < 33 or ord(character) == 127 for character in name):
         raise PolicyBundleError(f"credential {credential_id} has an invalid injection query key")
     return injection
@@ -1455,7 +1521,7 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             raise PolicyBundleError(f"OAuth credential {credential_id} requires a signed provider subject")
         injection = _validate_credential_injection(
             credential_id,
-            item.get("injection", {"type": "bearer"}),
+            item.get("injection"),
         )
         _validate_managed_oauth_injection(credential_id, provider, injection)
         credentials[credential_id] = CredentialPolicy(
@@ -2291,7 +2357,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     {
                         "id": "x-one-tweet-per-day",
                         "type": "rateLimit",
-                        "description": "A principal can publish at most one tweet per day with this credential.",
+                        "description": "The Docker fixture can publish at most one tweet per day for this principal and credential.",
                         "max": 1,
                         "windowSeconds": 86400,
                         "store": "shared",

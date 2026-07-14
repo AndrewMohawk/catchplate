@@ -103,7 +103,18 @@ print(json.load(open(sys.argv[1]))["approval_id"])
 PY
 )"
 
-curl -fsS "${ADMIN_HEADER[@]}" -X POST "$BASE/api/approvals/$approval_id/webauthn/options" > "$TMP_DIR/decision-gate-approval-options.json"
+curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/approvals/$approval_id/review" > "$TMP_DIR/decision-gate-approval-review.json"
+python3 - "$TMP_DIR/decision-gate-approval-review.json" "$TMP_DIR/decision-gate-approval-review-request.json" <<'PY'
+import json
+import sys
+review = json.load(open(sys.argv[1]))
+assert review["review_digest"].startswith("sha256:"), review
+assert review["review_receipt"]["id"], review
+json.dump({"reviewReceiptId": review["review_receipt"]["id"]}, open(sys.argv[2], "w"))
+PY
+curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
+  --data @"$TMP_DIR/decision-gate-approval-review-request.json" \
+  "$BASE/api/approvals/$approval_id/webauthn/options" > "$TMP_DIR/decision-gate-approval-options.json"
 challenge="$(python3 - "$TMP_DIR/decision-gate-approval-options.json" <<'PY'
 import json
 import sys
@@ -114,10 +125,17 @@ PY
 curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data "{\"challenge\":\"$challenge\"}" \
   "$BASE/api/dev/webauthn/assertion" > "$TMP_DIR/decision-gate-approval-assertion.json"
-python3 - "$TMP_DIR/decision-gate-approval-assertion.json" "$TMP_DIR/decision-gate-approval-approve.json" <<'PY'
+python3 - "$TMP_DIR/decision-gate-approval-assertion.json" "$TMP_DIR/decision-gate-approval-review.json" "$TMP_DIR/decision-gate-approval-approve.json" <<'PY'
 import json
 import sys
-json.dump({"assertion": json.load(open(sys.argv[1]))}, open(sys.argv[2], "w"))
+review = json.load(open(sys.argv[2]))
+json.dump(
+    {
+        "assertion": json.load(open(sys.argv[1])),
+        "reviewReceiptId": review["review_receipt"]["id"],
+    },
+    open(sys.argv[3], "w"),
+)
 PY
 curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data @"$TMP_DIR/decision-gate-approval-approve.json" \

@@ -884,6 +884,7 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     required_two_person_actions = {
         "credential.create",
         "credential.oauth.activate",
+        "credential.oauth.uncertain.resolve",
         "credential.update",
         "credential.delete",
         "route.create",
@@ -900,7 +901,7 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     add(
         failures,
         "*" in two_person_actions or required_two_person_actions.issubset(two_person_actions),
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, route, policy publish, WebAuthn enrollment, RBAC, deprovisioning, token rotation, break-glass, and setup attestation finalization mutations",
+        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, uncertain OAuth issuance resolution, route, policy publish, WebAuthn enrollment, RBAC, deprovisioning, token rotation, break-glass, and setup attestation finalization mutations",
     )
     bootstrap_token = env.get("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "")
     add(

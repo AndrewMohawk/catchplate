@@ -396,6 +396,20 @@ class OAuthPendingActivateRequest(BaseModel):
         return self
 
 
+class OAuthIssuanceUncertaintyResolveRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    confirmed_provider_revocation: bool = Field(alias="confirmedProviderRevocation")
+    note: str = Field(min_length=1, max_length=2000)
+    mfa: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def require_provider_revocation(self) -> OAuthIssuanceUncertaintyResolveRequest:
+        if self.confirmed_provider_revocation is not True:
+            raise ValueError("confirmedProviderRevocation must be true")
+        return self
+
+
 class RouteCreate(BaseModel):
     name: str
     enabled: bool = True
@@ -419,8 +433,24 @@ class RouteUpdate(BaseModel):
 
 
 class ApprovalApprove(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
     note: str | None = None
     assertion: dict[str, Any] | None = None
+    review_receipt_id: str | None = Field(
+        default=None,
+        alias="reviewReceiptId",
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    )
+
+
+class ApprovalWebAuthnOptionsRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    review_receipt_id: str = Field(
+        alias="reviewReceiptId",
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    )
 
 
 class ApprovalDeny(BaseModel):
@@ -1415,7 +1445,31 @@ def _reconcile_oauth_revocations(
     claimed = db.claim_oauth_revocations(worker_id=worker_id, limit=limit)
     revoked = 0
     failed = 0
+    uncertain = 0
     for item in claimed:
+        if item["kind"] == "issuance_uncertain":
+            db.record_audit_event(
+                "credential.oauth_issuance_uncertain",
+                {
+                    "provider": item["provider_id"],
+                    "source": item["source"],
+                    "revocation_work_id": item["id"],
+                    "result": "manual_provider_review_required",
+                    "error": item["error"],
+                },
+                actor_id=str(item["actor_id"]),
+                idempotency_key=f"oauth-issuance-uncertainty:{item['id']}",
+            )
+            reported = db.finish_oauth_issuance_uncertainty_report(
+                item["id"],
+                worker_id=worker_id,
+            )
+            if not reported.get("ok"):
+                raise db.MetadataStoreError(
+                    "OAuth issuance uncertainty report claim changed before completion"
+                )
+            uncertain += 1
+            continue
         error = None
         try:
             token_secret = json.loads(item["secret"])
@@ -1460,7 +1514,14 @@ def _reconcile_oauth_revocations(
             revoked += 1
         else:
             failed += 1
-    return {"claimed": len(claimed), "revoked": revoked, "failed": failed}
+    result = {
+        "claimed": len(claimed),
+        "revoked": revoked,
+        "failed": failed,
+    }
+    if uncertain:
+        result["uncertain"] = uncertain
+    return result
 
 
 def _oauth_revocation_reconciler_loop() -> None:
@@ -3066,6 +3127,13 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         if can_view_credentials
         else []
     )
+    oauth_issuance_uncertainties = (
+        db.list_oauth_issuance_uncertainties(
+            actor_id=None if identity.has_any_role({"admin"}) else identity.user_id
+        )
+        if can_view_credentials
+        else []
+    )
     routes = db.list_routes() if can_view_routes else []
     approvals = db.list_approvals(limit=100) if can_view_approvals else []
     logs = db.list_logs(limit=150) if can_view_logs else []
@@ -3078,6 +3146,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
     result = {
         "credentials": credentials,
         "pendingOAuthCredentials": pending_oauth_credentials,
+        "oauthIssuanceUncertainties": oauth_issuance_uncertainties,
         "routes": routes,
         "approvals": approvals,
         "logs": logs,
@@ -3111,6 +3180,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
             "counts": {
                 "credentials": len(credentials),
                 "pending_oauth_credentials": len(pending_oauth_credentials),
+                "oauth_issuance_uncertainties": len(oauth_issuance_uncertainties),
                 "routes": len(routes),
                 "approvals": len(approvals),
                 "logs": len(logs),
@@ -7327,6 +7397,81 @@ def oauth_pending_credential_revoke(
     return result
 
 
+@app.post("/api/oauth/issuance-uncertainties/{work_id}/resolve")
+def oauth_issuance_uncertainty_resolve(
+    work_id: str,
+    payload: OAuthIssuanceUncertaintyResolveRequest,
+    identity: AdminIdentity = Depends(require_role("admin", "credential_owner")),
+) -> dict[str, Any]:
+    uncertainty = db.get_oauth_revocation_work_status(work_id)
+    if uncertainty is None or uncertainty.get("status") not in {
+        "issuance_uncertain_unreported",
+        "issuance_uncertain",
+    }:
+        raise HTTPException(status_code=404, detail="OAuth issuance uncertainty not found")
+    if uncertainty.get("actor_id") != identity.user_id and not identity.has_any_role(
+        {"admin"}
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="only the OAuth requester or an admin can resolve this uncertainty",
+        )
+    action = "credential.oauth.uncertain.resolve"
+    mutation_payload = {
+        "work_id": work_id,
+        "confirmed_provider_revocation": payload.confirmed_provider_revocation,
+        "note": payload.note,
+        "provider": uncertainty["provider_id"],
+        "source": uncertainty["source"],
+    }
+    payload_digest = _control_plane_payload_digest(mutation_payload)
+    mfa = _require_control_plane_mutation_mfa(
+        action=action,
+        resource_id=work_id,
+        payload_digest=payload_digest,
+        mfa=payload.mfa,
+        identity=identity,
+    )
+    with db.connect() as conn:
+        two_person = _require_control_plane_two_person(
+            action=action,
+            resource_id=work_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request=mutation_payload,
+            connection=conn,
+        )
+        result = db.resolve_oauth_issuance_uncertainty(
+            work_id,
+            actor_id=identity.user_id,
+            _connection=conn,
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "oauth_issuance_uncertainty_not_resolvable",
+                    "reason": result.get("reason"),
+                },
+            )
+    db.record_audit_event(
+        "credential.oauth_issuance_uncertainty_resolved",
+        {
+            "provider": result["provider_id"],
+            "source": result["source"],
+            "revocation_work_id": work_id,
+            "confirmed_provider_revocation": True,
+            "note": payload.note,
+            "payload_digest": payload_digest,
+            "control_plane_mfa": mfa,
+            "control_plane_approval": two_person,
+        },
+        actor_id=identity.user_id,
+    )
+    return {"ok": True, "resolved": result}
+
+
 @app.post("/api/credentials")
 def create_credential(
     payload: CredentialCreate,
@@ -7740,12 +7885,45 @@ def approvals(
 @app.get("/api/approvals/{approval_id}/review")
 def approval_review(
     approval_id: str,
-    _: AdminIdentity = Depends(require_role("approver", "auditor")),
+    identity: AdminIdentity = Depends(require_role("approver", "auditor")),
 ) -> dict[str, Any]:
     approval = db.get_approval_request(approval_id)
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
-    return _approval_review_document(approval)
+    review = _approval_review_document(approval)
+    review_digest = "sha256:" + hashlib.sha256(
+        _canonical_json(review).encode("utf-8")
+    ).hexdigest()
+    receipt = None
+    if approval["status"] == "pending" and not _approval_is_expired(approval):
+        try:
+            receipt = db.issue_approval_review_receipt(
+                approval_request_id=approval_id,
+                reviewer_id=identity.user_id,
+                review_digest=review_digest,
+            )
+        except db.MetadataStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        db.record_audit_event(
+            "approval.review_opened",
+            {
+                "approval_request_id": approval_id,
+                "review_digest": review_digest,
+                "review_receipt_id": receipt["id"],
+                "review_receipt_expires_at": receipt["expires_at"],
+            },
+            actor_id=identity.user_id,
+        )
+    review["review_digest"] = review_digest
+    review["review_receipt"] = (
+        {
+            "id": receipt["id"],
+            "expires_at": receipt["expires_at"],
+        }
+        if receipt
+        else None
+    )
+    return review
 
 
 @app.post("/api/approvals/{approval_id}/approve")
@@ -7766,6 +7944,22 @@ def approve(
         raise HTTPException(status_code=409, detail="approval is expired")
     jit = _approval_jit_policy(approval, require_current_policy=True)
     _assert_approver_allowed(identity, jit)
+    review_receipt_id = payload.review_receipt_id if payload else None
+    if not review_receipt_id:
+        raise HTTPException(
+            status_code=412,
+            detail="open the approval review before approving this request",
+        )
+    review_receipt = db.get_active_approval_review_receipt(
+        review_receipt_id,
+        approval_request_id=approval_id,
+        reviewer_id=identity.user_id,
+    )
+    if review_receipt is None:
+        raise HTTPException(
+            status_code=412,
+            detail="approval review receipt is invalid, expired, or already used",
+        )
     authn_policy = _approval_authn_policy(jit)
     authn: dict[str, Any]
     if _webauthn_required(authn_policy) or (payload and payload.assertion):
@@ -7775,20 +7969,35 @@ def approve(
             )
         try:
             authn = verify_approval_assertion(
-                approval, identity.user_id, authn_policy, payload.assertion
+                approval,
+                identity.user_id,
+                authn_policy,
+                payload.assertion,
+                review_receipt,
             )
         except WebAuthnError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
     else:
-        authn = {"method": identity.auth_method, "user_id": identity.user_id}
-    updated = db.approve_request(
-        approval_id,
-        ttl_seconds=ttl_seconds,
-        note=payload.note if payload else None,
-        actor_id=identity.user_id,
-        authn=authn,
-        challenge_id=authn.get("challenge_id"),
-    )
+        authn = {
+            "method": identity.auth_method,
+            "user_id": identity.user_id,
+            "review_receipt_id": review_receipt["id"],
+            "review_digest": review_receipt["review_digest"],
+        }
+    try:
+        updated = db.approve_request(
+            approval_id,
+            ttl_seconds=ttl_seconds,
+            note=payload.note if payload else None,
+            actor_id=identity.user_id,
+            authn=authn,
+            challenge_id=authn.get("challenge_id"),
+            review_receipt_id=review_receipt["id"],
+            review_digest=review_receipt["review_digest"],
+            require_review_receipt=True,
+        )
+    except db.MetadataStoreError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(
             status_code=409, detail="approval state changed before it could be approved"
@@ -7850,6 +8059,7 @@ def deny(
 @app.post("/api/approvals/{approval_id}/webauthn/options")
 def approval_webauthn_options(
     approval_id: str,
+    payload: ApprovalWebAuthnOptionsRequest,
     identity: AdminIdentity = Depends(require_role("approver")),
 ) -> dict[str, Any]:
     approval = db.get_approval_request(approval_id)
@@ -7859,7 +8069,22 @@ def approval_webauthn_options(
         raise HTTPException(status_code=409, detail="approval is not pending")
     jit = _approval_jit_policy(approval, require_current_policy=True)
     _assert_approver_allowed(identity, jit)
-    return approval_options(approval, identity.user_id, _approval_authn_policy(jit))
+    review_receipt = db.get_active_approval_review_receipt(
+        payload.review_receipt_id,
+        approval_request_id=approval_id,
+        reviewer_id=identity.user_id,
+    )
+    if review_receipt is None:
+        raise HTTPException(
+            status_code=412,
+            detail="open or refresh the approval review before requesting WebAuthn",
+        )
+    return approval_options(
+        approval,
+        identity.user_id,
+        _approval_authn_policy(jit),
+        review_receipt,
+    )
 
 
 @app.post("/api/webauthn/register/options")
@@ -9606,6 +9831,9 @@ UI_HTML = r"""
     .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
     .pending-oauth-list { display: grid; gap: 8px; margin-top: 12px; }
     .pending-oauth-item { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: var(--panel); min-width: 0; }
+    .oauth-uncertain-item { border-color: #f59e0b; background: #fffbeb; }
+    .oauth-revocation-confirm { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 12px; line-height: 1.4; }
+    .oauth-revocation-confirm input { width: auto; flex: 0 0 auto; margin-top: 2px; }
     .setup-form-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
     .setup-form-grid label { margin-top: 0; }
     .setup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
@@ -9878,6 +10106,11 @@ UI_HTML = r"""
             <h3>Verified accounts awaiting activation</h3>
             <div id="pending-oauth-credentials"></div>
           </div>
+          <div id="oauth-uncertain-section" class="pending-oauth-list" hidden>
+            <h3>Provider issuance requires review</h3>
+            <p class="hint">The provider may have issued a grant, but Serverware could not durably confirm the result. Revoke the app in the provider account before clearing this record.</p>
+            <div id="oauth-issuance-uncertainties"></div>
+          </div>
         </section>
         <section>
           <h2>Agent Enrollment</h2>
@@ -10038,7 +10271,7 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], pendingOAuthCredentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, setupSessions: [], setupSession: null, setupChallenge: null, oauthSetupSessionId: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
+    let state = {credentials: [], pendingOAuthCredentials: [], oauthIssuanceUncertainties: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, setupSessions: [], setupSession: null, setupChallenge: null, oauthSetupSessionId: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
     let pendingMutation = null;
     let refreshInFlight = null;
     let hasRendered = false;
@@ -10143,7 +10376,7 @@ UI_HTML = r"""
         adapter: {type: 'x.v2', config: {mode: 'controlledWrite', blockWrites: false, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
           {id: 'x-only-tweet-create', type: 'operationPolicy', allowedOperations: ['tweets.write']},
-          {id: 'x-one-post-per-day', type: 'rateLimit', max: 1, windowSeconds: 86400, store: 'shared', key: {scope: ['principal', 'credential', 'route', 'operation']}},
+          {id: 'x-one-post-per-day', type: 'rateLimit', max: 1, windowSeconds: 86400, store: 'shared', key: {scope: ['route', 'operation'], operationFields: ['providerAccount']}},
           {id: 'x-plain-text-body', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['text', 'reply_settings'], requiredFields: ['text'], deniedFields: ['media', 'poll', 'direct_message_deep_link'], fields: {text: {type: 'string', minLength: 1, maxLength: 280}, reply_settings: {type: 'string', enum: ['following', 'mentionedUsers']}}}
         ]
       },
@@ -10696,6 +10929,26 @@ UI_HTML = r"""
       }).join('');
     }
 
+    function renderOAuthIssuanceUncertainties() {
+      const items = state.oauthIssuanceUncertainties || [];
+      $('oauth-uncertain-section').hidden = !items.length;
+      $('oauth-issuance-uncertainties').innerHTML = items.map((item) => {
+        const confirmId = `oauth-uncertain-confirm-${item.id}`;
+        const noteId = `oauth-uncertain-note-${item.id}`;
+        return `<div class="pending-oauth-item oauth-uncertain-item stack">
+          <div class="toolbar"><span class="pill warn">issuance uncertain</span><strong>${esc(item.provider_id || 'OAuth provider')}</strong></div>
+          <span class="muted">${esc(item.source || 'token exchange')} / detected ${esc(item.updated_at || item.created_at || '')}</span>
+          <code>${esc(item.id)}</code>
+          <span>${esc(item.last_error || 'The token exchange outcome could not be confirmed.')}</span>
+          <span class="muted">Requested by ${esc(item.actor_id || 'unknown operator')}</span>
+          <label class="oauth-revocation-confirm" for="${confirmId}"><input id="${confirmId}" type="checkbox">I confirmed the provider-side app grant was revoked.</label>
+          <label for="${noteId}">Revocation evidence note</label>
+          <input id="${noteId}" maxlength="2000" placeholder="Provider audit event, ticket, or verification details">
+          <button class="danger" type="button" onclick="runUiAction('Resolve uncertain OAuth issuance', () => resolveOAuthIssuanceUncertainty('${item.id}'))">Confirm revocation and clear</button>
+        </div>`;
+      }).join('');
+    }
+
     function syncCredentialKindFields(reset = false) {
       const kind = $('credential-kind').value;
       const settings = {
@@ -11034,6 +11287,7 @@ UI_HTML = r"""
       renderSetupWorkflow(controlState);
       renderEnrollmentOutput();
       renderPendingOAuthCredentials();
+      renderOAuthIssuanceUncertainties();
       $('credentials').innerHTML = state.credentials.map((item) => `
         <tr>
           <td><strong>${esc(item.name)}</strong><br><code>${esc(item.id)}</code></td>
@@ -11094,7 +11348,8 @@ UI_HTML = r"""
         'metadata_keys', 'expires_at_epoch_ms', 'x_app_id', 'name', 'kind',
         'policy_id', 'previous_policy_hash', 'candidate_policy_hash', 'previous_sequence', 'new_sequence',
         'previous_rollback_epoch', 'new_rollback_epoch', 'diff', 'dry_run', 'route_id', 'changed_fields',
-        'match_host', 'match_path_prefix', 'credential_id', 'enabled', 'subject_id', 'roles', 'reason'
+        'match_host', 'match_path_prefix', 'credential_id', 'enabled', 'subject_id', 'roles', 'reason',
+        'work_id', 'confirmed_provider_revocation', 'source', 'note'
       ];
       return Object.fromEntries(allowed.filter((key) => Object.prototype.hasOwnProperty.call(request || {}, key)).map((key) => [key, request[key]]));
     }
@@ -12075,6 +12330,25 @@ UI_HTML = r"""
         await refresh();
       }
     }
+    async function resolveOAuthIssuanceUncertainty(id) {
+      const item = (state.oauthIssuanceUncertainties || []).find((candidate) => candidate.id === id);
+      if (!item) throw new Error('OAuth issuance uncertainty is no longer available');
+      const confirmed = $(`oauth-uncertain-confirm-${id}`)?.checked === true;
+      const note = $(`oauth-uncertain-note-${id}`)?.value.trim() || '';
+      if (!confirmed) throw new Error('Confirm provider-side revocation before clearing this uncertainty');
+      if (!note) throw new Error('Record evidence of the provider-side revocation');
+      const mutation = {
+        kind: 'oauth-issuance-uncertainty-resolve',
+        label: `Resolve uncertain ${item.provider_id || 'OAuth'} issuance`,
+        persist: true,
+        path: `/api/oauth/issuance-uncertainties/${id}/resolve`,
+        method: 'POST',
+        body: {confirmedProviderRevocation: true, note}
+      };
+      const completed = await runControlPlaneMutation(mutation);
+      if (!completed.pending) await finishMutation(completed.mutation, completed.result);
+      return completed;
+    }
     async function deleteRoute(id) {
       if (!window.confirm(`Delete local prototype route ${id}? Matching requests will be denied.`)) return cancelledAction('Route deletion');
       const mutation = {kind: 'route-delete', label: `Delete local route ${id}`, persist: false, path: `/api/routes/${id}`, method: 'DELETE', body: {}};
@@ -12132,6 +12406,8 @@ UI_HTML = r"""
           <div class="review-field"><span>Body hash</span><code>${esc(review.body_hash || '')}</code></div>
           <div class="review-field"><span>Request digest</span><code>${esc(retry.request_digest || '')}</code></div>
           <div class="review-field"><span>Operation digest</span><code>${esc(retry.operation_digest || '')}</code></div>
+          <div class="review-field"><span>Review digest</span><code>${esc(review.review_digest || '')}</code></div>
+          <div class="review-field"><span>Review receipt expires</span><code>${esc(review.review_receipt?.expires_at || 'not approvable')}</code></div>
         </div>
         <div class="review-block">
           <h3>Risk flags</h3>
@@ -12169,8 +12445,17 @@ UI_HTML = r"""
         setStatus(`Approval ${id} cannot be approved: ${blockReason}.`, 'error');
         return {blocked: true, reason: blockReason};
       }
-      const options = await api(`/api/approvals/${id}/webauthn/options`, {method: 'POST'});
-      let body = {};
+      const reviewReceiptId = state.approvalReview?.review_receipt?.id;
+      if (!reviewReceiptId) {
+        await loadApprovalReview(id);
+        setStatus(`Review receipt refreshed for approval ${id}. Inspect it before approving.`, 'pending');
+        return {pending: true, reviewLoaded: true};
+      }
+      const options = await api(`/api/approvals/${id}/webauthn/options`, {
+        method: 'POST',
+        body: JSON.stringify({reviewReceiptId})
+      });
+      let body = {reviewReceiptId};
       if (window.PublicKeyCredential && (options.publicKey.allowCredentials || []).length) {
         const assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
         body.assertion = credentialToJson(assertion);

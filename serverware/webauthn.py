@@ -549,11 +549,15 @@ def verify_registration(
     return redacted
 
 
-def _approval_challenge_payload(approval: dict[str, Any], user_id: str) -> dict[str, Any]:
+def _approval_challenge_payload(
+    approval: dict[str, Any],
+    user_id: str,
+    review_receipt: dict[str, Any],
+) -> dict[str, Any]:
     redacted_display = approval.get("redacted_display") or {}
     return {
-        "v": 1,
-        "type": "serverware.approval",
+        "v": 2,
+        "type": "serverware.approval.reviewed",
         "approval_id": approval["id"],
         "user_id": user_id,
         "route_id": approval.get("route_id"),
@@ -567,12 +571,20 @@ def _approval_challenge_payload(approval: dict[str, Any], user_id: str) -> dict[
         "grant_max_uses": approval.get("grant_max_uses"),
         "consume_mode": "forwardStart",
         "redacted_display_digest": "sha256:" + hashlib.sha256(canonical_json(redacted_display).encode("utf-8")).hexdigest(),
+        "review_receipt_id": review_receipt["id"],
+        "review_digest": review_receipt["review_digest"],
+        "review_receipt_expires_at": review_receipt["expires_at"],
         "nonce": b64u(os.urandom(24)),
     }
 
 
-def approval_options(approval: dict[str, Any], user_id: str, authn_policy: dict[str, Any]) -> dict[str, Any]:
-    payload = _approval_challenge_payload(approval, user_id)
+def approval_options(
+    approval: dict[str, Any],
+    user_id: str,
+    authn_policy: dict[str, Any],
+    review_receipt: dict[str, Any],
+) -> dict[str, Any]:
+    payload = _approval_challenge_payload(approval, user_id, review_receipt)
     challenge = b64u(_sha256(canonical_json(payload).encode("utf-8")))
     challenge_row = db.create_webauthn_challenge(
         challenge=challenge,
@@ -669,7 +681,13 @@ def _verify_assertion_signature(credential: dict[str, Any], response: dict[str, 
     return {"client_data": client_data, "parsed": parsed}
 
 
-def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_policy: dict[str, Any], assertion: dict[str, Any]) -> dict[str, Any]:
+def verify_approval_assertion(
+    approval: dict[str, Any],
+    user_id: str,
+    authn_policy: dict[str, Any],
+    assertion: dict[str, Any],
+    review_receipt: dict[str, Any],
+) -> dict[str, Any]:
     credential_id = assertion.get("id") or assertion.get("rawId")
     credential = db.get_webauthn_credential(credential_id)
     if not credential:
@@ -701,6 +719,9 @@ def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_poli
         "approval_expires_at",
         "grant_ttl_seconds",
         "grant_max_uses",
+        "review_receipt_id",
+        "review_digest",
+        "review_receipt_expires_at",
     ):
         if payload.get(field) != {
             "approval_id": approval["id"],
@@ -712,6 +733,9 @@ def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_poli
             "approval_expires_at": approval.get("expires_at"),
             "grant_ttl_seconds": approval.get("grant_ttl_seconds"),
             "grant_max_uses": approval.get("grant_max_uses"),
+            "review_receipt_id": review_receipt["id"],
+            "review_digest": review_receipt["review_digest"],
+            "review_receipt_expires_at": review_receipt["expires_at"],
         }[field]:
             raise WebAuthnError(f"approval challenge {field} mismatch")
     expected_display_digest = "sha256:" + hashlib.sha256(
@@ -739,6 +763,8 @@ def verify_approval_assertion(approval: dict[str, Any], user_id: str, authn_poli
         "user_verified": parsed["user_verified"],
         "sign_count": parsed["sign_count"],
         "challenge_id": challenge["id"],
+        "review_receipt_id": review_receipt["id"],
+        "review_digest": review_receipt["review_digest"],
     }
 
 

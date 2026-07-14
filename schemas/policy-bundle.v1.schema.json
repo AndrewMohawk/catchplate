@@ -50,6 +50,59 @@
         }
       ]
     },
+    "credentialInjectionField": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "credentialInjectionPrefix": {
+      "type": "string",
+      "maxLength": 128,
+      "pattern": "^[^\\r\\n]*$"
+    },
+    "credentialInjectionTargetName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"
+    },
+    "credentialInjectionHeaderName": {
+      "allOf": [
+        {"$ref": "#/$defs/credentialInjectionTargetName"},
+        {
+          "not": {
+            "anyOf": [
+              {"pattern": "^[Cc][Oo][Oo][Kk][Ii][Ee]$"},
+              {"pattern": "^[Pp][Rr][Oo][Xx][Yy]-[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]$"},
+              {"pattern": "^[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]$"},
+              {"pattern": "^[Cc][Oo][Nn][Tt][Ee][Nn][Tt]-[Ll][Ee][Nn][Gg][Tt][Hh]$"},
+              {"pattern": "^[Hh][Oo][Ss][Tt]$"},
+              {"pattern": "^[Kk][Ee][Ee][Pp]-[Aa][Ll][Ii][Vv][Ee]$"},
+              {"pattern": "^[Pp][Rr][Oo][Xx][Yy]-[Aa][Uu][Tt][Hh][Ee][Nn][Tt][Ii][Cc][Aa][Tt][Ee]$"},
+              {"pattern": "^[Pp][Rr][Oo][Xx][Yy]-[Cc][Oo][Nn][Nn][Ee][Cc][Tt][Ii][Oo][Nn]$"},
+              {"pattern": "^[Tt][Ee]$"},
+              {"pattern": "^[Tt][Rr][Aa][Ii][Ll][Ee][Rr]$"},
+              {"pattern": "^[Tt][Rr][Aa][Nn][Ss][Ff][Ee][Rr]-[Ee][Nn][Cc][Oo][Dd][Ii][Nn][Gg]$"},
+              {"pattern": "^[Uu][Pp][Gg][Rr][Aa][Dd][Ee]$"},
+              {"pattern": "^[Xx]-[Ss][Ee][Rr][Vv][Ee][Rr][Ww][Aa][Rr][Ee]-"}
+            ]
+          }
+        }
+      ]
+    },
+    "credentialCustomInjectionHeaderName": {
+      "allOf": [
+        {"$ref": "#/$defs/credentialInjectionHeaderName"},
+        {"not": {"pattern": "^[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]$"}}
+      ]
+    },
+    "credentialBasicUsername": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\s:\\u0000-\\u001F\\u007F]+$"
+    },
     "credentialConstraint": {
       "type": "object",
       "required": ["id", "type"],
@@ -310,22 +363,61 @@
           },
           "scopes": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
           "injection": {
-            "type": "object",
-            "required": ["type"],
-            "additionalProperties": false,
-            "properties": {
-              "type": {"enum": ["bearer", "basic", "header", "query", "cookie"]},
-              "header": {"type": "string", "minLength": 1, "maxLength": 128},
-              "name": {"type": "string", "minLength": 1, "maxLength": 128},
-              "field": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 256,
-                "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["type"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "bearer"},
+                  "header": {"$ref": "#/$defs/credentialInjectionHeaderName"},
+                  "field": {"$ref": "#/$defs/credentialInjectionField"},
+                  "prefix": {"$ref": "#/$defs/credentialInjectionPrefix"}
+                }
               },
-              "prefix": {"type": "string", "maxLength": 128},
-              "username": {"type": "string", "minLength": 1, "maxLength": 256}
-            }
+              {
+                "type": "object",
+                "required": ["type", "username"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "basic"},
+                  "header": {"$ref": "#/$defs/credentialInjectionHeaderName"},
+                  "field": {"$ref": "#/$defs/credentialInjectionField"},
+                  "username": {"$ref": "#/$defs/credentialBasicUsername"}
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type", "name"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "header"},
+                  "name": {"$ref": "#/$defs/credentialCustomInjectionHeaderName"},
+                  "field": {"$ref": "#/$defs/credentialInjectionField"},
+                  "prefix": {"$ref": "#/$defs/credentialInjectionPrefix"}
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type", "name"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "query"},
+                  "name": {"$ref": "#/$defs/credentialInjectionTargetName"},
+                  "field": {"$ref": "#/$defs/credentialInjectionField"}
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type", "name"],
+                "additionalProperties": false,
+                "properties": {
+                  "type": {"const": "cookie"},
+                  "name": {"$ref": "#/$defs/credentialInjectionTargetName"},
+                  "field": {"$ref": "#/$defs/credentialInjectionField"}
+                }
+              }
+            ]
           }
         }
       }

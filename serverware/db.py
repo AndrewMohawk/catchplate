@@ -150,6 +150,7 @@ _POLICY_HIGH_WATER_LOCK_KEY = 0x535752504F4C4943
 _SETUP_SESSION_LOCK_KEY = 0x5357525345545550
 _PENDING_APPROVAL_MAX_COUNT = 10_000
 _PENDING_APPROVAL_MAX_PAYLOAD_BYTES = 64 * 1024
+_APPROVAL_REVIEW_RECEIPT_MAX_COUNT = 10_000
 _OIDC_LOGIN_GLOBAL_PENDING_MAX = 2_000
 _OIDC_LOGIN_SOURCE_PENDING_MAX = 20
 _OIDC_LOGIN_RATE_WINDOW_SECONDS = 60
@@ -1315,6 +1316,19 @@ def init_db(path: Path = DB_PATH) -> None:
                 consumed_by_flow_id TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS approval_review_receipts (
+                id TEXT PRIMARY KEY,
+                approval_request_id TEXT NOT NULL REFERENCES approval_requests(id) ON DELETE CASCADE,
+                reviewer_id TEXT NOT NULL,
+                review_digest TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS approval_review_receipts_lookup
+                ON approval_review_receipts (approval_request_id, reviewer_id, expires_at, used_at);
 
             CREATE TABLE IF NOT EXISTS approval_grant_consumptions (
                 id TEXT PRIMARY KEY,
@@ -4425,10 +4439,7 @@ def reserve_oauth_revocation_work(
     encrypted = _envelope_values(item_id, "{}", 1)
     with connect() as conn:
         _lock_oauth_revocation_work(conn)
-        conn.execute(
-            "DELETE FROM oauth_revocation_work WHERE status = 'reserved' AND next_attempt_at <= ?",
-            (now_s,),
-        )
+        _expire_oauth_exchange_reservations(conn, now_s)
         count_row = conn.execute(
             "SELECT COUNT(*) AS count FROM oauth_revocation_work"
         ).fetchone()
@@ -4467,6 +4478,68 @@ def reserve_oauth_revocation_work(
     return item_id
 
 
+def _expire_oauth_exchange_reservations(conn: Any, now_s: str) -> None:
+    conn.execute(
+        "DELETE FROM oauth_revocation_work WHERE status = 'reserved' AND next_attempt_at <= ?",
+        (now_s,),
+    )
+    conn.execute(
+        """
+        UPDATE oauth_revocation_work
+        SET status = 'issuance_uncertain_unreported',
+            last_error = COALESCE(last_error, 'provider exchange outcome is unknown after process interruption'),
+            next_attempt_at = ?, lease_owner = NULL, lease_until = NULL, updated_at = ?
+        WHERE status = 'exchange_in_flight' AND next_attempt_at <= ?
+        """,
+        (now_s, now_s, now_s),
+    )
+
+
+def mark_oauth_exchange_started(work_id: str) -> None:
+    if not isinstance(work_id, str) or not work_id or len(work_id) > 128:
+        raise ManagedOAuthCredentialError("OAuth revocation work binding is invalid")
+    now = utcnow()
+    now_s = now.isoformat()
+    deadline = (now + timedelta(seconds=_OAUTH_REVOCATION_RESERVED_SECONDS)).isoformat()
+    with connect() as conn:
+        _lock_credential_mutation(conn, work_id)
+        updated = conn.execute(
+            """
+            UPDATE oauth_revocation_work
+            SET status = 'exchange_in_flight', next_attempt_at = ?,
+                last_error = NULL, updated_at = ?
+            WHERE id = ? AND status = 'reserved'
+            """,
+            (deadline, now_s, work_id),
+        )
+        if updated.rowcount != 1:
+            raise ManagedOAuthCredentialError(
+                "OAuth revocation work reservation is unavailable"
+            )
+
+
+def mark_oauth_issuance_uncertain(work_id: str, *, error: str) -> None:
+    if not isinstance(error, str) or not error or len(error) > 500:
+        raise ManagedOAuthCredentialError("OAuth issuance uncertainty error is invalid")
+    now_s = iso_now()
+    with connect() as conn:
+        _lock_credential_mutation(conn, work_id)
+        updated = conn.execute(
+            """
+            UPDATE oauth_revocation_work
+            SET status = 'issuance_uncertain_unreported', last_error = ?,
+                next_attempt_at = ?, lease_owner = NULL, lease_until = NULL,
+                updated_at = ?
+            WHERE id = ? AND status IN ('exchange_in_flight', 'issuance_uncertain_unreported')
+            """,
+            (error, now_s, now_s, work_id),
+        )
+        if updated.rowcount != 1:
+            raise ManagedOAuthCredentialError(
+                "OAuth issuance uncertainty record is unavailable"
+            )
+
+
 def attach_oauth_revocation_material(work_id: str, *, secret: str) -> None:
     secret = validate_credential_secret(secret)
     now = utcnow()
@@ -4482,7 +4555,7 @@ def attach_oauth_revocation_material(work_id: str, *, secret: str) -> None:
                 secret_updated_at = ?, status = 'held', last_error = NULL,
                 next_attempt_at = ?, lease_owner = NULL, lease_until = NULL,
                 updated_at = ?
-            WHERE id = ? AND status IN ('reserved', 'held')
+            WHERE id = ? AND status IN ('reserved', 'exchange_in_flight', 'held')
             """,
             (
                 encrypted["encrypted_secret"],
@@ -4555,7 +4628,8 @@ def complete_oauth_revocation_work(work_id: str) -> bool:
 def get_oauth_revocation_work_status(work_id: str) -> dict[str, Any] | None:
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, status, attempts, last_error, next_attempt_at "
+            "SELECT id, provider_id, actor_id, source, status, attempts, last_error, "
+            "next_attempt_at, created_at, updated_at "
             "FROM oauth_revocation_work WHERE id = ?",
             (work_id,),
         ).fetchone()
@@ -4563,10 +4637,100 @@ def get_oauth_revocation_work_status(work_id: str) -> dict[str, Any] | None:
         return None
     return {
         "id": str(row["id"]),
+        "provider_id": str(row["provider_id"]),
+        "actor_id": str(row["actor_id"]),
+        "source": str(row["source"]),
         "status": str(row["status"]),
         "attempts": int(row["attempts"] or 0),
         "last_error": str(row["last_error"]) if row["last_error"] else None,
         "next_attempt_at": str(row["next_attempt_at"]),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+    }
+
+
+def list_oauth_issuance_uncertainties(
+    *, actor_id: str | None = None, limit: int = 100
+) -> list[dict[str, Any]]:
+    if actor_id is not None and (
+        not isinstance(actor_id, str) or not actor_id or len(actor_id) > 512
+    ):
+        raise ManagedOAuthCredentialError("OAuth issuance uncertainty actor is invalid")
+    if not isinstance(limit, int) or isinstance(limit, bool) or not 1 <= limit <= 1000:
+        raise ManagedOAuthCredentialError("OAuth issuance uncertainty limit is invalid")
+    now_s = iso_now()
+    with connect() as conn:
+        _lock_oauth_revocation_work(conn)
+        _expire_oauth_exchange_reservations(conn, now_s)
+        query = (
+            "SELECT id, provider_id, actor_id, source, status, last_error, created_at, updated_at "
+            "FROM oauth_revocation_work WHERE status IN "
+            "('issuance_uncertain_unreported', 'issuance_uncertain')"
+        )
+        params: list[Any] = []
+        if actor_id is not None:
+            query += " AND actor_id = ?"
+            params.append(actor_id)
+        query += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        rows = conn.execute(query, tuple(params)).fetchall()
+    return [
+        {
+            "id": str(row["id"]),
+            "provider_id": str(row["provider_id"]),
+            "actor_id": str(row["actor_id"]),
+            "source": str(row["source"]),
+            "status": str(row["status"]),
+            "last_error": str(row["last_error"]) if row["last_error"] else None,
+            "created_at": str(row["created_at"]),
+            "updated_at": str(row["updated_at"]),
+        }
+        for row in rows
+    ]
+
+
+def resolve_oauth_issuance_uncertainty(
+    work_id: str,
+    *,
+    actor_id: str,
+    _connection: Any | None = None,
+) -> dict[str, Any]:
+    if not isinstance(work_id, str) or not work_id or len(work_id) > 128:
+        raise ManagedOAuthCredentialError("OAuth issuance uncertainty ID is invalid")
+    if not isinstance(actor_id, str) or not actor_id or len(actor_id) > 512:
+        raise ManagedOAuthCredentialError("OAuth issuance uncertainty actor is invalid")
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
+        _lock_credential_mutation(conn, work_id)
+        row = conn.execute(
+            "SELECT id, provider_id, actor_id, source, status, created_at "
+            "FROM oauth_revocation_work WHERE id = ?",
+            (work_id,),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "reason": "issuance_uncertainty_not_found"}
+        if row["status"] not in {
+            "issuance_uncertain_unreported",
+            "issuance_uncertain",
+        }:
+            return {"ok": False, "reason": "issuance_uncertainty_not_resolvable"}
+        deleted = conn.execute(
+            "DELETE FROM oauth_revocation_work WHERE id = ? AND status IN "
+            "('issuance_uncertain_unreported', 'issuance_uncertain')",
+            (work_id,),
+        )
+        if deleted.rowcount != 1:
+            return {"ok": False, "reason": "issuance_uncertainty_raced"}
+    return {
+        "ok": True,
+        "id": str(row["id"]),
+        "provider_id": str(row["provider_id"]),
+        "requester_id": str(row["actor_id"]),
+        "source": str(row["source"]),
+        "created_at": str(row["created_at"]),
+        "resolved_by": actor_id,
     }
 
 
@@ -4747,15 +4911,44 @@ def claim_oauth_revocations(
     with connect() as conn:
         _lock_oauth_revocation_work(conn)
         _mark_expired_pending_oauth_credentials(conn, now_s)
-        conn.execute(
-            "DELETE FROM oauth_revocation_work WHERE status = 'reserved' AND next_attempt_at <= ?",
-            (now_s,),
-        )
+        _expire_oauth_exchange_reservations(conn, now_s)
         conn.execute(
             "UPDATE oauth_revocation_work SET status = 'pending', updated_at = ? "
             "WHERE status = 'held' AND next_attempt_at <= ?",
             (now_s, now_s),
         )
+        uncertainty_rows = conn.execute(
+            """
+            SELECT id, provider_id, actor_id, source, last_error
+            FROM oauth_revocation_work
+            WHERE status = 'issuance_uncertain_unreported'
+              AND (lease_until IS NULL OR lease_until <= ?)
+            ORDER BY created_at
+            LIMIT ?
+            """,
+            (now_s, limit),
+        ).fetchall()
+        for row in uncertainty_rows:
+            updated = conn.execute(
+                "UPDATE oauth_revocation_work SET lease_owner = ?, lease_until = ?, "
+                "updated_at = ? WHERE id = ? AND status = 'issuance_uncertain_unreported' "
+                "AND (lease_until IS NULL OR lease_until <= ?)",
+                (worker_id, lease_until, now_s, row["id"], now_s),
+            )
+            if updated.rowcount == 1:
+                claimed.append(
+                    {
+                        "kind": "issuance_uncertain",
+                        "id": str(row["id"]),
+                        "provider_id": str(row["provider_id"]),
+                        "actor_id": str(row["actor_id"]),
+                        "source": str(row["source"]),
+                        "error": str(row["last_error"] or "provider exchange outcome is unknown"),
+                    }
+                )
+        remaining = limit - len(claimed)
+        if remaining <= 0:
+            return claimed
         pending_rows = conn.execute(
             """
             SELECT * FROM pending_oauth_credentials
@@ -4765,7 +4958,7 @@ def claim_oauth_revocations(
             ORDER BY COALESCE(revocation_next_attempt_at, updated_at), created_at
             LIMIT ?
             """,
-            (now_s, now_s, limit),
+            (now_s, now_s, remaining),
         ).fetchall()
         for row in pending_rows:
             conn.execute(
@@ -4812,6 +5005,33 @@ def claim_oauth_revocations(
                     }
                 )
     return claimed
+
+
+def finish_oauth_issuance_uncertainty_report(
+    work_id: str,
+    *,
+    worker_id: str,
+) -> dict[str, Any]:
+    if not isinstance(work_id, str) or not work_id or len(work_id) > 128:
+        raise ManagedOAuthCredentialError("OAuth issuance uncertainty ID is invalid")
+    if not isinstance(worker_id, str) or not worker_id or len(worker_id) > 128:
+        raise ManagedOAuthCredentialError("OAuth issuance uncertainty worker is invalid")
+    now_s = iso_now()
+    with connect() as conn:
+        _lock_credential_mutation(conn, work_id)
+        updated = conn.execute(
+            """
+            UPDATE oauth_revocation_work
+            SET status = 'issuance_uncertain', lease_owner = NULL,
+                lease_until = NULL, updated_at = ?
+            WHERE id = ? AND status = 'issuance_uncertain_unreported'
+              AND lease_owner = ?
+            """,
+            (now_s, work_id, worker_id),
+        )
+        if updated.rowcount != 1:
+            return {"ok": False, "reason": "issuance_uncertainty_report_not_claimed"}
+    return {"ok": True, "status": "issuance_uncertain"}
 
 
 def finish_oauth_revocation_work(
@@ -6366,6 +6586,98 @@ def get_approval_request(item_id: str) -> dict[str, Any] | None:
     return row_to_approval(row) if row else None
 
 
+def issue_approval_review_receipt(
+    *,
+    approval_request_id: str,
+    reviewer_id: str,
+    review_digest: str,
+    ttl_seconds: int = 120,
+) -> dict[str, Any]:
+    if not isinstance(approval_request_id, str) or not approval_request_id:
+        raise MetadataStoreError("approval review receipt approval ID is invalid")
+    if not isinstance(reviewer_id, str) or not reviewer_id or len(reviewer_id) > 512:
+        raise MetadataStoreError("approval review receipt reviewer is invalid")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", review_digest or "") is None:
+        raise MetadataStoreError("approval review receipt digest is invalid")
+    if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or not 30 <= ttl_seconds <= 300:
+        raise MetadataStoreError("approval review receipt TTL must be between 30 and 300 seconds")
+    now = utcnow()
+    now_s = now.isoformat()
+    expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
+    receipt_id = str(uuid.uuid4())
+    with connect() as conn:
+        _lock_pending_approval_creation(conn)
+        approval = conn.execute(
+            "SELECT status, expires_at FROM approval_requests WHERE id = ?",
+            (approval_request_id,),
+        ).fetchone()
+        if approval is None:
+            raise MetadataStoreError("approval review receipt approval is unavailable")
+        if approval["status"] != "pending" or approval["expires_at"] <= now_s:
+            raise MetadataStoreError("approval review receipt requires a live pending approval")
+        conn.execute(
+            "DELETE FROM approval_review_receipts WHERE used_at IS NOT NULL OR expires_at <= ?",
+            (now_s,),
+        )
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM approval_review_receipts"
+        ).fetchone()
+        if int(count_row["count"] if count_row else 0) >= _APPROVAL_REVIEW_RECEIPT_MAX_COUNT:
+            raise MetadataStoreError("approval review receipt capacity has been reached")
+        conn.execute(
+            """
+            INSERT INTO approval_review_receipts (
+                id, approval_request_id, reviewer_id, review_digest,
+                expires_at, used_at, created_at
+            ) VALUES (?, ?, ?, ?, ?, NULL, ?)
+            """,
+            (
+                receipt_id,
+                approval_request_id,
+                reviewer_id,
+                review_digest,
+                expires_at,
+                now_s,
+            ),
+        )
+    return {
+        "id": receipt_id,
+        "approval_request_id": approval_request_id,
+        "reviewer_id": reviewer_id,
+        "review_digest": review_digest,
+        "expires_at": expires_at,
+        "created_at": now_s,
+    }
+
+
+def get_active_approval_review_receipt(
+    receipt_id: str,
+    *,
+    approval_request_id: str,
+    reviewer_id: str,
+) -> dict[str, Any] | None:
+    now_s = iso_now()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM approval_review_receipts
+            WHERE id = ? AND approval_request_id = ? AND reviewer_id = ?
+              AND used_at IS NULL AND expires_at > ?
+            """,
+            (receipt_id, approval_request_id, reviewer_id, now_s),
+        ).fetchone()
+    if row is None:
+        return None
+    return {
+        "id": str(row["id"]),
+        "approval_request_id": str(row["approval_request_id"]),
+        "reviewer_id": str(row["reviewer_id"]),
+        "review_digest": str(row["review_digest"]),
+        "expires_at": str(row["expires_at"]),
+        "created_at": str(row["created_at"]),
+    }
+
+
 def has_active_approval(route_id: str, url: str | None = None) -> bool:
     now_s = iso_now()
     args: list[Any] = [route_id, now_s]
@@ -6392,6 +6704,9 @@ def approve_request(
     actor_id: str = "admin",
     authn: dict[str, Any] | None = None,
     challenge_id: str | None = None,
+    review_receipt_id: str | None = None,
+    review_digest: str | None = None,
+    require_review_receipt: bool = False,
 ) -> dict[str, Any] | None:
     now = utcnow()
     now_s = now.isoformat()
@@ -6404,6 +6719,26 @@ def approve_request(
             return None
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
             return None
+        review_receipt = None
+        if require_review_receipt:
+            if not review_receipt_id or not review_digest:
+                raise MetadataStoreError("approval requires a review receipt")
+            review_receipt = conn.execute(
+                """
+                SELECT * FROM approval_review_receipts
+                WHERE id = ? AND approval_request_id = ? AND reviewer_id = ?
+                  AND review_digest = ? AND used_at IS NULL AND expires_at > ?
+                """,
+                (
+                    review_receipt_id,
+                    item_id,
+                    actor_id,
+                    review_digest,
+                    now_s,
+                ),
+            ).fetchone()
+            if review_receipt is None:
+                raise MetadataStoreError("approval review receipt is invalid, expired, or already used")
         grant_ttl_seconds = int(existing["grant_ttl_seconds"] or ttl_seconds)
         grant_max_uses = int(existing["grant_max_uses"] or 1)
         if not 1 <= grant_ttl_seconds <= 3600 or grant_max_uses < 1:
@@ -6450,6 +6785,14 @@ def approve_request(
         )
         if cur.rowcount != 1:
             return None
+        if review_receipt is not None:
+            consumed = conn.execute(
+                "UPDATE approval_review_receipts SET used_at = ? "
+                "WHERE id = ? AND used_at IS NULL AND expires_at > ?",
+                (now_s, review_receipt_id, now_s),
+            )
+            if consumed.rowcount != 1:
+                raise MetadataStoreError("approval review receipt changed before approval")
         grant_result: dict[str, Any] | None = None
         if existing["request_digest"]:
             if grants.uses_postgres():
@@ -6516,6 +6859,8 @@ def approve_request(
                 "approved_by": actor_id,
                 "approval_authn": authn or {},
                 "approval_challenge_id": challenge_id,
+                "review_receipt_id": review_receipt_id,
+                "review_digest": review_digest,
                 "grant_max_uses": grant_max_uses,
                 "grant_store_backend": (
                     grant_result or {"backend": grants.backend_name()}
@@ -8470,6 +8815,7 @@ def metadata_store_status() -> dict[str, Any]:
         "oauth_revocation_work",
         "routes",
         "approval_requests",
+        "approval_review_receipts",
         "control_plane_approvals",
         "webauthn_credentials",
         "webauthn_challenges",

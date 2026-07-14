@@ -669,7 +669,7 @@
           "type": "operationPolicy"
         },
         {
-          "description": "A principal can publish at most one tweet per day with this credential.",
+          "description": "The Docker fixture can publish at most one tweet per day for this principal and credential.",
           "id": "x-one-tweet-per-day",
           "key": {
             "scope": [

@@ -43,6 +43,7 @@ from serverware.policy_bundle import (
     bounded_pattern_matches,
     compile_policy_bundle,
     demo_policy_bundle,
+    validate_policy_schema,
 )
 try:
     from serverware.policy_engine import (
@@ -171,6 +172,17 @@ def assert_policy_rejected(bundle: dict, message: str, *, validate_schema: bool)
         raise AssertionError(f"{message}; validate_schema={use_schema}")
 
 
+def assert_injection_rejected(bundle: dict, message: str, *, validate_schema: bool) -> None:
+    assert_policy_rejected(bundle, message, validate_schema=validate_schema)
+    if not validate_schema:
+        return
+    try:
+        validate_policy_schema(bundle)
+    except PolicyBundleError:
+        return
+    raise AssertionError(f"policy schema accepted {message}")
+
+
 def main() -> None:
     db.init_db()
     validate_schema = schema_validation_available()
@@ -180,10 +192,79 @@ def main() -> None:
     demo = compile_policy_bundle(demo_bundle, validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     example_snapshot = compile_policy_bundle(examples, validate_schema=validate_schema)
+    for credential_id in ("cred-gmail", "cred-x"):
+        assert example_snapshot.credentials[credential_id].injection == {
+            "type": "bearer",
+            "header": "Authorization",
+            "field": "access_token",
+        }
     assert example_snapshot.credentials["cred-object-store"].injection == {
         "type": "header",
         "name": "X-Api-Key",
     }
+    valid_injections = (
+        {"type": "bearer"},
+        {"type": "bearer", "header": "Authorization", "field": "access_token", "prefix": "Bearer "},
+        {"type": "basic", "username": "service-account", "header": "Authorization", "field": "password"},
+        {"type": "header", "name": "X-Api-Key", "field": "api.key", "prefix": "Token "},
+        {"type": "query", "name": "api_key", "field": "token"},
+        {"type": "cookie", "name": "session_token", "field": "token"},
+    )
+    for injection in valid_injections:
+        valid = copy.deepcopy(demo_bundle)
+        valid["credentials"][0]["injection"] = injection
+        compiled = compile_policy_bundle(valid, validate_schema=validate_schema)
+        assert compiled.credentials["cred-demo-bearer"].injection == injection
+
+    invalid_injections = (
+        ({}, "an injection without a type"),
+        ({"type": "basic"}, "Basic injection without a username"),
+        ({"type": "basic", "username": ""}, "Basic injection with an empty username"),
+        ({"type": "basic", "username": 7}, "Basic injection with a non-string username"),
+        ({"type": "basic", "username": "user:name"}, "Basic injection with a colon in its username"),
+        ({"type": "basic", "username": "user name"}, "Basic injection with whitespace in its username"),
+        ({"type": "basic", "username": "a" * 257}, "Basic injection with an oversized username"),
+        ({"type": "header"}, "header injection without a name"),
+        ({"type": "query"}, "query injection without a name"),
+        ({"type": "cookie"}, "cookie injection without a name"),
+        ({"type": "header", "name": ""}, "header injection with an empty name"),
+        ({"type": "query", "name": ""}, "query injection with an empty name"),
+        ({"type": "cookie", "name": ""}, "cookie injection with an empty name"),
+        ({"type": "header", "name": "Bad Header"}, "header injection with an invalid name"),
+        ({"type": "query", "name": "api key"}, "query injection with an invalid name"),
+        ({"type": "cookie", "name": "session;token"}, "cookie injection with an invalid name"),
+        ({"type": "query", "name": "a" * 129}, "query injection with an oversized name"),
+        ({"type": "header", "name": "Authorization"}, "custom header injection into Authorization"),
+        ({"type": "bearer", "header": "Host"}, "bearer injection into Host"),
+        ({"type": "basic", "username": "service", "header": "Cookie"}, "Basic injection into Cookie"),
+        ({"type": "header", "name": "X-Serverware-Admin-Token"}, "header injection into service auth"),
+        ({"type": "bearer", "name": "X-Api-Key"}, "bearer injection with a header-only name field"),
+        ({"type": "basic", "username": "service", "prefix": "Basic "}, "Basic injection with a prefix"),
+        ({"type": "header", "name": "X-Api-Key", "username": "service"}, "header injection with a username"),
+        ({"type": "query", "name": "api_key", "prefix": "Token "}, "query injection with a prefix"),
+        ({"type": "cookie", "name": "session_token", "header": "Cookie"}, "cookie injection with a header"),
+        ({"type": "bearer", "header": 7}, "bearer injection with a non-string header"),
+        ({"type": "header", "name": 7}, "header injection with a non-string name"),
+        ({"type": "bearer", "field": ["access_token"]}, "bearer injection with a non-string field"),
+        ({"type": "bearer", "prefix": "Bearer\r\nX-Evil: 1"}, "bearer injection with a multiline prefix"),
+        ({"type": "bearer", "unknown": True}, "bearer injection with an unknown field"),
+        ({"type": "unsupported"}, "unsupported injection type"),
+    )
+    for injection, description in invalid_injections:
+        invalid = copy.deepcopy(demo_bundle)
+        invalid["credentials"][0]["injection"] = injection
+        assert_injection_rejected(
+            invalid,
+            f"compiler accepted {description}",
+            validate_schema=validate_schema,
+        )
+    missing_injection = copy.deepcopy(demo_bundle)
+    missing_injection["credentials"][0].pop("injection")
+    assert_injection_rejected(
+        missing_injection,
+        "compiler accepted a credential without an injection declaration",
+        validate_schema=validate_schema,
+    )
     invalid = copy.deepcopy(examples)
     stripe = next(
         item for item in invalid["routes"] if item["id"] == "example.stripe.payment_intent.tokenized_jit"

@@ -328,14 +328,24 @@ import json, sys
 print(json.load(open(sys.argv[1]))["approval_id"])
 PY
 )"
-approval_without_webauthn_code="$(curl -sS -o "$TMP_DIR/approval-no-webauthn.json" -w "%{http_code}" "${ADMIN_HEADER[@]}" -X POST "$BASE/api/approvals/$approval_id/approve?ttl_seconds=30")"
+curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/approvals/$approval_id/review" > "$TMP_DIR/approval-review.json"
+python3 - "$TMP_DIR/approval-review.json" "$TMP_DIR/approval-review-request.json" <<'PY'
+import json, sys
+review = json.load(open(sys.argv[1]))
+assert review["review_digest"].startswith("sha256:"), review
+assert review["review_receipt"]["id"], review
+json.dump({"reviewReceiptId": review["review_receipt"]["id"]}, open(sys.argv[2], "w"))
+PY
+approval_without_webauthn_code="$(curl -sS -o "$TMP_DIR/approval-no-webauthn.json" -w "%{http_code}" "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST --data @"$TMP_DIR/approval-review-request.json" "$BASE/api/approvals/$approval_id/approve?ttl_seconds=30")"
 if [[ "$approval_without_webauthn_code" != "412" ]]; then
   echo "expected approval without WebAuthn to fail with 412, got $approval_without_webauthn_code" >&2
   cat "$TMP_DIR/approval-no-webauthn.json" >&2
   exit 1
 fi
 
-curl -fsS "${ADMIN_HEADER[@]}" -X POST "$BASE/api/approvals/$approval_id/webauthn/options" > "$TMP_DIR/approval-webauthn-options.json"
+curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
+  --data @"$TMP_DIR/approval-review-request.json" \
+  "$BASE/api/approvals/$approval_id/webauthn/options" > "$TMP_DIR/approval-webauthn-options.json"
 challenge="$(python3 - "$TMP_DIR/approval-webauthn-options.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
@@ -346,16 +356,19 @@ assert payload["grant_ttl_seconds"] == 30, data
 assert payload["grant_max_uses"] == 1, data
 assert payload["consume_mode"] == "forwardStart", data
 assert payload["redacted_display_digest"].startswith("sha256:"), data
+assert payload["review_receipt_id"], data
+assert payload["review_digest"].startswith("sha256:"), data
 print(data["publicKey"]["challenge"])
 PY
 )"
 curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data "{\"challenge\":\"$challenge\"}" \
   "$BASE/api/dev/webauthn/assertion" > "$TMP_DIR/approval-webauthn-assertion.json"
-python3 - "$TMP_DIR/approval-webauthn-assertion.json" "$TMP_DIR/approval-webauthn-approve.json" <<'PY'
+python3 - "$TMP_DIR/approval-webauthn-assertion.json" "$TMP_DIR/approval-review.json" "$TMP_DIR/approval-webauthn-approve.json" <<'PY'
 import json, sys
 assertion = json.load(open(sys.argv[1]))
-json.dump({"assertion": assertion}, open(sys.argv[2], "w"))
+review = json.load(open(sys.argv[2]))
+json.dump({"assertion": assertion, "reviewReceiptId": review["review_receipt"]["id"]}, open(sys.argv[3], "w"))
 PY
 curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data @"$TMP_DIR/approval-webauthn-approve.json" \

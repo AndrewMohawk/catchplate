@@ -128,7 +128,7 @@ SETUP_SESSION_RETENTION_SECONDS = int(
 if not 300 <= SETUP_SESSION_RETENTION_SECONDS <= 7_776_000:
     raise RuntimeError("SERVERWARE_SETUP_SESSION_RETENTION_SECONDS must be between 300 and 7776000")
 SETUP_SESSION_EVIDENCE_MAX_BYTES = int(
-    os.getenv("SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES", "32768")
+    os.getenv("SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES", "1048576")
 )
 if not 1024 <= SETUP_SESSION_EVIDENCE_MAX_BYTES <= 1_048_576:
     raise RuntimeError("SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES must be between 1024 and 1048576")
@@ -159,6 +159,56 @@ SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS = int(
 )
 if not 5 <= SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS <= 3600:
     raise RuntimeError("SERVERWARE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS must be between 5 and 3600")
+
+_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY = os.getenv(
+    "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY", ""
+).strip()
+SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY_PATH = (
+    Path(_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY)
+    if _SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY
+    else None
+)
+SETUP_ENROLLMENT_VERIFIER_KEY_ID = os.getenv(
+    "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_KEY_ID", ""
+).strip()
+SETUP_ENROLLMENT_VERIFIER_PROVIDER = os.getenv(
+    "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PROVIDER", ""
+).strip()
+_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY = os.getenv(
+    "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY", ""
+).strip()
+SETUP_HARDWARE_VERIFIER_PUBLIC_KEY_PATH = (
+    Path(_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY)
+    if _SETUP_HARDWARE_VERIFIER_PUBLIC_KEY
+    else None
+)
+SETUP_HARDWARE_VERIFIER_KEY_ID = os.getenv(
+    "SERVERWARE_SETUP_HARDWARE_VERIFIER_KEY_ID", ""
+).strip()
+SETUP_HARDWARE_VERIFIER_PROVIDER = os.getenv(
+    "SERVERWARE_SETUP_HARDWARE_VERIFIER_PROVIDER", ""
+).strip()
+_SETUP_FINAL_AUTHORITY_PUBLIC_KEY = os.getenv(
+    "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY", ""
+).strip()
+SETUP_FINAL_AUTHORITY_PUBLIC_KEY_PATH = (
+    Path(_SETUP_FINAL_AUTHORITY_PUBLIC_KEY)
+    if _SETUP_FINAL_AUTHORITY_PUBLIC_KEY
+    else None
+)
+SETUP_FINAL_AUTHORITY_KEY_ID = os.getenv(
+    "SERVERWARE_SETUP_FINAL_AUTHORITY_KEY_ID", ""
+).strip()
+SETUP_FINAL_AUTHORITY_PROVIDER = os.getenv(
+    "SERVERWARE_SETUP_FINAL_AUTHORITY_PROVIDER", ""
+).strip()
+SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS = int(
+    os.getenv("SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS", "300")
+)
+if not 30 <= SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS <= 900:
+    raise RuntimeError(
+        "SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS must be between 30 and 900"
+    )
 
 CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES = int(
     os.getenv("SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES", "1000000")
@@ -200,7 +250,7 @@ ADMIN_ROLES = tuple(
     role.strip()
     for role in os.getenv(
         "SERVERWARE_ADMIN_ROLES",
-        "admin,approver,auditor,policy_author,policy_publisher,credential_owner",
+        "admin,approver,auditor,policy_author,policy_publisher,credential_owner,attestation_operator,attestation_reviewer",
     ).split(",")
     if role.strip()
 )
@@ -274,7 +324,7 @@ CONTROL_PLANE_TWO_PERSON_ACTIONS = tuple(
     item.strip()
     for item in os.getenv(
         "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS",
-        "credential.create,credential.oauth.activate,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
+        "credential.create,credential.oauth.activate,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant,setup.attestation.finalize",
     ).split(",")
     if item.strip()
 )

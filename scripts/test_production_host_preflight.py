@@ -26,6 +26,7 @@ import test_production_release_input_preflight  # noqa: E402
 import test_production_readiness  # noqa: E402
 import generate_release_provenance  # noqa: E402
 import production_host_preflight  # noqa: E402
+import verify_production_policy_identity  # noqa: E402
 
 
 def sha256_prefixed(value: bytes) -> str:
@@ -48,6 +49,12 @@ def set_production_images(env: dict[str, str], images_env: Path) -> None:
 def set_release_artifacts(env: dict[str, str], paths: dict[str, Path]) -> None:
     env["SERVERWARE_RELEASE_PROVENANCE_FILE"] = str(paths["provenance"].resolve())
     env["SERVERWARE_IMAGE_SIGNATURES_FILE"] = str(paths["image_signatures"].resolve())
+
+
+def fixture_release_env(paths: dict[str, Path]) -> dict[str, str]:
+    env = test_production_readiness.good_env()
+    env.update(test_production_handoff.fixture_release_trust_env(paths))
+    return env
 
 
 def write_kms_materials(path: Path, *, mode: int = 0o600) -> None:
@@ -244,12 +251,20 @@ def run_preflight(paths: dict[str, Path], *extra: str, allow_test_bypass: bool =
             if image["service"] == "serverware-decision-gate":
                 item["rust_binary_sha256"] = image["binary_digest"]
             reproduced_images.append(item)
-        security, policy_hash = test_production_release_input_preflight.release_security_fixture(
+        security, _ = test_production_release_input_preflight.release_security_fixture(
             paths["build"].parent,
             source_tree_digest=build["metadata"]["source_tree_digest"],
             images=reproduced_images,
         )
         paths.update(security)
+        identity = verify_production_policy_identity.verify_persisted_report(
+            bundle_path=paths["policy_bundle"],
+            trusted_public_key_path=paths["policy_key"],
+            report_path=paths["policy_identity"],
+        )
+        policy_hash = identity.get("policyHash")
+        if not isinstance(policy_hash, str) or not policy_hash.startswith("sha256:"):
+            raise AssertionError(f"identity verification did not return a policy hash: {identity}")
         bench = json.loads(paths["bench"].read_text(encoding="utf-8"))
         bench["policy_hash"] = policy_hash
         paths["bench"].write_text(json.dumps(bench, sort_keys=True) + "\n", encoding="utf-8")
@@ -366,7 +381,7 @@ def main() -> None:
         tmp = Path(tmp_raw)
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
-        env = test_production_readiness.good_env()
+        env = fixture_release_env(paths)
         set_release_artifacts(env, paths)
         set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
@@ -453,7 +468,7 @@ def main() -> None:
         tmp = Path(tmp_raw)
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
-        env = test_production_readiness.good_env()
+        env = fixture_release_env(paths)
         set_release_artifacts(env, paths)
         set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
@@ -466,7 +481,7 @@ def main() -> None:
         tmp = Path(tmp_raw)
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
-        env = test_production_readiness.good_env()
+        env = fixture_release_env(paths)
         set_release_artifacts(env, paths)
         set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
@@ -483,7 +498,7 @@ def main() -> None:
         tmp = Path(tmp_raw)
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
-        env = test_production_readiness.good_env()
+        env = fixture_release_env(paths)
         set_release_artifacts(env, paths)
         set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
@@ -504,7 +519,7 @@ def main() -> None:
         tmp = Path(tmp_raw)
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
-        env = test_production_readiness.good_env()
+        env = fixture_release_env(paths)
         set_release_artifacts(env, paths)
         env["SERVERWARE_PRODUCTION_IMAGES"] = "registry.prod.serverware.dev/serverware/control@sha256:" + "c" * 64
         write_env(paths["env"], env)
@@ -517,7 +532,7 @@ def main() -> None:
         tmp = Path(tmp_raw)
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
-        env = test_production_readiness.good_env()
+        env = fixture_release_env(paths)
         set_release_artifacts(env, paths)
         set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)
@@ -531,7 +546,7 @@ def main() -> None:
         tmp = Path(tmp_raw)
         paths = test_production_handoff.write_fixture_artifacts(tmp)
         paths["kms_materials"] = tmp / "kms-materials.json"
-        env = test_production_readiness.good_env()
+        env = fixture_release_env(paths)
         set_release_artifacts(env, paths)
         set_production_images(env, paths["images_env"])
         write_env(paths["env"], env)

@@ -597,10 +597,12 @@ def artifact_check(
     args: argparse.Namespace,
     expected_images: list[dict[str, str]],
     expected_binary_digest: str | None,
+    configured: dict[str, str],
 ) -> tuple[dict[str, Any], list[str]]:
     failures: list[str] = []
     status: dict[str, Any] = {"ok": False}
     try:
+        release_trust = handoff.release_trust_from_config(configured)
         production_images = handoff.verify_production_images_build(Path(args.production_images_build), check_current_tree=True)
         published_images, published_failures = published_images_check(
             Path(args.production_images_published),
@@ -642,6 +644,7 @@ def artifact_check(
             Path(args.release_provenance),
             summary_digest=release_summary["digest"],
             expected_source_tree_digest=production_images["source_tree_digest"],
+            trust=release_trust,
         )
         signatures = handoff.image_signature_scope(
             Path(args.image_signatures),
@@ -651,6 +654,7 @@ def artifact_check(
             expected_published_image_digests=[item["digest"] for item in expected_images],
             expected_published_image_refs=[item["ref"] for item in expected_images],
             expected_release_bindings=release_document,
+            trust=release_trust,
         )
         if signatures["covers_published_production_images"] is not True:
             failures.append("image signatures do not cover the published production image digests")
@@ -986,6 +990,7 @@ def main() -> None:
         args,
         [item for item in expected_images if isinstance(item, dict)],
         loaded_env.get("SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST") if loaded_env else None,
+        loaded_env,
     )
     failures.extend(artifact_failures)
     release_security, release_security_failures = release_security_evidence_check(args, artifacts)

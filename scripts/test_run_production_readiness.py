@@ -97,6 +97,10 @@ def main() -> None:
             str(final_challenge_receipt),
             "--final-challenge-authority-public-key",
             str(final_challenge_authority_key),
+            "--final-challenge-authority-public-key-id",
+            production_readiness_test.trusted_public_key_id(
+                final_challenge_authority_key.name
+            ),
             "--final-challenge-authority-provider",
             "production-final-challenge-authority",
         )
@@ -116,6 +120,10 @@ def main() -> None:
             str(hardware_assurance),
             "--hardware-assurance-trusted-public-key",
             str(hardware_assurance_key),
+            "--hardware-assurance-trusted-public-key-id",
+            production_readiness_test.trusted_public_key_id(
+                hardware_assurance_key.name
+            ),
             "--hardware-assurance-expected-challenge-nonce",
             expected_hardware_challenge,
         )
@@ -312,6 +320,11 @@ def main() -> None:
                 **final_mode_trust_values,
                 "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
                 "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
+                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": (
+                    production_readiness_test.trusted_public_key_id(
+                        final_challenge_authority_key.name
+                    )
+                ),
                 "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "x" * 257,
             },
         )
@@ -333,6 +346,11 @@ def main() -> None:
                 **final_mode_trust_values,
                 "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
                 "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
+                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": (
+                    production_readiness_test.trusted_public_key_id(
+                        final_challenge_authority_key.name
+                    )
+                ),
                 "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "production-final-challenge-authority",
             },
         )
@@ -372,10 +390,20 @@ def main() -> None:
             **final_mode_trust_values,
             "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
             "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": (
+                production_readiness_test.trusted_public_key_id(
+                    final_challenge_authority_key.name
+                )
+            ),
             "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "production-final-challenge-authority",
             "SERVERWARE_HARDWARE_ASSURANCE": str(hardware_assurance),
             "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY": str(
                 hardware_assurance_key
+            ),
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID": (
+                production_readiness_test.trusted_public_key_id(
+                    hardware_assurance_key.name
+                )
             ),
             "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE": expected_hardware_challenge,
         }
@@ -398,13 +426,75 @@ def main() -> None:
             or final_argv[final_argv.index("--final-challenge-receipt") + 1] != str(final_challenge_receipt)
             or final_argv[final_argv.index("--final-challenge-authority-public-key") + 1]
             != str(final_challenge_authority_key)
+            or final_argv[final_argv.index("--final-challenge-authority-public-key-id") + 1]
+            != production_readiness_test.trusted_public_key_id(
+                final_challenge_authority_key.name
+            )
             or final_argv[final_argv.index("--final-challenge-authority-provider") + 1]
             != "production-final-challenge-authority"
             or final_argv[final_argv.index("--hardware-assurance") + 1] != str(hardware_assurance)
+            or final_argv[final_argv.index("--hardware-assurance-trusted-public-key-id") + 1]
+            != production_readiness_test.trusted_public_key_id(
+                hardware_assurance_key.name
+            )
             or final_argv[final_argv.index("--hardware-assurance-expected-challenge-nonce") + 1]
             != expected_hardware_challenge
         ):
             raise AssertionError(f"runner did not propagate env-pinned final inputs: {final_argv}")
+
+        malformed_hardware_id_env = tmp / "malformed-hardware-id.env"
+        write_env(
+            malformed_hardware_id_env,
+            {
+                **final_env_values,
+                "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID": "sha256:not-a-key-id",
+            },
+        )
+        malformed_hardware_id = run_runner(
+            "--env-file",
+            str(malformed_hardware_id_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if (
+            malformed_hardware_id.returncode == 0
+            or "hardware assurance trusted public key ID must be sha256" not in detail(
+                malformed_hardware_id
+            )
+        ):
+            raise AssertionError(
+                f"runner accepted a malformed hardware verifier key ID: {detail(malformed_hardware_id)}"
+            )
+
+        same_authority_id_env = tmp / "same-final-authority-id.env"
+        write_env(
+            same_authority_id_env,
+            {
+                **final_env_values,
+                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": (
+                    final_env_values[
+                        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID"
+                    ]
+                ),
+            },
+        )
+        same_authority_id = run_runner(
+            "--env-file",
+            str(same_authority_id_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if (
+            same_authority_id.returncode == 0
+            or "must use different public keys" not in detail(same_authority_id)
+        ):
+            raise AssertionError(
+                f"runner accepted one key ID for both final trust roles: {detail(same_authority_id)}"
+            )
 
         mismatched_mode = run_runner(
             "--env-file",

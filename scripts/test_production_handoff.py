@@ -65,6 +65,26 @@ def digest(char: str) -> str:
     return "sha256:" + char * 64
 
 
+def fixture_release_trust_env(paths: dict[str, Path]) -> dict[str, str]:
+    return {
+        "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY": str(paths["release_trust_root"]),
+        "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY": str(paths["sigstore_trust_root"]),
+        "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY": str(paths["rekor_trust_root"]),
+        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(paths["external_trust_root"]),
+        "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
+        "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER": "managed-prod-log",
+        "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID": str(
+            test_release_completion.external_receipt_key_info()["key_id"]
+        ),
+        "SERVERWARE_COSIGN_KEY_ID": str(
+            test_release_completion.sigstore_signing_key_info()["key_id"]
+        ),
+        "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID": str(
+            test_release_completion.rekor_key_info()["key_id"]
+        ),
+    }
+
+
 def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path]:
     build = tmp / "production-images-build.json"
     provenance_summary = tmp / "release-provenance-summary.json"
@@ -76,6 +96,10 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
     images_env = tmp / "production-images.env"
     env = tmp / "production.env"
     env_template = tmp / "production.env.example"
+    release_trust_root = tmp / "release-signing.pub.pem"
+    sigstore_trust_root = tmp / "sigstore-signing.pub.pem"
+    rekor_trust_root = tmp / "rekor.pub.pem"
+    external_trust_root = tmp / "external-checkpoint.pub.pem"
     source_tree_digest = build_production_images.source_tree_digest()
     control_ref = "registry.prod.serverware.dev/serverware/control@" + digest("a")
     gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@" + digest("b")
@@ -109,6 +133,19 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
     }
     release_key = release_key_info()
     release_key_id = str(release_key["key_id"])
+    release_trust_root.write_text(str(release_key["public_key_pem"]), encoding="ascii")
+    sigstore_trust_root.write_text(
+        str(test_release_completion.sigstore_signing_key_info()["public_key_pem"]),
+        encoding="ascii",
+    )
+    rekor_trust_root.write_text(
+        str(test_release_completion.rekor_key_info()["public_key_pem"]),
+        encoding="ascii",
+    )
+    external_trust_root.write_text(
+        str(test_release_completion.external_receipt_key_info()["public_key_pem"]),
+        encoding="ascii",
+    )
     provenance_digest = sha256_json(provenance_payload)
     provenance_signature = "ed25519:" + b64e(release_key["key"].sign(canonical_json(provenance_payload).encode("utf-8")))
     provenance_record = {
@@ -178,7 +215,9 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         "metadata": {
             "provenanceDigest": provenance_digest,
             "releaseSigningKeyId": release_key_id,
-            "imageSigningKeyId": digest("3"),
+            "imageSigningKeyId": test_release_completion.sigstore_signing_key_info()[
+                "key_id"
+            ],
             "signatureProvider": "sigstore-command",
             "sigstoreTransparencyRequired": True,
             "sourceTreeDigest": source_tree_digest,
@@ -186,21 +225,16 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             "sbomCyclonedxSha256": digest("d"),
         },
     }
-    for index, image in enumerate(image_signature_payload["images"], start=1):
+    for image in image_signature_payload["images"]:
         statement_digest = sha256_json(image["statement"])
-        signature = "sigstore:test:" + image["service"]
         image["statement_digest"] = statement_digest
-        image["signature"] = signature
         image["sigstore"] = test_release_completion.sigstore_proof(
-            statement_digest=statement_digest,
-            signature=signature,
-            log_index=index,
+            statement=image["statement"]
         )
+        image["signature"] = image["sigstore"]["signature"]
     image_signature_digest = sha256_json(image_signature_payload)
     bundle_sigstore = test_release_completion.sigstore_proof(
-        statement_digest=image_signature_digest,
-        signature="sigstore:test:bundle",
-        log_index=3,
+        statement=image_signature_payload,
     )
     image_signature_payload["bundle_signature"] = bundle_sigstore
     image_signature_payload["metadata"]["signature"] = bundle_sigstore["signature"]
@@ -210,7 +244,9 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         "type": "release.image_signatures.v1",
         "provenance_digest": provenance_digest,
         "image_signature_bundle_digest": image_signature_digest,
-        "image_signing_key_id": digest("3"),
+        "image_signing_key_id": test_release_completion.sigstore_signing_key_info()[
+            "key_id"
+        ],
         "image_signature_provider": "sigstore-command",
         "release_signing_key_id": release_key_id,
         "signature": bundle_sigstore["signature"],
@@ -282,9 +318,16 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             "env": {"SERVERWARE_PRODUCTION_IMAGES": ",".join([control_ref, gate_ref])},
         },
     )
+    paths = {
+        "release_trust_root": release_trust_root,
+        "sigstore_trust_root": sigstore_trust_root,
+        "rekor_trust_root": rekor_trust_root,
+        "external_trust_root": external_trust_root,
+    }
     write_env(
         env,
         {
+            **fixture_release_trust_env(paths),
             "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-byte-secret-value",
             "SERVERWARE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kid": "prod"}]}),
         },
@@ -301,6 +344,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         "images_env": images_env,
         "env": env,
         "env_template": env_template,
+        **paths,
     }
 
 
@@ -448,10 +492,29 @@ def main() -> None:
         forged_transparency_paths = write_fixture_artifacts(tmp)
         provenance = json.loads(forged_transparency_paths["provenance"].read_text(encoding="utf-8"))
         provenance["transparency"]["anchor_response"]["anchors"][0]["external_checkpoint"]["receipt"]["signature"] = "ed25519:test"
+        provenance["transparency"]["inclusion_proof"]["item"]["external_checkpoint"]["receipt"]["signature"] = "ed25519:test"
         write_json(forged_transparency_paths["provenance"], provenance)
         forged_transparency = run_handoff(forged_transparency_paths)
-        if forged_transparency.returncode == 0 or "release provenance external transparency receipt signature verification failed" not in detail(forged_transparency):
+        if forged_transparency.returncode == 0 or "release provenance external transparency receipt signature" not in detail(forged_transparency):
             raise AssertionError(f"handoff accepted forged release transparency receipt: {detail(forged_transparency)}")
+
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        tmp = Path(tmp_raw)
+        reused_final_key_paths = write_fixture_artifacts(tmp)
+        reused_final_key_env = {
+            **fixture_release_trust_env(reused_final_key_paths),
+            "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-byte-secret-value",
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY": str(
+                reused_final_key_paths["release_trust_root"]
+            ),
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID": str(
+                release_key_info()["key_id"]
+            ),
+        }
+        write_env(reused_final_key_paths["env"], reused_final_key_env)
+        reused_final_key = run_handoff(reused_final_key_paths)
+        if reused_final_key.returncode == 0 or "must not reuse a production release trust key" not in detail(reused_final_key):
+            raise AssertionError(f"handoff accepted a final trust key reused for release provenance: {detail(reused_final_key)}")
 
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)

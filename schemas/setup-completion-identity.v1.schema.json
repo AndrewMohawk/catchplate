@@ -1,0 +1,180 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/setup-completion-identity.v1.schema.json",
+  "title": "Serverware Setup Completion Identity v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "setup_session_id",
+    "assignment",
+    "assignment_digest",
+    "trust_profile_sha256",
+    "enrollment_verification",
+    "hardware_verification"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.setupCompletionIdentity/v1"},
+    "kind": {"const": "SetupCompletionIdentity"},
+    "setup_session_id": {"$ref": "#/$defs/uuid"},
+    "assignment": {"$ref": "#/$defs/assignment"},
+    "assignment_digest": {"$ref": "#/$defs/sha256"},
+    "trust_profile_sha256": {"$ref": "#/$defs/sha256"},
+    "enrollment_verification": {"$ref": "#/$defs/enrollmentVerification"},
+    "hardware_verification": {"$ref": "#/$defs/hardwareVerification"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "challenge": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principalId",
+        "routeId",
+        "credentialId",
+        "credentialVersion",
+        "policyHash",
+        "routePolicyDigest"
+      ],
+      "properties": {
+        "principalId": {"$ref": "#/$defs/identifier"},
+        "routeId": {"$ref": "#/$defs/identifier"},
+        "credentialId": {"$ref": "#/$defs/identifier"},
+        "credentialVersion": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "policyHash": {"$ref": "#/$defs/sha256"},
+        "routePolicyDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "enrollmentChecks": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "prefixItems": [
+        {"const": "assignment-binding"},
+        {"const": "enrollment-session-binding"},
+        {"const": "packet-digest"},
+        {"const": "nonce-digest"},
+        {"const": "trust-profile"},
+        {"const": "attestation-quote"},
+        {"const": "runtime-manifest"},
+        {"const": "packet-signature"},
+        {"const": "packet-expiry"}
+      ],
+      "items": false
+    },
+    "hardwareChecks": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "prefixItems": [
+        {"const": "assignment-binding"},
+        {"const": "runtime-evidence"},
+        {"const": "challenge-binding"},
+        {"const": "hardware-assurance-digest"},
+        {"const": "hardware-statement-digest"},
+        {"const": "hardware-key-binding"},
+        {"const": "release-identity"},
+        {"const": "current-host-identity"},
+        {"const": "proxy-server-statement"},
+        {"const": "trust-profile"}
+      ],
+      "items": false
+    },
+    "enrollmentVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "verifier_provider",
+        "verifier_key_id",
+        "enrollment_session_id",
+        "enrollment_packet_sha256",
+        "verifier_nonce_sha256",
+        "decision",
+        "checks",
+        "issued_at_unix",
+        "expires_at_unix"
+      ],
+      "properties": {
+        "receipt_id": {"$ref": "#/$defs/uuid"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "verifier_provider": {"$ref": "#/$defs/provider"},
+        "verifier_key_id": {"$ref": "#/$defs/sha256"},
+        "enrollment_session_id": {"$ref": "#/$defs/uuid"},
+        "enrollment_packet_sha256": {"$ref": "#/$defs/sha256"},
+        "verifier_nonce_sha256": {"$ref": "#/$defs/sha256"},
+        "decision": {"const": "verified"},
+        "checks": {"$ref": "#/$defs/enrollmentChecks"},
+        "issued_at_unix": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "expires_at_unix": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
+      }
+    },
+    "hardwareVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "receipt_sha256",
+        "runtime_evidence_sha256",
+        "challenge",
+        "challenge_sha256",
+        "hardware_assurance_sha256",
+        "hardware_statement_sha256",
+        "hardware_verifier_provider",
+        "hardware_verifier_key_id",
+        "release_identity_sha256",
+        "current_host_identity_sha256",
+        "proxy_server_statement_sha256",
+        "decision",
+        "checks",
+        "issued_at_unix",
+        "expires_at_unix"
+      ],
+      "properties": {
+        "receipt_id": {"$ref": "#/$defs/uuid"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "challenge": {"$ref": "#/$defs/challenge"},
+        "challenge_sha256": {"$ref": "#/$defs/sha256"},
+        "hardware_assurance_sha256": {"$ref": "#/$defs/sha256"},
+        "hardware_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "hardware_verifier_provider": {"$ref": "#/$defs/provider"},
+        "hardware_verifier_key_id": {"$ref": "#/$defs/sha256"},
+        "release_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "current_host_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "proxy_server_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "decision": {"const": "verified"},
+        "checks": {"$ref": "#/$defs/hardwareChecks"},
+        "issued_at_unix": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "expires_at_unix": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
+      }
+    }
+  }
+}

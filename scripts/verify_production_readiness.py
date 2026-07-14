@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 import collect_nitro_kms_evidence
+from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
@@ -70,6 +71,7 @@ KMS_KEY_PREFIXES = (
     "kms://",
 )
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 INTERNAL_SERVICE_TOKEN_NAMES = (
     "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
     "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
@@ -81,10 +83,174 @@ MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
 MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES = 65536
 MAX_FINAL_CHALLENGE_RECEIPT_FILE_BYTES = 1048576
 MAX_HARDWARE_ASSURANCE_FILE_BYTES = 1048576
+HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
+HARDWARE_PROOF_MAX_AGE_SECONDS = 900
+HARDWARE_PROOF_FUTURE_SKEW_SECONDS = 30
+FINAL_CHALLENGE_RECEIPT_API_VERSION = "serverware.finalChallengeReceipt/v1"
+FINAL_CHALLENGE_RECEIPT_MAX_AGE_SECONDS = 900
+SETUP_TRUST_KEY_SETTINGS = (
+    "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY",
+    "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY",
+    "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY",
+)
+RELEASE_TRUST_KEY_SETTINGS = (
+    "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+    "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY",
+    "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
+    "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+    "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+    "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+)
+RELEASE_IDENTITY_FIELDS = {
+    "source_tree_digest",
+    "provenance_digest",
+    "runtime_manifest_digest",
+    "data_plane_binary_digest",
+    "production_image_digests",
+    "production_image_refs",
+    "production_images_build_sha256",
+    "production_images_published_sha256",
+    "image_signature_bundle_digest",
+}
+HARDWARE_ASSURANCE_STATEMENT_FIELDS = {
+    "verifier",
+    "issued_at_unix",
+    "expires_at_unix",
+    "challenge_nonce",
+    "current_host_identity",
+    "attestation_document_sha256",
+    "eif",
+    "pcrs",
+    "enclave",
+    "key_custody",
+    "no_parent_key",
+    "release_bindings",
+    "artifact_bindings",
+}
+FINAL_CHALLENGE_STATEMENT_FIELDS = {
+    "authority_provider",
+    "consumption_id",
+    "status",
+    "issued_at_unix",
+    "expires_at_unix",
+    "challenge_nonce_sha256",
+    "completion_identity_sha256",
+    "release_identity_sha256",
+    "hardware_verifier_key_id",
+    "current_host_identity_sha256",
+    "proxy_server_statement_sha256",
+}
 
 
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def require_valid(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def reject_duplicate_json_object_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in parsed:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        parsed[key] = value
+    return parsed
+
+
+def reject_json_float(value: str) -> float:
+    raise ValueError(f"floating-point JSON values are forbidden: {value}")
+
+
+def reject_json_constant(value: str) -> float:
+    raise ValueError(f"non-finite JSON values are forbidden: {value}")
+
+
+def strict_json_object(payload: bytes, label: str) -> dict[str, Any]:
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} must be valid UTF-8 JSON") from exc
+    try:
+        parsed = json.loads(
+            text,
+            object_pairs_hook=reject_duplicate_json_object_keys,
+            parse_float=reject_json_float,
+            parse_constant=reject_json_constant,
+        )
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ValueError(f"{label} must be strict JSON: {exc}") from exc
+    require_valid(isinstance(parsed, dict), f"{label} must be a JSON object")
+    return parsed
+
+
+def require_exact_keys(value: Any, expected: set[str], label: str) -> dict[str, Any]:
+    require_valid(isinstance(value, dict), f"{label} must be an object")
+    missing = sorted(expected - set(value))
+    unexpected = sorted(set(value) - expected)
+    require_valid(not missing, f"{label} is missing required fields: {missing}")
+    require_valid(not unexpected, f"{label} contains unexpected fields: {unexpected}")
+    return value
+
+
+def require_sha256(value: Any, label: str) -> str:
+    require_valid(
+        isinstance(value, str) and SHA256_RE.fullmatch(value) is not None,
+        f"{label} must be a sha256-prefixed digest",
+    )
+    return value
+
+
+def require_integer(value: Any, label: str) -> int:
+    require_valid(
+        isinstance(value, int) and not isinstance(value, bool),
+        f"{label} must be an integer",
+    )
+    return value
+
+
+def decode_canonical_base64url(value: Any, label: str) -> bytes:
+    require_valid(
+        isinstance(value, str)
+        and bool(value)
+        and BASE64URL_RE.fullmatch(value) is not None
+        and len(value) % 4 != 1,
+        f"{label} must be canonical unpadded base64url",
+    )
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except Exception as exc:
+        raise ValueError(f"{label} must be canonical unpadded base64url") from exc
+    require_valid(
+        base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") == value,
+        f"{label} must be canonical unpadded base64url",
+    )
+    return decoded
+
+
+def decode_ed25519_signature(value: Any, label: str) -> bytes:
+    require_valid(
+        isinstance(value, str) and value.startswith("ed25519:"),
+        f"{label} must use the ed25519 signature scheme",
+    )
+    decoded = decode_canonical_base64url(value.removeprefix("ed25519:"), label)
+    require_valid(len(decoded) == 64, f"{label} must decode to exactly 64 bytes")
+    return decoded
+
+
+def verify_ed25519_statement_signature(
+    public_key: Ed25519PublicKey,
+    signature: Any,
+    statement: dict[str, Any],
+    label: str,
+) -> None:
+    signature_bytes = decode_ed25519_signature(signature, f"{label} signature")
+    try:
+        public_key.verify(signature_bytes, canonical_json(statement).encode("utf-8"))
+    except InvalidSignature as exc:
+        raise ValueError(f"{label} signature verification failed") from exc
 
 
 def sha256_prefixed_bytes(value: bytes) -> str:
@@ -93,6 +259,382 @@ def sha256_prefixed_bytes(value: bytes) -> str:
 
 def sha256_prefixed_json(value: Any) -> str:
     return sha256_prefixed_bytes(canonical_json(value).encode("utf-8"))
+
+
+def validate_hardware_assurance_document(
+    document: dict[str, Any],
+    *,
+    trusted_public_key: Ed25519PublicKey,
+    trusted_key_id: str,
+    expected_trusted_key_id: str,
+    expected_challenge_nonce: str | None,
+    expected_challenge_nonce_sha256: str | None,
+    now_unix: int | None = None,
+) -> dict[str, Any]:
+    require_exact_keys(
+        document,
+        {"apiVersion", "kind", "statement", "signing_key_id", "signature"},
+        "hardware assurance document",
+    )
+    require_valid(
+        document.get("apiVersion") == HARDWARE_PROOF_API_VERSION,
+        f"SERVERWARE_HARDWARE_ASSURANCE must contain a {HARDWARE_PROOF_API_VERSION} document",
+    )
+    require_valid(
+        document.get("kind") == "ServerwareHardwareAssurance",
+        "hardware assurance kind must be ServerwareHardwareAssurance",
+    )
+    statement = require_exact_keys(
+        document.get("statement"),
+        HARDWARE_ASSURANCE_STATEMENT_FIELDS,
+        "hardware assurance statement",
+    )
+    verifier = require_exact_keys(
+        statement.get("verifier"),
+        {"name", "organization", "independent"},
+        "hardware assurance verifier identity",
+    )
+    require_valid(
+        isinstance(verifier.get("name"), str) and bool(verifier.get("name")),
+        "hardware assurance verifier name is missing",
+    )
+    require_valid(
+        isinstance(verifier.get("organization"), str)
+        and bool(verifier.get("organization")),
+        "hardware assurance verifier organization is missing",
+    )
+    require_valid(
+        verifier.get("independent") is True,
+        "hardware assurance verifier must be independent",
+    )
+    current_host = require_exact_keys(
+        statement.get("current_host_identity"),
+        {
+            "scheme",
+            "machine_id_sha256",
+            "product_uuid_sha256",
+            "boot_id_sha256",
+            "identity_sha256",
+            "observed_at_unix",
+            "commitment_sha256",
+        },
+        "hardware assurance current-host identity",
+    )
+    require_exact_keys(
+        statement.get("pcrs"),
+        {"PCR0", "PCR1", "PCR2"},
+        "hardware assurance PCR measurements",
+    )
+    eif = require_exact_keys(
+        statement.get("eif"),
+        {
+            "image_sha384",
+            "build_manifest",
+            "build_manifest_sha256",
+            "signature_verified",
+            "evidence_sha256",
+        },
+        "hardware assurance EIF evidence",
+    )
+    build_manifest = require_exact_keys(
+        eif.get("build_manifest"),
+        {
+            "apiVersion",
+            "release_identity",
+            "release_identity_sha256",
+            "eif_image_sha384",
+            "pcrs",
+        },
+        "hardware assurance EIF build manifest",
+    )
+    require_exact_keys(
+        build_manifest.get("release_identity"),
+        RELEASE_IDENTITY_FIELDS,
+        "hardware assurance EIF release identity",
+    )
+    require_exact_keys(
+        build_manifest.get("pcrs"),
+        {"PCR0", "PCR1", "PCR2"},
+        "hardware assurance EIF build manifest PCR measurements",
+    )
+    require_exact_keys(
+        statement.get("enclave"),
+        {
+            "cid",
+            "parent_cid",
+            "vsock_port",
+            "cid_evidence_sha256",
+            "vsock_evidence_sha256",
+            "vsock_handshake_verified",
+        },
+        "hardware assurance enclave evidence",
+    )
+    require_exact_keys(
+        statement.get("key_custody"),
+        {
+            "recipient_key_generated_in_enclave",
+            "kms_recipient_bound",
+            "plaintext_key_exported",
+            "parent_process_key_access",
+            "kms_recipient_bindings_sha256",
+            "evidence_sha256",
+        },
+        "hardware assurance key-custody evidence",
+    )
+    require_exact_keys(
+        statement.get("no_parent_key"),
+        {"verified", "parent_key_material_absent", "evidence_sha256"},
+        "hardware assurance no-parent-key evidence",
+    )
+    require_exact_keys(
+        statement.get("release_bindings"),
+        {
+            "policy_digest",
+            "policy_sequence",
+            "policy_high_water_digest",
+            "runtime_manifest_digest",
+            "data_plane_binary_digest",
+            "provenance_digest",
+            "source_tree_digest",
+            "response_signing_key_id",
+        },
+        "hardware assurance release bindings",
+    )
+    require_exact_keys(
+        statement.get("artifact_bindings"),
+        {"nitro_evidence_sha256", "production_host_preflight_sha256"},
+        "hardware assurance artifact bindings",
+    )
+
+    expected_key_id = require_sha256(
+        expected_trusted_key_id,
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+    )
+    require_valid(
+        hmac.compare_digest(trusted_key_id, expected_key_id),
+        "hardware assurance verifier key bytes do not match SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+    )
+    signing_key_id = require_sha256(
+        document.get("signing_key_id"),
+        "hardware assurance signing key id",
+    )
+    require_valid(
+        hmac.compare_digest(signing_key_id, trusted_key_id),
+        "hardware assurance signer does not match the independently trusted verifier key",
+    )
+    verify_ed25519_statement_signature(
+        trusted_public_key,
+        document.get("signature"),
+        statement,
+        "hardware assurance",
+    )
+
+    issued_at = require_integer(
+        statement.get("issued_at_unix"), "hardware assurance issued_at_unix"
+    )
+    expires_at = require_integer(
+        statement.get("expires_at_unix"), "hardware assurance expires_at_unix"
+    )
+    now = int(time.time()) if now_unix is None else now_unix
+    require_valid(
+        issued_at <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS,
+        "hardware assurance was issued in the future",
+    )
+    require_valid(
+        now - issued_at <= HARDWARE_PROOF_MAX_AGE_SECONDS,
+        "hardware assurance is stale",
+    )
+    require_valid(expires_at >= now, "hardware assurance has expired")
+    require_valid(expires_at > issued_at, "hardware assurance expiry does not follow issuance")
+    require_valid(
+        expires_at - issued_at <= HARDWARE_PROOF_MAX_AGE_SECONDS,
+        "hardware assurance validity window exceeds the allowed maximum",
+    )
+
+    challenge_nonce_bytes = decode_canonical_base64url(
+        statement.get("challenge_nonce"), "hardware assurance challenge nonce"
+    )
+    require_valid(
+        len(challenge_nonce_bytes) >= 32,
+        "hardware assurance challenge nonce must contain at least 32 bytes",
+    )
+    require_valid(
+        sum(
+            bool(value)
+            for value in (expected_challenge_nonce, expected_challenge_nonce_sha256)
+        )
+        == 1,
+        "hardware assurance verification requires exactly one expected challenge",
+    )
+    challenge_nonce_sha256 = sha256_prefixed_bytes(challenge_nonce_bytes)
+    if expected_challenge_nonce:
+        expected_nonce_bytes = decode_canonical_base64url(
+            expected_challenge_nonce,
+            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+        )
+        require_valid(len(expected_nonce_bytes) >= 32, "expected hardware challenge is too short")
+        challenge_matches = hmac.compare_digest(
+            challenge_nonce_bytes, expected_nonce_bytes
+        )
+    else:
+        challenge_matches = hmac.compare_digest(
+            challenge_nonce_sha256,
+            require_sha256(
+                expected_challenge_nonce_sha256,
+                "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
+            ),
+        )
+    require_valid(
+        challenge_matches,
+        "hardware assurance challenge nonce does not match the configured expected challenge",
+    )
+    return {
+        "issued_at_unix": issued_at,
+        "challenge_nonce_sha256": challenge_nonce_sha256,
+        "release_identity_sha256": require_sha256(
+            build_manifest.get("release_identity_sha256"),
+            "hardware assurance release identity digest",
+        ),
+        "current_host_identity_sha256": require_sha256(
+            current_host.get("identity_sha256"),
+            "hardware assurance current-host identity digest",
+        ),
+        "trusted_verifier_key_id": trusted_key_id,
+    }
+
+
+def validate_final_challenge_receipt_document(
+    document: dict[str, Any],
+    *,
+    trusted_public_key: Ed25519PublicKey,
+    trusted_key_id: str,
+    expected_trusted_key_id: str,
+    expected_provider: str,
+    expected_challenge_nonce_sha256: str,
+    expected_hardware_verifier_key_id: str,
+    hardware_assurance_summary: dict[str, Any] | None,
+    now_unix: int | None = None,
+) -> None:
+    require_exact_keys(
+        document,
+        {"apiVersion", "kind", "statement", "signing_key_id", "signature"},
+        "final challenge receipt",
+    )
+    require_valid(
+        document.get("apiVersion") == FINAL_CHALLENGE_RECEIPT_API_VERSION,
+        f"SERVERWARE_FINAL_CHALLENGE_RECEIPT must contain a {FINAL_CHALLENGE_RECEIPT_API_VERSION} document",
+    )
+    require_valid(
+        document.get("kind") == "FinalChallengeConsumption",
+        "final challenge receipt kind must be FinalChallengeConsumption",
+    )
+    statement = require_exact_keys(
+        document.get("statement"),
+        FINAL_CHALLENGE_STATEMENT_FIELDS,
+        "final challenge receipt statement",
+    )
+    provider = statement.get("authority_provider")
+    require_valid(
+        isinstance(provider, str) and 1 <= len(provider) <= 256,
+        "final challenge authority provider is invalid",
+    )
+    require_valid(
+        hmac.compare_digest(provider, expected_provider),
+        "SERVERWARE_FINAL_CHALLENGE_RECEIPT authority provider must match the configured provider",
+    )
+    consumption_id = statement.get("consumption_id")
+    require_valid(
+        isinstance(consumption_id, str) and 1 <= len(consumption_id) <= 128,
+        "final challenge receipt consumption id is invalid",
+    )
+    require_valid(
+        statement.get("status") == "consumed",
+        "final challenge receipt must consume the challenge",
+    )
+    issued_at = require_integer(
+        statement.get("issued_at_unix"), "final challenge receipt issued_at_unix"
+    )
+    expires_at = require_integer(
+        statement.get("expires_at_unix"), "final challenge receipt expires_at_unix"
+    )
+    now = int(time.time()) if now_unix is None else now_unix
+    require_valid(
+        issued_at <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS,
+        "final challenge receipt was issued in the future",
+    )
+    require_valid(expires_at > now, "final challenge receipt is expired")
+    require_valid(
+        expires_at > issued_at,
+        "final challenge receipt validity interval is invalid",
+    )
+    require_valid(
+        expires_at - issued_at <= FINAL_CHALLENGE_RECEIPT_MAX_AGE_SECONDS,
+        "final challenge receipt validity interval is too long",
+    )
+
+    expected_fields = {
+        "challenge_nonce_sha256": require_sha256(
+            expected_challenge_nonce_sha256,
+            "expected final challenge digest",
+        ),
+        "hardware_verifier_key_id": require_sha256(
+            expected_hardware_verifier_key_id,
+            "expected hardware assurance verifier key id",
+        ),
+    }
+    for field, expected in expected_fields.items():
+        actual = require_sha256(
+            statement.get(field), f"final challenge receipt {field}"
+        )
+        require_valid(
+            hmac.compare_digest(actual, expected),
+            f"final challenge receipt {field} mismatch",
+        )
+    for field in (
+        "completion_identity_sha256",
+        "release_identity_sha256",
+        "current_host_identity_sha256",
+        "proxy_server_statement_sha256",
+    ):
+        require_sha256(statement.get(field), f"final challenge receipt {field}")
+    if hardware_assurance_summary is not None:
+        require_valid(
+            issued_at >= hardware_assurance_summary["issued_at_unix"],
+            "final challenge receipt predates the hardware assurance",
+        )
+        for field in (
+            "release_identity_sha256",
+            "current_host_identity_sha256",
+        ):
+            require_valid(
+                hmac.compare_digest(
+                    statement[field], hardware_assurance_summary[field]
+                ),
+                f"final challenge receipt {field} does not match hardware assurance",
+            )
+
+    expected_key_id = require_sha256(
+        expected_trusted_key_id,
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+    )
+    require_valid(
+        hmac.compare_digest(trusted_key_id, expected_key_id),
+        "final challenge authority key bytes do not match SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+    )
+    signing_key_id = require_sha256(
+        document.get("signing_key_id"),
+        "final challenge receipt signing key id",
+    )
+    require_valid(
+        hmac.compare_digest(signing_key_id, trusted_key_id),
+        "final challenge receipt is not signed by the independently trusted authority key",
+    )
+    verify_ed25519_statement_signature(
+        trusted_public_key,
+        document.get("signature"),
+        statement,
+        "final challenge receipt",
+    )
 
 
 def redacted_environment_summary(env: dict[str, str]) -> dict[str, Any]:
@@ -206,11 +748,88 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
             add(failures, anchor_token != service_token, f"audit-anchor token must be distinct from {name}")
             add(failures, token != service_token, f"admin token must be distinct from {name}")
     roles = {role.strip() for role in env.get("SERVERWARE_ADMIN_ROLES", "").split(",") if role.strip()}
-    required_roles = {"admin", "approver", "auditor", "policy_author", "policy_publisher", "credential_owner"}
+    required_roles = {
+        "admin",
+        "approver",
+        "attestation_operator",
+        "attestation_reviewer",
+        "auditor",
+        "policy_author",
+        "policy_publisher",
+        "credential_owner",
+    }
     add(
         failures,
         required_roles.issubset(roles),
-        "SERVERWARE_ADMIN_ROLES must include admin, approver, auditor, policy_author, policy_publisher, and credential_owner",
+        "SERVERWARE_ADMIN_ROLES must include the administrative, policy, credential, audit, approval, and setup attestation roles",
+    )
+    setup_trust_roles = (
+        (
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY",
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_KEY_ID",
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PROVIDER",
+        ),
+        (
+            "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY",
+            "SERVERWARE_SETUP_HARDWARE_VERIFIER_KEY_ID",
+            "SERVERWARE_SETUP_HARDWARE_VERIFIER_PROVIDER",
+        ),
+        (
+            "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY",
+            "SERVERWARE_SETUP_FINAL_AUTHORITY_KEY_ID",
+            "SERVERWARE_SETUP_FINAL_AUTHORITY_PROVIDER",
+        ),
+    )
+    setup_key_ids: list[str] = []
+    setup_providers: list[str] = []
+    for path_name, id_name, provider_name in setup_trust_roles:
+        actual_key_id = check_trusted_public_key_file(
+            env, path_name, failures, require_ed25519=True
+        )
+        expected_key_id = env.get(id_name, "").strip()
+        provider = env.get(provider_name, "").strip()
+        add(
+            failures,
+            SHA256_RE.fullmatch(expected_key_id) is not None,
+            f"{id_name} must be a lowercase SHA-256 digest",
+        )
+        add(
+            failures,
+            actual_key_id is not None
+            and hmac.compare_digest(actual_key_id, expected_key_id),
+            f"{path_name} SPKI identity must match {id_name}",
+        )
+        add(
+            failures,
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}", provider)
+            is not None,
+            f"{provider_name} must be a canonical provider identifier",
+        )
+        if actual_key_id is not None:
+            setup_key_ids.append(actual_key_id)
+        if provider:
+            setup_providers.append(provider)
+    add(
+        failures,
+        len(set(setup_key_ids)) == 3,
+        "setup enrollment, hardware, and final receipt roles must use distinct keys",
+    )
+    add(
+        failures,
+        len(set(setup_providers)) == 3,
+        "setup enrollment, hardware, and final receipt roles must use distinct providers",
+    )
+    check_cross_domain_trust_key_separation(env, failures)
+    try:
+        setup_challenge_ttl = int(
+            env.get("SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS", "")
+        )
+    except ValueError:
+        setup_challenge_ttl = 0
+    add(
+        failures,
+        30 <= setup_challenge_ttl <= 900,
+        "SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS must be between 30 and 900",
     )
     add(failures, env_bool(env, "SERVERWARE_OIDC_ENABLED"), "control-plane OIDC authentication must be enabled")
     oidc_issuer = env.get("SERVERWARE_OIDC_ISSUER", "").strip()
@@ -276,11 +895,12 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         "rbac.deprovision",
         "control_plane.token.rotate",
         "break_glass.grant",
+        "setup.attestation.finalize",
     }
     add(
         failures,
         "*" in two_person_actions or required_two_person_actions.issubset(two_person_actions),
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, route, policy publish, WebAuthn enrollment, RBAC, deprovisioning, token rotation, and break-glass mutations",
+        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, route, policy publish, WebAuthn enrollment, RBAC, deprovisioning, token rotation, break-glass, and setup attestation finalization mutations",
     )
     bootstrap_token = env.get("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "")
     add(
@@ -483,14 +1103,14 @@ def read_bounded_regular_file(
     return payload
 
 
-def check_trusted_public_key_file(
+def load_trusted_public_key_file(
     env: dict[str, str],
     setting_name: str,
     failures: list[str],
     *,
     require_ed25519: bool = False,
     require_ecdsa_or_rsa: bool = False,
-) -> str | None:
+) -> tuple[Any, str] | None:
     payload = read_bounded_regular_file(
         env,
         setting_name,
@@ -517,7 +1137,67 @@ def check_trusted_public_key_file(
     ):
         failures.append(f"{setting_name} must contain an ECDSA or RSA public key")
         return None
-    return sha256_prefixed_bytes(public_key_der)
+    return public_key, sha256_prefixed_bytes(public_key_der)
+
+
+def check_trusted_public_key_file(
+    env: dict[str, str],
+    setting_name: str,
+    failures: list[str],
+    *,
+    require_ed25519: bool = False,
+    require_ecdsa_or_rsa: bool = False,
+) -> str | None:
+    loaded = load_trusted_public_key_file(
+        env,
+        setting_name,
+        failures,
+        require_ed25519=require_ed25519,
+        require_ecdsa_or_rsa=require_ecdsa_or_rsa,
+    )
+    return loaded[1] if loaded is not None else None
+
+
+def check_cross_domain_trust_key_separation(
+    env: dict[str, str], failures: list[str]
+) -> None:
+    key_ids: dict[str, str] = {}
+    for setting_name in (*SETUP_TRUST_KEY_SETTINGS, *RELEASE_TRUST_KEY_SETTINGS):
+        if not env.get(setting_name, "").strip():
+            continue
+        ignored_failures: list[str] = []
+        key_id = check_trusted_public_key_file(
+            env, setting_name, ignored_failures
+        )
+        if key_id is not None:
+            key_ids[setting_name] = key_id
+    for setup_setting in SETUP_TRUST_KEY_SETTINGS:
+        setup_key_id = key_ids.get(setup_setting)
+        if setup_key_id is None:
+            continue
+        for release_setting in RELEASE_TRUST_KEY_SETTINGS:
+            release_key_id = key_ids.get(release_setting)
+            if release_key_id is None:
+                continue
+            add(
+                failures,
+                not hmac.compare_digest(setup_key_id, release_key_id),
+                "cross-domain trust key reuse is forbidden: "
+                f"{setup_setting} and {release_setting} must use distinct keys",
+            )
+    configured_release_keys = [
+        (setting_name, key_ids[setting_name])
+        for setting_name in RELEASE_TRUST_KEY_SETTINGS
+        if setting_name in key_ids
+    ]
+    for index, (left_setting, left_key_id) in enumerate(configured_release_keys):
+        for right_setting, right_key_id in configured_release_keys[index + 1 :]:
+            add(
+                failures,
+                not hmac.compare_digest(left_key_id, right_key_id),
+                "production trust key reuse is forbidden: "
+                f"{left_setting} and {right_setting} must use distinct keys",
+            )
 
 
 def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
@@ -1006,11 +1686,13 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
     receipt_settings = (
         "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
         "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
         "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
     )
     hardware_settings = (
         "SERVERWARE_HARDWARE_ASSURANCE",
         "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
         "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
         "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
     )
@@ -1029,6 +1711,7 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
         *receipt_settings,
         "SERVERWARE_HARDWARE_ASSURANCE",
         "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
     ):
         value = configured[name]
         add(failures, bool(value), f"final verification mode requires {name}")
@@ -1043,15 +1726,15 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
     )
     if expected_nonce:
         try:
-            decoded_nonce = base64.urlsafe_b64decode(
-                expected_nonce + "=" * (-len(expected_nonce) % 4)
+            decoded_nonce = decode_canonical_base64url(
+                expected_nonce,
+                "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
             )
-        except Exception:
+        except ValueError:
             decoded_nonce = b""
         add(
             failures,
-            re.fullmatch(r"[A-Za-z0-9_-]+", expected_nonce) is not None
-            and len(decoded_nonce) >= 32,
+            len(decoded_nonce) >= 32,
             "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE must be unpadded base64url for at least 32 bytes",
         )
     if expected_nonce_digest:
@@ -1066,62 +1749,37 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
             *receipt_settings,
             "SERVERWARE_HARDWARE_ASSURANCE",
             "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
         )
     ]
     if not all(required_values) or bool(expected_nonce) == bool(expected_nonce_digest):
         return
     add(
         failures,
-        len(configured["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"]) <= 256,
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER must not exceed 256 characters",
+        re.fullmatch(
+            r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}",
+            configured["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"],
+        )
+        is not None,
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER must be a canonical provider identifier",
     )
-    receipt_payload = read_bounded_regular_file(
-        env,
-        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
+    expected_hardware_key_id = configured[
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID"
+    ]
+    expected_authority_key_id = configured[
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID"
+    ]
+    add(
         failures,
-        file_label="final challenge receipt",
-        max_bytes=MAX_FINAL_CHALLENGE_RECEIPT_FILE_BYTES,
+        SHA256_RE.fullmatch(expected_hardware_key_id) is not None,
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
     )
-    receipt = None
-    if receipt_payload is not None:
-        try:
-            receipt = json.loads(receipt_payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            receipt = None
-        add(
-            failures,
-            isinstance(receipt, dict)
-            and receipt.get("apiVersion") == "serverware.finalChallengeReceipt/v1",
-            "SERVERWARE_FINAL_CHALLENGE_RECEIPT must contain a serverware.finalChallengeReceipt/v1 document",
-        )
-    authority_key_id = check_trusted_public_key_file(
-        env,
-        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+    add(
         failures,
-        require_ed25519=True,
+        SHA256_RE.fullmatch(expected_authority_key_id) is not None,
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
     )
-    if isinstance(receipt, dict):
-        statement = receipt.get("statement") if isinstance(receipt.get("statement"), dict) else {}
-        add(
-            failures,
-            receipt.get("kind") == "FinalChallengeConsumption",
-            "SERVERWARE_FINAL_CHALLENGE_RECEIPT kind must be FinalChallengeConsumption",
-        )
-        add(
-            failures,
-            statement.get("authority_provider") == configured["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"],
-            "SERVERWARE_FINAL_CHALLENGE_RECEIPT authority provider must match the configured provider",
-        )
-        add(
-            failures,
-            authority_key_id is not None and receipt.get("signing_key_id") == authority_key_id,
-            "SERVERWARE_FINAL_CHALLENGE_RECEIPT signing key must match the configured Ed25519 authority key",
-        )
-        add(
-            failures,
-            isinstance(receipt.get("signature"), str) and bool(receipt.get("signature")),
-            "SERVERWARE_FINAL_CHALLENGE_RECEIPT must contain an authority signature",
-        )
+
     hardware_payload = read_bounded_regular_file(
         env,
         "SERVERWARE_HARDWARE_ASSURANCE",
@@ -1132,35 +1790,99 @@ def check_final_challenge_authority(env: dict[str, str], failures: list[str]) ->
     hardware_assurance = None
     if hardware_payload is not None:
         try:
-            hardware_assurance = json.loads(hardware_payload.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            hardware_assurance = None
-        add(
-            failures,
-            isinstance(hardware_assurance, dict)
-            and hardware_assurance.get("apiVersion") == "serverware.hardwareAssurance/v1"
-            and hardware_assurance.get("kind") == "ServerwareHardwareAssurance",
-            "SERVERWARE_HARDWARE_ASSURANCE must contain a serverware.hardwareAssurance/v1 document",
-        )
-    hardware_key_id = check_trusted_public_key_file(
+            hardware_assurance = strict_json_object(
+                hardware_payload, "SERVERWARE_HARDWARE_ASSURANCE"
+            )
+        except ValueError as exc:
+            failures.append(str(exc))
+    hardware_key = load_trusted_public_key_file(
         env,
         "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
         failures,
         require_ed25519=True,
     )
-    if isinstance(hardware_assurance, dict):
+    hardware_summary = None
+    if hardware_key is not None:
+        hardware_public_key, hardware_key_id = hardware_key
         add(
             failures,
-            hardware_key_id is not None
-            and hardware_assurance.get("signing_key_id") == hardware_key_id,
-            "SERVERWARE_HARDWARE_ASSURANCE signing key must match the configured Ed25519 verifier key",
+            SHA256_RE.fullmatch(expected_hardware_key_id) is not None
+            and hmac.compare_digest(hardware_key_id, expected_hardware_key_id),
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY SPKI identity must match SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
         )
+        if hardware_assurance is not None:
+            try:
+                hardware_summary = validate_hardware_assurance_document(
+                    hardware_assurance,
+                    trusted_public_key=hardware_public_key,
+                    trusted_key_id=hardware_key_id,
+                    expected_trusted_key_id=expected_hardware_key_id,
+                    expected_challenge_nonce=expected_nonce or None,
+                    expected_challenge_nonce_sha256=expected_nonce_digest or None,
+                )
+            except ValueError as exc:
+                failures.append(str(exc))
+
+    receipt_payload = read_bounded_regular_file(
+        env,
+        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
+        failures,
+        file_label="final challenge receipt",
+        max_bytes=MAX_FINAL_CHALLENGE_RECEIPT_FILE_BYTES,
+    )
+    receipt = None
+    if receipt_payload is not None:
+        try:
+            receipt = strict_json_object(
+                receipt_payload, "SERVERWARE_FINAL_CHALLENGE_RECEIPT"
+            )
+        except ValueError as exc:
+            failures.append(str(exc))
+    authority_key = load_trusted_public_key_file(
+        env,
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        failures,
+        require_ed25519=True,
+    )
+    if authority_key is not None:
+        authority_public_key, authority_key_id = authority_key
         add(
             failures,
-            isinstance(hardware_assurance.get("signature"), str)
-            and bool(hardware_assurance.get("signature")),
-            "SERVERWARE_HARDWARE_ASSURANCE must contain a verifier signature",
+            SHA256_RE.fullmatch(expected_authority_key_id) is not None
+            and hmac.compare_digest(authority_key_id, expected_authority_key_id),
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY SPKI identity must match SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
         )
+        if receipt is not None and hardware_key is not None:
+            expected_challenge_digest = expected_nonce_digest
+            if expected_nonce:
+                try:
+                    decoded_expected_nonce = decode_canonical_base64url(
+                        expected_nonce,
+                        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+                    )
+                except ValueError:
+                    decoded_expected_nonce = b""
+                if decoded_expected_nonce:
+                    expected_challenge_digest = sha256_prefixed_bytes(
+                        decoded_expected_nonce
+                    )
+            if not expected_challenge_digest:
+                return
+            try:
+                validate_final_challenge_receipt_document(
+                    receipt,
+                    trusted_public_key=authority_public_key,
+                    trusted_key_id=authority_key_id,
+                    expected_trusted_key_id=expected_authority_key_id,
+                    expected_provider=configured[
+                        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"
+                    ],
+                    expected_challenge_nonce_sha256=expected_challenge_digest,
+                    expected_hardware_verifier_key_id=hardware_key[1],
+                    hardware_assurance_summary=hardware_summary,
+                )
+            except ValueError as exc:
+                failures.append(str(exc))
 
 
 def check_cosign(env: dict[str, str], failures: list[str]) -> None:

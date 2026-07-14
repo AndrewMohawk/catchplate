@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -21,6 +22,10 @@ sys.path.insert(0, str(ROOT))
 
 def digest(character: str) -> str:
     return "sha256:" + character * 64
+
+
+def digest_value(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def configure_sqlite(data_dir: str) -> None:
@@ -150,7 +155,350 @@ def bind_enrollment(
     )
 
 
+def setup_evidence(
+    kind: str, suffix: str, *, verifier_key_id: str = "verifier:test"
+) -> list[dict[str, Any]]:
+    receipt_kinds = {
+        "enrollment_verification": "serverware.setupEnrollmentVerification/v1",
+        "hardware_assurance": "serverware.setupHardwareVerification/v1",
+        "final_challenge_receipt": "serverware.setupFinalChallengeReceipt/v1",
+    }
+    document = {"receipt": suffix, "verified": True}
+    if kind in receipt_kinds:
+        document = {
+            "kind": receipt_kinds[kind],
+            "statement": {"receipt": suffix, "verified": True},
+            "signature": {
+                "algorithm": "test-only",
+                "value": f"signed:{suffix}",
+            },
+        }
+    return [
+        {
+            "kind": kind,
+            "document": document,
+            "verifier_key_id": verifier_key_id,
+            "observed_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ]
+
+
+def advance_to_enrollment(db: Any, suffix: str) -> dict[str, Any]:
+    return bind_enrollment(
+        db,
+        activate_policy(
+            db,
+            stage_candidate(
+                db,
+                bind_credential(db, create_session(db, suffix), suffix),
+                suffix,
+            ),
+        ),
+        suffix,
+    )
+
+
+def advance_to_runtime(db: Any, suffix: str) -> dict[str, Any]:
+    session = advance_to_enrollment(db, suffix)
+    for transition, kind in (
+        ("record_enrollment_evidence", "enrollment_verification"),
+        ("record_canary_evidence", "canary_result"),
+        ("record_runtime_evidence", "runtime_verification"),
+    ):
+        session = db.transition_setup_session(
+            session["id"],
+            expected_revision=session["revision"],
+            transition=transition,
+            actor_id=session["owner_id"],
+            evidence=setup_evidence(kind, f"{suffix}:{kind}"),
+        )
+    return session
+
+
+def bind_challenge(
+    db: Any, session: dict[str, Any], challenge_digest: str
+) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    challenge = bytes.fromhex(challenge_digest.removeprefix("sha256:"))
+    actual_digest = "sha256:" + hashlib.sha256(challenge).hexdigest()
+    return db.transition_setup_session(
+        session["id"],
+        expected_revision=session["revision"],
+        transition="bind_attestation_challenge",
+        actor_id=session["owner_id"],
+        updates={
+            "attestation_challenge_digest": actual_digest,
+            "attestation_challenge_issued_at": (now - timedelta(seconds=1)).isoformat(),
+            "attestation_challenge_expires_at": (now + timedelta(hours=1)).isoformat(),
+            "attestation_challenge_value": base64.urlsafe_b64encode(challenge)
+            .decode("ascii")
+            .rstrip("="),
+        },
+    )
+
+
+def exercise_challenge_recovery_and_approval_atomicity(db: Any) -> None:
+    session = advance_to_runtime(db, "challenge-recovery")
+    now = datetime.now(timezone.utc)
+    first_challenge = b"a" * 32
+    first_value = base64.urlsafe_b64encode(first_challenge).decode("ascii").rstrip("=")
+    first_digest = "sha256:" + hashlib.sha256(first_challenge).hexdigest()
+    session = db.transition_setup_session(
+        session["id"],
+        expected_revision=session["revision"],
+        transition="bind_attestation_challenge",
+        actor_id=session["owner_id"],
+        updates={
+            "attestation_challenge_digest": first_digest,
+            "attestation_challenge_issued_at": (now - timedelta(seconds=1)).isoformat(),
+            "attestation_challenge_expires_at": (now + timedelta(seconds=1)).isoformat(),
+            "attestation_challenge_value": first_value,
+        },
+        _now=now,
+    )
+    second_challenge = b"b" * 32
+    second_value = (
+        base64.urlsafe_b64encode(second_challenge).decode("ascii").rstrip("=")
+    )
+    second_digest = "sha256:" + hashlib.sha256(second_challenge).hexdigest()
+    replacement_updates = {
+        "attestation_challenge_digest": second_digest,
+        "attestation_challenge_issued_at": (now + timedelta(seconds=1)).isoformat(),
+        "attestation_challenge_expires_at": (now + timedelta(minutes=1)).isoformat(),
+        "attestation_challenge_value": second_value,
+    }
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.transition_setup_session(
+            session["id"],
+            expected_revision=session["revision"],
+            transition="bind_attestation_challenge",
+            actor_id=session["owner_id"],
+            updates=replacement_updates,
+            _now=now + timedelta(milliseconds=500),
+        ),
+        "an unexpired setup challenge was rebound",
+    )
+    replacement = db.transition_setup_session(
+        session["id"],
+        expected_revision=session["revision"],
+        transition="bind_attestation_challenge",
+        actor_id=session["owner_id"],
+        updates=replacement_updates,
+        _now=now + timedelta(seconds=2),
+    )
+    if not (
+        replacement["revision"] == session["revision"] + 1
+        and replacement["attestation_challenge_digest"] == second_digest
+        and replacement["attestation_challenge_value"] == second_value
+    ):
+        raise AssertionError("an expired setup challenge was not replaced atomically")
+
+    approval = db.ensure_control_plane_approval(
+        action="setup.attestation.finalize",
+        resource_id=session["id"],
+        payload_digest=digest_value("challenge-recovery-finalization"),
+        requester_id=session["owner_id"],
+        request={"setup_session_id": session["id"]},
+        ttl_seconds=300,
+    )
+    approval = db.approve_control_plane_approval(
+        approval["id"], actor_id="user:challenge-recovery-reviewer"
+    )
+    if not approval or approval["status"] != "approved":
+        raise AssertionError("setup approval rollback fixture was not approved")
+    try:
+        with db.connect() as conn:
+            consumed = db.consume_control_plane_approval(
+                approval["id"],
+                action="setup.attestation.finalize",
+                resource_id=session["id"],
+                payload_digest=digest_value("challenge-recovery-finalization"),
+                actor_id=session["owner_id"],
+                _connection=conn,
+            )
+            if not consumed["ok"]:
+                raise AssertionError(f"setup approval could not be consumed: {consumed}")
+            raise RuntimeError("injected transition failure")
+    except RuntimeError as exc:
+        if str(exc) != "injected transition failure":
+            raise
+    approval_after_rollback = db.get_control_plane_approval(approval["id"])
+    if not approval_after_rollback or approval_after_rollback["status"] != "approved":
+        raise AssertionError("setup approval consumption escaped its transaction rollback")
+    consumed = db.consume_control_plane_approval(
+        approval["id"],
+        action="setup.attestation.finalize",
+        resource_id=session["id"],
+        payload_digest=digest_value("challenge-recovery-finalization"),
+        actor_id=session["owner_id"],
+    )
+    if not consumed["ok"] or consumed["approval"]["status"] != "consumed":
+        raise AssertionError("setup approval was not consumable after rollback")
+
+    hardware = record_hardware(
+        db,
+        replacement,
+        "challenge-recovery",
+        now=now + timedelta(seconds=3),
+    )
+    finalized = record_final(
+        db,
+        hardware,
+        "challenge-recovery",
+        now=now + timedelta(minutes=1, seconds=1),
+    )
+    if finalized["phase"] != "completion_pending_audit":
+        raise AssertionError(
+            "a fresh final receipt could not complete hardware evidence after challenge expiry"
+        )
+
+    expired = create_session(db, "shared-transaction-expiry")
+    expired_at = (now - timedelta(seconds=1)).isoformat()
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE setup_sessions SET expires_at = ? WHERE id = ?",
+            (expired_at, expired["id"]),
+        )
+
+    def mutate_expired_with_shared_transaction() -> dict[str, Any]:
+        with db.connect() as conn:
+            return db.transition_setup_session(
+                expired["id"],
+                expected_revision=expired["revision"],
+                transition="claim",
+                actor_id=expired["owner_id"],
+                updates={"current_assignee_id": expired["owner_id"]},
+                _connection=conn,
+                _now=now,
+            )
+
+    expect_error(
+        db.SetupSessionValidationError,
+        mutate_expired_with_shared_transaction,
+        "a shared approval transaction mutated an expired setup session",
+    )
+    expired_after = db.get_setup_session(expired["id"])
+    if not expired_after or expired_after["revision"] != expired["revision"]:
+        raise AssertionError("expired shared-transaction rejection changed setup state")
+
+
+def record_hardware(
+    db: Any,
+    session: dict[str, Any],
+    suffix: str,
+    *,
+    assurance_digest: str | None = None,
+    evidence_suffix: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    hardware_evidence = setup_evidence(
+        "hardware_assurance",
+        evidence_suffix or f"{suffix}:hardware",
+        verifier_key_id="hardware-verifier:test",
+    )
+    receipt_digest = "sha256:" + hashlib.sha256(
+        json.dumps(
+            hardware_evidence[0]["document"],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()
+    return db.transition_setup_session(
+        session["id"],
+        expected_revision=session["revision"],
+        transition="record_hardware_receipt",
+        actor_id=session["owner_id"],
+        updates={
+            "hardware_assurance_digest": assurance_digest
+            or digest_value(f"{suffix}:hardware-assurance-artifact"),
+            "hardware_verification_receipt_digest": receipt_digest,
+            "release_identity_digest": digest("6"),
+            "current_host_identity_digest": digest("7"),
+            "proxy_server_statement_digest": digest("8"),
+            "trust_profile_digest": digest("9"),
+        },
+        evidence=hardware_evidence,
+        _now=now,
+    )
+
+
+def record_final(
+    db: Any,
+    session: dict[str, Any],
+    suffix: str,
+    *,
+    consumption_id: str | None = None,
+    evidence_suffix: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    return db.transition_setup_session(
+        session["id"],
+        expected_revision=session["revision"],
+        transition="record_final_challenge_receipt",
+        actor_id=session["owner_id"],
+        updates={
+            "completion_identity_digest": digest("a"),
+            "final_consumption_id": consumption_id or f"consumption:{suffix}",
+        },
+        evidence=setup_evidence(
+            "final_challenge_receipt",
+            evidence_suffix or f"{suffix}:final",
+            verifier_key_id="final-authority:test",
+        ),
+        _now=now,
+    )
+
+
 def exercise_idempotent_schema(db: Any) -> None:
+    with db.connect() as conn:
+        conn.execute(
+            """
+            CREATE TABLE setup_sessions (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                current_assignee_id TEXT,
+                status TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                revision BIGINT NOT NULL,
+                template_id TEXT,
+                principal_id TEXT,
+                route_id TEXT,
+                route_policy_digest TEXT,
+                credential_id TEXT,
+                credential_version BIGINT,
+                policy_hash TEXT,
+                assignment_digest TEXT,
+                oauth_provider TEXT,
+                oauth_state_digest TEXT,
+                oauth_pending_credential_id TEXT,
+                canary_id TEXT,
+                enrollment_session_id TEXT,
+                enrollment_packet_digest TEXT,
+                verifier_nonce_hash TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                terminal_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE setup_session_evidence (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES setup_sessions(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                evidence_digest TEXT NOT NULL,
+                verifier_key_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (session_id, kind, evidence_digest)
+            )
+            """
+        )
     db.init_db()
     db.init_db()
     with db.connect() as conn:
@@ -161,24 +509,71 @@ def exercise_idempotent_schema(db: Any) -> None:
         ):
             conn.execute(f"SELECT 1 FROM {table} LIMIT 1")
         if db.metadata_uses_postgres():
-            column = conn.execute(
-                "SELECT 1 FROM information_schema.columns "
-                "WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?",
-                ("setup_sessions", "route_policy_digest"),
-            ).fetchone()
+            columns = {
+                row["column_name"]
+                for row in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = ?",
+                    ("setup_sessions",),
+                ).fetchall()
+            }
+            indexes = {
+                row["indexname"]
+                for row in conn.execute(
+                    "SELECT indexname FROM pg_indexes "
+                    "WHERE schemaname = current_schema() "
+                    "AND tablename IN ('setup_sessions', 'setup_session_evidence')"
+                ).fetchall()
+            }
         else:
-            column = next(
-                (
-                    row
-                    for row in conn.execute(
-                        "PRAGMA table_info(setup_sessions)"
-                    ).fetchall()
-                    if row["name"] == "route_policy_digest"
-                ),
-                None,
-            )
-    if not column:
-        raise AssertionError("setup session route_policy_digest migration is missing")
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(setup_sessions)").fetchall()
+            }
+            indexes = {
+                row["name"]
+                for table in ("setup_sessions", "setup_session_evidence")
+                for row in conn.execute(f"PRAGMA index_list({table})").fetchall()
+            }
+    expected_columns = {
+        "route_policy_digest",
+        "attestation_challenge_digest",
+        "attestation_challenge_issued_at",
+        "attestation_challenge_expires_at",
+        "enrollment_verifier_receipt_digest",
+        "enrollment_verifier_key_id",
+        "runtime_evidence_digest",
+        "hardware_assurance_digest",
+        "hardware_verification_receipt_digest",
+        "hardware_verifier_key_id",
+        "release_identity_digest",
+        "current_host_identity_digest",
+        "proxy_server_statement_digest",
+        "trust_profile_digest",
+        "completion_identity_digest",
+        "final_authority_key_id",
+        "final_consumption_id",
+        "final_receipt_digest",
+    }
+    expected_indexes = {
+        "setup_sessions_one_attestation_challenge",
+        "setup_sessions_one_enrollment_verifier_receipt",
+        "setup_sessions_one_runtime_evidence",
+        "setup_sessions_one_hardware_assurance",
+        "setup_sessions_one_hardware_verification_receipt",
+        "setup_sessions_one_final_consumption",
+        "setup_sessions_one_final_receipt",
+        "setup_session_evidence_one_kind",
+        "setup_session_evidence_one_digest",
+    }
+    if not expected_columns <= columns:
+        raise AssertionError(
+            f"setup session binding migrations are missing: {expected_columns - columns}"
+        )
+    if not expected_indexes <= indexes:
+        raise AssertionError(
+            f"setup session uniqueness migrations are missing: {expected_indexes - indexes}"
+        )
 
 
 def exercise_capacity_race(db: Any) -> None:
@@ -347,16 +742,19 @@ def exercise_atomic_oauth_callback_persistence(db: Any) -> None:
             "metadata_keys": sorted(metadata),
             "expires_at_epoch_ms": None,
         }
-        payload_digest = "sha256:" + hashlib.sha256(
-            db.dumps(
-                {
-                    "action": "credential.oauth.activate",
-                    "review": review,
-                    "encrypted_token_source_sha256": "sha256:"
-                    + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
-                }
-            ).encode("utf-8")
-        ).hexdigest()
+        payload_digest = (
+            "sha256:"
+            + hashlib.sha256(
+                db.dumps(
+                    {
+                        "action": "credential.oauth.activate",
+                        "review": review,
+                        "encrypted_token_source_sha256": "sha256:"
+                        + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
+                    }
+                ).encode("utf-8")
+            ).hexdigest()
+        )
         return secret, metadata, review, payload_digest
 
     state_digest = digest("9")
@@ -372,9 +770,7 @@ def exercise_atomic_oauth_callback_persistence(db: Any) -> None:
     pending_secret, pending_metadata, pending_review, pending_digest = oauth_values(
         "atomic-pending"
     )
-    pending_ids_before = {
-        item["id"] for item in db.list_pending_oauth_credentials()
-    }
+    pending_ids_before = {item["id"] for item in db.list_pending_oauth_credentials()}
     pending_events_before = len(
         db.get_setup_session(pending_session["id"], include_events=True)["events"]
     )
@@ -400,7 +796,9 @@ def exercise_atomic_oauth_callback_persistence(db: Any) -> None:
     if {
         item["id"] for item in db.list_pending_oauth_credentials()
     } != pending_ids_before:
-        raise AssertionError("failed setup CAS persisted a standalone pending OAuth grant")
+        raise AssertionError(
+            "failed setup CAS persisted a standalone pending OAuth grant"
+        )
 
     original_transition = db.transition_setup_session
 
@@ -465,7 +863,9 @@ def exercise_atomic_oauth_callback_persistence(db: Any) -> None:
         pending_bound["phase"] == "oauth_verified"
         and pending_bound["oauth_pending_credential_id"] == pending["id"]
     ):
-        raise AssertionError("pending OAuth creation and setup binding did not commit together")
+        raise AssertionError(
+            "pending OAuth creation and setup binding did not commit together"
+        )
 
     approval = db.ensure_control_plane_approval(
         action="credential.oauth.activate",
@@ -514,6 +914,37 @@ def exercise_atomic_oauth_callback_persistence(db: Any) -> None:
         raise AssertionError(
             "approval, credential activation, pending deletion, and setup transition did not roll back together"
         )
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE setup_sessions SET credential_id = ?, credential_version = ? "
+            "WHERE id = ?",
+            ("credential:prebound", 1, pending_session["id"]),
+        )
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.activate_pending_oauth_credential(
+            pending["id"],
+            approval_id=approval["id"],
+            actor_id=pending_session["owner_id"],
+            setup_session_id=pending_session["id"],
+            setup_expected_revision=pending_bound["revision"],
+        ),
+        "OAuth activation silently rebound an immutable setup credential",
+    )
+    rebound_after = db.get_setup_session(pending_session["id"])
+    approval_after_rebind = db.get_control_plane_approval(approval["id"])
+    if not (
+        rebound_after
+        and rebound_after["credential_id"] == "credential:prebound"
+        and rebound_after["revision"] == pending_bound["revision"]
+        and db.get_pending_oauth_credential(pending["id"]) is not None
+        and db.get_credential(pending["id"]) is None
+        and approval_after_rebind
+        and approval_after_rebind["status"] == "approved"
+    ):
+        raise AssertionError(
+            "immutable OAuth setup rebind rejection did not roll back atomically"
+        )
 
     immediate_state_digest = digest("8")
     immediate_session = create_session(db, "atomic-immediate")
@@ -545,7 +976,9 @@ def exercise_atomic_oauth_callback_persistence(db: Any) -> None:
         "stale setup CAS left an immediately active OAuth credential",
     )
     if {item["id"] for item in db.list_credentials()} != credential_ids_before:
-        raise AssertionError("failed setup CAS persisted a standalone active credential")
+        raise AssertionError(
+            "failed setup CAS persisted a standalone active credential"
+        )
     original_transition = db.transition_setup_session
     db.transition_setup_session = fail_post_insert_transition
     try:
@@ -592,7 +1025,9 @@ def exercise_atomic_oauth_callback_persistence(db: Any) -> None:
         and immediate_bound["credential_id"] == credential["id"]
         and immediate_bound["credential_version"] == credential["credential_version"]
     ):
-        raise AssertionError("immediate credential creation and setup binding did not commit together")
+        raise AssertionError(
+            "immediate credential creation and setup binding did not commit together"
+        )
 
 
 def exercise_generation_and_expiry_fail_closed(db: Any) -> None:
@@ -870,6 +1305,401 @@ def exercise_evidence_validation(db: Any) -> None:
         raise AssertionError("rejected secret material reached setup evidence storage")
 
 
+def exercise_authenticated_receipt_ledger(db: Any) -> None:
+    session = advance_to_runtime(db, "receipt-ledger")
+    loaded = db.get_setup_session(session["id"], include_evidence=True)
+    runtime_evidence = next(
+        item for item in loaded["evidence"] if item["kind"] == "runtime_verification"
+    )
+    enrollment_receipt = next(
+        item for item in loaded["evidence"] if item["kind"] == "enrollment_verification"
+    )
+    if session["runtime_evidence_digest"] != runtime_evidence["evidence_digest"]:
+        raise AssertionError("runtime evidence digest was not bound by the DB")
+    if not (
+        session["enrollment_verifier_receipt_digest"]
+        == enrollment_receipt["evidence_digest"]
+        and session["enrollment_verifier_key_id"] == "verifier:test"
+        and enrollment_receipt["document"]["kind"]
+        == "serverware.setupEnrollmentVerification/v1"
+        and enrollment_receipt["document"]["signature"]["value"]
+        == "signed:receipt-ledger:enrollment_verification"
+    ):
+        raise AssertionError(
+            "signed enrollment receipt was not durably reconstructable"
+        )
+
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: record_hardware(db, session, "receipt-without-challenge"),
+        "hardware receipt was accepted without an attestation challenge",
+    )
+    now = datetime.now(timezone.utc)
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.transition_setup_session(
+            session["id"],
+            expected_revision=session["revision"],
+            transition="bind_attestation_challenge",
+            actor_id=session["owner_id"],
+            updates={
+                "attestation_challenge_digest": digest("0"),
+                "attestation_challenge_issued_at": (
+                    now - timedelta(hours=2)
+                ).isoformat(),
+                "attestation_challenge_expires_at": (
+                    now - timedelta(hours=1)
+                ).isoformat(),
+            },
+        ),
+        "expired attestation challenge was accepted",
+    )
+    if db.get_setup_session(session["id"])["revision"] != session["revision"]:
+        raise AssertionError("rejected challenge binding changed the session")
+
+    session = bind_challenge(db, session, digest("0"))
+    if session["phase"] != "runtime_verified":
+        raise AssertionError("attestation challenge binding changed the runtime phase")
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.transition_setup_session(
+            session["id"],
+            expected_revision=session["revision"],
+            transition="record_hardware_receipt",
+            actor_id=session["owner_id"],
+            updates={
+                "release_identity_digest": digest("6"),
+                "current_host_identity_digest": digest("7"),
+                "proxy_server_statement_digest": digest("8"),
+            },
+            evidence=setup_evidence(
+                "hardware_assurance",
+                "receipt-ledger:hardware",
+                verifier_key_id="hardware-verifier:test",
+            ),
+        ),
+        "incomplete server-derived hardware bindings were accepted",
+    )
+    before_hardware = db.get_setup_session(
+        session["id"], include_evidence=True, include_events=True
+    )
+    if before_hardware["revision"] != session["revision"] or any(
+        item["kind"] == "hardware_assurance" for item in before_hardware["evidence"]
+    ):
+        raise AssertionError("rejected hardware receipt did not roll back")
+
+    session = record_hardware(db, session, "receipt-ledger")
+    if not (
+        session["phase"] == "hardware_verified"
+        and session["hardware_assurance_digest"]
+        == digest_value("receipt-ledger:hardware-assurance-artifact")
+        and session["hardware_verification_receipt_digest"]
+        and session["hardware_verifier_key_id"] == "hardware-verifier:test"
+        and session["release_identity_digest"] == digest("6")
+        and session["current_host_identity_digest"] == digest("7")
+        and session["proxy_server_statement_digest"] == digest("8")
+        and session["trust_profile_digest"] == digest("9")
+    ):
+        raise AssertionError("hardware receipt did not bind the verified receipt set")
+    hardware_loaded = db.get_setup_session(session["id"], include_evidence=True)
+    hardware_receipt = next(
+        item
+        for item in hardware_loaded["evidence"]
+        if item["kind"] == "hardware_assurance"
+    )
+    if not (
+        hardware_loaded["hardware_verification_receipt_digest"]
+        == hardware_receipt["evidence_digest"]
+        and hardware_loaded["hardware_assurance_digest"]
+        != hardware_receipt["evidence_digest"]
+        and hardware_receipt["document"]["kind"]
+        == "serverware.setupHardwareVerification/v1"
+        and hardware_receipt["document"]["signature"]["value"]
+        == "signed:receipt-ledger:hardware"
+    ):
+        raise AssertionError(
+            "hardware artifact and signed verification receipt digests were conflated"
+        )
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.transition_setup_session(
+            session["id"],
+            expected_revision=session["revision"],
+            transition="complete",
+            actor_id=session["owner_id"],
+        ),
+        "bare hardware_verified to complete transition remained available",
+    )
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.transition_setup_session(
+            session["id"],
+            expected_revision=session["revision"],
+            transition="record_final_challenge_receipt",
+            actor_id=session["owner_id"],
+            updates={
+                "completion_identity_digest": digest("a"),
+                "final_consumption_id": "consumption:receipt-ledger",
+            },
+        ),
+        "final transition was accepted without final receipt evidence",
+    )
+    session = record_final(db, session, "receipt-ledger")
+    if not (
+        session["phase"] == "completion_pending_audit"
+        and session["status"] == "active"
+        and session["final_receipt_digest"]
+        and session["final_authority_key_id"] == "final-authority:test"
+        and session["final_consumption_id"] == "consumption:receipt-ledger"
+    ):
+        raise AssertionError("final receipt did not enter the audit gate")
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.transition_setup_session(
+            session["id"],
+            expected_revision=session["revision"],
+            transition="system_complete",
+            actor_id="system:setup-auditor",
+        ),
+        "setup completed before its final receipt event was audited",
+    )
+    if db.get_setup_session(session["id"])["revision"] != session["revision"]:
+        raise AssertionError("rejected audit gate changed the session revision")
+    drain_outbox(db, datetime.now(timezone.utc))
+    completed = db.transition_setup_session(
+        session["id"],
+        expected_revision=session["revision"],
+        transition="system_complete",
+        actor_id="system:setup-auditor",
+    )
+    if completed["status"] != "complete" or completed["phase"] != "complete":
+        raise AssertionError("audited final receipt did not complete the setup")
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.claim_or_handoff_setup_session(
+            completed["id"],
+            expected_revision=completed["revision"],
+            actor_id=completed["owner_id"],
+            assignee_id="user:late-handoff",
+            handoff=True,
+        ),
+        "terminal setup session accepted a binding mutation",
+    )
+    terminal = db.get_setup_session(completed["id"])
+    if terminal != completed:
+        raise AssertionError("terminal setup bindings changed after completion")
+
+
+def exercise_security_replay_constraints(db: Any) -> None:
+    enrollment_left = advance_to_enrollment(db, "enrollment-replay-left")
+    enrollment_right = advance_to_enrollment(db, "enrollment-replay-right")
+    enrollment_left = db.transition_setup_session(
+        enrollment_left["id"],
+        expected_revision=enrollment_left["revision"],
+        transition="record_enrollment_evidence",
+        actor_id=enrollment_left["owner_id"],
+        evidence=setup_evidence(
+            "enrollment_verification", "enrollment:shared-signed-receipt"
+        ),
+    )
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: db.transition_setup_session(
+            enrollment_right["id"],
+            expected_revision=enrollment_right["revision"],
+            transition="record_enrollment_evidence",
+            actor_id=enrollment_right["owner_id"],
+            evidence=setup_evidence(
+                "enrollment_verification", "enrollment:shared-signed-receipt"
+            ),
+        ),
+        "signed enrollment verifier receipt was replayed across setup sessions",
+    )
+    if not enrollment_left["enrollment_verifier_receipt_digest"]:
+        raise AssertionError("enrollment verifier receipt digest was not bound")
+
+    left = advance_to_runtime(db, "replay-left")
+    right = advance_to_runtime(db, "replay-right")
+    left = bind_challenge(db, left, digest("b"))
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: bind_challenge(db, right, digest("b")),
+        "attestation challenge was replayed across setup sessions",
+    )
+    right = bind_challenge(db, right, digest("c"))
+    left = record_hardware(
+        db, left, "replay-left", evidence_suffix="hardware:shared-receipt"
+    )
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: record_hardware(
+            db,
+            right,
+            "replay-right",
+            assurance_digest=left["hardware_assurance_digest"],
+            evidence_suffix="hardware:right-unique-receipt",
+        ),
+        "hardware assurance artifact digest was replayed across setup sessions",
+    )
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: record_hardware(
+            db, right, "replay-right", evidence_suffix="hardware:shared-receipt"
+        ),
+        "hardware evidence digest was replayed across setup sessions",
+    )
+    if db.get_setup_session(right["id"])["revision"] != right["revision"]:
+        raise AssertionError("cross-session hardware replay changed the losing session")
+    right = record_hardware(db, right, "replay-right")
+    left = record_final(
+        db,
+        left,
+        "replay-left",
+        consumption_id="consumption:shared",
+        evidence_suffix="final:shared-receipt",
+    )
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: record_final(
+            db,
+            right,
+            "replay-right",
+            consumption_id="consumption:shared",
+            evidence_suffix="final:right-unique",
+        ),
+        "final consumption ID was replayed across setup sessions",
+    )
+    expect_error(
+        db.SetupSessionValidationError,
+        lambda: record_final(
+            db,
+            right,
+            "replay-right",
+            consumption_id="consumption:right-unique",
+            evidence_suffix="final:shared-receipt",
+        ),
+        "final receipt digest was replayed across setup sessions",
+    )
+    right = record_final(db, right, "replay-right")
+    with db.connect() as conn:
+        duplicate_kinds = conn.execute(
+            "SELECT session_id, kind, COUNT(*) AS count "
+            "FROM setup_session_evidence GROUP BY session_id, kind HAVING COUNT(*) > 1"
+        ).fetchall()
+    if duplicate_kinds:
+        raise AssertionError("setup ledger stored multiple evidence rows for one kind")
+    if not left["final_receipt_digest"] or not right["final_receipt_digest"]:
+        raise AssertionError("valid independent final receipts were not retained")
+
+
+def exercise_final_receipt_cas_and_rollback(db: Any) -> None:
+    session = record_hardware(
+        db,
+        bind_challenge(db, advance_to_runtime(db, "final-cas"), digest("d")),
+        "final-cas",
+    )
+
+    def finalize(suffix: str) -> tuple[str, str]:
+        try:
+            value = record_final(db, session, suffix)
+            return "accepted", value["final_consumption_id"]
+        except db.SetupSessionStaleRevisionError as exc:
+            return "stale", str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(finalize, ("final-cas-left", "final-cas-right")))
+    if [status for status, _ in outcomes].count("accepted") != 1 or [
+        status for status, _ in outcomes
+    ].count("stale") != 1:
+        raise AssertionError(f"final receipt CAS did not have one winner: {outcomes}")
+    loaded = db.get_setup_session(session["id"], include_evidence=True)
+    if (
+        len(
+            [
+                item
+                for item in loaded["evidence"]
+                if item["kind"] == "final_challenge_receipt"
+            ]
+        )
+        != 1
+    ):
+        raise AssertionError("final receipt CAS persisted more than one receipt")
+
+    rollback = record_hardware(
+        db,
+        bind_challenge(db, advance_to_runtime(db, "final-rollback"), digest("e")),
+        "final-rollback",
+    )
+    before = db.get_setup_session(
+        rollback["id"], include_evidence=True, include_events=True
+    )
+    original_insert_setup_event = db._insert_setup_event
+
+    def fail_final_event(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("injected final receipt event failure")
+
+    db._insert_setup_event = fail_final_event
+    try:
+        expect_error(
+            RuntimeError,
+            lambda: record_final(db, rollback, "final-rollback"),
+            "final receipt event failure committed partial ledger state",
+        )
+    finally:
+        db._insert_setup_event = original_insert_setup_event
+    after = db.get_setup_session(
+        rollback["id"], include_evidence=True, include_events=True
+    )
+    if after != before:
+        raise AssertionError(
+            "final receipt session, evidence, and event did not roll back"
+        )
+
+
+def exercise_strict_outbox_sequence(db: Any) -> None:
+    target = bind_credential(
+        db, create_session(db, "outbox-sequence"), "outbox-sequence"
+    )
+    target_sequences: list[int] = []
+    now = datetime.now(timezone.utc)
+    for attempt in range(100):
+        claimed = db.claim_setup_session_audit_outbox(
+            worker_id=f"worker:sequence:{attempt}", limit=500, now=now
+        )
+        if not claimed:
+            break
+        session_ids = [item["session_id"] for item in claimed]
+        if len(session_ids) != len(set(session_ids)):
+            raise AssertionError("one outbox claim skipped per-session sequence")
+        with db.connect() as conn:
+            for item in claimed:
+                predecessor = conn.execute(
+                    "SELECT 1 FROM setup_session_events WHERE session_id = ? "
+                    "AND sequence < ? AND audit_status != 'audited' LIMIT 1",
+                    (item["session_id"], item["sequence"]),
+                ).fetchone()
+                if predecessor:
+                    raise AssertionError(
+                        "outbox claimed an event before its predecessor"
+                    )
+        for item in claimed:
+            if item["session_id"] == target["id"]:
+                target_sequences.append(item["sequence"])
+            if not db.finish_setup_session_audit_outbox(
+                item["id"],
+                claim_id=item["audit_claim_id"],
+                audit_event_hash=digest("5"),
+                now=now,
+            ):
+                raise AssertionError("strict outbox test lost an audit claim")
+        if target_sequences == [1, 2]:
+            break
+    if target_sequences != [1, 2]:
+        raise AssertionError(
+            f"outbox did not claim target events in strict sequence: {target_sequences}"
+        )
+
+
 def exercise_outbox(db: Any) -> None:
     first_time = datetime(2030, 1, 1, tzinfo=timezone.utc)
     claimed = db.claim_setup_session_audit_outbox(
@@ -976,6 +1806,16 @@ def exercise_expire_and_prune(db: Any) -> None:
             "setup expiration lost its original expiry or audit transition"
         )
     drain_outbox(db, now + timedelta(seconds=1))
+    with db.connect() as conn:
+        durable_security_sessions = {
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM setup_sessions WHERE status = 'complete' "
+                "AND final_receipt_digest IS NOT NULL"
+            ).fetchall()
+        }
+    if not durable_security_sessions:
+        raise AssertionError("completed security ledger fixture was not retained")
     previous_retention = db.SETUP_SESSION_RETENTION_SECONDS
     db.SETUP_SESSION_RETENTION_SECONDS = 300
     try:
@@ -984,6 +1824,10 @@ def exercise_expire_and_prune(db: Any) -> None:
         db.SETUP_SESSION_RETENTION_SECONDS = previous_retention
     if pruned["pruned"] < 1 or db.get_setup_session(session["id"]) is not None:
         raise AssertionError(f"audited terminal setup session was not pruned: {pruned}")
+    if any(
+        db.get_setup_session(item_id) is None for item_id in durable_security_sessions
+    ):
+        raise AssertionError("security-bound terminal setup ledger was pruned")
 
 
 def main() -> None:
@@ -1010,6 +1854,11 @@ def main() -> None:
             exercise_unique_bindings(db)
             exercise_evidence_validation(db)
             exercise_outbox(db)
+            exercise_authenticated_receipt_ledger(db)
+            exercise_security_replay_constraints(db)
+            exercise_challenge_recovery_and_approval_atomicity(db)
+            exercise_final_receipt_cas_and_rollback(db)
+            exercise_strict_outbox_sequence(db)
             exercise_expire_and_prune(db)
         finally:
             if schema and args.postgres_dsn:

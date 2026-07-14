@@ -208,10 +208,14 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
                 args.hardware_assurance,
                 "--hardware-assurance-trusted-public-key",
                 args.hardware_assurance_trusted_public_key,
+                "--hardware-assurance-trusted-public-key-id",
+                args.hardware_assurance_trusted_public_key_id,
                 "--final-challenge-receipt",
                 args.final_challenge_receipt,
                 "--final-challenge-authority-public-key",
                 args.final_challenge_authority_public_key,
+                "--final-challenge-authority-public-key-id",
+                args.final_challenge_authority_public_key_id,
                 "--final-challenge-authority-provider",
                 args.final_challenge_authority_provider,
             ]
@@ -400,10 +404,12 @@ def main() -> None:
     parser.add_argument("--verification-mode", choices=("readiness", "final"), default="readiness")
     parser.add_argument("--hardware-assurance", default=None)
     parser.add_argument("--hardware-assurance-trusted-public-key", default=None)
+    parser.add_argument("--hardware-assurance-trusted-public-key-id", default=None)
     parser.add_argument("--hardware-assurance-expected-challenge-nonce", default=None)
     parser.add_argument("--hardware-assurance-expected-challenge-nonce-sha256", default=None)
     parser.add_argument("--final-challenge-receipt", default=None)
     parser.add_argument("--final-challenge-authority-public-key", default=None)
+    parser.add_argument("--final-challenge-authority-public-key-id", default=None)
     parser.add_argument("--final-challenge-authority-provider", default=None)
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
     parser.add_argument("--policy-bundle", required=True)
@@ -515,11 +521,13 @@ def main() -> None:
     final_challenge_settings = {
         "final_challenge_receipt": "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
         "final_challenge_authority_public_key": "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "final_challenge_authority_public_key_id": "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
         "final_challenge_authority_provider": "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
     }
     hardware_assurance_settings = {
         "hardware_assurance": "SERVERWARE_HARDWARE_ASSURANCE",
         "hardware_assurance_trusted_public_key": "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "hardware_assurance_trusted_public_key_id": "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
         "hardware_assurance_expected_challenge_nonce": "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
         "hardware_assurance_expected_challenge_nonce_sha256": (
             "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256"
@@ -605,7 +613,11 @@ def main() -> None:
                     raise SystemExit(1)
                 setattr(args, attribute, value)
                 env[env_name] = value
-            elif attribute in {"hardware_assurance", "hardware_assurance_trusted_public_key"}:
+            elif attribute in {
+                "hardware_assurance",
+                "hardware_assurance_trusted_public_key",
+                "hardware_assurance_trusted_public_key_id",
+            }:
                 missing_hardware_assurance.append(
                     f"{env_name} (must be pinned in the production readiness env file)"
                 )
@@ -627,6 +639,29 @@ def main() -> None:
             print(
                 "production readiness env error: final verification mode requires exactly one hardware assurance "
                 "expected challenge nonce or digest",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        hardware_key_id = args.hardware_assurance_trusted_public_key_id
+        authority_key_id = args.final_challenge_authority_public_key_id
+        if SHA256_RE.fullmatch(hardware_key_id) is None:
+            print(
+                "production readiness env error: hardware assurance trusted public key ID must be "
+                "sha256:<64 lowercase hex>",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if SHA256_RE.fullmatch(authority_key_id) is None:
+            print(
+                "production readiness env error: final challenge authority public key ID must be "
+                "sha256:<64 lowercase hex>",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if hardware_key_id == authority_key_id:
+            print(
+                "production readiness env error: hardware assurance verifier and final challenge authority "
+                "must use different public keys",
                 file=sys.stderr,
             )
             raise SystemExit(1)

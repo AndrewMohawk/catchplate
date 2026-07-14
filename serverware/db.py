@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import base64
 import fcntl
 import hashlib
 import hmac
@@ -220,34 +221,84 @@ _SENSITIVE_CREDENTIAL_METADATA_SUFFIXES = (
 _SETUP_TERMINAL_STATUSES = {"complete", "cancelled", "failed", "superseded", "expired"}
 _SETUP_DIGEST_FIELDS = {
     "assignment_digest",
+    "attestation_challenge_digest",
+    "completion_identity_digest",
+    "current_host_identity_digest",
     "enrollment_packet_digest",
+    "enrollment_verifier_receipt_digest",
+    "final_receipt_digest",
+    "hardware_assurance_digest",
+    "hardware_verification_receipt_digest",
     "oauth_state_digest",
     "policy_hash",
+    "proxy_server_statement_digest",
+    "release_identity_digest",
     "route_policy_digest",
+    "runtime_evidence_digest",
+    "trust_profile_digest",
     "verifier_nonce_hash",
+}
+_SETUP_TIMESTAMP_FIELDS = {
+    "attestation_challenge_issued_at",
+    "attestation_challenge_expires_at",
 }
 _SETUP_BINDING_FIELDS = {
     "assignment_digest",
+    "attestation_challenge_digest",
+    "attestation_challenge_expires_at",
+    "attestation_challenge_issued_at",
+    "attestation_challenge_value",
     "canary_id",
+    "completion_identity_digest",
     "credential_id",
     "credential_version",
+    "current_host_identity_digest",
     "enrollment_packet_digest",
     "enrollment_session_id",
+    "enrollment_verifier_key_id",
+    "enrollment_verifier_receipt_digest",
+    "final_authority_key_id",
+    "final_consumption_id",
+    "final_receipt_digest",
+    "hardware_assurance_digest",
+    "hardware_verification_receipt_digest",
+    "hardware_verifier_key_id",
     "oauth_pending_credential_id",
     "oauth_provider",
     "oauth_state_digest",
     "policy_hash",
     "principal_id",
+    "proxy_server_statement_digest",
+    "release_identity_digest",
     "route_id",
     "route_policy_digest",
+    "runtime_evidence_digest",
     "template_id",
+    "trust_profile_digest",
     "verifier_nonce_hash",
+}
+_SETUP_UNIQUE_BINDING_FIELDS = {
+    "attestation_challenge_digest",
+    "canary_id",
+    "enrollment_session_id",
+    "enrollment_verifier_receipt_digest",
+    "final_consumption_id",
+    "final_receipt_digest",
+    "hardware_assurance_digest",
+    "hardware_verification_receipt_digest",
+    "oauth_pending_credential_id",
+    "oauth_state_digest",
+    "runtime_evidence_digest",
 }
 _SETUP_EVIDENCE_TRANSITIONS = {
     "record_enrollment_evidence": ("enrollment_verification", "ca_installed"),
     "record_canary_evidence": ("canary_result", "canaries_verified"),
     "record_runtime_evidence": ("runtime_verification", "runtime_verified"),
     "record_hardware_receipt": ("hardware_assurance", "hardware_verified"),
+    "record_final_challenge_receipt": (
+        "final_challenge_receipt",
+        "completion_pending_audit",
+    ),
 }
 _SETUP_TRANSITIONS: dict[str, dict[str, Any]] = {
     "claim": {
@@ -328,13 +379,35 @@ _SETUP_TRANSITIONS: dict[str, dict[str, Any]] = {
         "next_phase": "runtime_verified",
         "updates": set(),
     },
+    "bind_attestation_challenge": {
+        "phases": {"runtime_verified"},
+        "next_phase": "runtime_verified",
+        "updates": {
+            "attestation_challenge_digest",
+            "attestation_challenge_issued_at",
+            "attestation_challenge_expires_at",
+            "attestation_challenge_value",
+        },
+    },
     "record_hardware_receipt": {
         "phases": {"runtime_verified", "hardware_verified"},
         "next_phase": "hardware_verified",
-        "updates": set(),
+        "updates": {
+            "current_host_identity_digest",
+            "hardware_assurance_digest",
+            "hardware_verification_receipt_digest",
+            "proxy_server_statement_digest",
+            "release_identity_digest",
+            "trust_profile_digest",
+        },
     },
-    "complete": {
+    "record_final_challenge_receipt": {
         "phases": {"hardware_verified"},
+        "next_phase": "completion_pending_audit",
+        "updates": {"completion_identity_digest", "final_consumption_id"},
+    },
+    "system_complete": {
+        "phases": {"completion_pending_audit"},
         "next_phase": "complete",
         "updates": set(),
         "status": "complete",
@@ -1006,6 +1079,24 @@ def init_db(path: Path = DB_PATH) -> None:
                 enrollment_session_id TEXT,
                 enrollment_packet_digest TEXT,
                 verifier_nonce_hash TEXT,
+                enrollment_verifier_receipt_digest TEXT,
+                enrollment_verifier_key_id TEXT,
+                attestation_challenge_digest TEXT,
+                attestation_challenge_issued_at TEXT,
+                attestation_challenge_expires_at TEXT,
+                attestation_challenge_value TEXT,
+                runtime_evidence_digest TEXT,
+                hardware_assurance_digest TEXT,
+                hardware_verification_receipt_digest TEXT,
+                hardware_verifier_key_id TEXT,
+                release_identity_digest TEXT,
+                current_host_identity_digest TEXT,
+                proxy_server_statement_digest TEXT,
+                trust_profile_digest TEXT,
+                completion_identity_digest TEXT,
+                final_authority_key_id TEXT,
+                final_consumption_id TEXT,
+                final_receipt_digest TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
@@ -1030,7 +1121,6 @@ def init_db(path: Path = DB_PATH) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_enrollment
                 ON setup_sessions (enrollment_session_id)
                 WHERE enrollment_session_id IS NOT NULL;
-
             CREATE TABLE IF NOT EXISTS setup_session_evidence (
                 id TEXT PRIMARY KEY,
                 session_id TEXT NOT NULL REFERENCES setup_sessions(id) ON DELETE CASCADE,
@@ -1040,11 +1130,16 @@ def init_db(path: Path = DB_PATH) -> None:
                 verifier_key_id TEXT NOT NULL,
                 observed_at TEXT NOT NULL,
                 created_at TEXT NOT NULL,
-                UNIQUE (session_id, kind, evidence_digest)
+                UNIQUE (session_id, kind),
+                UNIQUE (evidence_digest)
             );
 
             CREATE INDEX IF NOT EXISTS setup_session_evidence_session_created
                 ON setup_session_evidence (session_id, created_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_session_evidence_one_kind
+                ON setup_session_evidence (session_id, kind);
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_session_evidence_one_digest
+                ON setup_session_evidence (evidence_digest);
 
             CREATE TABLE IF NOT EXISTS setup_session_events (
                 id TEXT PRIMARY KEY,
@@ -1408,6 +1503,57 @@ def init_db(path: Path = DB_PATH) -> None:
         )
         _ensure_column(conn, "pending_oauth_credentials", "updated_at", "TEXT")
         _ensure_column(conn, "setup_sessions", "route_policy_digest", "TEXT")
+        for column in (
+            "attestation_challenge_digest",
+            "attestation_challenge_issued_at",
+            "attestation_challenge_expires_at",
+            "attestation_challenge_value",
+            "enrollment_verifier_receipt_digest",
+            "enrollment_verifier_key_id",
+            "runtime_evidence_digest",
+            "hardware_assurance_digest",
+            "hardware_verification_receipt_digest",
+            "hardware_verifier_key_id",
+            "release_identity_digest",
+            "current_host_identity_digest",
+            "proxy_server_statement_digest",
+            "trust_profile_digest",
+            "completion_identity_digest",
+            "final_authority_key_id",
+            "final_consumption_id",
+            "final_receipt_digest",
+        ):
+            _ensure_column(conn, "setup_sessions", column, "TEXT")
+        for index_name, column in (
+            (
+                "setup_sessions_one_attestation_challenge",
+                "attestation_challenge_digest",
+            ),
+            (
+                "setup_sessions_one_enrollment_verifier_receipt",
+                "enrollment_verifier_receipt_digest",
+            ),
+            ("setup_sessions_one_runtime_evidence", "runtime_evidence_digest"),
+            ("setup_sessions_one_hardware_assurance", "hardware_assurance_digest"),
+            (
+                "setup_sessions_one_hardware_verification_receipt",
+                "hardware_verification_receipt_digest",
+            ),
+            ("setup_sessions_one_final_consumption", "final_consumption_id"),
+            ("setup_sessions_one_final_receipt", "final_receipt_digest"),
+        ):
+            conn.execute(
+                f"CREATE UNIQUE INDEX IF NOT EXISTS {index_name} "
+                f"ON setup_sessions ({column}) WHERE {column} IS NOT NULL"
+            )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS setup_session_evidence_one_kind "
+            "ON setup_session_evidence (session_id, kind)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS setup_session_evidence_one_digest "
+            "ON setup_session_evidence (evidence_digest)"
+        )
         _ensure_column(
             conn, "oidc_login_states", "source_key", "TEXT NOT NULL DEFAULT 'internal'"
         )
@@ -1651,6 +1797,90 @@ def _row_to_setup_session(row: Any) -> dict[str, Any]:
         "verifier_nonce_hash": (
             str(row["verifier_nonce_hash"]) if row["verifier_nonce_hash"] else None
         ),
+        "enrollment_verifier_receipt_digest": (
+            str(row["enrollment_verifier_receipt_digest"])
+            if row["enrollment_verifier_receipt_digest"]
+            else None
+        ),
+        "enrollment_verifier_key_id": (
+            str(row["enrollment_verifier_key_id"])
+            if row["enrollment_verifier_key_id"]
+            else None
+        ),
+        "attestation_challenge_digest": (
+            str(row["attestation_challenge_digest"])
+            if row["attestation_challenge_digest"]
+            else None
+        ),
+        "attestation_challenge_issued_at": (
+            str(row["attestation_challenge_issued_at"])
+            if row["attestation_challenge_issued_at"]
+            else None
+        ),
+        "attestation_challenge_expires_at": (
+            str(row["attestation_challenge_expires_at"])
+            if row["attestation_challenge_expires_at"]
+            else None
+        ),
+        "attestation_challenge_value": (
+            str(row["attestation_challenge_value"])
+            if row["attestation_challenge_value"]
+            else None
+        ),
+        "runtime_evidence_digest": (
+            str(row["runtime_evidence_digest"])
+            if row["runtime_evidence_digest"]
+            else None
+        ),
+        "hardware_assurance_digest": (
+            str(row["hardware_assurance_digest"])
+            if row["hardware_assurance_digest"]
+            else None
+        ),
+        "hardware_verification_receipt_digest": (
+            str(row["hardware_verification_receipt_digest"])
+            if row["hardware_verification_receipt_digest"]
+            else None
+        ),
+        "hardware_verifier_key_id": (
+            str(row["hardware_verifier_key_id"])
+            if row["hardware_verifier_key_id"]
+            else None
+        ),
+        "release_identity_digest": (
+            str(row["release_identity_digest"])
+            if row["release_identity_digest"]
+            else None
+        ),
+        "current_host_identity_digest": (
+            str(row["current_host_identity_digest"])
+            if row["current_host_identity_digest"]
+            else None
+        ),
+        "proxy_server_statement_digest": (
+            str(row["proxy_server_statement_digest"])
+            if row["proxy_server_statement_digest"]
+            else None
+        ),
+        "trust_profile_digest": (
+            str(row["trust_profile_digest"]) if row["trust_profile_digest"] else None
+        ),
+        "completion_identity_digest": (
+            str(row["completion_identity_digest"])
+            if row["completion_identity_digest"]
+            else None
+        ),
+        "final_authority_key_id": (
+            str(row["final_authority_key_id"])
+            if row["final_authority_key_id"]
+            else None
+        ),
+        "final_consumption_id": (
+            str(row["final_consumption_id"]) if row["final_consumption_id"] else None
+        ),
+        "final_receipt_digest": (
+            str(row["final_receipt_digest"]) if row["final_receipt_digest"] else None
+        ),
         "created_at": str(row["created_at"]),
         "updated_at": str(row["updated_at"]),
         "expires_at": str(row["expires_at"]),
@@ -1840,6 +2070,13 @@ def _expire_and_prune_setup_sessions(
         WHERE status IN ('complete', 'cancelled', 'failed', 'superseded', 'expired')
           AND terminal_at IS NOT NULL
           AND terminal_at <= ?
+          AND enrollment_verifier_receipt_digest IS NULL
+          AND attestation_challenge_digest IS NULL
+          AND runtime_evidence_digest IS NULL
+          AND hardware_assurance_digest IS NULL
+          AND hardware_verification_receipt_digest IS NULL
+          AND final_consumption_id IS NULL
+          AND final_receipt_digest IS NULL
           AND NOT EXISTS (
               SELECT 1 FROM setup_session_events
               WHERE setup_session_events.session_id = setup_sessions.id
@@ -1884,6 +2121,17 @@ def _validate_setup_bindings(
             validated[field] = value
         elif field in _SETUP_DIGEST_FIELDS:
             validated[field] = _setup_digest(field, value)
+        elif field in _SETUP_TIMESTAMP_FIELDS:
+            validated[field] = _setup_timestamp(field, value)
+        elif field == "attestation_challenge_value":
+            validated[field] = _setup_text(field, value, maximum=128)
+            if (
+                len(validated[field]) < 43
+                or re.fullmatch(r"[A-Za-z0-9_-]+", validated[field]) is None
+            ):
+                raise SetupSessionValidationError(
+                    "attestation_challenge_value must be canonical unpadded base64url"
+                )
         elif field == "oauth_provider":
             validated[field] = _setup_text(field, value, maximum=128)
         else:
@@ -1910,16 +2158,7 @@ def _assert_setup_binding_unique(
     value: Any,
     session_id: str | None,
 ) -> None:
-    if (
-        field
-        not in {
-            "oauth_state_digest",
-            "oauth_pending_credential_id",
-            "canary_id",
-            "enrollment_session_id",
-        }
-        or value is None
-    ):
+    if field not in _SETUP_UNIQUE_BINDING_FIELDS or value is None:
         return
     sql = f"SELECT id FROM setup_sessions WHERE {field} = ?"
     params: list[Any] = [value]
@@ -2326,9 +2565,33 @@ def transition_setup_session(
         label="setup transition details",
     )
     details = loads(details_json, {})
-    now = _now or utcnow()
+    now = _setup_now(_now)
     now_s = now.isoformat()
     prepared_evidence = _prepare_setup_evidence(transition, evidence, created_at=now_s)
+    if prepared_evidence:
+        receipt = prepared_evidence[0]
+        if transition == "record_enrollment_evidence":
+            validated_updates.update(
+                {
+                    "enrollment_verifier_receipt_digest": receipt["evidence_digest"],
+                    "enrollment_verifier_key_id": receipt["verifier_key_id"],
+                }
+            )
+        elif transition == "record_runtime_evidence":
+            validated_updates["runtime_evidence_digest"] = receipt["evidence_digest"]
+        elif transition == "record_hardware_receipt":
+            validated_updates.update(
+                {
+                    "hardware_verifier_key_id": receipt["verifier_key_id"],
+                }
+            )
+        elif transition == "record_final_challenge_receipt":
+            validated_updates.update(
+                {
+                    "final_authority_key_id": receipt["verifier_key_id"],
+                    "final_receipt_digest": receipt["evidence_digest"],
+                }
+            )
 
     if _connection is None:
         _expire_setup_sessions_before_mutation(now)
@@ -2348,6 +2611,10 @@ def transition_setup_session(
             raise SetupSessionStaleRevisionError(
                 setup_id, expected_revision, current_revision
             )
+        if row["status"] == "active" and now >= datetime.fromisoformat(
+            str(row["expires_at"])
+        ):
+            raise SetupSessionValidationError("setup session has expired")
         if row["status"] != "active":
             raise SetupSessionValidationError(
                 f"setup session is terminal with status {row['status']}"
@@ -2384,10 +2651,26 @@ def transition_setup_session(
         next_status = contract.get("status", "active")
         terminal_at = now_s if next_status in _SETUP_TERMINAL_STATUSES else None
         for field, value in validated_updates.items():
+            replacing_expired_challenge = (
+                transition == "bind_attestation_challenge"
+                and field
+                in {
+                    "attestation_challenge_digest",
+                    "attestation_challenge_issued_at",
+                    "attestation_challenge_expires_at",
+                    "attestation_challenge_value",
+                }
+                and row["attestation_challenge_expires_at"] is not None
+                and now >= datetime.fromisoformat(
+                    str(row["attestation_challenge_expires_at"])
+                )
+                and row["hardware_verification_receipt_digest"] is None
+            )
             if (
                 field != "current_assignee_id"
                 and row[field] is not None
                 and row[field] != value
+                and not replacing_expired_challenge
             ):
                 raise SetupSessionValidationError(
                     f"immutable setup binding {field} cannot be rebound"
@@ -2440,6 +2723,115 @@ def transition_setup_session(
             raise SetupSessionValidationError(
                 "bind_enrollment requires session, packet, and verifier nonce digests"
             )
+        challenge_fields = (
+            "attestation_challenge_digest",
+            "attestation_challenge_issued_at",
+            "attestation_challenge_expires_at",
+            "attestation_challenge_value",
+        )
+        if transition == "bind_attestation_challenge":
+            if any(not effective.get(field) for field in challenge_fields):
+                raise SetupSessionValidationError(
+                    "bind_attestation_challenge requires digest, issue, and expiry bindings"
+                )
+            challenge_issued_at = datetime.fromisoformat(
+                str(effective["attestation_challenge_issued_at"])
+            )
+            challenge_expires_at = datetime.fromisoformat(
+                str(effective["attestation_challenge_expires_at"])
+            )
+            if not challenge_issued_at <= now < challenge_expires_at:
+                raise SetupSessionValidationError(
+                    "attestation challenge must be currently valid when bound"
+                )
+            try:
+                challenge_value = str(effective["attestation_challenge_value"])
+                challenge_bytes = base64.b64decode(
+                    challenge_value + "=" * (-len(challenge_value) % 4),
+                    altchars=b"-_",
+                    validate=True,
+                )
+            except (TypeError, ValueError) as exc:
+                raise SetupSessionValidationError(
+                    "attestation challenge value is invalid"
+                ) from exc
+            canonical_challenge = (
+                base64.urlsafe_b64encode(challenge_bytes)
+                .decode("ascii")
+                .rstrip("=")
+            )
+            if not (
+                32 <= len(challenge_bytes) <= 64
+                and hmac.compare_digest(canonical_challenge, challenge_value)
+                and hmac.compare_digest(
+                    "sha256:" + hashlib.sha256(challenge_bytes).hexdigest(),
+                    str(effective["attestation_challenge_digest"]),
+                )
+            ):
+                raise SetupSessionValidationError(
+                    "attestation challenge value does not match its digest"
+                )
+        if transition in {"record_hardware_receipt", "record_final_challenge_receipt"}:
+            if any(not effective.get(field) for field in challenge_fields):
+                raise SetupSessionValidationError(
+                    f"{transition} requires an attestation challenge binding"
+                )
+        if transition == "record_hardware_receipt":
+            if now >= datetime.fromisoformat(
+                str(effective["attestation_challenge_expires_at"])
+            ):
+                raise SetupSessionValidationError(
+                    "record_hardware_receipt requires an unexpired attestation challenge"
+                )
+        if transition == "record_hardware_receipt":
+            required_hardware_bindings = (
+                "runtime_evidence_digest",
+                "hardware_assurance_digest",
+                "hardware_verification_receipt_digest",
+                "hardware_verifier_key_id",
+                "release_identity_digest",
+                "current_host_identity_digest",
+                "proxy_server_statement_digest",
+                "trust_profile_digest",
+            )
+            if any(not effective.get(field) for field in required_hardware_bindings):
+                raise SetupSessionValidationError(
+                    "record_hardware_receipt requires the complete verified binding set"
+                )
+        if transition == "record_final_challenge_receipt":
+            required_final_bindings = (
+                "hardware_assurance_digest",
+                "hardware_verification_receipt_digest",
+                "hardware_verifier_key_id",
+                "release_identity_digest",
+                "current_host_identity_digest",
+                "proxy_server_statement_digest",
+                "trust_profile_digest",
+                "completion_identity_digest",
+                "final_authority_key_id",
+                "final_consumption_id",
+                "final_receipt_digest",
+            )
+            if any(not effective.get(field) for field in required_final_bindings):
+                raise SetupSessionValidationError(
+                    "record_final_challenge_receipt requires the complete final binding set"
+                )
+        if transition == "system_complete":
+            receipt_event = conn.execute(
+                "SELECT audit_status, audited_at, audit_event_hash "
+                "FROM setup_session_events WHERE session_id = ? "
+                "AND transition = 'record_final_challenge_receipt' "
+                "ORDER BY sequence DESC LIMIT 1",
+                (setup_id,),
+            ).fetchone()
+            if not receipt_event or not (
+                receipt_event["audit_status"] == "audited"
+                and receipt_event["audited_at"]
+                and receipt_event["audit_event_hash"]
+            ):
+                raise SetupSessionValidationError(
+                    "system_complete requires the final receipt transition to be durably audited"
+                )
 
         evidence_count_row = conn.execute(
             "SELECT COUNT(*) AS count FROM setup_session_evidence WHERE session_id = ?",
@@ -2464,13 +2856,23 @@ def transition_setup_session(
         if event_count >= event_limit:
             raise SetupSessionCapacityError("setup session event capacity is exhausted")
         for evidence_item in prepared_evidence:
-            replay = conn.execute(
+            same_kind = conn.execute(
                 "SELECT id FROM setup_session_evidence "
-                "WHERE session_id = ? AND kind = ? AND evidence_digest = ?",
-                (setup_id, evidence_item["kind"], evidence_item["evidence_digest"]),
+                "WHERE session_id = ? AND kind = ?",
+                (setup_id, evidence_item["kind"]),
+            ).fetchone()
+            if same_kind:
+                raise SetupSessionValidationError(
+                    "setup security evidence kind was already recorded for this session"
+                )
+            replay = conn.execute(
+                "SELECT id FROM setup_session_evidence WHERE evidence_digest = ?",
+                (evidence_item["evidence_digest"],),
             ).fetchone()
             if replay:
-                raise SetupSessionValidationError("setup evidence replay was rejected")
+                raise SetupSessionValidationError(
+                    "setup security evidence digest replay was rejected"
+                )
 
         assignments = {
             "status": next_status,
@@ -2614,8 +3016,14 @@ def claim_setup_session_audit_outbox(
             (stale_before,),
         )
         rows = conn.execute(
-            "SELECT * FROM setup_session_events WHERE audit_status = 'pending' "
-            "ORDER BY created_at ASC, id ASC LIMIT ?",
+            "SELECT candidate.* FROM setup_session_events AS candidate "
+            "WHERE candidate.audit_status = 'pending' "
+            "AND NOT EXISTS ("
+            "SELECT 1 FROM setup_session_events AS predecessor "
+            "WHERE predecessor.session_id = candidate.session_id "
+            "AND predecessor.sequence < candidate.sequence "
+            "AND predecessor.audit_status != 'audited'"
+            ") ORDER BY candidate.created_at ASC, candidate.id ASC LIMIT ?",
             (limit,),
         ).fetchall()
         claimed: list[dict[str, Any]] = []
@@ -4712,71 +5120,29 @@ def activate_pending_oauth_credential(
         ).fetchone()
         setup_result = None
         if setup_row is not None:
-            setup_updates = {
-                "credential_id": credential_id,
-                "credential_version": int(credential_row["credential_version"]),
-                "oauth_provider": str(setup_row["oauth_provider"]),
-            }
-            changed = conn.execute(
-                """
-                UPDATE setup_sessions
-                SET phase = 'credential_activated', credential_id = ?,
-                    credential_version = ?, updated_at = ?, revision = revision + 1
-                WHERE id = ? AND revision = ? AND status = 'active'
-                  AND phase = 'oauth_verified' AND owner_id = ?
-                  AND oauth_pending_credential_id = ?
-                """,
-                (
-                    credential_id,
-                    int(credential_row["credential_version"]),
-                    now_s,
-                    setup_id,
-                    int(setup_expected_revision),
-                    actor_id,
-                    item_id,
-                ),
-            )
-            if changed.rowcount != 1:
-                current = conn.execute(
-                    "SELECT revision FROM setup_sessions WHERE id = ?", (setup_id,)
-                ).fetchone()
-                if current is None:
-                    raise SetupSessionNotFoundError(
-                        f"setup session not found: {setup_id}"
-                    )
-                raise SetupSessionStaleRevisionError(
-                    setup_id,
-                    int(setup_expected_revision),
-                    int(current["revision"]),
-                )
-            _insert_setup_event(
-                conn,
-                session_id=setup_id,
+            setup_result = transition_setup_session(
+                setup_id,
+                expected_revision=int(setup_expected_revision),
                 transition="bind_credential",
                 actor_id=actor_id,
-                from_phase="oauth_verified",
-                to_phase="credential_activated",
-                binding_updates=setup_updates,
-                evidence_digests=[],
-                details={
+                updates={
+                    "credential_id": credential_id,
+                    "credential_version": int(credential_row["credential_version"]),
+                    "oauth_provider": str(setup_row["oauth_provider"]),
+                },
+                event={
                     "provider_account": review.get("provider_account"),
                     "pending_credential_id": item_id,
                     "approval_id": approval_id,
                 },
-                created_at=now_s,
+                _connection=conn,
+                _now=now,
             )
-            setup_result = conn.execute(
-                "SELECT * FROM setup_sessions WHERE id = ?", (setup_id,)
-            ).fetchone()
     return {
         "ok": True,
         "credential": row_to_credential(credential_row),
         "approval": row_to_control_plane_approval(approval_row),
-        **(
-            {"setup_session": _row_to_setup_session(setup_result)}
-            if setup_result is not None
-            else {}
-        ),
+        **({"setup_session": setup_result} if setup_result is not None else {}),
     }
 
 
@@ -5196,9 +5562,11 @@ def begin_oauth_credential_disconnect(item_id: str) -> dict[str, Any]:
         metadata = loads(row["metadata"], {})
         if row["kind"] != "oauth2" and metadata.get("oauth") is not True:
             return {"ok": False, "reason": "credential_not_managed_oauth"}
-        provider_id, provider_subject, provider_account = (
-            validate_managed_oauth_account_identity(metadata)
-        )
+        (
+            provider_id,
+            provider_subject,
+            provider_account,
+        ) = validate_managed_oauth_account_identity(metadata)
         lifecycle_status = str(row["lifecycle_status"] or "active")
         if lifecycle_status not in {
             "active",
@@ -5252,9 +5620,11 @@ def finish_oauth_credential_disconnect(
         if row is None:
             return {"ok": False, "reason": "credential_not_found"}
         metadata = loads(row["metadata"], {})
-        provider_id, provider_subject, provider_account = (
-            validate_managed_oauth_account_identity(metadata)
-        )
+        (
+            provider_id,
+            provider_subject,
+            provider_account,
+        ) = validate_managed_oauth_account_identity(metadata)
         if int(row["credential_version"] or 1) != expected_version:
             return {"ok": False, "reason": "credential_changed_during_revocation"}
         if str(row["lifecycle_status"] or "active") != "revocation_pending":
@@ -5638,9 +6008,14 @@ def consume_control_plane_approval(
     resource_id: str | None,
     payload_digest: str,
     actor_id: str,
+    _connection: Any | None = None,
+    _now: datetime | None = None,
 ) -> dict[str, Any]:
-    now_s = iso_now()
-    with connect() as conn:
+    now_s = (_now or utcnow()).isoformat()
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
         existing = conn.execute(
             "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
         ).fetchone()

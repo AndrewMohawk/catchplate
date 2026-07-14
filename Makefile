@@ -484,6 +484,8 @@ verify-agent-enrollment:
 
 verify-setup-session-api:
 	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_setup_receipts.py
+	docker compose exec -T serverware python scripts/test_setup_receipt_api.py
 	docker compose exec -T serverware python scripts/test_setup_session_api.py
 	docker compose exec -T serverware python scripts/test_setup_sessions.py
 

@@ -81,6 +81,116 @@ def verify_cosign_ecdsa_signature_compatibility() -> None:
     raise AssertionError("completion verifier accepted an ECDSA signature over a different statement")
 
 
+def verify_ed25519_signature_canonicalization() -> None:
+    key_info = hardware_verifier_key_info()
+    payload = canonical_json({"signed": "statement"}).encode("utf-8")
+    encoded = b64e(key_info["key"].sign(payload))
+    signature = "ed25519:" + encoded
+    verify_release_completion.verify_ed25519(
+        key_info["public_key_pem"],
+        signature,
+        payload,
+        "canonical Ed25519 fixture",
+    )
+    verify_release_completion.verify_public_key_signature(
+        key_info["public_key_pem"],
+        encoded,
+        payload,
+        "canonical Ed25519 generic fixture",
+    )
+
+    alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    final_index = alphabet.index(encoded[-1])
+    alias_index = final_index + 1 if final_index % 16 != 15 else final_index - 1
+    noncanonical_alias = encoded[:-1] + alphabet[alias_index]
+    if base64.urlsafe_b64decode(noncanonical_alias + "==") != key_info["key"].sign(payload):
+        raise AssertionError("Ed25519 fixture did not construct an equivalent non-canonical encoding")
+    for rejected in (signature + "=", "ed25519:" + noncanonical_alias):
+        try:
+            verify_release_completion.verify_ed25519(
+                key_info["public_key_pem"],
+                rejected,
+                payload,
+                "non-canonical Ed25519 fixture",
+            )
+        except ValueError as exc:
+            if "canonical unpadded base64url" not in str(exc):
+                raise AssertionError(
+                    f"non-canonical Ed25519 signature failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("completion verifier accepted a non-canonical Ed25519 signature")
+
+
+def test_final_file_snapshots() -> None:
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        tmp = Path(tmp_raw)
+        document_path = tmp / "hardware-assurance.json"
+        trusted_key_path = tmp / "hardware-verifier.pub.pem"
+        original_document = b'{"version":"original"}\n'
+        replacement_document = b'{"version":"replacement"}\n'
+        original_key = hardware_verifier_key_info()["public_key_pem"].encode("ascii")
+        replacement_key = final_challenge_authority_key_info()["public_key_pem"].encode("ascii")
+        document_path.write_bytes(original_document)
+        trusted_key_path.write_bytes(original_key)
+        snapshots = verify_release_completion.snapshot_final_verification_files(
+            {
+                "hardware_assurance": document_path,
+                "hardware_assurance_trusted_public_key": trusted_key_path,
+            },
+            include_hardware_assurance=True,
+            include_final_receipt=False,
+        )
+        document_path.write_bytes(replacement_document)
+        trusted_key_path.write_bytes(replacement_key)
+        if (
+            verify_release_completion.load_json_snapshot(
+                snapshots["hardware_assurance"],
+                "hardware assurance",
+            ).get("version")
+            != "original"
+            or snapshots["hardware_assurance"].sha256
+            != sha256_prefixed_bytes(original_document)
+            or verify_release_completion.release_public_key_id(
+                verify_release_completion.snapshot_text(
+                    snapshots["hardware_assurance_trusted_public_key"],
+                    "hardware assurance trust root",
+                    encoding="ascii",
+                )
+            )
+            != hardware_verifier_key_info()["key_id"]
+        ):
+            raise AssertionError("final verification snapshots reopened a swapped input path")
+
+        symlink_path = tmp / "symlinked-hardware-assurance.json"
+        symlink_path.symlink_to(document_path)
+        try:
+            verify_release_completion.snapshot_regular_file(
+                symlink_path,
+                "hardware assurance",
+                max_bytes=verify_release_completion.FINAL_EVIDENCE_MAX_BYTES,
+            )
+        except ValueError as exc:
+            if "must not be a symlink" not in str(exc):
+                raise AssertionError(f"symlinked final input failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("final verification accepted a symlinked input")
+
+        oversized_path = tmp / "oversized-final-receipt.json"
+        oversized_path.write_bytes(b"x" * 65)
+        try:
+            verify_release_completion.snapshot_regular_file(
+                oversized_path,
+                "final challenge receipt",
+                max_bytes=64,
+            )
+        except ValueError as exc:
+            if "size limit" not in str(exc):
+                raise AssertionError(f"oversized final input failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("final verification accepted an oversized input")
+
+
 HARDWARE_ASSURANCE_CHALLENGE_BYTES = b"hardware-assurance-fixture-nonce"
 HARDWARE_ASSURANCE_CHALLENGE_NONCE = b64e(HARDWARE_ASSURANCE_CHALLENGE_BYTES)
 HARDWARE_ASSURANCE_CHALLENGE_SHA256 = sha256_prefixed_bytes(HARDWARE_ASSURANCE_CHALLENGE_BYTES)
@@ -584,10 +694,16 @@ def write_final_production_env_file(
             verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ENV_KEY: str(
                 tmp / "hardware-assurance-verifier.pub.pem"
             ),
+            verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ID_ENV_KEY: (
+                hardware_verifier_key_info()["key_id"]
+            ),
             verify_release_completion.FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY: HARDWARE_ASSURANCE_CHALLENGE_NONCE,
             verify_release_completion.FINAL_CHALLENGE_RECEIPT_ENV_KEY: str(tmp / "final-challenge-receipt.json"),
             verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY: str(
                 tmp / "final-challenge-authority.pub.pem"
+            ),
+            verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ID_ENV_KEY: (
+                final_challenge_authority_key_info()["key_id"]
             ),
             verify_release_completion.FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY: (
                 "fixture-off-host-challenge-authority"
@@ -654,6 +770,7 @@ def test_final_production_env_binding() -> None:
             final_challenge_authority_key_info()["public_key_pem"],
             encoding="ascii",
         )
+
         configured = write_final_production_env_file(tmp)
         readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
         recorded_summaries = (readiness_summary, preflight_summary, config_summary)
@@ -664,10 +781,12 @@ def test_final_production_env_binding() -> None:
         final_input_names = (
             verify_release_completion.FINAL_HARDWARE_ASSURANCE_ENV_KEY,
             verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ENV_KEY,
+            verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ID_ENV_KEY,
             verify_release_completion.FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY,
             verify_release_completion.FINAL_HARDWARE_CHALLENGE_DIGEST_ENV_KEY,
             verify_release_completion.FINAL_CHALLENGE_RECEIPT_ENV_KEY,
             verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY,
+            verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ID_ENV_KEY,
             verify_release_completion.FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY,
         )
         release_trust_input_names = (
@@ -683,7 +802,23 @@ def test_final_production_env_binding() -> None:
         def verify_binding(
             selected: dict[str, str | None] | None = None,
             selected_release_trust: dict[str, str | None] | None = None,
+            snapshots_override: dict[
+                str, verify_release_completion.FileSnapshot
+            ]
+            | None = None,
         ) -> dict[str, Any]:
+            final_file_snapshots = snapshots_override or {
+                "hardware_assurance_trusted_public_key": verify_release_completion.snapshot_regular_file(
+                    tmp / "hardware-assurance-verifier.pub.pem",
+                    "hardware assurance trust root",
+                    max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+                ),
+                "final_challenge_authority_public_key": verify_release_completion.snapshot_regular_file(
+                    tmp / "final-challenge-authority.pub.pem",
+                    "final challenge authority trust root",
+                    max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+                ),
+            }
             return verify_release_completion.verify_current_production_env_binding(
                 paths,
                 readiness_summary,
@@ -692,6 +827,7 @@ def test_final_production_env_binding() -> None:
                 verification_mode="final",
                 release_trust_inputs=selected_release_trust or release_trust_inputs,
                 final_inputs=selected or final_inputs,
+                final_file_snapshots=final_file_snapshots,
             )
 
         def expect_failure(
@@ -723,6 +859,131 @@ def test_final_production_env_binding() -> None:
             or binding.get("hardware_assurance_expected_challenge_selector") != "nonce"
         ):
             raise AssertionError(f"valid final env binding omitted trust-root identities: {binding}")
+
+        frozen_key_snapshots = {
+            "hardware_assurance_trusted_public_key": verify_release_completion.snapshot_regular_file(
+                tmp / "hardware-assurance-verifier.pub.pem",
+                "hardware assurance trust root",
+                max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+            ),
+            "final_challenge_authority_public_key": verify_release_completion.snapshot_regular_file(
+                tmp / "final-challenge-authority.pub.pem",
+                "final challenge authority trust root",
+                max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+            ),
+        }
+        (tmp / "hardware-assurance-verifier.pub.pem").write_text(
+            final_challenge_authority_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        swapped_binding = verify_binding(snapshots_override=frozen_key_snapshots)
+        if (
+            swapped_binding.get("hardware_assurance_trusted_public_key_id")
+            != hardware_verifier_key_info()["key_id"]
+        ):
+            raise AssertionError(
+                "final env binding reopened a hardware trust-root path after snapshot capture"
+            )
+        (tmp / "hardware-assurance-verifier.pub.pem").write_text(
+            hardware_verifier_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+
+        wrong_id_configured = write_final_production_env_file(
+            tmp,
+            overrides={
+                verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ID_ENV_KEY: digest("0")
+            },
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        wrong_id_inputs = {
+            name: wrong_id_configured.get(name) for name in final_input_names
+        }
+        expect_failure(
+            "hardware assurance verifier key bytes do not match the independently configured SPKI identity",
+            wrong_id_inputs,
+        )
+
+        (tmp / "final-challenge-authority.pub.pem").write_text(
+            hardware_verifier_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        same_key_configured = write_final_production_env_file(
+            tmp,
+            overrides={
+                verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ID_ENV_KEY: (
+                    hardware_verifier_key_info()["key_id"]
+                )
+            },
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        same_key_inputs = {
+            name: same_key_configured.get(name) for name in final_input_names
+        }
+        expect_failure(
+            "hardware assurance verifier and final challenge authority must use different public keys",
+            same_key_inputs,
+        )
+        (tmp / "final-challenge-authority.pub.pem").write_text(
+            final_challenge_authority_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+
+        (tmp / "hardware-assurance-verifier.pub.pem").write_text(
+            release_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        reused_release_hardware_configured = write_final_production_env_file(
+            tmp,
+            overrides={
+                verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ID_ENV_KEY: (
+                    release_key_info()["key_id"]
+                )
+            },
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        reused_release_hardware_inputs = {
+            name: reused_release_hardware_configured.get(name)
+            for name in final_input_names
+        }
+        expect_failure(
+            "hardware assurance verifier must not reuse a release trust public key",
+            reused_release_hardware_inputs,
+        )
+        (tmp / "hardware-assurance-verifier.pub.pem").write_text(
+            hardware_verifier_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+
+        (tmp / "final-challenge-authority.pub.pem").write_text(
+            external_receipt_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        reused_release_authority_configured = write_final_production_env_file(
+            tmp,
+            overrides={
+                verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ID_ENV_KEY: (
+                    external_receipt_key_info()["key_id"]
+                )
+            },
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        reused_release_authority_inputs = {
+            name: reused_release_authority_configured.get(name)
+            for name in final_input_names
+        }
+        expect_failure(
+            "final challenge authority must not reuse a release trust public key",
+            reused_release_authority_inputs,
+        )
+        (tmp / "final-challenge-authority.pub.pem").write_text(
+            final_challenge_authority_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+
+        configured = write_final_production_env_file(tmp)
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        final_inputs = {name: configured.get(name) for name in final_input_names}
 
         substituted_release_trust = dict(release_trust_inputs)
         substituted_release_trust[verify_release_completion.RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY] = str(
@@ -791,6 +1052,22 @@ def test_final_production_env_binding() -> None:
         )
         readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
         expect_failure("final challenge authority trust root does not exactly match")
+
+        write_final_production_env_file(
+            tmp,
+            omitted={verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ID_ENV_KEY},
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        expect_failure("hardware assurance expected SPKI identity does not exactly match")
+
+        write_final_production_env_file(
+            tmp,
+            omitted={
+                verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ID_ENV_KEY
+            },
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        expect_failure("final challenge authority expected SPKI identity does not exactly match")
 
         write_final_production_env_file(
             tmp,
@@ -2020,6 +2297,8 @@ def verify_hardware_assurance_fixture(
     return verify_release_completion.verify_hardware_assurance(
         document,
         trusted_public_key_pem=hardware_verifier_key_info()["public_key_pem"],
+        expected_trusted_public_key_id=hardware_verifier_key_info()["key_id"],
+        hardware_assurance_document_sha256=sha256_file(tmp / "hardware-assurance.json"),
         nitro_summary=nitro_summary,
         nitro_evidence_sha256=sha256_file(tmp / "nitro-kms-evidence.json"),
         production_host_preflight_sha256=sha256_file(tmp / "production-host-preflight.json"),
@@ -2219,7 +2498,7 @@ def test_proxy_response_proof_requirements(
     expect_proxy_proof_failure(
         tmp,
         forged_server_signature,
-        "server statement signature verification failed",
+        "server statement signature must decode to exactly 64 bytes",
         "a forged proxy server statement signature",
     )
 
@@ -2380,7 +2659,7 @@ def test_proxy_response_proof_requirements(
     expect_proxy_proof_failure(
         tmp,
         forged_verifier,
-        "trusted vendor verifier signature verification failed",
+        "trusted vendor verifier signature must decode to exactly 64 bytes",
         "a forged vendor verifier receipt",
     )
 
@@ -2504,6 +2783,8 @@ def test_proxy_response_proof_requirements(
 
 def main() -> None:
     verify_cosign_ecdsa_signature_compatibility()
+    verify_ed25519_signature_canonicalization()
+    test_final_file_snapshots()
     test_final_production_env_binding()
     global POLICY_DIGEST
     with tempfile.TemporaryDirectory() as tmp_raw:
@@ -2747,23 +3028,48 @@ def main() -> None:
         proxy_server_statement_sha256 = sha256_prefixed_json(
             valid_proxy_response_proof["server_statement"]
         )
-        final_completion_identity_sha256 = sha256_prefixed_json(
-            {
-                "release_identity_sha256": exact_host_hardware_summary[
-                    "release_identity_sha256"
-                ],
-                "current_host_identity_sha256": exact_host_summary["identity"][
-                    "identity_sha256"
-                ],
-                "hardware_verifier_key_id": exact_host_hardware_summary[
-                    "trusted_verifier_key_id"
-                ],
-                "challenge_nonce_sha256": exact_host_hardware_summary[
-                    "challenge_nonce_sha256"
-                ],
-                "proxy_server_statement_sha256": proxy_server_statement_sha256,
-            }
+        final_completion_identity = verify_release_completion.final_completion_identity(
+            exact_host_hardware_summary,
+            current_host_identity_sha256=exact_host_summary["identity"][
+                "identity_sha256"
+            ],
+            proxy_server_statement_sha256=proxy_server_statement_sha256,
         )
+        final_completion_identity_sha256 = sha256_prefixed_json(
+            final_completion_identity
+        )
+        if (
+            final_completion_identity.get("apiVersion")
+            != verify_release_completion.FINAL_COMPLETION_IDENTITY_API_VERSION
+            or final_completion_identity.get("hardware_assurance_document_sha256")
+            != sha256_file(tmp / "hardware-assurance.json")
+            or final_completion_identity.get(
+                "hardware_assurance_signed_statement_sha256"
+            )
+            != sha256_prefixed_json(valid_hardware_assurance["statement"])
+        ):
+            raise AssertionError(
+                "final completion identity omitted exact hardware document or signed-statement digest"
+            )
+        for field in (
+            "hardware_assurance_document_sha256",
+            "hardware_assurance_signed_statement_sha256",
+        ):
+            changed_hardware_summary = clone_document(exact_host_hardware_summary)
+            changed_hardware_summary[field] = digest("0")
+            changed_identity_sha256 = sha256_prefixed_json(
+                verify_release_completion.final_completion_identity(
+                    changed_hardware_summary,
+                    current_host_identity_sha256=exact_host_summary["identity"][
+                        "identity_sha256"
+                    ],
+                    proxy_server_statement_sha256=proxy_server_statement_sha256,
+                )
+            )
+            if changed_identity_sha256 == final_completion_identity_sha256:
+                raise AssertionError(
+                    f"final completion identity did not bind {field}"
+                )
         receipt = final_challenge_receipt(
             challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
             completion_identity_sha256=final_completion_identity_sha256,
@@ -2784,6 +3090,10 @@ def main() -> None:
             trusted_public_key_pem=final_challenge_authority_key_info()[
                 "public_key_pem"
             ],
+            expected_trusted_public_key_id=final_challenge_authority_key_info()[
+                "key_id"
+            ],
+            final_challenge_receipt_sha256=sha256_prefixed_json(receipt),
             expected_provider="fixture-off-host-challenge-authority",
             expected_challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
             expected_completion_identity_sha256=final_completion_identity_sha256,
@@ -2802,9 +3112,54 @@ def main() -> None:
             ],
             now_unix=exact_host_hardware_summary["issued_at_unix"],
         )
-        if receipt_summary.get("consumed") is not True:
+        if (
+            receipt_summary.get("consumed") is not True
+            or receipt_summary.get("receipt_sha256")
+            != sha256_prefixed_json(receipt)
+            or receipt_summary.get("receipt_signed_statement_sha256")
+            != sha256_prefixed_json(receipt["statement"])
+        ):
             raise AssertionError(
                 f"off-host challenge authority receipt did not authorize final completion: {receipt_summary}"
+            )
+        try:
+            verify_release_completion.verify_final_challenge_receipt(
+                receipt,
+                trusted_public_key_pem=final_challenge_authority_key_info()[
+                    "public_key_pem"
+                ],
+                expected_trusted_public_key_id=hardware_verifier_key_info()[
+                    "key_id"
+                ],
+                final_challenge_receipt_sha256=sha256_prefixed_json(receipt),
+                expected_provider="fixture-off-host-challenge-authority",
+                expected_challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+                expected_completion_identity_sha256=final_completion_identity_sha256,
+                expected_release_identity_sha256=exact_host_hardware_summary[
+                    "release_identity_sha256"
+                ],
+                expected_hardware_verifier_key_id=exact_host_hardware_summary[
+                    "trusted_verifier_key_id"
+                ],
+                expected_current_host_identity_sha256=exact_host_summary[
+                    "identity"
+                ]["identity_sha256"],
+                expected_proxy_server_statement_sha256=proxy_server_statement_sha256,
+                hardware_assurance_issued_at_unix=exact_host_hardware_summary[
+                    "issued_at_unix"
+                ],
+                now_unix=exact_host_hardware_summary["issued_at_unix"],
+            )
+        except ValueError as exc:
+            if "key bytes do not match the independently configured SPKI identity" not in str(
+                exc
+            ):
+                raise AssertionError(
+                    f"wrong expected authority SPKI ID failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(
+                "final challenge receipt accepted authority key bytes under another expected SPKI ID"
             )
         forged_receipt = final_challenge_receipt(
             challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
@@ -2827,6 +3182,12 @@ def main() -> None:
                 trusted_public_key_pem=final_challenge_authority_key_info()[
                     "public_key_pem"
                 ],
+                expected_trusted_public_key_id=final_challenge_authority_key_info()[
+                    "key_id"
+                ],
+                final_challenge_receipt_sha256=sha256_prefixed_json(
+                    forged_receipt
+                ),
                 expected_provider="fixture-off-host-challenge-authority",
                 expected_challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
                 expected_completion_identity_sha256=final_completion_identity_sha256,
@@ -3156,7 +3517,7 @@ def main() -> None:
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
 
         bad_provenance_document = json.loads(json.dumps(provenance_document))
-        bad_provenance_document["signature"] = "ed25519:test"
+        bad_provenance_document["signature"] = "ed25519:" + b64e(b"\x00" * 64)
         write(tmp / "release-provenance.json", bad_provenance_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
         rejected_provenance_signature = run_verifier(tmp)
@@ -3223,7 +3584,9 @@ def main() -> None:
 
         bad_provenance_document = json.loads(json.dumps(provenance_document))
         release_checkpoint = bad_provenance_document["transparency"]["anchor_response"]["anchors"][0]["external_checkpoint"]
-        release_checkpoint["receipt"]["signature"] = "ed25519:test"
+        release_checkpoint["receipt"]["signature"] = "ed25519:" + b64e(
+            b"\x00" * 64
+        )
         bad_provenance_document["transparency"]["inclusion_proof"]["item"]["external_checkpoint"] = json.loads(
             json.dumps(release_checkpoint)
         )
@@ -3299,7 +3662,9 @@ def main() -> None:
 
         bad_image_summary, bad_image_document = image_signatures(provenance_summary["provenance_digest"])
         image_checkpoint = bad_image_document["metadata"]["transparency"]["anchorResponse"]["anchors"][0]["external_checkpoint"]
-        image_checkpoint["receipt"]["signature"] = "ed25519:test"
+        image_checkpoint["receipt"]["signature"] = "ed25519:" + b64e(
+            b"\x00" * 64
+        )
         bad_image_document["metadata"]["transparency"]["inclusionProof"]["item"]["external_checkpoint"] = json.loads(
             json.dumps(image_checkpoint)
         )
@@ -3364,7 +3729,9 @@ def main() -> None:
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
 
         bad_image_summary, bad_image_document = image_signatures(provenance_summary["provenance_digest"])
-        bad_image_document["metadata"]["transparency"]["inclusionProof"]["signed_tree_head"]["signature"] = "ed25519:test"
+        bad_image_document["metadata"]["transparency"]["inclusionProof"][
+            "signed_tree_head"
+        ]["signature"] = "ed25519:" + b64e(b"\x00" * 64)
         bad_image_document["metadata"]["transparency"]["anchorResponse"]["anchors"][0]["signed_tree_head"] = bad_image_document["metadata"]["transparency"]["inclusionProof"]["signed_tree_head"]
         write(tmp / "image-signatures-summary.json", bad_image_summary)
         write(tmp / "image-signatures.json", bad_image_document)

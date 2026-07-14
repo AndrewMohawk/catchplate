@@ -26,6 +26,10 @@ import verify_release_completion as completion  # noqa: E402
 
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 BENCH_P99_TARGET_MS = 20.0
+EXPECTED_TRANSPARENCY_PROVIDER_ENV_KEY = "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER"
+EXPECTED_TRANSPARENCY_LOG_ID_ENV_KEY = "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID"
+EXPECTED_SIGSTORE_KEY_ID_ENV_KEY = "SERVERWARE_COSIGN_KEY_ID"
+EXPECTED_REKOR_LOG_ID_ENV_KEY = "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"
 
 
 def canonical_json(value: Any) -> str:
@@ -92,6 +96,109 @@ def require_sha256(value: Any, label: str) -> str:
     if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
         raise ValueError(f"{label} must be sha256:<64 hex>")
     return value
+
+
+def _release_trust_root(
+    configured: dict[str, str],
+    setting_name: str,
+    label: str,
+) -> tuple[str, str]:
+    selected = configured.get(setting_name, "").strip()
+    if not selected:
+        raise ValueError(f"production readiness env is missing {setting_name}")
+    snapshot = completion.snapshot_regular_file(
+        Path(selected),
+        label,
+        max_bytes=completion.FINAL_TRUST_ROOT_MAX_BYTES,
+    )
+    public_key_pem = completion.snapshot_text(snapshot, label, encoding="ascii").strip()
+    return public_key_pem, release_public_key_id(public_key_pem)
+
+
+def release_trust_from_config(configured: dict[str, str]) -> dict[str, str]:
+    provider = configured.get(completion.EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY, "").strip()
+    expected_provider = configured.get(EXPECTED_TRANSPARENCY_PROVIDER_ENV_KEY, "").strip()
+    if not provider or provider != expected_provider:
+        raise ValueError(
+            "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER must match "
+            "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER"
+        )
+    expected_external_log_id = require_sha256(
+        configured.get(EXPECTED_TRANSPARENCY_LOG_ID_ENV_KEY),
+        EXPECTED_TRANSPARENCY_LOG_ID_ENV_KEY,
+    )
+    expected_sigstore_key_id = require_sha256(
+        configured.get(EXPECTED_SIGSTORE_KEY_ID_ENV_KEY),
+        EXPECTED_SIGSTORE_KEY_ID_ENV_KEY,
+    )
+    expected_rekor_log_id = require_sha256(
+        configured.get(EXPECTED_REKOR_LOG_ID_ENV_KEY),
+        EXPECTED_REKOR_LOG_ID_ENV_KEY,
+    )
+    release_pem, release_id = _release_trust_root(
+        configured,
+        completion.RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY,
+        "release provenance trust root",
+    )
+    sigstore_pem, sigstore_id = _release_trust_root(
+        configured,
+        completion.SIGSTORE_TRUST_ROOT_ENV_KEY,
+        "Sigstore trust root",
+    )
+    rekor_pem, rekor_id = _release_trust_root(
+        configured,
+        completion.REKOR_TRUST_ROOT_ENV_KEY,
+        "Rekor trust root",
+    )
+    external_pem, external_id = _release_trust_root(
+        configured,
+        completion.EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY,
+        "external checkpoint trust root",
+    )
+    if sigstore_id != expected_sigstore_key_id:
+        raise ValueError("Sigstore trust root does not match SERVERWARE_COSIGN_KEY_ID")
+    if rekor_id != expected_rekor_log_id:
+        raise ValueError("Rekor trust root does not match SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID")
+    if external_id != expected_external_log_id:
+        raise ValueError(
+            "external checkpoint trust root does not match "
+            "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID"
+        )
+    role_ids = {release_id, sigstore_id, rekor_id, external_id}
+    if len(role_ids) != 4:
+        raise ValueError("production release trust roles must use distinct public keys")
+    for setting_name, expected_id_name, label in (
+        (
+            completion.FINAL_HARDWARE_TRUST_ROOT_ENV_KEY,
+            completion.FINAL_HARDWARE_TRUST_ROOT_ID_ENV_KEY,
+            "hardware assurance trust root",
+        ),
+        (
+            completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY,
+            completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ID_ENV_KEY,
+            "final challenge authority trust root",
+        ),
+    ):
+        if not configured.get(setting_name, "").strip():
+            continue
+        _, key_id = _release_trust_root(configured, setting_name, label)
+        expected_key_id = require_sha256(configured.get(expected_id_name), expected_id_name)
+        if key_id != expected_key_id:
+            raise ValueError(f"{label} does not match {expected_id_name}")
+        if key_id in role_ids:
+            raise ValueError(f"{label} must not reuse a production release trust key")
+        role_ids.add(key_id)
+    return {
+        "release_public_key_pem": release_pem,
+        "release_key_id": release_id,
+        "sigstore_public_key_pem": sigstore_pem,
+        "sigstore_key_id": sigstore_id,
+        "rekor_public_key_pem": rekor_pem,
+        "rekor_log_id": rekor_id,
+        "external_public_key_pem": external_pem,
+        "external_provider": expected_provider,
+        "external_log_id": external_id,
+    }
 
 
 def verify_production_images_build(path: Path, *, check_current_tree: bool) -> dict[str, Any]:
@@ -201,27 +308,17 @@ def verify_external_transparency_checkpoint(
     transparency: dict[str, Any],
     *,
     anchor_key: str,
+    trust: dict[str, str],
+    expected_checkpoint_sha256: str,
     label: str,
 ) -> dict[str, Any]:
-    anchor_response = transparency.get(anchor_key) if isinstance(transparency.get(anchor_key), dict) else {}
-    anchors = anchor_response.get("anchors") if isinstance(anchor_response.get("anchors"), list) else []
-    checkpoints = [
-        item.get("external_checkpoint")
-        for item in anchors
-        if isinstance(item, dict) and isinstance(item.get("external_checkpoint"), dict)
-    ]
-    if not checkpoints:
-        raise ValueError(f"{label} transparency anchor is missing external checkpoint evidence")
-    checkpoint = checkpoints[0]
-    provider = checkpoint.get("provider")
-    if not isinstance(provider, str) or not provider:
-        raise ValueError(f"{label} external transparency checkpoint did not bind provider")
-    log_id = require_sha256(checkpoint.get("log_id"), f"{label} external transparency log id")
     return completion.external_checkpoint_binding(
         transparency,
         anchor_key=anchor_key,
-        expected_provider=provider,
-        expected_log_id=log_id,
+        expected_provider=trust["external_provider"],
+        expected_log_id=trust["external_log_id"],
+        trusted_public_key_pem=trust["external_public_key_pem"],
+        expected_checkpoint_sha256=expected_checkpoint_sha256,
         label=label,
     )
 
@@ -243,6 +340,7 @@ def verify_release_provenance_document(
     *,
     summary_digest: str,
     expected_source_tree_digest: str,
+    trust: dict[str, str],
 ) -> dict[str, Any]:
     document = load_json(document_path, "release provenance document")
     provenance = document.get("provenance")
@@ -281,9 +379,16 @@ def verify_release_provenance_document(
     if not isinstance(signature, str) or not signature or not isinstance(public_key_pem, str) or not public_key_pem:
         raise ValueError("release provenance document is missing signature metadata")
     release_signing_key_id = require_sha256(document.get("release_signing_key_id"), "release signing key id")
-    if release_public_key_id(public_key_pem) != release_signing_key_id:
-        raise ValueError("release provenance signing key id does not match public key")
-    verify_ed25519(public_key_pem, signature, canonical_json(provenance).encode("utf-8"), "release provenance")
+    if release_signing_key_id != trust["release_key_id"]:
+        raise ValueError("release provenance signer does not match the independently trusted release key")
+    if release_public_key_id(public_key_pem) != trust["release_key_id"]:
+        raise ValueError("release provenance embedded signing key is not the independently trusted release key")
+    verify_ed25519(
+        trust["release_public_key_pem"],
+        signature,
+        canonical_json(provenance).encode("utf-8"),
+        "release provenance",
+    )
     transparency = document.get("transparency") if isinstance(document.get("transparency"), dict) else {}
     release_record = completion.transparency_record_binding(
         transparency,
@@ -295,11 +400,16 @@ def verify_release_provenance_document(
             "signature": signature,
             "release_signing_key_id": release_signing_key_id,
         },
+        expected_external_provider=trust["external_provider"],
+        expected_external_log_id=trust["external_log_id"],
+        trusted_external_public_key_pem=trust["external_public_key_pem"],
         label="release provenance",
     )
     external_transparency = verify_external_transparency_checkpoint(
         transparency,
         anchor_key="anchor_response",
+        trust=trust,
+        expected_checkpoint_sha256=release_record["external_checkpoint"]["checkpoint_sha256"],
         label="release provenance",
     )
     return {
@@ -324,6 +434,7 @@ def image_signature_scope(
     expected_published_image_digests: list[str] | None = None,
     expected_published_image_refs: list[str] | None = None,
     expected_release_bindings: dict[str, Any] | None = None,
+    trust: dict[str, str],
 ) -> dict[str, Any]:
     document = load_json(document_path, "image signatures document")
     document_digest = require_sha256(document.get("image_signature_bundle_digest"), "image signature document digest")
@@ -343,6 +454,8 @@ def image_signature_scope(
     if metadata.get("sigstoreTransparencyRequired") is not True:
         raise ValueError("image signatures do not require Sigstore transparency")
     image_signing_key_id = require_sha256(metadata.get("imageSigningKeyId"), "image signature signing key id")
+    if image_signing_key_id != trust["sigstore_key_id"]:
+        raise ValueError("image signing key does not match the independently trusted Sigstore key")
     bundle_sigstore = document.get("bundle_signature") if isinstance(document.get("bundle_signature"), dict) else {}
     metadata_bundle_sigstore = metadata.get("bundleSigstore") if isinstance(metadata.get("bundleSigstore"), dict) else {}
     if not bundle_sigstore or metadata_bundle_sigstore != bundle_sigstore:
@@ -358,14 +471,20 @@ def image_signature_scope(
         raise ValueError("image signature bundle Sigstore signing key mismatch")
     bundle_transparency = bundle_sigstore.get("transparency") if isinstance(bundle_sigstore.get("transparency"), dict) else {}
     bundle_rekor_log_id = require_sha256(bundle_transparency.get("log_id"), "image signature bundle transparency log id")
+    if bundle_rekor_log_id != trust["rekor_log_id"]:
+        raise ValueError("image signature bundle transparency log does not match the independently trusted Rekor log")
     transparency_log_ids = [bundle_rekor_log_id]
     if not bundle_transparency.get("inclusion_proof"):
         raise ValueError("image signature bundle has no transparency inclusion proof")
     completion.verify_sigstore_bundle_binding(
         bundle_sigstore,
+        expected_statement=normalized_image_signature_payload(document),
         expected_statement_digest=document_digest,
         expected_signature=str(bundle_sigstore.get("signature")),
-        expected_rekor_log_id=bundle_rekor_log_id,
+        trusted_signing_public_key_pem=trust["sigstore_public_key_pem"],
+        expected_signing_key_id=trust["sigstore_key_id"],
+        expected_rekor_log_id=trust["rekor_log_id"],
+        trusted_rekor_public_key_pem=trust["rekor_public_key_pem"],
         label="image signature bundle",
     )
     if expected_release_bindings:
@@ -410,14 +529,20 @@ def image_signature_scope(
             raise ValueError(f"image {service} Sigstore signing key mismatch")
         sigstore_transparency = sigstore.get("transparency") if isinstance(sigstore.get("transparency"), dict) else {}
         log_id = require_sha256(sigstore_transparency.get("log_id"), f"image {service} transparency log id")
+        if log_id != trust["rekor_log_id"]:
+            raise ValueError(f"image {service} transparency log does not match the independently trusted Rekor log")
         transparency_log_ids.append(log_id)
         if not sigstore_transparency.get("inclusion_proof"):
             raise ValueError(f"image {service} has no transparency inclusion proof")
         completion.verify_sigstore_bundle_binding(
             sigstore,
+            expected_statement=statement,
             expected_statement_digest=statement_digest,
             expected_signature=str(sigstore.get("signature")),
-            expected_rekor_log_id=log_id,
+            trusted_signing_public_key_pem=trust["sigstore_public_key_pem"],
+            expected_signing_key_id=trust["sigstore_key_id"],
+            expected_rekor_log_id=trust["rekor_log_id"],
+            trusted_rekor_public_key_pem=trust["rekor_public_key_pem"],
             label=f"image {service}",
         )
         predicate = statement.get("predicate") if isinstance(statement.get("predicate"), dict) else {}
@@ -452,11 +577,16 @@ def image_signature_scope(
             "signature": metadata.get("signature"),
             "images": signed_image_map,
         },
+        expected_external_provider=trust["external_provider"],
+        expected_external_log_id=trust["external_log_id"],
+        trusted_external_public_key_pem=trust["external_public_key_pem"],
         label="image signature bundle",
     )
     external_transparency = verify_external_transparency_checkpoint(
         metadata_transparency,
         anchor_key="anchorResponse",
+        trust=trust,
+        expected_checkpoint_sha256=image_record["external_checkpoint"]["checkpoint_sha256"],
         label="image signature bundle",
     )
     production_ids = sorted(production_image_ids)
@@ -674,6 +804,10 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        env_path = Path(args.env_file)
+        configured = run_production_readiness.load_env_file(env_path)
+        release_trust = release_trust_from_config(configured)
+        env = env_status(env_path)
         build_path = Path(args.production_images_build)
         build_raw = load_json(build_path, "production images build artifact")
         production_images = verify_production_images_build(build_path, check_current_tree=not args.skip_current_tree_check)
@@ -705,6 +839,7 @@ def main() -> None:
             Path(args.release_provenance),
             summary_digest=release_provenance["digest"],
             expected_source_tree_digest=production_images["source_tree_digest"],
+            trust=release_trust,
         )
         published_images_env = production_images_env_status(Path(args.production_images_env))
         signatures = image_signature_scope(
@@ -715,8 +850,8 @@ def main() -> None:
             expected_published_image_digests=published_images_env["image_digests"],
             expected_published_image_refs=[item["ref"] for item in published_images_env["images"]],
             expected_release_bindings=release_provenance_document,
+            trust=release_trust,
         )
-        env = env_status(Path(args.env_file))
         host = host_status()
         registry_prefix = args.registry_prefix.strip() or None
         commands = production_commands(

@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/setup-hardware-verification.v1.schema.json",
+  "title": "Serverware Setup Hardware Verification v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "statement", "signing_key_id", "signature"],
+  "properties": {
+    "apiVersion": {"const": "serverware.setupHardwareVerification/v1"},
+    "kind": {"const": "SetupHardwareVerification"},
+    "statement": {"$ref": "#/$defs/statement"},
+    "signing_key_id": {"$ref": "#/$defs/sha256"},
+    "signature": {"$ref": "#/$defs/signature"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+    },
+    "challenge": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 86,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principalId",
+        "routeId",
+        "credentialId",
+        "credentialVersion",
+        "policyHash",
+        "routePolicyDigest"
+      ],
+      "properties": {
+        "principalId": {"$ref": "#/$defs/identifier"},
+        "routeId": {"$ref": "#/$defs/identifier"},
+        "credentialId": {"$ref": "#/$defs/identifier"},
+        "credentialVersion": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "policyHash": {"$ref": "#/$defs/sha256"},
+        "routePolicyDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 10,
+      "maxItems": 10,
+      "prefixItems": [
+        {"const": "assignment-binding"},
+        {"const": "runtime-evidence"},
+        {"const": "challenge-binding"},
+        {"const": "hardware-assurance-digest"},
+        {"const": "hardware-statement-digest"},
+        {"const": "hardware-key-binding"},
+        {"const": "release-identity"},
+        {"const": "current-host-identity"},
+        {"const": "proxy-server-statement"},
+        {"const": "trust-profile"}
+      ],
+      "items": false
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "setup_session_id",
+        "assignment",
+        "assignment_digest",
+        "runtime_evidence_sha256",
+        "challenge",
+        "challenge_sha256",
+        "hardware_assurance_sha256",
+        "hardware_statement_sha256",
+        "hardware_verifier_provider",
+        "hardware_verifier_key_id",
+        "release_identity_sha256",
+        "current_host_identity_sha256",
+        "proxy_server_statement_sha256",
+        "trust_profile_sha256",
+        "decision",
+        "checks",
+        "issued_at_unix",
+        "expires_at_unix"
+      ],
+      "properties": {
+        "receipt_id": {"$ref": "#/$defs/uuid"},
+        "setup_session_id": {"$ref": "#/$defs/uuid"},
+        "assignment": {"$ref": "#/$defs/assignment"},
+        "assignment_digest": {"$ref": "#/$defs/sha256"},
+        "runtime_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "challenge": {"$ref": "#/$defs/challenge"},
+        "challenge_sha256": {"$ref": "#/$defs/sha256"},
+        "hardware_assurance_sha256": {"$ref": "#/$defs/sha256"},
+        "hardware_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "hardware_verifier_provider": {"$ref": "#/$defs/provider"},
+        "hardware_verifier_key_id": {"$ref": "#/$defs/sha256"},
+        "release_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "current_host_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "proxy_server_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "trust_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "decision": {"const": "verified"},
+        "checks": {"$ref": "#/$defs/checks"},
+        "issued_at_unix": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "expires_at_unix": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
+      }
+    }
+  }
+}

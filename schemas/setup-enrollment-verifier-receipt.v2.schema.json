@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/setup-enrollment-verifier-receipt.v2.schema.json",
+  "title": "Serverware Enrollment Verifier Receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "statement", "signing_key_id", "signature"],
+  "properties": {
+    "apiVersion": {"const": "serverware.enrollmentVerifierReceipt/v2"},
+    "kind": {"const": "EnrollmentVerifierReceipt"},
+    "statement": {"$ref": "#/$defs/statement"},
+    "signing_key_id": {"$ref": "#/$defs/sha256"},
+    "signature": {"$ref": "#/$defs/signature"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "identifier": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"
+    },
+    "provider": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]*$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+    },
+    "assignment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "principalId",
+        "routeId",
+        "credentialId",
+        "credentialVersion",
+        "policyHash",
+        "routePolicyDigest"
+      ],
+      "properties": {
+        "principalId": {"$ref": "#/$defs/identifier"},
+        "routeId": {"$ref": "#/$defs/identifier"},
+        "credentialId": {"$ref": "#/$defs/identifier"},
+        "credentialVersion": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "policyHash": {"$ref": "#/$defs/sha256"},
+        "routePolicyDigest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "prefixItems": [
+        {"const": "assignment-binding"},
+        {"const": "enrollment-session-binding"},
+        {"const": "packet-digest"},
+        {"const": "nonce-digest"},
+        {"const": "trust-profile"},
+        {"const": "attestation-quote"},
+        {"const": "runtime-manifest"},
+        {"const": "packet-signature"},
+        {"const": "packet-expiry"}
+      ],
+      "items": false
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "receipt_id",
+        "setup_session_id",
+        "assignment",
+        "assignment_digest",
+        "enrollment_session_id",
+        "enrollment_packet_sha256",
+        "verifier_nonce_sha256",
+        "trust_profile_sha256",
+        "verifier_provider",
+        "decision",
+        "checks",
+        "issued_at_unix",
+        "expires_at_unix"
+      ],
+      "properties": {
+        "receipt_id": {"$ref": "#/$defs/uuid"},
+        "setup_session_id": {"$ref": "#/$defs/uuid"},
+        "assignment": {"$ref": "#/$defs/assignment"},
+        "assignment_digest": {"$ref": "#/$defs/sha256"},
+        "enrollment_session_id": {"$ref": "#/$defs/uuid"},
+        "enrollment_packet_sha256": {"$ref": "#/$defs/sha256"},
+        "verifier_nonce_sha256": {"$ref": "#/$defs/sha256"},
+        "trust_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "verifier_provider": {"$ref": "#/$defs/provider"},
+        "decision": {"const": "verified"},
+        "checks": {"$ref": "#/$defs/checks"},
+        "issued_at_unix": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
+        "expires_at_unix": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807}
+      }
+    }
+  }
+}

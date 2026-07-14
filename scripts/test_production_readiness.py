@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ import verify_production_readiness as readiness  # noqa: E402
 
 
 OAUTH_SECRET_TEMP_DIR = tempfile.TemporaryDirectory(prefix="serverware-oauth-readiness-")
+EVIDENCE_ISSUED_AT = int(time.time())
 
 
 def oauth_secret_file(name: str, value: str, mode: int = 0o600) -> Path:
@@ -32,6 +34,14 @@ def oauth_secret_file(name: str, value: str, mode: int = 0o600) -> Path:
     return path
 
 
+def trusted_ed25519_private_key(name: str) -> Ed25519PrivateKey:
+    return Ed25519PrivateKey.from_private_bytes(
+        hashlib.sha256(
+            f"serverware-production-readiness:{name}".encode("utf-8")
+        ).digest()
+    )
+
+
 def trusted_public_key_file(name: str) -> Path:
     path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
     if path.exists():
@@ -39,11 +49,7 @@ def trusted_public_key_file(name: str) -> Path:
     if name == "sigstore.pub.pem":
         private_key = generate_private_key(public_exponent=65537, key_size=2048)
     else:
-        private_key = Ed25519PrivateKey.from_private_bytes(
-            hashlib.sha256(
-                f"serverware-production-readiness:{name}".encode("utf-8")
-            ).digest()
-        )
+        private_key = trusted_ed25519_private_key(name)
     path.write_bytes(
         private_key.public_key().public_bytes(
             serialization.Encoding.PEM,
@@ -63,42 +69,184 @@ def trusted_public_key_id(name: str) -> str:
     return "sha256:" + hashlib.sha256(public_key_der).hexdigest()
 
 
-def final_challenge_receipt_file(name: str = "final-challenge-receipt.json") -> Path:
+def digest(character: str) -> str:
+    return "sha256:" + character * 64
+
+
+def sha384_digest(character: str) -> str:
+    return "sha384:" + character * 96
+
+
+def sha256_json(value: Any) -> str:
+    return "sha256:" + hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def base64url(value: bytes) -> str:
+    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+
+
+def ed25519_signature(key_name: str, statement: dict[str, Any]) -> str:
+    signature = trusted_ed25519_private_key(key_name).sign(
+        canonical_json(statement).encode("utf-8")
+    )
+    return "ed25519:" + base64url(signature)
+
+
+def fixture_release_identity() -> dict[str, Any]:
+    return {
+        "source_tree_digest": digest("1"),
+        "provenance_digest": digest("2"),
+        "runtime_manifest_digest": digest("3"),
+        "data_plane_binary_digest": digest("4"),
+        "production_image_digests": [digest("5"), digest("6")],
+        "production_image_refs": [
+            "registry.prod.acme-corp.net/serverware/control@" + digest("5"),
+            "registry.prod.acme-corp.net/serverware/decision-gate@" + digest("6"),
+        ],
+        "production_images_build_sha256": digest("7"),
+        "production_images_published_sha256": digest("8"),
+        "image_signature_bundle_digest": digest("9"),
+    }
+
+
+def hardware_assurance_document() -> dict[str, Any]:
+    release_identity = fixture_release_identity()
+    pcrs = {
+        "PCR0": sha384_digest("a"),
+        "PCR1": sha384_digest("b"),
+        "PCR2": sha384_digest("c"),
+    }
+    build_manifest = {
+        "apiVersion": "serverware.eifBuildManifest/v1",
+        "release_identity": release_identity,
+        "release_identity_sha256": sha256_json(release_identity),
+        "eif_image_sha384": pcrs["PCR0"],
+        "pcrs": pcrs,
+    }
+    host_identity_payload = {
+        "scheme": "serverware.currentCompletionHostIdentity/v1",
+        "machine_id_sha256": digest("a"),
+        "product_uuid_sha256": digest("b"),
+        "boot_id_sha256": digest("c"),
+    }
+    host_identity = {
+        **host_identity_payload,
+        "identity_sha256": sha256_json(host_identity_payload),
+        "observed_at_unix": EVIDENCE_ISSUED_AT,
+    }
+    host_identity["commitment_sha256"] = sha256_json(host_identity)
+    statement = {
+        "verifier": {
+            "name": "production-independent-verifier",
+            "organization": "Acme Assurance Lab",
+            "independent": True,
+        },
+        "issued_at_unix": EVIDENCE_ISSUED_AT,
+        "expires_at_unix": EVIDENCE_ISSUED_AT + 300,
+        "challenge_nonce": base64url(b"h" * 32),
+        "current_host_identity": host_identity,
+        "attestation_document_sha256": digest("d"),
+        "eif": {
+            "image_sha384": pcrs["PCR0"],
+            "build_manifest": build_manifest,
+            "build_manifest_sha256": sha256_json(build_manifest),
+            "signature_verified": True,
+            "evidence_sha256": digest("0"),
+        },
+        "pcrs": pcrs,
+        "enclave": {
+            "cid": 16,
+            "parent_cid": 3,
+            "vsock_port": 5000,
+            "cid_evidence_sha256": digest("1"),
+            "vsock_evidence_sha256": digest("2"),
+            "vsock_handshake_verified": True,
+        },
+        "key_custody": {
+            "recipient_key_generated_in_enclave": True,
+            "kms_recipient_bound": True,
+            "plaintext_key_exported": False,
+            "parent_process_key_access": False,
+            "kms_recipient_bindings_sha256": digest("e"),
+            "evidence_sha256": digest("3"),
+        },
+        "no_parent_key": {
+            "verified": True,
+            "parent_key_material_absent": True,
+            "evidence_sha256": digest("4"),
+        },
+        "release_bindings": {
+            "policy_digest": digest("f"),
+            "policy_sequence": 12,
+            "policy_high_water_digest": digest("0"),
+            "runtime_manifest_digest": release_identity["runtime_manifest_digest"],
+            "data_plane_binary_digest": release_identity["data_plane_binary_digest"],
+            "provenance_digest": release_identity["provenance_digest"],
+            "source_tree_digest": release_identity["source_tree_digest"],
+            "response_signing_key_id": digest("a"),
+        },
+        "artifact_bindings": {
+            "nitro_evidence_sha256": digest("b"),
+            "production_host_preflight_sha256": digest("c"),
+        },
+    }
+    key_name = "hardware-assurance-verifier.pub.pem"
+    return {
+        "apiVersion": "serverware.hardwareAssurance/v1",
+        "kind": "ServerwareHardwareAssurance",
+        "statement": statement,
+        "signing_key_id": trusted_public_key_id(key_name),
+        "signature": ed25519_signature(key_name, statement),
+    }
+
+
+def hardware_assurance_file(name: str = "hardware-assurance.json") -> Path:
     path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
     path.write_text(
-        canonical_json(
-            {
-                "apiVersion": "serverware.finalChallengeReceipt/v1",
-                "kind": "FinalChallengeConsumption",
-                "statement": {
-                    "authority_provider": "production-final-challenge-authority",
-                },
-                "signing_key_id": trusted_public_key_id("final-challenge-authority.pub.pem"),
-                "signature": "test-signature",
-            }
-        )
-        + "\n",
+        canonical_json(hardware_assurance_document()) + "\n",
         encoding="utf-8",
     )
     path.chmod(0o600)
     return path
 
 
-def hardware_assurance_file(name: str = "hardware-assurance.json") -> Path:
+def final_challenge_receipt_document() -> dict[str, Any]:
+    hardware_document = hardware_assurance_document()
+    hardware_statement = hardware_document["statement"]
+    statement = {
+        "authority_provider": "production-final-challenge-authority",
+        "consumption_id": "production-consumption-0001",
+        "status": "consumed",
+        "issued_at_unix": EVIDENCE_ISSUED_AT,
+        "expires_at_unix": EVIDENCE_ISSUED_AT + 300,
+        "challenge_nonce_sha256": "sha256:"
+        + hashlib.sha256(b"h" * 32).hexdigest(),
+        "completion_identity_sha256": digest("d"),
+        "release_identity_sha256": hardware_statement["eif"]["build_manifest"][
+            "release_identity_sha256"
+        ],
+        "hardware_verifier_key_id": trusted_public_key_id(
+            "hardware-assurance-verifier.pub.pem"
+        ),
+        "current_host_identity_sha256": hardware_statement[
+            "current_host_identity"
+        ]["identity_sha256"],
+        "proxy_server_statement_sha256": digest("e"),
+    }
+    key_name = "final-challenge-authority.pub.pem"
+    return {
+        "apiVersion": "serverware.finalChallengeReceipt/v1",
+        "kind": "FinalChallengeConsumption",
+        "statement": statement,
+        "signing_key_id": trusted_public_key_id(key_name),
+        "signature": ed25519_signature(key_name, statement),
+    }
+
+
+def final_challenge_receipt_file(name: str = "final-challenge-receipt.json") -> Path:
     path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
     path.write_text(
-        canonical_json(
-            {
-                "apiVersion": "serverware.hardwareAssurance/v1",
-                "kind": "ServerwareHardwareAssurance",
-                "statement": {},
-                "signing_key_id": trusted_public_key_id(
-                    "hardware-assurance-verifier.pub.pem"
-                ),
-                "signature": "ed25519:test-signature",
-            }
-        )
-        + "\n",
+        canonical_json(final_challenge_receipt_document()) + "\n",
         encoding="utf-8",
     )
     path.chmod(0o600)
@@ -256,7 +404,29 @@ def good_env() -> dict[str, str]:
             ),
             "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
             "SERVERWARE_AUDIT_ANCHOR_TOKEN": "prod-anchor-token-32-bytes-minimum-value",
-            "SERVERWARE_ADMIN_ROLES": "admin,approver,auditor,policy_author,policy_publisher,credential_owner",
+            "SERVERWARE_ADMIN_ROLES": "admin,approver,auditor,policy_author,policy_publisher,credential_owner,attestation_operator,attestation_reviewer",
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY": str(
+                trusted_public_key_file("setup-enrollment-verifier.pub.pem")
+            ),
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_KEY_ID": trusted_public_key_id(
+                "setup-enrollment-verifier.pub.pem"
+            ),
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PROVIDER": "production-enrollment-verifier",
+            "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY": str(
+                trusted_public_key_file("setup-hardware-verifier.pub.pem")
+            ),
+            "SERVERWARE_SETUP_HARDWARE_VERIFIER_KEY_ID": trusted_public_key_id(
+                "setup-hardware-verifier.pub.pem"
+            ),
+            "SERVERWARE_SETUP_HARDWARE_VERIFIER_PROVIDER": "production-hardware-verifier",
+            "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY": str(
+                trusted_public_key_file("setup-final-authority.pub.pem")
+            ),
+            "SERVERWARE_SETUP_FINAL_AUTHORITY_KEY_ID": trusted_public_key_id(
+                "setup-final-authority.pub.pem"
+            ),
+            "SERVERWARE_SETUP_FINAL_AUTHORITY_PROVIDER": "production-setup-final-authority",
+            "SERVERWARE_SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS": "300",
             "SERVERWARE_OAUTH_STATE_TTL_SECONDS": "600",
             "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS": "900",
             "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT": "1000",
@@ -264,7 +434,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_SETUP_SESSION_MAX_ACTIVE": "1000",
             "SERVERWARE_SETUP_SESSION_MAX_RETAINED": "10000",
             "SERVERWARE_SETUP_SESSION_RETENTION_SECONDS": "604800",
-            "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES": "32768",
+            "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES": "1048576",
             "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_COUNT": "64",
             "SERVERWARE_SETUP_SESSION_EVENT_MAX_BYTES": "16384",
             "SERVERWARE_SETUP_SESSION_EVENT_MAX_COUNT": "128",
@@ -303,7 +473,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "0",
             "SERVERWARE_CA_INSTALL_SESSION_TTL_SECONDS": "300",
             "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
-            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.oauth.activate,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
+            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.oauth.activate,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant,setup.attestation.finalize",
             "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN": "test-production-bootstrap-token-32-chars-minimum",
             "SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED": "1",
             "SERVERWARE_POLICY_CANARY_REQUIRED": "1",
@@ -414,9 +584,11 @@ def good_env() -> dict[str, str]:
         "SERVERWARE_COMPLETION_VERIFICATION_MODE",
         "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
         "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
         "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
         "SERVERWARE_HARDWARE_ASSURANCE",
         "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
         "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
         "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
     ):
@@ -433,10 +605,16 @@ def final_challenge_env() -> dict[str, str]:
             "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(
                 trusted_public_key_file("final-challenge-authority.pub.pem")
             ),
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID": trusted_public_key_id(
+                "final-challenge-authority.pub.pem"
+            ),
             "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "production-final-challenge-authority",
             "SERVERWARE_HARDWARE_ASSURANCE": str(hardware_assurance_file()),
             "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY": str(
                 trusted_public_key_file("hardware-assurance-verifier.pub.pem")
+            ),
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID": trusted_public_key_id(
+                "hardware-assurance-verifier.pub.pem"
             ),
             "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE": base64.urlsafe_b64encode(
                 b"h" * 32
@@ -645,6 +823,275 @@ def main() -> None:
 
     run_readiness(final_challenge_env())
 
+    missing_hardware_key_pin_env = final_challenge_env()
+    missing_hardware_key_pin_env.pop(
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID"
+    )
+    expect_failure(
+        missing_hardware_key_pin_env,
+        "final verification mode requires SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+    )
+
+    missing_final_key_pin_env = final_challenge_env()
+    missing_final_key_pin_env.pop(
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID"
+    )
+    expect_failure(
+        missing_final_key_pin_env,
+        "final verification mode requires SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+    )
+
+    mismatched_hardware_key_pin_env = final_challenge_env()
+    mismatched_hardware_key_pin_env[
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID"
+    ] = digest("0")
+    expect_failure(
+        mismatched_hardware_key_pin_env,
+        "SPKI identity must match SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+    )
+
+    mismatched_final_key_pin_env = final_challenge_env()
+    mismatched_final_key_pin_env[
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID"
+    ] = digest("0")
+    expect_failure(
+        mismatched_final_key_pin_env,
+        "SPKI identity must match SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+    )
+
+    arbitrary_hardware_signature_env = final_challenge_env()
+    arbitrary_hardware_document = hardware_assurance_document()
+    arbitrary_hardware_document["signature"] = "ed25519:test-signature"
+    arbitrary_hardware_path = hardware_assurance_file(
+        "arbitrary-signature-hardware-assurance.json"
+    )
+    arbitrary_hardware_path.write_text(
+        canonical_json(arbitrary_hardware_document) + "\n", encoding="utf-8"
+    )
+    arbitrary_hardware_signature_env["SERVERWARE_HARDWARE_ASSURANCE"] = str(
+        arbitrary_hardware_path
+    )
+    expect_failure(
+        arbitrary_hardware_signature_env, "must be canonical unpadded base64url"
+    )
+
+    arbitrary_receipt_signature_env = final_challenge_env()
+    arbitrary_receipt_document = final_challenge_receipt_document()
+    arbitrary_receipt_document["signature"] = "test-signature"
+    arbitrary_receipt_path = final_challenge_receipt_file(
+        "arbitrary-signature-final-challenge-receipt.json"
+    )
+    arbitrary_receipt_path.write_text(
+        canonical_json(arbitrary_receipt_document) + "\n", encoding="utf-8"
+    )
+    arbitrary_receipt_signature_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(
+        arbitrary_receipt_path
+    )
+    expect_failure(arbitrary_receipt_signature_env, "ed25519 signature scheme")
+
+    forged_receipt_signature_env = final_challenge_env()
+    forged_receipt_document = final_challenge_receipt_document()
+    forged_receipt_document["signature"] = "ed25519:" + base64url(b"\0" * 64)
+    forged_receipt_path = final_challenge_receipt_file(
+        "forged-signature-final-challenge-receipt.json"
+    )
+    forged_receipt_path.write_text(
+        canonical_json(forged_receipt_document) + "\n", encoding="utf-8"
+    )
+    forged_receipt_signature_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(
+        forged_receipt_path
+    )
+    expect_failure(forged_receipt_signature_env, "signature verification failed")
+
+    incomplete_receipt_shape_env = final_challenge_env()
+    incomplete_receipt_document = final_challenge_receipt_document()
+    incomplete_receipt_document["statement"].pop("proxy_server_statement_sha256")
+    incomplete_receipt_document["signature"] = ed25519_signature(
+        "final-challenge-authority.pub.pem",
+        incomplete_receipt_document["statement"],
+    )
+    incomplete_receipt_path = final_challenge_receipt_file(
+        "incomplete-shape-final-challenge-receipt.json"
+    )
+    incomplete_receipt_path.write_text(
+        canonical_json(incomplete_receipt_document) + "\n", encoding="utf-8"
+    )
+    incomplete_receipt_shape_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(
+        incomplete_receipt_path
+    )
+    expect_failure(incomplete_receipt_shape_env, "missing required fields")
+
+    incomplete_hardware_shape_env = final_challenge_env()
+    incomplete_hardware_document = hardware_assurance_document()
+    incomplete_hardware_document["statement"]["key_custody"].pop(
+        "evidence_sha256"
+    )
+    incomplete_hardware_document["signature"] = ed25519_signature(
+        "hardware-assurance-verifier.pub.pem",
+        incomplete_hardware_document["statement"],
+    )
+    incomplete_hardware_path = hardware_assurance_file(
+        "incomplete-shape-hardware-assurance.json"
+    )
+    incomplete_hardware_path.write_text(
+        canonical_json(incomplete_hardware_document) + "\n", encoding="utf-8"
+    )
+    incomplete_hardware_shape_env["SERVERWARE_HARDWARE_ASSURANCE"] = str(
+        incomplete_hardware_path
+    )
+    expect_failure(incomplete_hardware_shape_env, "missing required fields")
+
+    duplicate_receipt_key_env = final_challenge_env()
+    duplicate_receipt_path = final_challenge_receipt_file(
+        "duplicate-key-final-challenge-receipt.json"
+    )
+    duplicate_receipt_json = canonical_json(final_challenge_receipt_document())
+    duplicate_receipt_path.write_text(
+        duplicate_receipt_json.replace(
+            '"kind":"FinalChallengeConsumption"',
+            '"kind":"FinalChallengeConsumption","kind":"FinalChallengeConsumption"',
+            1,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    duplicate_receipt_key_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(
+        duplicate_receipt_path
+    )
+    expect_failure(duplicate_receipt_key_env, "duplicate JSON object key: kind")
+
+    floating_point_hardware_env = final_challenge_env()
+    floating_point_hardware_document = hardware_assurance_document()
+    floating_point_hardware_document["statement"]["issued_at_unix"] = float(
+        EVIDENCE_ISSUED_AT
+    )
+    floating_point_hardware_document["signature"] = ed25519_signature(
+        "hardware-assurance-verifier.pub.pem",
+        floating_point_hardware_document["statement"],
+    )
+    floating_point_hardware_path = hardware_assurance_file(
+        "floating-point-hardware-assurance.json"
+    )
+    floating_point_hardware_path.write_text(
+        canonical_json(floating_point_hardware_document) + "\n", encoding="utf-8"
+    )
+    floating_point_hardware_env["SERVERWARE_HARDWARE_ASSURANCE"] = str(
+        floating_point_hardware_path
+    )
+    expect_failure(
+        floating_point_hardware_env, "floating-point JSON values are forbidden"
+    )
+
+    mismatched_hardware_signing_key_env = final_challenge_env()
+    mismatched_hardware_signing_key_document = hardware_assurance_document()
+    mismatched_hardware_signing_key_document["signing_key_id"] = digest("0")
+    mismatched_hardware_signing_key_path = hardware_assurance_file(
+        "mismatched-key-hardware-assurance.json"
+    )
+    mismatched_hardware_signing_key_path.write_text(
+        canonical_json(mismatched_hardware_signing_key_document) + "\n",
+        encoding="utf-8",
+    )
+    mismatched_hardware_signing_key_env["SERVERWARE_HARDWARE_ASSURANCE"] = str(
+        mismatched_hardware_signing_key_path
+    )
+    expect_failure(
+        mismatched_hardware_signing_key_env,
+        "signer does not match the independently trusted verifier key",
+    )
+
+    mismatched_receipt_hardware_key_env = final_challenge_env()
+    mismatched_receipt_hardware_key_document = final_challenge_receipt_document()
+    mismatched_receipt_hardware_key_document["statement"][
+        "hardware_verifier_key_id"
+    ] = digest("0")
+    mismatched_receipt_hardware_key_document["signature"] = ed25519_signature(
+        "final-challenge-authority.pub.pem",
+        mismatched_receipt_hardware_key_document["statement"],
+    )
+    mismatched_receipt_hardware_key_path = final_challenge_receipt_file(
+        "mismatched-hardware-key-final-challenge-receipt.json"
+    )
+    mismatched_receipt_hardware_key_path.write_text(
+        canonical_json(mismatched_receipt_hardware_key_document) + "\n",
+        encoding="utf-8",
+    )
+    mismatched_receipt_hardware_key_env[
+        "SERVERWARE_FINAL_CHALLENGE_RECEIPT"
+    ] = str(mismatched_receipt_hardware_key_path)
+    expect_failure(
+        mismatched_receipt_hardware_key_env,
+        "final challenge receipt hardware_verifier_key_id mismatch",
+    )
+
+    setup_key_roles = (
+        (
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY",
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_KEY_ID",
+        ),
+        (
+            "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY",
+            "SERVERWARE_SETUP_HARDWARE_VERIFIER_KEY_ID",
+        ),
+        (
+            "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY",
+            "SERVERWARE_SETUP_FINAL_AUTHORITY_KEY_ID",
+        ),
+    )
+    release_key_roles = (
+        ("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", None),
+        ("SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY", "SERVERWARE_COSIGN_KEY_ID"),
+        (
+            "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
+            "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID",
+        ),
+        (
+            "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+            "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID",
+        ),
+        (
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY_ID",
+        ),
+        (
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY_ID",
+        ),
+    )
+    for setup_key_setting, setup_key_id_setting in setup_key_roles:
+        for release_key_setting, release_key_id_setting in release_key_roles:
+            reused_cross_domain_key_env = final_challenge_env()
+            reused_cross_domain_key_env[release_key_setting] = (
+                reused_cross_domain_key_env[setup_key_setting]
+            )
+            if release_key_id_setting is not None:
+                reused_cross_domain_key_env[release_key_id_setting] = (
+                    reused_cross_domain_key_env[setup_key_id_setting]
+                )
+            expect_failure(
+                reused_cross_domain_key_env,
+                "cross-domain trust key reuse is forbidden",
+            )
+
+    for index, (left_key_setting, _) in enumerate(release_key_roles):
+        for right_key_setting, right_key_id_setting in release_key_roles[index + 1 :]:
+            reused_production_key_env = final_challenge_env()
+            reused_path = Path(reused_production_key_env[left_key_setting])
+            reused_production_key_env[right_key_setting] = str(reused_path)
+            if right_key_id_setting is not None:
+                public_key = serialization.load_pem_public_key(reused_path.read_bytes())
+                public_key_der = public_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                reused_production_key_env[right_key_id_setting] = (
+                    "sha256:" + hashlib.sha256(public_key_der).hexdigest()
+                )
+            expect_failure(
+                reused_production_key_env,
+                "production trust key reuse is forbidden",
+            )
+
     readiness_with_final_input_env = good_env()
     readiness_with_final_input_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(final_challenge_receipt_file())
     expect_failure(readiness_with_final_input_env, "forbidden in readiness mode")
@@ -683,7 +1130,19 @@ def main() -> None:
 
     oversized_final_authority_provider_env = final_challenge_env()
     oversized_final_authority_provider_env["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"] = "x" * 257
-    expect_failure(oversized_final_authority_provider_env, "must not exceed 256 characters")
+    expect_failure(
+        oversized_final_authority_provider_env,
+        "must be a canonical provider identifier",
+    )
+
+    malformed_hardware_challenge_env = final_challenge_env()
+    malformed_hardware_challenge_env[
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE"
+    ] = "!not-base64url"
+    expect_failure(
+        malformed_hardware_challenge_env,
+        "must be unpadded base64url for at least 32 bytes",
+    )
 
     symlink_final_receipt_env = final_challenge_env()
     symlink_final_receipt_path = Path(OAUTH_SECRET_TEMP_DIR.name) / "final-challenge-receipt-link.json"
@@ -702,7 +1161,7 @@ def main() -> None:
     invalid_final_receipt_path = final_challenge_receipt_file("invalid-final-challenge-receipt.json")
     invalid_final_receipt_path.write_text(canonical_json({"apiVersion": "wrong/v1"}) + "\n", encoding="utf-8")
     invalid_final_receipt_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(invalid_final_receipt_path)
-    expect_failure(invalid_final_receipt_env, "serverware.finalChallengeReceipt/v1 document")
+    expect_failure(invalid_final_receipt_env, "missing required fields")
 
     missing_google_env = good_env()
     for name in (
@@ -877,6 +1336,22 @@ def main() -> None:
     no_mutation_mfa_env = good_env()
     no_mutation_mfa_env.pop("SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED", None)
     expect_failure(no_mutation_mfa_env, "WebAuthn MFA")
+
+    missing_setup_trust_env = good_env()
+    missing_setup_trust_env.pop("SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY", None)
+    expect_failure(missing_setup_trust_env, "SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY")
+
+    mismatched_setup_trust_env = good_env()
+    mismatched_setup_trust_env["SERVERWARE_SETUP_HARDWARE_VERIFIER_KEY_ID"] = (
+        mismatched_setup_trust_env["SERVERWARE_SETUP_ENROLLMENT_VERIFIER_KEY_ID"]
+    )
+    expect_failure(mismatched_setup_trust_env, "SPKI identity")
+
+    reused_setup_provider_env = good_env()
+    reused_setup_provider_env["SERVERWARE_SETUP_FINAL_AUTHORITY_PROVIDER"] = (
+        reused_setup_provider_env["SERVERWARE_SETUP_HARDWARE_VERIFIER_PROVIDER"]
+    )
+    expect_failure(reused_setup_provider_env, "must use distinct providers")
 
     direct_ca_env = good_env()
     direct_ca_env["SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED"] = "1"

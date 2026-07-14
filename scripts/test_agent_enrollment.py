@@ -11,9 +11,11 @@ import sys
 import tempfile
 import threading
 import urllib.parse
+import uuid
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -39,6 +41,15 @@ def main() -> None:
         )
         from serverware.policy_bundle import compile_policy_bundle, demo_policy_bundle, sign_policy_bundle
         from serverware.response_identity import response_public_key_info
+        from serverware.setup_receipts import (
+            Ed25519TrustRoot,
+            EnrollmentReceiptExpected,
+            FixedClock,
+            SetupAssignment,
+            canonical_json_bytes,
+            sha256_digest,
+            verify_enrollment_verifier_receipt,
+        )
         from generate_agent_enrollment import (
             MAX_ENROLLMENT_PACKET_BYTES,
             enrollment_nonce,
@@ -249,6 +260,24 @@ def main() -> None:
         else:
             raise AssertionError("enrollment verifier accepted duplicate JSON keys")
 
+        float_path = Path(tmp) / "float-enrollment.json"
+        float_path.write_text('{"issuedAtEpochMs":1.5}\n', encoding="utf-8")
+        try:
+            load_enrollment_packet(float_path)
+        except ValueError as exc:
+            assert "floating-point" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier accepted a floating-point packet value")
+
+        symlink_path = Path(tmp) / "symlink-enrollment.json"
+        symlink_path.symlink_to(packet_path)
+        try:
+            load_enrollment_packet(symlink_path)
+        except ValueError as exc:
+            assert "non-symlink" in str(exc), exc
+        else:
+            raise AssertionError("enrollment verifier followed an enrollment packet symlink")
+
         non_object_path = Path(tmp) / "array-enrollment.json"
         non_object_path.write_text("[]\n", encoding="utf-8")
         try:
@@ -267,6 +296,64 @@ def main() -> None:
             assert "exceeds" in str(exc), exc
         else:
             raise AssertionError("enrollment verifier accepted an oversized packet")
+
+        setup_session_id = str(uuid.uuid4())
+        setup_enrollment_session_id = str(uuid.uuid4())
+        setup_receipt_id = str(uuid.uuid4())
+        setup_install_session = {
+            "id": setup_enrollment_session_id,
+            "nonce": NONCE,
+            "token": "setup-install-token-0123456789abcdef0123456789",
+            "tokenHeader": "X-Serverware-CA-Install-Token",
+            "policyUrl": f"/api/ca/install-sessions/{setup_enrollment_session_id}/policy",
+            "downloadUrl": f"/api/ca/install-sessions/{setup_enrollment_session_id}/ca.pem",
+            "expiresAt": "2099-01-01T00:00:00+00:00",
+        }
+        setup_packet = build_agent_enrollment(
+            snapshot=snapshot,
+            principal_id="agent:demo-proxy-token",
+            attestation=attestation,
+            proxy_url="http://10.42.0.10:8080",
+            control_plane_url="https://serverware.example",
+            proxy_egress_cidrs=["10.42.0.10/32"],
+            namespace="agents",
+            pod_selector={"app": "release-bot"},
+            nonce=NONCE,
+            ca_install_session=setup_install_session,
+        )
+        setup_route = next(
+            route
+            for route in setup_packet["allowedRoutes"]
+            if isinstance(route.get("credentialRef"), str)
+        )
+        setup_assignment = SetupAssignment(
+            principal_id=str(setup_packet["principalId"]),
+            route_id=str(setup_route["id"]),
+            credential_id=str(setup_route["credentialRef"]),
+            credential_version=7,
+            policy_hash=str(setup_packet["pinning"]["policyHash"]),
+            route_policy_digest=sha256_digest(b"setup-route-policy"),
+        )
+        setup_trust_profile_digest = sha256_digest(b"setup-receipt-trust-profile")
+        setup_packet_path = Path(tmp) / "setup-enrollment.json"
+        setup_packet_path.write_text(json.dumps(setup_packet, indent=2) + "\n", encoding="utf-8")
+        setup_signing_key = Ed25519PrivateKey.generate()
+        setup_signing_key_path = Path(tmp) / "setup-enrollment-verifier.pem"
+        setup_signing_key_path.write_bytes(
+            setup_signing_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        setup_signing_key_path.chmod(0o600)
+        setup_trust = Ed25519TrustRoot(
+            "independent-enrollment-verifier",
+            setup_signing_key.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            ),
+        )
 
         class EnrollmentHandler(http.server.BaseHTTPRequestHandler):
             def log_message(self, _format: str, *args: object) -> None:
@@ -347,6 +434,166 @@ def main() -> None:
             assert verified_receipt["downloadedPacketSha256"] == (
                 "sha256:" + hashlib.sha256(packet_path.read_bytes()).hexdigest()
             ), verified_receipt
+
+            setup_receipt_command = [
+                sys.executable,
+                str(ROOT / "scripts" / "generate_agent_enrollment.py"),
+                "--base",
+                base,
+                "--verify-packet",
+                str(setup_packet_path),
+                "--expected-packet-sha256",
+                "sha256:" + hashlib.sha256(setup_packet_path.read_bytes()).hexdigest(),
+                "--expected-principal",
+                setup_assignment.principal_id,
+                "--expected-nonce",
+                NONCE,
+                "--sign-setup-receipt",
+                "--setup-session-id",
+                setup_session_id,
+                "--enrollment-session-id",
+                setup_enrollment_session_id,
+                "--route-id",
+                setup_assignment.route_id,
+                "--credential-id",
+                setup_assignment.credential_id,
+                "--credential-version",
+                str(setup_assignment.credential_version),
+                "--policy-hash",
+                setup_assignment.policy_hash,
+                "--route-policy-digest",
+                setup_assignment.route_policy_digest,
+                "--expected-assignment-digest",
+                setup_assignment.digest,
+                "--trust-profile-sha256",
+                setup_trust_profile_digest,
+                "--verifier-provider",
+                setup_trust.provider,
+                "--setup-receipt-signing-key",
+                str(setup_signing_key_path),
+                "--expected-verifier-key-id",
+                setup_trust.key_id,
+                "--receipt-id",
+                setup_receipt_id,
+            ]
+            setup_receipt_result = subprocess.run(
+                setup_receipt_command,
+                cwd=ROOT,
+                env=os.environ.copy(),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if setup_receipt_result.returncode != 0:
+                raise AssertionError(f"setup receipt signing failed: {setup_receipt_result.stderr}")
+            setup_receipt = json.loads(setup_receipt_result.stdout)
+            assert set(setup_receipt) == {
+                "apiVersion",
+                "kind",
+                "statement",
+                "signing_key_id",
+                "signature",
+            }, setup_receipt
+            assert "principalId" not in setup_receipt, setup_receipt
+            assert "verificationReceipt" not in setup_receipt, setup_receipt
+            setup_statement = setup_receipt["statement"]
+            expected_setup_receipt = EnrollmentReceiptExpected(
+                receipt_id=setup_receipt_id,
+                setup_session_id=setup_session_id,
+                assignment=setup_assignment,
+                enrollment_session_id=setup_enrollment_session_id,
+                enrollment_packet_sha256=setup_packet["authenticity"]["statement"]["packetSha256"],
+                verifier_nonce_sha256=sha256_digest(NONCE.encode("ascii")),
+                trust_profile_sha256=setup_trust_profile_digest,
+            )
+            verified_setup_receipt = verify_enrollment_verifier_receipt(
+                canonical_json_bytes(setup_receipt),
+                trust=setup_trust,
+                expected=expected_setup_receipt,
+                clock=FixedClock(setup_statement["issued_at_unix"]),
+            )
+            assert verified_setup_receipt.assignment == setup_assignment, verified_setup_receipt
+            assert verified_setup_receipt.verifier_key_id == setup_trust.key_id, verified_setup_receipt
+
+            def replace_cli_value(command: list[str], flag: str, value: str) -> list[str]:
+                changed = list(command)
+                changed[changed.index(flag) + 1] = value
+                return changed
+
+            def expect_setup_receipt_failure(command: list[str], message: str) -> None:
+                result = subprocess.run(
+                    command,
+                    cwd=ROOT,
+                    env=os.environ.copy(),
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                assert result.returncode == 1, result
+                assert not result.stdout, result.stdout
+                assert message in result.stderr, result.stderr
+
+            expect_setup_receipt_failure(
+                replace_cli_value(
+                    setup_receipt_command,
+                    "--expected-assignment-digest",
+                    "sha256:" + "0" * 64,
+                ),
+                "expected assignment digest",
+            )
+            expect_setup_receipt_failure(
+                replace_cli_value(
+                    setup_receipt_command,
+                    "--enrollment-session-id",
+                    str(uuid.uuid4()),
+                ),
+                "does not match the enrollment session",
+            )
+            substituted_assignment = SetupAssignment(
+                principal_id=setup_assignment.principal_id,
+                route_id="route.substituted",
+                credential_id=setup_assignment.credential_id,
+                credential_version=setup_assignment.credential_version,
+                policy_hash=setup_assignment.policy_hash,
+                route_policy_digest=setup_assignment.route_policy_digest,
+            )
+            substituted_assignment_command = replace_cli_value(
+                setup_receipt_command,
+                "--route-id",
+                substituted_assignment.route_id,
+            )
+            substituted_assignment_command = replace_cli_value(
+                substituted_assignment_command,
+                "--expected-assignment-digest",
+                substituted_assignment.digest,
+            )
+            expect_setup_receipt_failure(
+                substituted_assignment_command,
+                "route and credential do not match",
+            )
+            expect_setup_receipt_failure(
+                replace_cli_value(
+                    setup_receipt_command,
+                    "--expected-verifier-key-id",
+                    "sha256:" + "0" * 64,
+                ),
+                "does not match the expected enrollment verifier key ID",
+            )
+            symlinked_signing_key = Path(tmp) / "setup-enrollment-verifier-symlink.pem"
+            symlinked_signing_key.symlink_to(setup_signing_key_path)
+            expect_setup_receipt_failure(
+                replace_cli_value(
+                    setup_receipt_command,
+                    "--setup-receipt-signing-key",
+                    str(symlinked_signing_key),
+                ),
+                "non-symlink",
+            )
+            setup_signing_key_path.chmod(0o644)
+            expect_setup_receipt_failure(
+                setup_receipt_command,
+                "must not be accessible by group or other users",
+            )
 
             substituted_result = subprocess.run(
                 [

@@ -16,6 +16,8 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
+from collections.abc import Mapping
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -40,6 +42,9 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from serverware import __version__
 from serverware.attestation import (
@@ -88,6 +93,7 @@ from serverware.config import (
     RBAC_BINDINGS_PATH,
     RELEASE_CHANNEL,
     SECRET_LEASE_TTL_SECONDS,
+    SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS,
     WEBAUTHN_BOOTSTRAP_TOKEN,
     validate_internal_service_auth,
 )
@@ -151,6 +157,27 @@ from serverware.policy_bundle import (
     write_policy_bundle,
 )
 from serverware.response_identity import response_signature_headers, response_statement
+from serverware.setup_receipt_service import (
+    SetupReceiptTrustConfigurationError,
+    setup_receipt_trust_profile,
+)
+from serverware.setup_receipts import (
+    EnrollmentReceiptExpected,
+    FixedClock,
+    HardwareVerificationExpected,
+    JsonLimits,
+    ReceiptVerificationError,
+    SetupAssignment,
+    VerifiedEnrollmentVerifierReceipt,
+    VerifiedSetupHardwareVerification,
+    canonical_json_bytes as setup_receipt_canonical_json_bytes,
+    derive_setup_completion_identity,
+    parse_strict_json_object,
+    sha256_digest as setup_receipt_sha256_digest,
+    verify_enrollment_verifier_receipt,
+    verify_final_challenge_receipt,
+    verify_setup_hardware_verification,
+)
 from serverware.webauthn import (
     WebAuthnError,
     approval_options,
@@ -183,6 +210,26 @@ _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _SIGNED_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 _CONTROL_PLANE_REQUEST_MAX_BYTES = 2 * 1024 * 1024
 _RECIPIENT_ATTESTATION_MAX_BYTES = 64 * 1024
+_SETUP_RECEIPT_MAX_BYTES = 64 * 1024
+_SETUP_HARDWARE_ASSURANCE_MAX_BYTES = 512 * 1024
+_SETUP_RECEIPT_ENVELOPE_LIMITS = JsonLimits(
+    max_bytes=1024 * 1024,
+    max_depth=20,
+    max_object_keys=64,
+    max_total_keys=1024,
+    max_array_items=256,
+    max_total_nodes=8192,
+    max_string_bytes=768 * 1024,
+)
+_SETUP_HARDWARE_ASSURANCE_JSON_LIMITS = JsonLimits(
+    max_bytes=_SETUP_HARDWARE_ASSURANCE_MAX_BYTES,
+    max_depth=32,
+    max_object_keys=256,
+    max_total_keys=4096,
+    max_array_items=1024,
+    max_total_nodes=32768,
+    max_string_bytes=256 * 1024,
+)
 _recipient_attestation_verifier_slots = threading.BoundedSemaphore(value=4)
 
 
@@ -762,6 +809,13 @@ class KeyReleaseVerify(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     validate_internal_service_auth()
+    if RELEASE_CHANNEL.strip().lower() not in {"dev", "development", "local", "test"}:
+        try:
+            setup_receipt_trust_profile()
+        except SetupReceiptTrustConfigurationError as exc:
+            raise RuntimeError(
+                "production setup receipt trust roots are not securely configured"
+            ) from exc
     db.init_db()
     _drain_setup_session_audit_outbox()
     snapshot = get_policy_snapshot()
@@ -1273,6 +1327,8 @@ def _control_plane_approval_id(mfa: dict[str, Any] | None) -> str | None:
 
 
 def _control_plane_approval_roles(action: str) -> set[str]:
+    if action.startswith("setup.attestation."):
+        return {"attestation_reviewer"}
     if action.startswith("policy."):
         return {"policy_publisher"}
     if action.startswith("credential."):
@@ -1298,6 +1354,7 @@ def _require_control_plane_two_person(
     mfa: dict[str, Any] | None,
     identity: AdminIdentity,
     request: dict[str, Any],
+    connection: Any | None = None,
 ) -> dict[str, Any] | None:
     if not _control_plane_two_person_required(action):
         return None
@@ -1309,6 +1366,7 @@ def _require_control_plane_two_person(
             resource_id=resource_id,
             payload_digest=payload_digest,
             actor_id=identity.user_id,
+            _connection=connection,
         )
         if not result.get("ok"):
             raise HTTPException(
@@ -2583,6 +2641,8 @@ def _require_policy_canary_activation_thresholds(
 
 VALID_RBAC_ROLES = {
     "admin",
+    "attestation_operator",
+    "attestation_reviewer",
     "policy_author",
     "policy_publisher",
     "credential_owner",
@@ -4377,6 +4437,8 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
 
 _SETUP_SESSION_READ_ROLES = {
     "admin",
+    "attestation_operator",
+    "attestation_reviewer",
     "auditor",
     "credential_owner",
     "policy_author",
@@ -4384,6 +4446,8 @@ _SETUP_SESSION_READ_ROLES = {
 }
 _SETUP_SESSION_MUTATION_ROLES = {
     "admin",
+    "attestation_operator",
+    "attestation_reviewer",
     "credential_owner",
     "policy_author",
     "policy_publisher",
@@ -4483,12 +4547,30 @@ def _setup_session_public(item: dict[str, Any]) -> dict[str, Any]:
         "enrollment_session_id": "enrollmentSessionId",
         "enrollment_packet_digest": "enrollmentPacketDigest",
         "verifier_nonce_hash": "verifierNonceHash",
+        "enrollment_verifier_receipt_digest": "enrollmentVerifierReceiptDigest",
+        "enrollment_verifier_key_id": "enrollmentVerifierKeyId",
+        "attestation_challenge_digest": "attestationChallengeDigest",
+        "attestation_challenge_issued_at": "attestationChallengeIssuedAt",
+        "attestation_challenge_expires_at": "attestationChallengeExpiresAt",
+        "runtime_evidence_digest": "runtimeEvidenceDigest",
+        "hardware_assurance_digest": "hardwareAssuranceDigest",
+        "hardware_verification_receipt_digest": "hardwareVerificationReceiptDigest",
+        "hardware_verifier_key_id": "hardwareVerifierKeyId",
+        "release_identity_digest": "releaseIdentityDigest",
+        "current_host_identity_digest": "currentHostIdentityDigest",
+        "proxy_server_statement_digest": "proxyServerStatementDigest",
+        "trust_profile_digest": "trustProfileDigest",
+        "completion_identity_digest": "completionIdentityDigest",
+        "final_authority_key_id": "finalAuthorityKeyId",
+        "final_consumption_id": "finalConsumptionId",
+        "final_receipt_digest": "finalReceiptDigest",
         "created_at": "createdAt",
         "updated_at": "updatedAt",
         "expires_at": "expiresAt",
         "terminal_at": "terminalAt",
     }
     public = {field_names.get(key, key): value for key, value in item.items()}
+    public.pop("attestation_challenge_value", None)
     public["apiVersion"] = "serverware.setupSession/v1"
     return public
 
@@ -4591,6 +4673,355 @@ def _finish_setup_transition(item: dict[str, Any]) -> dict[str, Any]:
     return {"session": _setup_session_public(item), "audit": audit}
 
 
+def _setup_receipt_profile():
+    try:
+        return setup_receipt_trust_profile()
+    except SetupReceiptTrustConfigurationError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="setup receipt trust roots are not securely configured",
+        ) from exc
+
+
+def _setup_receipt_failure(exc: ReceiptVerificationError) -> None:
+    raise HTTPException(
+        status_code=409,
+        detail={"error": "setup_receipt_rejected", "reason": exc.code.value},
+    ) from exc
+
+
+def _plain_setup_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _plain_setup_json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_plain_setup_json(item) for item in value]
+    return value
+
+
+async def _setup_receipt_envelope(
+    request: Request,
+    *,
+    required_fields: set[str],
+    optional_fields: set[str] | None = None,
+) -> Mapping[str, Any]:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/json":
+        raise HTTPException(status_code=415, detail="setup receipt submission requires application/json")
+    try:
+        envelope = parse_strict_json_object(
+            await request.body(), limits=_SETUP_RECEIPT_ENVELOPE_LIMITS
+        )
+    except ReceiptVerificationError as exc:
+        _setup_receipt_failure(exc)
+        raise AssertionError("unreachable")
+    optional = optional_fields or set()
+    fields = set(envelope)
+    if not required_fields.issubset(fields) or fields - required_fields - optional:
+        raise HTTPException(
+            status_code=400,
+            detail="setup receipt envelope fields do not match the endpoint contract",
+        )
+    return envelope
+
+
+def _decode_setup_receipt_blob(value: Any, *, label: str, maximum: int) -> bytes:
+    if not isinstance(value, str) or not value or "=" in value or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+        raise HTTPException(status_code=400, detail=f"{label} must be canonical unpadded base64url")
+    try:
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{label} is not valid base64url") from exc
+    canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
+    if not hmac.compare_digest(canonical, value) or not 1 <= len(decoded) <= maximum:
+        raise HTTPException(status_code=413, detail=f"{label} exceeds its accepted bound")
+    return decoded
+
+
+def _setup_expected_revision(envelope: Mapping[str, Any]) -> int:
+    value = envelope.get("expectedRevision")
+    if type(value) is not int or value < 0:
+        raise HTTPException(status_code=400, detail="expectedRevision must be a non-negative integer")
+    return value
+
+
+def _setup_assignment_from_session(item: Mapping[str, Any]) -> SetupAssignment:
+    required = (
+        "principal_id",
+        "route_id",
+        "credential_id",
+        "credential_version",
+        "policy_hash",
+        "route_policy_digest",
+    )
+    if any(item.get(field) is None for field in required):
+        raise HTTPException(status_code=409, detail="setup assignment is incomplete")
+    try:
+        assignment = SetupAssignment(
+            principal_id=str(item["principal_id"]),
+            route_id=str(item["route_id"]),
+            credential_id=str(item["credential_id"]),
+            credential_version=int(item["credential_version"]),
+            policy_hash=str(item["policy_hash"]),
+            route_policy_digest=str(item["route_policy_digest"]),
+        )
+    except ReceiptVerificationError as exc:
+        _setup_receipt_failure(exc)
+        raise AssertionError("unreachable")
+    if not hmac.compare_digest(assignment.digest, str(item.get("assignment_digest") or "")):
+        raise HTTPException(status_code=409, detail="setup assignment digest is inconsistent")
+    return assignment
+
+
+def _require_setup_current_assignee(item: Mapping[str, Any], identity: AdminIdentity) -> None:
+    if not hmac.compare_digest(str(item.get("current_assignee_id") or ""), identity.user_id):
+        raise HTTPException(status_code=403, detail="setup attestation action requires the current assignee")
+
+
+def _setup_receipt_document(
+    raw: bytes, *, limits: JsonLimits | None = None
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    try:
+        document = (
+            parse_strict_json_object(raw, limits=limits)
+            if limits is not None
+            else parse_strict_json_object(raw)
+        )
+    except ReceiptVerificationError as exc:
+        _setup_receipt_failure(exc)
+        raise AssertionError("unreachable")
+    statement = document.get("statement")
+    if not isinstance(statement, Mapping):
+        raise HTTPException(status_code=409, detail="setup receipt statement is missing")
+    return document, statement
+
+
+def _setup_receipt_uuid(statement: Mapping[str, Any]) -> str:
+    value = statement.get("receipt_id")
+    try:
+        parsed = uuid.UUID(str(value))
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(status_code=409, detail="setup receipt ID is invalid") from exc
+    if str(parsed) != value:
+        raise HTTPException(status_code=409, detail="setup receipt ID is not canonical")
+    return str(value)
+
+
+def _setup_enrollment_is_authoritatively_consumed(item: Mapping[str, Any]) -> None:
+    enrollment_session_id = str(item.get("enrollment_session_id") or "")
+    with _ca_install_sessions_lock():
+        state = _read_ca_install_sessions()
+        raw = state.get("sessions", {}).get(enrollment_session_id)
+        enrollment = dict(raw) if isinstance(raw, dict) else None
+    assignment = {
+        "route_id": item.get("route_id"),
+        "credential_id": item.get("credential_id"),
+        "credential_version": item.get("credential_version"),
+    }
+    if not (
+        enrollment
+        and enrollment.get("purpose") == "agent-enrollment"
+        and enrollment.get("status") == "consumed"
+        and enrollment.get("principal_id") == item.get("principal_id")
+        and enrollment.get("policy_hash") == item.get("policy_hash")
+        and assignment in (enrollment.get("allowed_assignments") or [])
+        and enrollment.get("enrollment_packet_sha256") == item.get("enrollment_packet_digest")
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="the exact enrollment CA capability has not been authoritatively consumed",
+        )
+
+
+def _setup_evidence(item: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
+    matches = [
+        evidence
+        for evidence in (item.get("evidence") or [])
+        if isinstance(evidence, Mapping) and evidence.get("kind") == kind
+    ]
+    if len(matches) != 1 or not isinstance(matches[0].get("document"), Mapping):
+        raise HTTPException(status_code=409, detail=f"setup {kind} evidence is unavailable")
+    return matches[0]
+
+
+def _verified_setup_enrollment(
+    item: Mapping[str, Any], profile: Any
+) -> VerifiedEnrollmentVerifierReceipt:
+    evidence = _setup_evidence(item, "enrollment_verification")
+    raw = setup_receipt_canonical_json_bytes(evidence["document"])
+    _, statement = _setup_receipt_document(raw)
+    issued_at = statement.get("issued_at_unix")
+    if type(issued_at) is not int:
+        raise HTTPException(status_code=409, detail="stored enrollment receipt time is invalid")
+    expected = EnrollmentReceiptExpected(
+        receipt_id=_setup_receipt_uuid(statement),
+        setup_session_id=str(item["id"]),
+        assignment=_setup_assignment_from_session(item),
+        enrollment_session_id=str(item["enrollment_session_id"]),
+        enrollment_packet_sha256=str(item["enrollment_packet_digest"]),
+        verifier_nonce_sha256=str(item["verifier_nonce_hash"]),
+        trust_profile_sha256=profile.digest,
+    )
+    try:
+        return verify_enrollment_verifier_receipt(
+            raw,
+            trust=profile.enrollment_verifier,
+            expected=expected,
+            clock=FixedClock(issued_at),
+        )
+    except ReceiptVerificationError as exc:
+        _setup_receipt_failure(exc)
+        raise AssertionError("unreachable")
+
+
+def _setup_hardware_assurance_projection(raw: bytes, profile: Any) -> dict[str, Any]:
+    document, statement = _setup_receipt_document(
+        raw, limits=_SETUP_HARDWARE_ASSURANCE_JSON_LIMITS
+    )
+    if set(document) != {"apiVersion", "kind", "statement", "signing_key_id", "signature"}:
+        raise HTTPException(status_code=409, detail="hardware assurance fields are not closed")
+    if document.get("apiVersion") != "serverware.hardwareAssurance/v1" or document.get("kind") != "ServerwareHardwareAssurance":
+        raise HTTPException(status_code=409, detail="hardware assurance type is invalid")
+    if document.get("signing_key_id") != profile.hardware_verifier.key_id:
+        raise HTTPException(status_code=409, detail="hardware assurance signer is not trusted")
+    signature = document.get("signature")
+    if not isinstance(signature, str) or not signature.startswith("ed25519:"):
+        raise HTTPException(status_code=409, detail="hardware assurance signature is invalid")
+    signature_bytes = _decode_setup_receipt_blob(
+        signature.split(":", 1)[1], label="hardware assurance signature", maximum=64
+    )
+    if len(signature_bytes) != 64:
+        raise HTTPException(status_code=409, detail="hardware assurance signature length is invalid")
+    public_key = serialization.load_der_public_key(profile.hardware_verifier.public_key_spki_der)
+    if not isinstance(public_key, Ed25519PublicKey):
+        raise HTTPException(status_code=503, detail="hardware verifier trust root is invalid")
+    try:
+        public_key.verify(signature_bytes, setup_receipt_canonical_json_bytes(statement))
+    except InvalidSignature as exc:
+        raise HTTPException(status_code=409, detail="hardware assurance signature verification failed") from exc
+    now = int(time.time())
+    issued_at = statement.get("issued_at_unix")
+    expires_at = statement.get("expires_at_unix")
+    if (
+        type(issued_at) is not int
+        or type(expires_at) is not int
+        or issued_at > now + 30
+        or now - issued_at > 900
+        or expires_at <= now
+        or expires_at <= issued_at
+        or expires_at - issued_at > 900
+    ):
+        raise HTTPException(status_code=409, detail="hardware assurance validity window is invalid")
+    challenge = _decode_setup_receipt_blob(
+        statement.get("challenge_nonce"), label="hardware assurance challenge", maximum=64
+    )
+    if len(challenge) < 32:
+        raise HTTPException(status_code=409, detail="hardware assurance challenge is too short")
+    eif = statement.get("eif")
+    build_manifest = eif.get("build_manifest") if isinstance(eif, Mapping) else None
+    host = statement.get("current_host_identity")
+    release_digest = build_manifest.get("release_identity_sha256") if isinstance(build_manifest, Mapping) else None
+    host_digest = host.get("identity_sha256") if isinstance(host, Mapping) else None
+    for value, label in (
+        (release_digest, "release identity"),
+        (host_digest, "current host identity"),
+    ):
+        if not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+            raise HTTPException(status_code=409, detail=f"hardware assurance {label} digest is invalid")
+    return {
+        "document": document,
+        "documentDigest": setup_receipt_sha256_digest(raw),
+        "statementDigest": setup_receipt_sha256_digest(setup_receipt_canonical_json_bytes(statement)),
+        "challenge": challenge,
+        "challengeDigest": setup_receipt_sha256_digest(challenge),
+        "releaseIdentityDigest": release_digest,
+        "currentHostIdentityDigest": host_digest,
+    }
+
+
+def _verified_setup_hardware(
+    item: Mapping[str, Any], profile: Any
+) -> VerifiedSetupHardwareVerification:
+    evidence = _setup_evidence(item, "hardware_assurance")
+    evidence_document = evidence["document"]
+    receipt_document = evidence_document.get("verificationReceipt")
+    if not isinstance(receipt_document, Mapping):
+        raise HTTPException(status_code=409, detail="stored hardware verification receipt is unavailable")
+    raw = setup_receipt_canonical_json_bytes(receipt_document)
+    for content_field, digest_field, expected_digest in (
+        (
+            "hardwareAssuranceBase64url",
+            "hardwareAssuranceSha256",
+            item.get("hardware_assurance_digest"),
+        ),
+        (
+            "proxyServerStatementBase64url",
+            "proxyServerStatementSha256",
+            item.get("proxy_server_statement_digest"),
+        ),
+    ):
+        content = _decode_setup_receipt_blob(
+            evidence_document.get(content_field),
+            label=f"stored {content_field}",
+            maximum=_SETUP_HARDWARE_ASSURANCE_MAX_BYTES,
+        )
+        if not (
+            evidence_document.get(digest_field) == expected_digest
+            and hmac.compare_digest(
+                setup_receipt_sha256_digest(content), str(expected_digest or "")
+            )
+        ):
+            raise HTTPException(status_code=409, detail="stored hardware artifact binding is inconsistent")
+    _, statement = _setup_receipt_document(raw)
+    issued_at = statement.get("issued_at_unix")
+    challenge_text = statement.get("challenge")
+    if type(issued_at) is not int:
+        raise HTTPException(status_code=409, detail="stored hardware receipt time is invalid")
+    challenge = _decode_setup_receipt_blob(
+        challenge_text, label="stored hardware challenge", maximum=64
+    )
+    if not hmac.compare_digest(
+        setup_receipt_sha256_digest(challenge),
+        str(item.get("attestation_challenge_digest") or ""),
+    ):
+        raise HTTPException(status_code=409, detail="stored hardware challenge binding is inconsistent")
+    expected = HardwareVerificationExpected(
+        receipt_id=_setup_receipt_uuid(statement),
+        setup_session_id=str(item["id"]),
+        assignment=_setup_assignment_from_session(item),
+        runtime_evidence_sha256=str(item["runtime_evidence_digest"]),
+        challenge=challenge,
+        hardware_assurance_sha256=str(item["hardware_assurance_digest"]),
+        hardware_statement_sha256=str(statement.get("hardware_statement_sha256") or ""),
+        release_identity_sha256=str(item["release_identity_digest"]),
+        current_host_identity_sha256=str(item["current_host_identity_digest"]),
+        proxy_server_statement_sha256=str(item["proxy_server_statement_digest"]),
+        trust_profile_sha256=str(item["trust_profile_digest"]),
+    )
+    try:
+        return verify_setup_hardware_verification(
+            raw,
+            trust=profile.hardware_verifier,
+            expected=expected,
+            clock=FixedClock(issued_at),
+        )
+    except ReceiptVerificationError as exc:
+        _setup_receipt_failure(exc)
+        raise AssertionError("unreachable")
+
+
+def _setup_final_receipt_audited(item: Mapping[str, Any]) -> bool:
+    return any(
+        event.get("transition") == "record_final_challenge_receipt"
+        and event.get("audit_status") == "audited"
+        and event.get("audited_at")
+        and event.get("audit_event_hash")
+        for event in (item.get("events") or [])
+        if isinstance(event, Mapping)
+    )
+
+
 @app.post("/api/setup/sessions")
 def setup_session_create(
     payload: SetupSessionCreateRequest,
@@ -4662,6 +5093,501 @@ def setup_session_get(
         include_events=True,
     )
     return {"session": _setup_session_public(item)}
+
+
+@app.get("/api/setup/receipt-trust")
+def setup_receipt_trust(
+    _: AdminIdentity = Depends(require_role(*sorted(_SETUP_SESSION_READ_ROLES))),
+) -> dict[str, Any]:
+    profile = _setup_receipt_profile()
+    return {
+        "apiVersion": "serverware.setupReceiptTrustProfile/v1",
+        "digest": profile.digest,
+        "enrollmentVerifier": {
+            "provider": profile.enrollment_verifier.provider,
+            "keyId": profile.enrollment_verifier.key_id,
+        },
+        "hardwareVerifier": {
+            "provider": profile.hardware_verifier.provider,
+            "keyId": profile.hardware_verifier.key_id,
+        },
+        "finalAuthority": {
+            "provider": profile.final_authority.provider,
+            "keyId": profile.final_authority.key_id,
+        },
+    }
+
+
+@app.post("/api/setup/sessions/{session_id}/enrollment-receipt")
+async def setup_session_enrollment_receipt(
+    session_id: str,
+    request: Request,
+    identity: AdminIdentity = Depends(require_role("attestation_operator")),
+) -> dict[str, Any]:
+    envelope = await _setup_receipt_envelope(
+        request, required_fields={"expectedRevision", "receipt"}
+    )
+    item = _load_setup_session_for_identity(
+        session_id, identity, mutate=True, include_evidence=True
+    )
+    _require_setup_current_assignee(item, identity)
+    expected_revision = _setup_expected_revision(envelope)
+    if expected_revision != item["revision"]:
+        _setup_session_error(
+            db.SetupSessionStaleRevisionError(
+                session_id, expected_revision, int(item["revision"])
+            )
+        )
+    if item["phase"] != "enrollment_issued":
+        raise HTTPException(status_code=409, detail="setup is not awaiting an enrollment receipt")
+    _setup_enrollment_is_authoritatively_consumed(item)
+    profile = _setup_receipt_profile()
+    raw_receipt = _decode_setup_receipt_blob(
+        envelope.get("receipt"), label="enrollment receipt", maximum=_SETUP_RECEIPT_MAX_BYTES
+    )
+    document, statement = _setup_receipt_document(raw_receipt)
+    expected = EnrollmentReceiptExpected(
+        receipt_id=_setup_receipt_uuid(statement),
+        setup_session_id=session_id,
+        assignment=_setup_assignment_from_session(item),
+        enrollment_session_id=str(item["enrollment_session_id"]),
+        enrollment_packet_sha256=str(item["enrollment_packet_digest"]),
+        verifier_nonce_sha256=str(item["verifier_nonce_hash"]),
+        trust_profile_sha256=profile.digest,
+    )
+    try:
+        verified = verify_enrollment_verifier_receipt(
+            raw_receipt,
+            trust=profile.enrollment_verifier,
+            expected=expected,
+            clock=lambda: int(time.time()),
+        )
+        updated = db.transition_setup_session(
+            session_id,
+            expected_revision=expected_revision,
+            transition="record_enrollment_evidence",
+            actor_id=identity.user_id,
+            evidence=[
+                {
+                    "kind": "enrollment_verification",
+                    "document": _plain_setup_json(document),
+                    "verifier_key_id": verified.verifier_key_id,
+                    "observed_at": datetime.fromtimestamp(
+                        verified.issued_at_unix, timezone.utc
+                    ).isoformat(),
+                }
+            ],
+            event={
+                "receipt_id": verified.receipt_id,
+                "receipt_digest": verified.receipt_sha256,
+                "trust_profile_digest": verified.trust_profile_sha256,
+            },
+        )
+    except ReceiptVerificationError as exc:
+        _setup_receipt_failure(exc)
+        raise AssertionError("unreachable")
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/attestation-challenge")
+def setup_session_attestation_challenge(
+    session_id: str,
+    payload: SetupSessionRevisionRequest,
+    identity: AdminIdentity = Depends(require_role("attestation_operator")),
+) -> dict[str, Any]:
+    item = _load_setup_session_for_identity(session_id, identity, mutate=True)
+    _require_setup_current_assignee(item, identity)
+    if item["phase"] != "runtime_verified":
+        raise HTTPException(status_code=409, detail="setup runtime evidence is not verified")
+    profile = _setup_receipt_profile()
+    if payload.expected_revision != item["revision"]:
+        _setup_session_error(
+            db.SetupSessionStaleRevisionError(
+                session_id, payload.expected_revision, int(item["revision"])
+            )
+        )
+    existing_expires = item.get("attestation_challenge_expires_at")
+    existing_value = item.get("attestation_challenge_value")
+    if existing_expires and existing_value:
+        expires = datetime.fromisoformat(str(existing_expires))
+        if datetime.now(timezone.utc) < expires:
+            challenge = _decode_setup_receipt_blob(
+                existing_value,
+                label="stored setup challenge",
+                maximum=64,
+            )
+            return {
+                "session": _setup_session_public(item),
+                "audit": {"claimed": 0, "audited": 0, "failed": 0},
+                "challenge": {
+                    "apiVersion": "serverware.setupAttestationChallenge/v1",
+                    "value": existing_value,
+                    "sha256": setup_receipt_sha256_digest(challenge),
+                    "expiresAt": expires.isoformat(),
+                    "trustProfileDigest": profile.digest,
+                },
+            }
+    challenge = secrets.token_bytes(32)
+    challenge_value = base64.urlsafe_b64encode(challenge).decode("ascii").rstrip("=")
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS)
+    try:
+        updated = db.transition_setup_session(
+            session_id,
+            expected_revision=payload.expected_revision,
+            transition="bind_attestation_challenge",
+            actor_id=identity.user_id,
+            updates={
+                "attestation_challenge_digest": setup_receipt_sha256_digest(challenge),
+                "attestation_challenge_issued_at": now.isoformat(),
+                "attestation_challenge_expires_at": expires.isoformat(),
+                "attestation_challenge_value": challenge_value,
+            },
+            event={"trust_profile_digest": profile.digest},
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    response = _finish_setup_transition(updated)
+    response["challenge"] = {
+        "apiVersion": "serverware.setupAttestationChallenge/v1",
+        "value": challenge_value,
+        "sha256": setup_receipt_sha256_digest(challenge),
+        "expiresAt": expires.isoformat(),
+        "trustProfileDigest": profile.digest,
+    }
+    return response
+
+
+@app.post("/api/setup/sessions/{session_id}/hardware-verification")
+async def setup_session_hardware_verification(
+    session_id: str,
+    request: Request,
+    identity: AdminIdentity = Depends(require_role("attestation_operator")),
+) -> dict[str, Any]:
+    envelope = await _setup_receipt_envelope(
+        request,
+        required_fields={
+            "expectedRevision",
+            "hardwareAssurance",
+            "proxyServerStatement",
+            "receipt",
+        },
+    )
+    item = _load_setup_session_for_identity(
+        session_id, identity, mutate=True, include_evidence=True
+    )
+    _require_setup_current_assignee(item, identity)
+    expected_revision = _setup_expected_revision(envelope)
+    if expected_revision != item["revision"]:
+        _setup_session_error(
+            db.SetupSessionStaleRevisionError(
+                session_id, expected_revision, int(item["revision"])
+            )
+        )
+    if item["phase"] != "runtime_verified" or not item.get("runtime_evidence_digest"):
+        raise HTTPException(status_code=409, detail="setup runtime evidence is not verified")
+    if not item.get("attestation_challenge_digest"):
+        raise HTTPException(status_code=409, detail="setup attestation challenge is unavailable")
+    profile = _setup_receipt_profile()
+    raw_assurance = _decode_setup_receipt_blob(
+        envelope.get("hardwareAssurance"),
+        label="hardware assurance",
+        maximum=_SETUP_HARDWARE_ASSURANCE_MAX_BYTES,
+    )
+    assurance = _setup_hardware_assurance_projection(raw_assurance, profile)
+    if not hmac.compare_digest(
+        assurance["challengeDigest"], str(item["attestation_challenge_digest"])
+    ):
+        raise HTTPException(status_code=409, detail="hardware assurance challenge does not match this setup")
+    raw_proxy_statement = _decode_setup_receipt_blob(
+        envelope.get("proxyServerStatement"),
+        label="proxy server statement",
+        maximum=128 * 1024,
+    )
+    proxy_statement_digest = setup_receipt_sha256_digest(raw_proxy_statement)
+    raw_receipt = _decode_setup_receipt_blob(
+        envelope.get("receipt"),
+        label="hardware verification receipt",
+        maximum=_SETUP_RECEIPT_MAX_BYTES,
+    )
+    document, statement = _setup_receipt_document(raw_receipt)
+    expected = HardwareVerificationExpected(
+        receipt_id=_setup_receipt_uuid(statement),
+        setup_session_id=session_id,
+        assignment=_setup_assignment_from_session(item),
+        runtime_evidence_sha256=str(item["runtime_evidence_digest"]),
+        challenge=assurance["challenge"],
+        hardware_assurance_sha256=assurance["documentDigest"],
+        hardware_statement_sha256=assurance["statementDigest"],
+        release_identity_sha256=assurance["releaseIdentityDigest"],
+        current_host_identity_sha256=assurance["currentHostIdentityDigest"],
+        proxy_server_statement_sha256=proxy_statement_digest,
+        trust_profile_sha256=profile.digest,
+    )
+    try:
+        verified = verify_setup_hardware_verification(
+            raw_receipt,
+            trust=profile.hardware_verifier,
+            expected=expected,
+            clock=lambda: int(time.time()),
+        )
+        completion = derive_setup_completion_identity(
+            _verified_setup_enrollment(item, profile), verified
+        )
+        updated = db.transition_setup_session(
+            session_id,
+            expected_revision=expected_revision,
+            transition="record_hardware_receipt",
+            actor_id=identity.user_id,
+            updates={
+                "hardware_assurance_digest": verified.hardware_assurance_sha256,
+                "hardware_verification_receipt_digest": verified.receipt_sha256,
+                "release_identity_digest": verified.release_identity_sha256,
+                "current_host_identity_digest": verified.current_host_identity_sha256,
+                "proxy_server_statement_digest": verified.proxy_server_statement_sha256,
+                "trust_profile_digest": verified.trust_profile_sha256,
+            },
+            evidence=[
+                {
+                    "kind": "hardware_assurance",
+                    "document": {
+                        "apiVersion": "serverware.setupHardwareEvidence/v1",
+                        "hardwareAssuranceBase64url": base64.urlsafe_b64encode(
+                            raw_assurance
+                        ).decode("ascii").rstrip("="),
+                        "hardwareAssuranceSha256": verified.hardware_assurance_sha256,
+                        "proxyServerStatementBase64url": base64.urlsafe_b64encode(
+                            raw_proxy_statement
+                        ).decode("ascii").rstrip("="),
+                        "proxyServerStatementSha256": verified.proxy_server_statement_sha256,
+                        "verificationReceipt": _plain_setup_json(document),
+                    },
+                    "verifier_key_id": verified.hardware_verifier_key_id,
+                    "observed_at": datetime.fromtimestamp(
+                        verified.issued_at_unix, timezone.utc
+                    ).isoformat(),
+                }
+            ],
+            event={
+                "receipt_id": verified.receipt_id,
+                "receipt_digest": verified.receipt_sha256,
+                "hardware_assurance_digest": verified.hardware_assurance_sha256,
+                "hardware_statement_digest": verified.hardware_statement_sha256,
+                "completion_identity_digest": completion.digest_sha256,
+            },
+        )
+    except ReceiptVerificationError as exc:
+        _setup_receipt_failure(exc)
+        raise AssertionError("unreachable")
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    response = _finish_setup_transition(updated)
+    response["completionIdentity"] = {
+        "apiVersion": "serverware.setupCompletionIdentity/v1",
+        "sha256": completion.digest_sha256,
+        "document": _plain_setup_json(completion.document),
+    }
+    return response
+
+
+@app.post("/api/setup/sessions/{session_id}/final-receipt")
+async def setup_session_final_receipt(
+    session_id: str,
+    request: Request,
+    identity: AdminIdentity = Depends(require_role("attestation_reviewer")),
+) -> dict[str, Any]:
+    envelope = await _setup_receipt_envelope(
+        request,
+        required_fields={"expectedRevision", "receipt"},
+        optional_fields={"mfa"},
+    )
+    item = _load_setup_session_for_identity(
+        session_id,
+        identity,
+        mutate=True,
+        include_evidence=True,
+        include_events=True,
+    )
+    _require_setup_current_assignee(item, identity)
+    expected_revision = _setup_expected_revision(envelope)
+    if expected_revision != item["revision"]:
+        _setup_session_error(
+            db.SetupSessionStaleRevisionError(
+                session_id, expected_revision, int(item["revision"])
+            )
+        )
+    if item["phase"] not in {"hardware_verified", "completion_pending_audit", "complete"}:
+        raise HTTPException(status_code=409, detail="setup hardware evidence is not verified")
+    profile = _setup_receipt_profile()
+    completion = derive_setup_completion_identity(
+        _verified_setup_enrollment(item, profile),
+        _verified_setup_hardware(item, profile),
+    )
+    raw_receipt = _decode_setup_receipt_blob(
+        envelope.get("receipt"),
+        label="final challenge receipt",
+        maximum=_SETUP_RECEIPT_MAX_BYTES,
+    )
+    document, statement = _setup_receipt_document(raw_receipt)
+    receipt_clock = FixedClock(int(time.time()))
+    if item["phase"] in {"completion_pending_audit", "complete"}:
+        issued_at = statement.get("issued_at_unix")
+        if type(issued_at) is not int:
+            raise HTTPException(status_code=409, detail="final receipt time is invalid")
+        receipt_clock = FixedClock(issued_at)
+    try:
+        verified = verify_final_challenge_receipt(
+            raw_receipt,
+            trust=profile.final_challenge_trust,
+            completion=completion,
+            clock=receipt_clock,
+        )
+    except ReceiptVerificationError as exc:
+        _setup_receipt_failure(exc)
+        raise AssertionError("unreachable")
+    if item["phase"] in {"completion_pending_audit", "complete"}:
+        if not (
+            hmac.compare_digest(verified.receipt_sha256, str(item.get("final_receipt_digest") or ""))
+            and hmac.compare_digest(verified.consumption_id, str(item.get("final_consumption_id") or ""))
+            and hmac.compare_digest(completion.digest_sha256, str(item.get("completion_identity_digest") or ""))
+        ):
+            raise HTTPException(status_code=409, detail="final receipt retry does not match the accepted receipt")
+    if item["phase"] == "hardware_verified":
+        raw_mfa = envelope.get("mfa")
+        if raw_mfa is not None and not isinstance(raw_mfa, Mapping):
+            raise HTTPException(status_code=400, detail="final receipt mfa must be an object")
+        mfa = _plain_setup_json(raw_mfa) if raw_mfa is not None else None
+        payload_digest = _control_plane_payload_digest(
+            {
+                "setup_session_id": session_id,
+                "expected_revision": expected_revision,
+                "final_receipt_digest": verified.receipt_sha256,
+                "completion_identity_digest": completion.digest_sha256,
+            }
+        )
+        verified_mfa = _require_control_plane_mutation_mfa(
+            action="setup.attestation.finalize",
+            resource_id=session_id,
+            payload_digest=payload_digest,
+            mfa=mfa,
+            identity=identity,
+        )
+        approval_request = {
+            "setup_session_id": session_id,
+            "final_receipt_digest": verified.receipt_sha256,
+            "completion_identity_digest": completion.digest_sha256,
+        }
+
+        def accept_final_receipt(
+            two_person: dict[str, Any] | None,
+            *,
+            connection: Any | None = None,
+        ) -> dict[str, Any]:
+            return db.transition_setup_session(
+                session_id,
+                expected_revision=expected_revision,
+                transition="record_final_challenge_receipt",
+                actor_id=identity.user_id,
+                updates={
+                    "completion_identity_digest": completion.digest_sha256,
+                    "final_consumption_id": verified.consumption_id,
+                },
+                evidence=[
+                    {
+                        "kind": "final_challenge_receipt",
+                        "document": _plain_setup_json(document),
+                        "verifier_key_id": verified.authority_key_id,
+                        "observed_at": datetime.fromtimestamp(
+                            verified.issued_at_unix, timezone.utc
+                        ).isoformat(),
+                    }
+                ],
+                event={
+                    "receipt_digest": verified.receipt_sha256,
+                    "consumption_id": verified.consumption_id,
+                    "completion_identity_digest": completion.digest_sha256,
+                    "control_plane_mfa": verified_mfa,
+                    "control_plane_approval": two_person,
+                    "payload_digest": payload_digest,
+                },
+                _connection=connection,
+            )
+
+        try:
+            if _control_plane_two_person_required("setup.attestation.finalize") and _control_plane_approval_id(mfa):
+                with db.connect() as connection:
+                    two_person = _require_control_plane_two_person(
+                        action="setup.attestation.finalize",
+                        resource_id=session_id,
+                        payload_digest=payload_digest,
+                        mfa=mfa,
+                        identity=identity,
+                        request=approval_request,
+                        connection=connection,
+                    )
+                    item = accept_final_receipt(
+                        two_person, connection=connection
+                    )
+            else:
+                two_person = _require_control_plane_two_person(
+                    action="setup.attestation.finalize",
+                    resource_id=session_id,
+                    payload_digest=payload_digest,
+                    mfa=mfa,
+                    identity=identity,
+                    request=approval_request,
+                )
+                item = accept_final_receipt(two_person)
+        except db.SetupSessionError as exc:
+            _setup_session_error(exc)
+            raise AssertionError("unreachable")
+    audit = _drain_setup_session_audit_outbox()
+    item = _load_setup_session_for_identity(
+        session_id,
+        identity,
+        mutate=True,
+        include_evidence=True,
+        include_events=True,
+    )
+    if item["phase"] == "completion_pending_audit" and _setup_final_receipt_audited(item):
+        try:
+            item = db.transition_setup_session(
+                session_id,
+                expected_revision=int(item["revision"]),
+                transition="system_complete",
+                actor_id="serverware:setup-audit-finalizer",
+                event={
+                    "final_receipt_digest": verified.receipt_sha256,
+                    "completion_identity_digest": completion.digest_sha256,
+                },
+            )
+        except db.SetupSessionError as exc:
+            _setup_session_error(exc)
+            raise AssertionError("unreachable")
+        completion_audit = _drain_setup_session_audit_outbox()
+        audit = {
+            key: audit.get(key, 0) + completion_audit.get(key, 0)
+            for key in {"claimed", "audited", "failed"}
+        }
+    return {
+        "session": _setup_session_public(item),
+        "audit": audit,
+        "completionIdentity": {
+            "apiVersion": "serverware.setupCompletionIdentity/v1",
+            "sha256": completion.digest_sha256,
+            "document": _plain_setup_json(completion.document),
+        },
+        "finalReceipt": {
+            "sha256": verified.receipt_sha256,
+            "consumptionId": verified.consumption_id,
+            "authorityKeyId": verified.authority_key_id,
+        },
+    }
 
 
 @app.post("/api/setup/sessions/{session_id}/claim")
@@ -5015,34 +5941,6 @@ def setup_session_verify(
     )
     current = item
     try:
-        if current["phase"] == "enrollment_issued":
-            enrollment_check = next(
-                (
-                    check
-                    for check in result["checks"]
-                    if check["id"] == "enrollment.caCapabilityConsumed"
-                ),
-                None,
-            )
-            if enrollment_check and enrollment_check["status"] == "pass":
-                current = db.transition_setup_session(
-                    session_id,
-                    expected_revision=current["revision"],
-                    transition="record_enrollment_evidence",
-                    actor_id=identity.user_id,
-                    evidence=[
-                        {
-                            "kind": "enrollment_verification",
-                            "document": {
-                                "assignmentDigest": result["assignmentDigest"],
-                                "enrollment": enrollment_check.get("evidence"),
-                                "verificationClass": "server-observed-capability-consumption",
-                            },
-                            "verifier_key_id": "serverware-control-plane",
-                            "observed_at": result["checkedAt"],
-                        }
-                    ],
-                )
         if current["phase"] == "ca_installed":
             canary = _read_policy_canary_state()
             if (
@@ -5100,6 +5998,8 @@ def setup_session_verify(
         _setup_session_error(exc)
         raise AssertionError("unreachable")
     response = _finish_setup_transition(current)
+    result["setupSessionId"] = current["id"]
+    result["setupRevision"] = current["revision"]
     response["verification"] = result
     return response
 
@@ -8893,6 +9793,19 @@ UI_HTML = r"""
             <button id="setup-command-button" class="secondary" type="button" onclick="runUiAction('Download packet and copy verifier command', copyEnrollmentVerifier)" disabled>Copy verification command</button>
             <button id="setup-verify-button" class="secondary" type="submit">Verify server evidence</button>
           </div>
+          <div class="setup-form-grid">
+            <div><label for="setup-enrollment-receipt">Enrollment verifier receipt</label><input id="setup-enrollment-receipt" type="file" accept="application/json,.json"></div>
+            <button id="setup-enrollment-receipt-button" class="secondary" type="button" onclick="runUiAction('Accept enrollment receipt', submitSetupEnrollmentReceipt)" disabled>Accept enrollment receipt</button>
+            <button id="setup-challenge-button" class="secondary" type="button" onclick="runUiAction('Issue attestation challenge', issueSetupAttestationChallenge)" disabled>Issue challenge</button>
+            <div><label for="setup-attestation-challenge">Attestation challenge</label><input id="setup-attestation-challenge" readonly></div>
+            <button id="setup-copy-challenge-button" class="secondary" type="button" title="Copy attestation challenge" onclick="runUiAction('Copy attestation challenge', copySetupAttestationChallenge)" disabled>Copy challenge</button>
+            <div><label for="setup-hardware-assurance">Hardware assurance</label><input id="setup-hardware-assurance" type="file" accept="application/json,.json"></div>
+            <div><label for="setup-hardware-receipt">Hardware verifier receipt</label><input id="setup-hardware-receipt" type="file" accept="application/json,.json"></div>
+            <div><label for="setup-proxy-statement">Proxy response statement</label><input id="setup-proxy-statement" type="file" accept="application/json,.json"></div>
+            <button id="setup-hardware-button" class="secondary" type="button" onclick="runUiAction('Accept hardware verification', submitSetupHardwareVerification)" disabled>Accept hardware proof</button>
+            <div><label for="setup-final-receipt">Off-host final receipt</label><input id="setup-final-receipt" type="file" accept="application/json,.json"></div>
+            <button id="setup-final-button" type="button" onclick="runUiAction('Finalize attested setup', finalizeSetupAttestation)" disabled>Finalize attestation</button>
+          </div>
         </form>
         <div id="setup-summary" class="setup-summary" role="status" aria-live="polite"></div>
         <div id="setup-checks" class="setup-checks"></div>
@@ -9125,7 +10038,7 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], pendingOAuthCredentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, setupSessions: [], setupSession: null, oauthSetupSessionId: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
+    let state = {credentials: [], pendingOAuthCredentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, setupSessions: [], setupSession: null, setupChallenge: null, oauthSetupSessionId: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
     let pendingMutation = null;
     let refreshInFlight = null;
     let hasRendered = false;
@@ -9403,7 +10316,11 @@ UI_HTML = r"""
     }
 
     function bytesToB64(value) {
-      const raw = String.fromCharCode(...new Uint8Array(value));
+      const bytes = new Uint8Array(value);
+      let raw = '';
+      for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+        raw += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+      }
       return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
     }
 
@@ -9652,6 +10569,7 @@ UI_HTML = r"""
         const retained = {
           enrollmentPacket: state.enrollmentPacket,
           setupSession: state.setupSession,
+          setupChallenge: state.setupChallenge,
           oauthSetupSessionId: state.oauthSetupSessionId,
           setupVerification: state.setupVerification,
           approvalReview: state.approvalReview,
@@ -9666,7 +10584,7 @@ UI_HTML = r"""
           api('/api/policy'),
           api('/api/policy/canary/status'),
           api(`/attestation?nonce=${encodeURIComponent(generateEnrollmentNonce())}`),
-          api('/api/setup/sessions?status=active&limit=100')
+          api('/api/setup/sessions?limit=100')
         ]);
         const setupSessions = setupSessionsResult.status === 'fulfilled' ? setupSessionsResult.value.sessions || [] : [];
         const requestedSetupId = new URLSearchParams(window.location.search).get('setup');
@@ -9833,6 +10751,7 @@ UI_HTML = r"""
     }
 
     function rememberSetupSession(session, {updateUrl = true} = {}) {
+      if (state.setupSession?.id !== session?.id) state.setupChallenge = null;
       state.setupSession = session || null;
       if (session) {
         const existing = (state.setupSessions || []).filter((item) => item.id !== session.id);
@@ -9863,13 +10782,16 @@ UI_HTML = r"""
       if (!selection.template || !selection.principalId || !selection.routeId) {
         throw new Error('Select a template, principal, and route before creating a setup run');
       }
+      const activeRoute = (state.activePolicy?.bundle?.routes || []).find((item) => item.id === selection.routeId);
+      if (!activeRoute) throw new Error('The selected route is not present in the active signed policy');
+      const routePolicyDigest = await sha256CanonicalJson(activeRoute);
       const result = await api('/api/setup/sessions', {
         method: 'POST',
         body: JSON.stringify({
           templateId: selection.template,
           principalId: selection.principalId,
           routeId: selection.routeId,
-          routePolicyDigest: null
+          routePolicyDigest
         })
       });
       rememberSetupSession(result.session);
@@ -9962,13 +10884,19 @@ UI_HTML = r"""
     function setupVerificationForSelection(selection = currentSetupSelection()) {
       const result = state.setupVerification;
       const assignment = result?.assignment;
-      if (!assignment) return null;
+      const session = state.setupSession;
+      if (!assignment || !session) return null;
       const credential = (state.credentials || []).find((item) => item.id === selection.credentialId);
-      return assignment.principalId === selection.principalId
+      return result.setupSessionId === session.id
+        && result.setupRevision === session.revision
+        && result.assignmentDigest === session.assignmentDigest
+        && assignment.principalId === selection.principalId
         && assignment.routeId === selection.routeId
         && assignment.credentialId === selection.credentialId
         && assignment.policyHash === state.activePolicy?.policy_hash
         && assignment.credentialVersion === credential?.credential_version
+        && assignment.routePolicyDigest === session.routePolicyDigest
+        && session.enrollmentSessionId === state.enrollmentPacket?.ca?.installSession?.id
         ? result
         : null;
     }
@@ -10044,10 +10972,18 @@ UI_HTML = r"""
       $('setup-enroll-button').disabled = !active || setupSession?.phase !== 'policy_activated';
       $('setup-command-button').disabled = !packetMatches;
       $('setup-verify-button').disabled = !setupSession || !['enrollment_issued', 'ca_installed', 'canaries_verified', 'runtime_verified', 'hardware_verified'].includes(setupSession.phase);
+      $('setup-enrollment-receipt-button').disabled = setupSession?.phase !== 'enrollment_issued';
+      $('setup-challenge-button').disabled = setupSession?.phase !== 'runtime_verified';
+      $('setup-challenge-button').textContent = setupSession?.attestationChallengeDigest ? 'Get challenge' : 'Issue challenge';
+      $('setup-hardware-button').disabled = setupSession?.phase !== 'runtime_verified' || !setupSession?.attestationChallengeDigest;
+      $('setup-final-button').disabled = !['hardware_verified', 'completion_pending_audit'].includes(setupSession?.phase);
+      $('setup-attestation-challenge').value = state.setupChallenge?.setupSessionId === setupSession?.id ? state.setupChallenge.value : '';
+      $('setup-copy-challenge-button').disabled = !state.setupChallenge?.value || state.setupChallenge.setupSessionId !== setupSession?.id;
 
       setupStatusPill('setup-configuration-status', verification?.configurationReady === true, 'Configuration ready', active ? 'Evidence pending' : 'Configuration pending');
       setupStatusPill('setup-runtime-status', verification?.runtimeVerified === true, 'Path exercised', 'Path not exercised');
-      setupStatusPill('setup-hardware-status', verification?.hardwareVerified === true, 'Hardware verified', 'Hardware unverified');
+      const hardwareVerified = ['hardware_verified', 'completion_pending_audit', 'complete'].includes(setupSession?.phase);
+      setupStatusPill('setup-hardware-status', hardwareVerified, setupSession?.phase === 'complete' ? 'Attestation complete' : 'Hardware verified', 'Hardware unverified');
 
       const summary = $('setup-summary');
       const checks = $('setup-checks');
@@ -10836,6 +11772,87 @@ UI_HTML = r"""
       return result;
     }
 
+    async function readSetupArtifact(inputId, maximumBytes, label) {
+      const file = $(inputId).files?.[0];
+      if (!file) throw new Error(`Select the ${label} JSON file`);
+      if (file.size < 1 || file.size > maximumBytes) throw new Error(`${label} must be between 1 and ${maximumBytes} bytes`);
+      return bytesToB64(await file.arrayBuffer());
+    }
+
+    async function submitSetupEnrollmentReceipt() {
+      const session = state.setupSession;
+      if (!session || session.phase !== 'enrollment_issued') throw new Error('This setup run is not awaiting enrollment verification');
+      const receipt = await readSetupArtifact('setup-enrollment-receipt', 65536, 'enrollment verifier receipt');
+      const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/enrollment-receipt`, {
+        method: 'POST',
+        body: JSON.stringify({expectedRevision: session.revision, receipt})
+      });
+      rememberSetupSession(result.session);
+      state.setupVerification = null;
+      renderSetupWorkflow();
+      return result;
+    }
+
+    async function issueSetupAttestationChallenge() {
+      const session = state.setupSession;
+      if (!session || session.phase !== 'runtime_verified') throw new Error('Verify runtime evidence before issuing a hardware challenge');
+      const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/attestation-challenge`, {
+        method: 'POST',
+        body: JSON.stringify({expectedRevision: session.revision})
+      });
+      rememberSetupSession(result.session);
+      state.setupChallenge = {...result.challenge, setupSessionId: result.session.id};
+      renderSetupWorkflow();
+      return result;
+    }
+
+    async function copySetupAttestationChallenge() {
+      const challenge = state.setupChallenge;
+      if (!challenge || challenge.setupSessionId !== state.setupSession?.id) throw new Error('Issue a challenge in this browser first');
+      await navigator.clipboard.writeText(challenge.value);
+      return {sha256: challenge.sha256};
+    }
+
+    async function submitSetupHardwareVerification() {
+      const session = state.setupSession;
+      if (!session || session.phase !== 'runtime_verified' || !session.attestationChallengeDigest) throw new Error('This setup run is not awaiting hardware verification');
+      const hardwareAssurance = await readSetupArtifact('setup-hardware-assurance', 524288, 'hardware assurance');
+      const receipt = await readSetupArtifact('setup-hardware-receipt', 65536, 'hardware verifier receipt');
+      const proxyServerStatement = await readSetupArtifact('setup-proxy-statement', 131072, 'proxy response statement');
+      const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/hardware-verification`, {
+        method: 'POST',
+        body: JSON.stringify({
+          expectedRevision: session.revision,
+          hardwareAssurance,
+          proxyServerStatement,
+          receipt
+        })
+      });
+      rememberSetupSession(result.session);
+      state.setupChallenge = null;
+      state.setupVerification = null;
+      renderSetupWorkflow();
+      return result;
+    }
+
+    async function finalizeSetupAttestation() {
+      const session = state.setupSession;
+      if (!session || !['hardware_verified', 'completion_pending_audit'].includes(session.phase)) throw new Error('This setup run is not awaiting final attestation');
+      const receipt = await readSetupArtifact('setup-final-receipt', 65536, 'off-host final receipt');
+      const mutation = {
+        kind: 'setup-attestation-finalize',
+        label: 'Finalize attested setup',
+        persist: true,
+        path: `/api/setup/sessions/${encodeURIComponent(session.id)}/final-receipt`,
+        method: 'POST',
+        body: {expectedRevision: session.revision, receipt}
+      };
+      const completed = await runControlPlaneMutation(mutation);
+      if (completed.pending) return completed;
+      await finishMutation(completed.mutation, completed.result);
+      return completed.result;
+    }
+
     $('setup-form').addEventListener('submit', (event) => {
       event.preventDefault();
       runUiAction('Verify setup evidence', verifySetupEvidence);
@@ -11261,6 +12278,15 @@ UI_HTML = r"""
       const packetFilename = downloadEnrollment(packetText);
       const packetDigestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(packetText));
       const packetSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+      const setupSession = state.setupSession;
+      let receiptTrust = null;
+      if (setupSession?.enrollmentSessionId) {
+        try {
+          receiptTrust = await api('/api/setup/receipt-trust');
+        } catch (error) {
+          if (error.status !== 503) throw error;
+        }
+      }
       const command = [
         'set -euo pipefail',
         'umask 077',
@@ -11271,9 +12297,17 @@ UI_HTML = r"""
         `install -D -m 0644 .tmp/serverware-ca.pem ${shellQuote(ca.installPath)}`,
         `export HTTPS_PROXY=${shellQuote(serverware.proxyUrl)}`,
         `export HTTP_PROXY=${shellQuote(serverware.proxyUrl)}`
-      ].join('\n');
-      await navigator.clipboard.writeText(command);
-      return {copied: true, principalId: packet.principalId};
+      ];
+      if (receiptTrust && setupSession?.assignmentDigest && setupSession?.routePolicyDigest) {
+        command.push(
+          ': "${SERVERWARE_SETUP_ENROLLMENT_VERIFIER_SIGNING_KEY:?set the independent verifier Ed25519 private-key path}"',
+          'SETUP_ENROLLMENT_RECEIPT="${SERVERWARE_SETUP_ENROLLMENT_RECEIPT:-${VERIFIED_ENROLLMENT_PACKET%.json}.receipt.json}"',
+          `python3 scripts/generate_agent_enrollment.py --sign-setup-receipt --verify-packet "$ENROLLMENT_PACKET" --expected-packet-sha256 ${shellQuote(packetSha256)} --expected-principal ${shellQuote(packet.principalId)} --expected-nonce ${shellQuote(packet.nonce)} --base ${shellQuote(serverware.controlPlaneUrl)} --setup-session-id ${shellQuote(setupSession.id)} --enrollment-session-id ${shellQuote(setupSession.enrollmentSessionId)} --route-id ${shellQuote(setupSession.routeId)} --credential-id ${shellQuote(setupSession.credentialId)} --credential-version ${Number(setupSession.credentialVersion)} --policy-hash ${shellQuote(setupSession.policyHash)} --route-policy-digest ${shellQuote(setupSession.routePolicyDigest)} --expected-assignment-digest ${shellQuote(setupSession.assignmentDigest)} --trust-profile-sha256 ${shellQuote(receiptTrust.digest)} --verifier-provider ${shellQuote(receiptTrust.enrollmentVerifier.provider)} --setup-receipt-signing-key "$SERVERWARE_SETUP_ENROLLMENT_VERIFIER_SIGNING_KEY" --expected-verifier-key-id ${shellQuote(receiptTrust.enrollmentVerifier.keyId)} > "$SETUP_ENROLLMENT_RECEIPT"`
+        );
+      }
+      const commandText = command.join('\n');
+      await navigator.clipboard.writeText(commandText);
+      return {copied: true, principalId: packet.principalId, setupReceipt: Boolean(receiptTrust)};
     }
     $('admin-token').value = sessionStorage.getItem(tokenKey) || '';
     $('admin-token').addEventListener('change', async () => {

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import json
 import base64
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -11,7 +12,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import build_production_images
@@ -51,6 +53,37 @@ def b64e(value: bytes) -> str:
 
 def b64d(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+
+def verify_cosign_ecdsa_signature_compatibility() -> None:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_key_pem = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    payload = canonical_json({"cosign": "canonical-statement"}).encode("utf-8")
+    signature = base64.b64encode(private_key.sign(payload, ec.ECDSA(hashes.SHA256()))).decode("ascii")
+    verify_release_completion.verify_public_key_signature(
+        public_key_pem,
+        signature,
+        payload,
+        "Cosign ECDSA fixture",
+    )
+    try:
+        verify_release_completion.verify_public_key_signature(
+            public_key_pem,
+            signature,
+            payload + b"-tampered",
+            "Cosign ECDSA fixture",
+        )
+    except ValueError:
+        return
+    raise AssertionError("completion verifier accepted an ECDSA signature over a different statement")
+
+
+HARDWARE_ASSURANCE_CHALLENGE_BYTES = b"hardware-assurance-fixture-nonce"
+HARDWARE_ASSURANCE_CHALLENGE_NONCE = b64e(HARDWARE_ASSURANCE_CHALLENGE_BYTES)
+HARDWARE_ASSURANCE_CHALLENGE_SHA256 = sha256_prefixed_bytes(HARDWARE_ASSURANCE_CHALLENGE_BYTES)
 
 
 KMS_MATERIAL_FIXTURES: dict[str, dict[str, Any]] = {
@@ -107,7 +140,24 @@ def hardware_verifier_key_info() -> dict[str, Any]:
     return ed25519_key_info(key)
 
 
+def sigstore_signing_key_info() -> dict[str, Any]:
+    return public_key_info(ec.derive_private_key(4, ec.SECP256R1()))
+
+
+def rekor_key_info() -> dict[str, Any]:
+    return public_key_info(ec.derive_private_key(3, ec.SECP256R1()))
+
+
+def final_challenge_authority_key_info() -> dict[str, Any]:
+    key = Ed25519PrivateKey.from_private_bytes(b"\x0b" * 32)
+    return ed25519_key_info(key)
+
+
 def ed25519_key_info(key: Ed25519PrivateKey) -> dict[str, Any]:
+    return public_key_info(key)
+
+
+def public_key_info(key: Any) -> dict[str, Any]:
     public_key = key.public_key()
     pem = public_key.public_bytes(
         serialization.Encoding.PEM,
@@ -132,16 +182,10 @@ def image_signature_bundle_digest(document: dict[str, Any]) -> str:
     return sha256_prefixed_json(copied)
 
 
-def refresh_sigstore_bundle_digest(sigstore: dict[str, Any], statement_digest: str) -> None:
-    bundle = sigstore.get("bundle")
-    if not isinstance(bundle, dict):
-        return
-    message_signature = bundle.get("messageSignature")
-    if not isinstance(message_signature, dict):
-        return
-    message_digest = message_signature.get("messageDigest")
-    if isinstance(message_digest, dict):
-        message_digest["digest"] = statement_digest.split(":", 1)[1]
+def refresh_sigstore_bundle_digest(sigstore: dict[str, Any], statement: dict[str, Any]) -> None:
+    refreshed = sigstore_proof(statement=statement)
+    sigstore.clear()
+    sigstore.update(refreshed)
 
 
 def refresh_image_signature_bundle(summary: dict[str, Any], document: dict[str, Any]) -> None:
@@ -150,10 +194,14 @@ def refresh_image_signature_bundle(summary: dict[str, Any], document: dict[str, 
     bundle_sigstore = document.get("bundle_signature")
     if isinstance(bundle_sigstore, dict):
         bundle_sigstore["statement_digest"] = bundle_digest
-        refresh_sigstore_bundle_digest(bundle_sigstore, bundle_digest)
+        refresh_sigstore_bundle_digest(
+            bundle_sigstore,
+            verify_release_completion.normalized_image_signature_payload(document),
+        )
         metadata = document.get("metadata")
         if isinstance(metadata, dict):
             metadata["bundleSigstore"] = bundle_sigstore
+            metadata["signature"] = bundle_sigstore["signature"]
     summary["image_signature_bundle_digest"] = bundle_digest
     refresh_image_transparency_record(document)
 
@@ -170,7 +218,8 @@ def refresh_image_statements_and_bundle(summary: dict[str, Any], document: dict[
         sigstore = image.get("sigstore")
         if isinstance(sigstore, dict):
             sigstore["statement_digest"] = statement_digest
-            refresh_sigstore_bundle_digest(sigstore, statement_digest)
+            refresh_sigstore_bundle_digest(sigstore, statement)
+            image["signature"] = sigstore["signature"]
     refresh_image_signature_bundle(summary, document)
 
 
@@ -509,21 +558,288 @@ def write_production_env_files(
         f"SERVERWARE_DATA_PLANE_INSTANCE_ID={PROXY_SERVER_INSTANCE_ID}\n"
         f"SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID={proxy_collector_key_info()['key_id']}\n"
         f"SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID={proxy_vendor_verifier_key_info()['key_id']}\n"
+        f"{verify_release_completion.RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY}={tmp / 'release-signing.pub.pem'}\n"
+        f"{verify_release_completion.SIGSTORE_TRUST_ROOT_ENV_KEY}={tmp / 'sigstore-signing.pub.pem'}\n"
+        f"{verify_release_completion.REKOR_TRUST_ROOT_ENV_KEY}={tmp / 'rekor.pub.pem'}\n"
+        f"{verify_release_completion.EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY}={tmp / 'external-checkpoint.pub.pem'}\n"
+        f"{verify_release_completion.EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY}=managed-prod-log\n"
         f"SERVERWARE_PRODUCTION_IMAGES={selected_readiness_value}\n",
         encoding="utf-8",
     )
     write_production_config_files(tmp)
 
 
+def write_final_production_env_file(
+    tmp: Path,
+    *,
+    overrides: dict[str, str] | None = None,
+    omitted: set[str] | None = None,
+) -> dict[str, str]:
+    write_production_env_files(tmp)
+    configured = run_production_readiness.load_env_file(tmp / "production.env")
+    configured.update(
+        {
+            verify_release_completion.FINAL_MODE_ENV_KEY: "final",
+            verify_release_completion.FINAL_HARDWARE_ASSURANCE_ENV_KEY: str(tmp / "hardware-assurance.json"),
+            verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ENV_KEY: str(
+                tmp / "hardware-assurance-verifier.pub.pem"
+            ),
+            verify_release_completion.FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY: HARDWARE_ASSURANCE_CHALLENGE_NONCE,
+            verify_release_completion.FINAL_CHALLENGE_RECEIPT_ENV_KEY: str(tmp / "final-challenge-receipt.json"),
+            verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY: str(
+                tmp / "final-challenge-authority.pub.pem"
+            ),
+            verify_release_completion.FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY: (
+                "fixture-off-host-challenge-authority"
+            ),
+        }
+    )
+    configured.update(overrides or {})
+    for name in omitted or set():
+        configured.pop(name, None)
+    (tmp / "production.env").write_text(
+        "".join(f"{name}={value}\n" for name, value in configured.items()),
+        encoding="utf-8",
+    )
+    write_production_config_files(tmp)
+    return configured
+
+
+def final_env_binding_summaries(
+    tmp: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    configured = run_production_readiness.load_env_file(tmp / "production.env")
+    refs = production_image_refs()
+    environment = {
+        "production_readiness_env_sha256": sha256_file(tmp / "production.env"),
+        "production_images_env_sha256": sha256_file(tmp / "production-images.env"),
+    }
+    readiness_summary = {
+        "production_images": refs,
+        "production_image_digests": [ref.rsplit("@", 1)[1] for ref in refs],
+        "environment": environment,
+    }
+    preflight_summary = {
+        "production_image_refs": refs,
+        "production_env_keys": sorted(configured),
+        "benchmark_binary_digest": digest("9"),
+        "runtime_trust_materials": {
+            "proof_collector_key_id": proxy_collector_key_info()["key_id"],
+            "proof_verifier_key_id": proxy_vendor_verifier_key_info()["key_id"],
+        },
+        **environment,
+    }
+    config_summary = {"environment": environment}
+    return readiness_summary, preflight_summary, config_summary
+
+
+def test_final_production_env_binding() -> None:
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        tmp = Path(tmp_raw)
+        (tmp / "release-signing.pub.pem").write_text(release_key_info()["public_key_pem"], encoding="ascii")
+        (tmp / "sigstore-signing.pub.pem").write_text(
+            sigstore_signing_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        (tmp / "rekor.pub.pem").write_text(rekor_key_info()["public_key_pem"], encoding="ascii")
+        (tmp / "external-checkpoint.pub.pem").write_text(
+            external_receipt_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        (tmp / "hardware-assurance-verifier.pub.pem").write_text(
+            hardware_verifier_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        (tmp / "final-challenge-authority.pub.pem").write_text(
+            final_challenge_authority_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        configured = write_final_production_env_file(tmp)
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        recorded_summaries = (readiness_summary, preflight_summary, config_summary)
+        paths = {
+            "production_readiness_env": tmp / "production.env",
+            "production_images_env": tmp / "production-images.env",
+        }
+        final_input_names = (
+            verify_release_completion.FINAL_HARDWARE_ASSURANCE_ENV_KEY,
+            verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ENV_KEY,
+            verify_release_completion.FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY,
+            verify_release_completion.FINAL_HARDWARE_CHALLENGE_DIGEST_ENV_KEY,
+            verify_release_completion.FINAL_CHALLENGE_RECEIPT_ENV_KEY,
+            verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY,
+            verify_release_completion.FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY,
+        )
+        release_trust_input_names = (
+            verify_release_completion.RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY,
+            verify_release_completion.SIGSTORE_TRUST_ROOT_ENV_KEY,
+            verify_release_completion.REKOR_TRUST_ROOT_ENV_KEY,
+            verify_release_completion.EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY,
+            verify_release_completion.EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY,
+        )
+        final_inputs = {name: configured.get(name) for name in final_input_names}
+        release_trust_inputs = {name: configured.get(name) for name in release_trust_input_names}
+
+        def verify_binding(
+            selected: dict[str, str | None] | None = None,
+            selected_release_trust: dict[str, str | None] | None = None,
+        ) -> dict[str, Any]:
+            return verify_release_completion.verify_current_production_env_binding(
+                paths,
+                readiness_summary,
+                preflight_summary,
+                config_summary,
+                verification_mode="final",
+                release_trust_inputs=selected_release_trust or release_trust_inputs,
+                final_inputs=selected or final_inputs,
+            )
+
+        def expect_failure(
+            expected: str,
+            selected: dict[str, str | None] | None = None,
+            selected_release_trust: dict[str, str | None] | None = None,
+        ) -> None:
+            try:
+                verify_binding(selected, selected_release_trust)
+            except ValueError as exc:
+                if expected not in str(exc):
+                    raise AssertionError(f"final env binding failed for the wrong reason: {exc}") from exc
+            else:
+                raise AssertionError(f"final env binding accepted invalid input: {expected}")
+
+        binding = verify_binding()
+        if (
+            binding.get("final_trust_roots_env_bound") is not True
+            or binding.get("release_trust_roots_env_bound") is not True
+            or binding.get("release_provenance_trusted_public_key_id") != release_key_info()["key_id"]
+            or binding.get("sigstore_trusted_public_key_id") != sigstore_signing_key_info()["key_id"]
+            or binding.get("rekor_trusted_public_key_id") != rekor_key_info()["key_id"]
+            or binding.get("external_checkpoint_trusted_public_key_id")
+            != external_receipt_key_info()["key_id"]
+            or binding.get("hardware_assurance_trusted_public_key_id")
+            != hardware_verifier_key_info()["key_id"]
+            or binding.get("final_challenge_authority_public_key_id")
+            != final_challenge_authority_key_info()["key_id"]
+            or binding.get("hardware_assurance_expected_challenge_selector") != "nonce"
+        ):
+            raise AssertionError(f"valid final env binding omitted trust-root identities: {binding}")
+
+        substituted_release_trust = dict(release_trust_inputs)
+        substituted_release_trust[verify_release_completion.RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY] = str(
+            tmp / "caller-selected-release-key.pub.pem"
+        )
+        expect_failure(
+            "release provenance trust root does not exactly match",
+            selected_release_trust=substituted_release_trust,
+        )
+
+        substituted_checkpoint_provider = dict(release_trust_inputs)
+        substituted_checkpoint_provider[
+            verify_release_completion.EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY
+        ] = "caller-selected-transparency-log"
+        expect_failure(
+            "external checkpoint provider does not exactly match",
+            selected_release_trust=substituted_checkpoint_provider,
+        )
+
+        rogue_hardware_key = ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x14" * 32))
+        rogue_hardware_path = tmp / "rogue-hardware-verifier.pub.pem"
+        rogue_hardware_path.write_text(rogue_hardware_key["public_key_pem"], encoding="ascii")
+        substituted_hardware = dict(final_inputs)
+        substituted_hardware[verify_release_completion.FINAL_HARDWARE_TRUST_ROOT_ENV_KEY] = str(
+            rogue_hardware_path
+        )
+        expect_failure("hardware assurance trust root does not exactly match", substituted_hardware)
+
+        rogue_authority_key = ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x15" * 32))
+        rogue_authority_path = tmp / "rogue-final-authority.pub.pem"
+        rogue_authority_path.write_text(rogue_authority_key["public_key_pem"], encoding="ascii")
+        substituted_authority = dict(final_inputs)
+        substituted_authority[
+            verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY
+        ] = str(rogue_authority_path)
+        expect_failure("final challenge authority trust root does not exactly match", substituted_authority)
+
+        substituted_provider = dict(final_inputs)
+        substituted_provider[
+            verify_release_completion.FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY
+        ] = "caller-selected-authority"
+        expect_failure("final challenge authority provider does not exactly match", substituted_provider)
+
+        substituted_challenge = dict(final_inputs)
+        substituted_challenge[
+            verify_release_completion.FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY
+        ] = b64e(b"caller-selected-hardware-challenge")
+        expect_failure("hardware assurance expected challenge does not exactly match", substituted_challenge)
+
+        substituted_receipt = dict(final_inputs)
+        substituted_receipt[verify_release_completion.FINAL_CHALLENGE_RECEIPT_ENV_KEY] = str(
+            tmp / "caller-selected-final-receipt.json"
+        )
+        expect_failure("final challenge receipt does not exactly match", substituted_receipt)
+
+        write_final_production_env_file(
+            tmp,
+            omitted={verify_release_completion.RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY},
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        expect_failure("release provenance trust root does not exactly match")
+
+        write_final_production_env_file(
+            tmp,
+            omitted={verify_release_completion.FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY},
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        expect_failure("final challenge authority trust root does not exactly match")
+
+        write_final_production_env_file(
+            tmp,
+            omitted={verify_release_completion.FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY},
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        expect_failure("must pin exactly one hardware assurance expected challenge")
+
+        write_final_production_env_file(
+            tmp,
+            omitted={verify_release_completion.FINAL_MODE_ENV_KEY},
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        expect_failure("must set SERVERWARE_COMPLETION_VERIFICATION_MODE=final")
+
+        digest_configured = write_final_production_env_file(
+            tmp,
+            overrides={
+                verify_release_completion.FINAL_HARDWARE_CHALLENGE_DIGEST_ENV_KEY: (
+                    HARDWARE_ASSURANCE_CHALLENGE_SHA256
+                )
+            },
+            omitted={verify_release_completion.FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY},
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        digest_inputs = {name: digest_configured.get(name) for name in final_input_names}
+        digest_binding = verify_binding(digest_inputs)
+        if digest_binding.get("hardware_assurance_expected_challenge_selector") != "nonce_sha256":
+            raise AssertionError(f"final env digest challenge was not bound: {digest_binding}")
+
+        readiness_summary, preflight_summary, config_summary = recorded_summaries
+        rewritten = write_final_production_env_file(
+            tmp,
+            overrides={
+                verify_release_completion.FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY: (
+                    "rewritten-authority"
+                )
+            },
+        )
+        rewritten_inputs = {name: rewritten.get(name) for name in final_input_names}
+        expect_failure(
+            "current production readiness env digest does not match production host preflight",
+            rewritten_inputs,
+        )
+
+
 def redacted_environment_summary(tmp: Path) -> dict[str, Any]:
     return {
-        "env_keys": [
-            "SERVERWARE_DATA_PLANE_INSTANCE_ID",
-            "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST",
-            "SERVERWARE_PRODUCTION_IMAGES",
-            "SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID",
-            "SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID",
-        ],
+        "env_keys": sorted(run_production_readiness.load_env_file(tmp / "production.env")),
         "production_readiness_env_path": str(tmp / "production.env"),
         "production_readiness_env_sha256": sha256_file(tmp / "production.env"),
         "production_images_env_path": str(tmp / "production-images.env"),
@@ -709,39 +1025,131 @@ def transparency_for_record(
     return {"record": record, anchor_key: anchor_response, inclusion_key: inclusion}
 
 
-def sigstore_bundle(*, statement_digest: str, signature: str, log_id: str = digest("4"), log_index: int = 1) -> dict[str, Any]:
-    inclusion_proof = {"treeSize": log_index + 1, "logIndex": log_index, "rootHash": digest("a"), "hashes": []}
+def sigstore_bundle(
+    *,
+    statement: dict[str, Any],
+    signing_key_info: dict[str, Any] | None = None,
+    rekor_signer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    signer = signing_key_info or sigstore_signing_key_info()
+    rekor = rekor_signer or rekor_key_info()
+    statement_digest = sha256_prefixed_json(statement)
+    signature = base64.b64encode(
+        signer["key"].sign(
+            canonical_json(statement).encode("utf-8"),
+            ec.ECDSA(hashes.SHA256()),
+        )
+    ).decode("ascii")
+    raw_log_id = base64.b64encode(bytes.fromhex(rekor["key_id"].split(":", 1)[1])).decode("ascii")
+    body = {
+        "apiVersion": "0.0.1",
+        "kind": "hashedrekord",
+        "spec": {
+            "data": {"hash": {"algorithm": "sha256", "value": statement_digest.split(":", 1)[1]}},
+            "signature": {
+                "content": signature,
+                "publicKey": {
+                    "content": base64.b64encode(signer["public_key_pem"].encode("ascii")).decode("ascii")
+                },
+            },
+        },
+    }
+    canonicalized_body_bytes = canonical_json(body).encode("utf-8")
+    canonicalized_body = base64.b64encode(canonicalized_body_bytes).decode("ascii")
+    integrated_time = 1779830000
+    log_index = 0
+    set_payload = {
+        "body": canonicalized_body,
+        "integratedTime": integrated_time,
+        "logID": rekor["key_id"].split(":", 1)[1],
+        "logIndex": log_index,
+    }
+    signed_entry_timestamp = base64.b64encode(
+        rekor["key"].sign(
+            canonical_json(set_payload).encode("utf-8"),
+            ec.ECDSA(hashes.SHA256()),
+        )
+    ).decode("ascii")
+    leaf_hash = hashlib.sha256(b"\x00" + canonicalized_body_bytes).digest()
+    checkpoint_text = (
+        "rekor.fixture.test - 1\n"
+        "1\n"
+        + base64.b64encode(leaf_hash).decode("ascii")
+        + "\n"
+    )
+    checkpoint_signature = rekor["key"].sign(
+        checkpoint_text.encode("utf-8"),
+        ec.ECDSA(hashes.SHA256()),
+    )
+    checkpoint_envelope = (
+        checkpoint_text
+        + "\n\u2014 rekor.fixture.test "
+        + base64.b64encode(bytes.fromhex(rekor["key_id"].split(":", 1)[1])[:4] + checkpoint_signature).decode(
+            "ascii"
+        )
+        + "\n"
+    )
+    inclusion_proof = {
+        "treeSize": "1",
+        "logIndex": "0",
+        "rootHash": base64.b64encode(leaf_hash).decode("ascii"),
+        "hashes": [],
+        "checkpoint": {"envelope": checkpoint_envelope},
+    }
     return {
         "mediaType": "application/vnd.dev.sigstore.bundle.v0.3+json",
         "messageSignature": {
-            "messageDigest": {"algorithm": "sha256", "digest": statement_digest.split(":", 1)[1]},
+            "messageDigest": {
+                "algorithm": "SHA2_256",
+                "digest": base64.b64encode(bytes.fromhex(statement_digest.split(":", 1)[1])).decode("ascii"),
+            },
             "signature": signature,
         },
         "verificationMaterial": {
+            "publicKey": {
+                "hint": base64.b64encode(
+                    bytes.fromhex(signer["key_id"].split(":", 1)[1])
+                ).decode("ascii")
+            },
             "tlogEntries": [
                 {
-                    "entryUUID": f"entry-{log_index}",
-                    "integratedTime": 1779830000 + log_index,
-                    "logId": {"keyId": log_id},
-                    "logIndex": log_index,
+                    "entryUUID": "fixture-rekor-entry",
+                    "integratedTime": str(integrated_time),
+                    "logId": {"keyId": raw_log_id},
+                    "logIndex": str(log_index),
+                    "canonicalizedBody": canonicalized_body,
+                    "inclusionPromise": {"signedEntryTimestamp": signed_entry_timestamp},
                     "inclusionProof": inclusion_proof,
                 }
-            ]
+            ],
         },
     }
 
 
-def sigstore_proof(*, statement_digest: str, signature: str, log_id: str = digest("4"), log_index: int = 1) -> dict[str, Any]:
-    bundle = sigstore_bundle(statement_digest=statement_digest, signature=signature, log_id=log_id, log_index=log_index)
+def sigstore_proof(
+    *,
+    statement: dict[str, Any],
+    signing_key_info: dict[str, Any] | None = None,
+    rekor_signer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    signer = signing_key_info or sigstore_signing_key_info()
+    rekor = rekor_signer or rekor_key_info()
+    statement_digest = sha256_prefixed_json(statement)
+    bundle = sigstore_bundle(
+        statement=statement,
+        signing_key_info=signer,
+        rekor_signer=rekor,
+    )
+    signature = bundle["messageSignature"]["signature"]
     entry = bundle["verificationMaterial"]["tlogEntries"][0]
     return {
         "ok": True,
         "provider": "cosign",
         "signature": signature,
         "statement_digest": statement_digest,
-        "key_provider": {"type": "sigstore-keyless", "key_id": digest("3")},
+        "key_provider": {"type": "sigstore-key", "key_id": signer["key_id"]},
         "transparency": {
-            "log_id": log_id,
+            "log_id": rekor["key_id"],
             "entry_uuid": entry["entryUUID"],
             "integrated_time": entry["integratedTime"],
             "log_index": entry["logIndex"],
@@ -759,7 +1167,7 @@ def refresh_image_transparency_record(document: dict[str, Any]) -> None:
         "type": "release.image_signatures.v1",
         "provenance_digest": metadata.get("provenanceDigest"),
         "image_signature_bundle_digest": document.get("image_signature_bundle_digest"),
-        "image_signing_key_id": metadata.get("imageSigningKeyId") or digest("3"),
+        "image_signing_key_id": metadata.get("imageSigningKeyId") or sigstore_signing_key_info()["key_id"],
         "image_signature_provider": metadata.get("signatureProvider"),
         "release_signing_key_id": metadata.get("releaseSigningKeyId"),
         "signature": metadata.get("signature"),
@@ -860,8 +1268,76 @@ def sign_hardware_assurance(
     )
 
 
+def final_challenge_receipt(
+    *,
+    challenge_nonce_sha256: str,
+    completion_identity_sha256: str,
+    release_identity_sha256: str,
+    hardware_verifier_key_id: str,
+    current_host_identity_sha256: str,
+    proxy_server_statement_sha256: str,
+    issued_at_unix: int,
+    signer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    key_info = signer or final_challenge_authority_key_info()
+    statement = {
+        "authority_provider": "fixture-off-host-challenge-authority",
+        "consumption_id": "fixture-consumption-0001",
+        "status": "consumed",
+        "issued_at_unix": issued_at_unix,
+        "expires_at_unix": issued_at_unix + 300,
+        "challenge_nonce_sha256": challenge_nonce_sha256,
+        "completion_identity_sha256": completion_identity_sha256,
+        "release_identity_sha256": release_identity_sha256,
+        "hardware_verifier_key_id": hardware_verifier_key_id,
+        "current_host_identity_sha256": current_host_identity_sha256,
+        "proxy_server_statement_sha256": proxy_server_statement_sha256,
+    }
+    return {
+        "apiVersion": verify_release_completion.FINAL_CHALLENGE_RECEIPT_API_VERSION,
+        "kind": "FinalChallengeConsumption",
+        "statement": statement,
+        "signing_key_id": key_info["key_id"],
+        "signature": "ed25519:"
+        + b64e(key_info["key"].sign(canonical_json(statement).encode("utf-8"))),
+    }
+
+
+def fixture_release_identity(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
+    nitro_summary = verify_release_completion.verify_nitro_evidence(
+        nitro,
+        "hardware assurance fixture Nitro evidence",
+    )
+    readiness = json.loads((tmp / "production-readiness.json").read_text(encoding="utf-8"))
+    image_signatures_document = json.loads((tmp / "image-signatures.json").read_text(encoding="utf-8"))
+    image_refs = readiness["live"]["production_images_no_shell"]["images"]
+    return verify_release_completion.validate_release_identity(
+        {
+            "source_tree_digest": nitro_summary["attested_runtime"]["source_tree_digest"],
+            "provenance_digest": nitro_summary["attested_runtime"]["provenance_digest"],
+            "runtime_manifest_digest": nitro_summary["attested_runtime"]["runtime_manifest_digest"],
+            "data_plane_binary_digest": nitro_summary["attested_runtime"]["data_plane_binary_digest"],
+            "production_image_digests": [item.split("@", 1)[1] for item in image_refs],
+            "production_image_refs": image_refs,
+            "production_images_build_sha256": sha256_file(tmp / "production-images-build.json"),
+            "production_images_published_sha256": sha256_file(tmp / "production-images-published.json"),
+            "image_signature_bundle_digest": image_signatures_document["image_signature_bundle_digest"],
+        },
+        "fixture release identity",
+    )
+
+
 def hardware_assurance_document(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
     nitro_summary = verify_release_completion.verify_nitro_evidence(nitro, "hardware assurance fixture Nitro evidence")
+    release_identity = fixture_release_identity(nitro, tmp)
+    pcrs = {"PCR0": sha384("a"), "PCR1": sha384("b"), "PCR2": sha384("c")}
+    build_manifest = {
+        "apiVersion": verify_release_completion.EIF_BUILD_MANIFEST_API_VERSION,
+        "release_identity": release_identity,
+        "release_identity_sha256": sha256_prefixed_json(release_identity),
+        "eif_image_sha384": sha384("a"),
+        "pcrs": pcrs,
+    }
     issued_at = int(time.time())
     document = {
         "apiVersion": "serverware.hardwareAssurance/v1",
@@ -874,7 +1350,7 @@ def hardware_assurance_document(nitro: dict[str, Any], tmp: Path) -> dict[str, A
             },
             "issued_at_unix": issued_at,
             "expires_at_unix": issued_at + 300,
-            "challenge_nonce": b64e(b"hardware-assurance-fixture-nonce"),
+            "challenge_nonce": HARDWARE_ASSURANCE_CHALLENGE_NONCE,
             "current_host_identity": verify_release_completion.current_host_identity_claim(
                 fixture_current_host_identity(),
                 observed_at_unix=issued_at,
@@ -882,11 +1358,12 @@ def hardware_assurance_document(nitro: dict[str, Any], tmp: Path) -> dict[str, A
             "attestation_document_sha256": nitro_summary["raw_attestation_document_sha256"],
             "eif": {
                 "image_sha384": sha384("a"),
-                "build_manifest_sha256": digest("1"),
+                "build_manifest": build_manifest,
+                "build_manifest_sha256": sha256_prefixed_json(build_manifest),
                 "signature_verified": True,
                 "evidence_sha256": digest("2"),
             },
-            "pcrs": {"PCR0": sha384("a"), "PCR1": sha384("b"), "PCR2": sha384("c")},
+            "pcrs": pcrs,
             "enclave": {
                 "cid": 16,
                 "parent_cid": 3,
@@ -945,8 +1422,8 @@ def production_readiness(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
         "live": {
             "sigstore": {
                 "ok": True,
-                "key_id": digest("3"),
-                "transparency_log_id": digest("4"),
+                "key_id": sigstore_signing_key_info()["key_id"],
+                "transparency_log_id": rekor_key_info()["key_id"],
                 "entry_uuid": "entry",
             },
             "external_transparency": {
@@ -1067,12 +1544,11 @@ def image_signatures(
     }
     for index, image in enumerate(payload["images"], start=1):
         statement_digest = sha256_prefixed_json(image["statement"])
-        signature = "sigstore:test:" + str(image["service"])
-        image["signature"] = signature
         image["statement_digest"] = statement_digest
-        image["sigstore"] = sigstore_proof(statement_digest=statement_digest, signature=signature, log_index=index)
+        image["sigstore"] = sigstore_proof(statement=image["statement"])
+        image["signature"] = image["sigstore"]["signature"]
     bundle_digest = sha256_prefixed_json(payload)
-    bundle_sigstore = sigstore_proof(statement_digest=bundle_digest, signature="sigstore:test:bundle", log_index=3)
+    bundle_sigstore = sigstore_proof(statement=payload)
     document = dict(payload)
     document["image_signature_bundle_digest"] = bundle_digest
     document["bundle_signature"] = bundle_sigstore
@@ -1083,7 +1559,7 @@ def image_signatures(
         "type": "release.image_signatures.v1",
         "provenance_digest": provenance_digest,
         "image_signature_bundle_digest": bundle_digest,
-        "image_signing_key_id": digest("3"),
+        "image_signing_key_id": sigstore_signing_key_info()["key_id"],
         "image_signature_provider": "sigstore-command",
         "release_signing_key_id": selected_release_key_id,
         "signature": bundle_sigstore["signature"],
@@ -1102,7 +1578,7 @@ def image_signatures(
         "provenance_digest": provenance_digest,
         "release_signing_key_id": selected_release_key_id,
         "image_signature_bundle_digest": bundle_digest,
-        "image_signing_key_id": digest("3"),
+        "image_signing_key_id": sigstore_signing_key_info()["key_id"],
         "images": 2,
     }
     return summary, document
@@ -1390,6 +1866,7 @@ def run_verifier(
     allow_host_bypass: bool = True,
     include_proxy_proof: bool = True,
     include_hardware_assurance: bool = False,
+    hardware_expected_challenge_mode: str | None = "nonce",
 ) -> subprocess.CompletedProcess[bytes]:
     env = os.environ.copy()
     if allow_host_bypass:
@@ -1416,16 +1893,28 @@ def run_verifier(
         if include_proxy_proof
         else []
     )
-    hardware_assurance_args = (
-        [
+    hardware_expected_challenge_args: list[str] = []
+    if hardware_expected_challenge_mode == "nonce":
+        hardware_expected_challenge_args = [
+            "--hardware-assurance-expected-challenge-nonce",
+            HARDWARE_ASSURANCE_CHALLENGE_NONCE,
+        ]
+    elif hardware_expected_challenge_mode == "sha256":
+        hardware_expected_challenge_args = [
+            "--hardware-assurance-expected-challenge-nonce-sha256",
+            HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+        ]
+    elif hardware_expected_challenge_mode is not None:
+        raise AssertionError(f"unknown hardware expected challenge mode: {hardware_expected_challenge_mode}")
+    hardware_assurance_args = []
+    if include_hardware_assurance:
+        hardware_assurance_args = [
             "--hardware-assurance",
             str(tmp / "hardware-assurance.json"),
             "--hardware-assurance-trusted-public-key",
             str(tmp / "hardware-assurance-verifier.pub.pem"),
+            *hardware_expected_challenge_args,
         ]
-        if include_hardware_assurance
-        else []
-    )
     return subprocess.run(
         [
             sys.executable,
@@ -1451,10 +1940,20 @@ def run_verifier(
             str(tmp / "release-provenance-summary.json"),
             "--release-provenance",
             str(tmp / "release-provenance.json"),
+            "--release-provenance-trusted-public-key",
+            str(tmp / "release-signing.pub.pem"),
             "--image-signatures-summary",
             str(tmp / "image-signatures-summary.json"),
             "--image-signatures",
             str(tmp / "image-signatures.json"),
+            "--sigstore-trusted-public-key",
+            str(tmp / "sigstore-signing.pub.pem"),
+            "--rekor-trusted-public-key",
+            str(tmp / "rekor.pub.pem"),
+            "--external-checkpoint-provider",
+            "managed-prod-log",
+            "--external-checkpoint-trusted-public-key",
+            str(tmp / "external-checkpoint.pub.pem"),
             "--bench",
             str(tmp / "decision-gate-rs-bench.json"),
             "--policy-bundle",
@@ -1509,6 +2008,9 @@ def verify_hardware_assurance_fixture(
     tmp: Path,
     document: dict[str, Any],
     current_host: dict[str, Any],
+    *,
+    expected_challenge_nonce: str | None = HARDWARE_ASSURANCE_CHALLENGE_NONCE,
+    expected_challenge_nonce_sha256: str | None = None,
 ) -> dict[str, Any]:
     nitro = json.loads((tmp / "nitro-kms-evidence.json").read_text(encoding="utf-8"))
     nitro_summary = verify_release_completion.verify_nitro_evidence(
@@ -1522,6 +2024,9 @@ def verify_hardware_assurance_fixture(
         nitro_evidence_sha256=sha256_file(tmp / "nitro-kms-evidence.json"),
         production_host_preflight_sha256=sha256_file(tmp / "production-host-preflight.json"),
         current_host=current_host,
+        expected_release_identity=fixture_release_identity(nitro, tmp),
+        expected_challenge_nonce=expected_challenge_nonce,
+        expected_challenge_nonce_sha256=expected_challenge_nonce_sha256,
     )
 
 
@@ -1998,6 +2503,8 @@ def test_proxy_response_proof_requirements(
 
 
 def main() -> None:
+    verify_cosign_ecdsa_signature_compatibility()
+    test_final_production_env_binding()
     global POLICY_DIGEST
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
@@ -2025,6 +2532,16 @@ def main() -> None:
         write(tmp / "release-provenance.json", provenance_document)
         write(tmp / "image-signatures-summary.json", image_summary)
         write(tmp / "image-signatures.json", image_document)
+        (tmp / "release-signing.pub.pem").write_text(release_key_info()["public_key_pem"], encoding="ascii")
+        (tmp / "sigstore-signing.pub.pem").write_text(
+            sigstore_signing_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        (tmp / "rekor.pub.pem").write_text(rekor_key_info()["public_key_pem"], encoding="ascii")
+        (tmp / "external-checkpoint.pub.pem").write_text(
+            external_receipt_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
         write(tmp / "kms-materials.json", kms_materials_document())
         write(
             tmp / "decision-gate-rs-bench.json",
@@ -2057,6 +2574,10 @@ def main() -> None:
         if (
             proof.get("apiVersion") != "serverware.completionProof/v3"
             or proof.get("kind") != "ServerwarePreEnclaveReadiness"
+            or proof.get("verification_mode") != "readiness"
+            or proof.get("result_scope") != "readiness-only"
+            or proof.get("readiness_only") is not True
+            or proof.get("verification_passed") is not True
             or proof.get("completion_status") != "pre-enclave-readiness"
             or proof.get("release_completion") != "not-final"
             or proof.get("final_completion") is not False
@@ -2090,6 +2611,106 @@ def main() -> None:
         ):
             raise AssertionError(f"completion verifier accepted hardware evidence without a separate trust root: {detail(missing_hardware_trust)}")
 
+        missing_hardware_challenge = run_verifier(
+            tmp,
+            include_hardware_assurance=True,
+            hardware_expected_challenge_mode=None,
+        )
+        if (
+            missing_hardware_challenge.returncode == 0
+            or "hardware-backed completion requires exactly one --hardware-assurance-expected-challenge-nonce"
+            not in detail(missing_hardware_challenge)
+        ):
+            raise AssertionError(
+                "completion verifier accepted hardware evidence without an externally supplied expected challenge: "
+                f"{detail(missing_hardware_challenge)}"
+            )
+
+        both_hardware_challenges = run_verifier(
+            tmp,
+            "--hardware-assurance-expected-challenge-nonce-sha256",
+            HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+            include_hardware_assurance=True,
+        )
+        if (
+            both_hardware_challenges.returncode == 0
+            or "hardware-backed completion requires exactly one --hardware-assurance-expected-challenge-nonce"
+            not in detail(both_hardware_challenges)
+        ):
+            raise AssertionError(
+                f"completion verifier accepted both expected challenge forms: {detail(both_hardware_challenges)}"
+            )
+
+        malformed_hardware_challenge = run_verifier(
+            tmp,
+            "--hardware-assurance-expected-challenge-nonce",
+            "not+unpadded/base64url",
+            include_hardware_assurance=True,
+            hardware_expected_challenge_mode=None,
+        )
+        if (
+            malformed_hardware_challenge.returncode == 0
+            or "expected hardware assurance challenge nonce is invalid" not in detail(malformed_hardware_challenge)
+        ):
+            raise AssertionError(
+                f"completion verifier accepted a malformed expected challenge nonce: {detail(malformed_hardware_challenge)}"
+            )
+
+        malformed_hardware_challenge_digest = run_verifier(
+            tmp,
+            "--hardware-assurance-expected-challenge-nonce-sha256",
+            "sha256:not-a-digest",
+            include_hardware_assurance=True,
+            hardware_expected_challenge_mode=None,
+        )
+        if (
+            malformed_hardware_challenge_digest.returncode == 0
+            or "expected hardware assurance challenge nonce digest must be a sha256-prefixed digest"
+            not in detail(malformed_hardware_challenge_digest)
+        ):
+            raise AssertionError(
+                "completion verifier accepted a malformed expected challenge digest: "
+                f"{detail(malformed_hardware_challenge_digest)}"
+            )
+
+        replayed_hardware_assurance = run_verifier(
+            tmp,
+            "--hardware-assurance-expected-challenge-nonce",
+            b64e(b"different-hardware-challenge-nonce"),
+            include_hardware_assurance=True,
+            hardware_expected_challenge_mode=None,
+        )
+        if (
+            replayed_hardware_assurance.returncode == 0
+            or "hardware assurance challenge nonce does not match the caller-expected challenge"
+            not in detail(replayed_hardware_assurance)
+        ):
+            raise AssertionError(
+                "completion verifier accepted a signed hardware assurance replayed for another challenge: "
+                f"{detail(replayed_hardware_assurance)}"
+            )
+
+        hardware_digest_result = run_verifier(
+            tmp,
+            include_hardware_assurance=True,
+            hardware_expected_challenge_mode="sha256",
+        )
+        if hardware_digest_result.returncode != 0:
+            raise AssertionError(
+                "completion verifier rejected a valid caller-expected challenge digest: "
+                f"{detail(hardware_digest_result)}"
+            )
+        hardware_digest_summary = (
+            json.loads(hardware_digest_result.stdout.decode("utf-8")).get("hardware_assurance_evidence") or {}
+        )
+        if (
+            hardware_digest_summary.get("expected_challenge_bound") is not True
+            or hardware_digest_summary.get("challenge_nonce_sha256") != HARDWARE_ASSURANCE_CHALLENGE_SHA256
+        ):
+            raise AssertionError(
+                f"completion verifier omitted the expected challenge digest binding: {hardware_digest_summary}"
+            )
+
         hardware_result = run_verifier(tmp, include_hardware_assurance=True)
         if hardware_result.returncode != 0:
             raise AssertionError(f"completion verifier rejected valid signed hardware assurance evidence: {detail(hardware_result)}")
@@ -2097,6 +2718,8 @@ def main() -> None:
         hardware_summary = hardware_limited_proof.get("hardware_assurance_evidence") or {}
         if (
             hardware_summary.get("verified") is not True
+            or hardware_summary.get("expected_challenge_bound") is not True
+            or hardware_summary.get("challenge_nonce_sha256") != HARDWARE_ASSURANCE_CHALLENGE_SHA256
             or hardware_summary.get("current_host_identity_bound") is not False
             or hardware_limited_proof.get("final_completion") is not False
             or hardware_limited_proof.get("hardware_proof") is not False
@@ -2120,6 +2743,177 @@ def main() -> None:
         )
         if final_assurance.get("final_completion") is not True or final_assurance.get("hardware_proof") is not True:
             raise AssertionError(f"fully verified hardware and current-host evidence did not enable final completion: {final_assurance}")
+
+        proxy_server_statement_sha256 = sha256_prefixed_json(
+            valid_proxy_response_proof["server_statement"]
+        )
+        final_completion_identity_sha256 = sha256_prefixed_json(
+            {
+                "release_identity_sha256": exact_host_hardware_summary[
+                    "release_identity_sha256"
+                ],
+                "current_host_identity_sha256": exact_host_summary["identity"][
+                    "identity_sha256"
+                ],
+                "hardware_verifier_key_id": exact_host_hardware_summary[
+                    "trusted_verifier_key_id"
+                ],
+                "challenge_nonce_sha256": exact_host_hardware_summary[
+                    "challenge_nonce_sha256"
+                ],
+                "proxy_server_statement_sha256": proxy_server_statement_sha256,
+            }
+        )
+        receipt = final_challenge_receipt(
+            challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+            completion_identity_sha256=final_completion_identity_sha256,
+            release_identity_sha256=exact_host_hardware_summary[
+                "release_identity_sha256"
+            ],
+            hardware_verifier_key_id=exact_host_hardware_summary[
+                "trusted_verifier_key_id"
+            ],
+            current_host_identity_sha256=exact_host_summary["identity"][
+                "identity_sha256"
+            ],
+            proxy_server_statement_sha256=proxy_server_statement_sha256,
+            issued_at_unix=exact_host_hardware_summary["issued_at_unix"],
+        )
+        receipt_summary = verify_release_completion.verify_final_challenge_receipt(
+            receipt,
+            trusted_public_key_pem=final_challenge_authority_key_info()[
+                "public_key_pem"
+            ],
+            expected_provider="fixture-off-host-challenge-authority",
+            expected_challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+            expected_completion_identity_sha256=final_completion_identity_sha256,
+            expected_release_identity_sha256=exact_host_hardware_summary[
+                "release_identity_sha256"
+            ],
+            expected_hardware_verifier_key_id=exact_host_hardware_summary[
+                "trusted_verifier_key_id"
+            ],
+            expected_current_host_identity_sha256=exact_host_summary["identity"][
+                "identity_sha256"
+            ],
+            expected_proxy_server_statement_sha256=proxy_server_statement_sha256,
+            hardware_assurance_issued_at_unix=exact_host_hardware_summary[
+                "issued_at_unix"
+            ],
+            now_unix=exact_host_hardware_summary["issued_at_unix"],
+        )
+        if receipt_summary.get("consumed") is not True:
+            raise AssertionError(
+                f"off-host challenge authority receipt did not authorize final completion: {receipt_summary}"
+            )
+        forged_receipt = final_challenge_receipt(
+            challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+            completion_identity_sha256=digest("0"),
+            release_identity_sha256=exact_host_hardware_summary[
+                "release_identity_sha256"
+            ],
+            hardware_verifier_key_id=exact_host_hardware_summary[
+                "trusted_verifier_key_id"
+            ],
+            current_host_identity_sha256=exact_host_summary["identity"][
+                "identity_sha256"
+            ],
+            proxy_server_statement_sha256=proxy_server_statement_sha256,
+            issued_at_unix=exact_host_hardware_summary["issued_at_unix"],
+        )
+        try:
+            verify_release_completion.verify_final_challenge_receipt(
+                forged_receipt,
+                trusted_public_key_pem=final_challenge_authority_key_info()[
+                    "public_key_pem"
+                ],
+                expected_provider="fixture-off-host-challenge-authority",
+                expected_challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+                expected_completion_identity_sha256=final_completion_identity_sha256,
+                expected_release_identity_sha256=exact_host_hardware_summary[
+                    "release_identity_sha256"
+                ],
+                expected_hardware_verifier_key_id=exact_host_hardware_summary[
+                    "trusted_verifier_key_id"
+                ],
+                expected_current_host_identity_sha256=exact_host_summary["identity"][
+                    "identity_sha256"
+                ],
+                expected_proxy_server_statement_sha256=proxy_server_statement_sha256,
+                hardware_assurance_issued_at_unix=exact_host_hardware_summary[
+                    "issued_at_unix"
+                ],
+                now_unix=exact_host_hardware_summary["issued_at_unix"],
+            )
+        except ValueError as exc:
+            if "completion_identity_sha256 mismatch" not in str(exc):
+                raise AssertionError(
+                    f"wrong-completion receipt failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(
+                "off-host challenge receipt authorized a different completion identity"
+            )
+
+        challenge_ledger = tmp / "final-challenge-ledger.json"
+        first_consumption = verify_release_completion.consume_final_challenge_once(
+            challenge_ledger,
+            challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+            completion_identity_sha256=sha256_prefixed_json({"release": exact_host_hardware_summary["release_identity_sha256"]}),
+        )
+        if first_consumption.get("consumed") is not True or first_consumption.get("ledger_entries") != 1:
+            raise AssertionError(f"final challenge was not atomically consumed: {first_consumption}")
+        try:
+            verify_release_completion.consume_final_challenge_once(
+                challenge_ledger,
+                challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
+                completion_identity_sha256=digest("0"),
+            )
+        except ValueError as exc:
+            if "final completion challenge was already consumed" not in str(exc):
+                raise AssertionError(f"same-challenge replay failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("final completion accepted reuse of the same expected challenge")
+
+        arbitrary_source_binding = clone_document(valid_hardware_assurance)
+        forged_manifest = arbitrary_source_binding["statement"]["eif"]["build_manifest"]
+        forged_manifest["release_identity"]["source_tree_digest"] = digest("0")
+        forged_manifest["release_identity_sha256"] = sha256_prefixed_json(forged_manifest["release_identity"])
+        arbitrary_source_binding["statement"]["eif"]["build_manifest_sha256"] = sha256_prefixed_json(forged_manifest)
+        sign_hardware_assurance(arbitrary_source_binding)
+        expect_hardware_assurance_failure(
+            tmp,
+            arbitrary_source_binding,
+            "does not match the independently verified source/build/release identity",
+            "trusted-signer arbitrary source-to-EIF binding",
+        )
+        write(tmp / "hardware-assurance.json", valid_hardware_assurance)
+
+        unbound_legacy_hardware_summary = clone_document(exact_host_hardware_summary)
+        unbound_legacy_hardware_summary.pop("expected_challenge_bound")
+        try:
+            verify_release_completion.completion_assurance(
+                unbound_legacy_hardware_summary,
+                exact_host_summary,
+            )
+        except ValueError as exc:
+            if "not bound to an externally supplied expected challenge" not in str(exc):
+                raise AssertionError(f"unbound hardware summary failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("completion assurance accepted a hardware summary without an expected challenge binding")
+
+        try:
+            verify_hardware_assurance_fixture(
+                tmp,
+                valid_hardware_assurance,
+                exact_host_summary,
+                expected_challenge_nonce=None,
+            )
+        except ValueError as exc:
+            if "requires exactly one caller-expected challenge nonce or nonce SHA-256" not in str(exc):
+                raise AssertionError(f"missing direct verifier challenge failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("hardware assurance verifier accepted evidence without an expected challenge")
 
         try:
             verify_hardware_assurance_fixture(
@@ -2371,10 +3165,49 @@ def main() -> None:
         write(tmp / "release-provenance.json", provenance_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
 
+        unauthorized_release_key = ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x02" * 32))
+        unauthorized_provenance_summary = json.loads(json.dumps(provenance_summary))
+        unauthorized_provenance_document = json.loads(json.dumps(provenance_document))
+        unauthorized_signature = "ed25519:" + b64e(
+            unauthorized_release_key["key"].sign(
+                canonical_json(unauthorized_provenance_document["provenance"]).encode("utf-8")
+            )
+        )
+        unauthorized_provenance_document["signature"] = unauthorized_signature
+        unauthorized_provenance_document["release_signing_key_id"] = unauthorized_release_key["key_id"]
+        unauthorized_provenance_document["release_signing_public_key_pem"] = unauthorized_release_key["public_key_pem"]
+        unauthorized_provenance_document["transparency"] = transparency_for_record(
+            {
+                "type": "release.provenance.v1",
+                "provenance_digest": unauthorized_provenance_document["provenance_digest"],
+                "signature": unauthorized_signature,
+                "release_signing_key_id": unauthorized_release_key["key_id"],
+            }
+        )
+        unauthorized_provenance_summary["release_signing_key_id"] = unauthorized_release_key["key_id"]
+        write(tmp / "release-provenance-summary.json", unauthorized_provenance_summary)
+        write(tmp / "release-provenance.json", unauthorized_provenance_document)
+        write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+        rejected_unauthorized_signer = run_verifier(tmp)
+        if (
+            rejected_unauthorized_signer.returncode == 0
+            or "release provenance signer does not match the independently trusted release key"
+            not in detail(rejected_unauthorized_signer)
+        ):
+            raise AssertionError(
+                f"completion verifier accepted an unauthorized release signer: {detail(rejected_unauthorized_signer)}"
+            )
+        write(tmp / "release-provenance-summary.json", provenance_summary)
+        write(tmp / "release-provenance.json", provenance_document)
+        write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+
         bad_provenance_document = json.loads(json.dumps(provenance_document))
         release_checkpoint = bad_provenance_document["transparency"]["anchor_response"]["anchors"][0]["external_checkpoint"]
         release_checkpoint["log_id"] = digest("a")
         release_checkpoint["receipt"]["payload"]["log_id"] = digest("a")
+        bad_provenance_document["transparency"]["inclusion_proof"]["item"]["external_checkpoint"] = json.loads(
+            json.dumps(release_checkpoint)
+        )
         write(tmp / "release-provenance.json", bad_provenance_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
         rejected_release_log = run_verifier(tmp)
@@ -2382,6 +3215,7 @@ def main() -> None:
         if rejected_release_log.returncode == 0 or not (
             "release provenance external transparency log does not match live readiness" in rejected_release_log_detail
             or "release provenance external transparency receipt public key does not match log id" in rejected_release_log_detail
+            or "release provenance external transparency log is not the trusted log" in rejected_release_log_detail
         ):
             raise AssertionError(f"completion verifier accepted release provenance from another external log: {detail(rejected_release_log)}")
         write(tmp / "release-provenance.json", provenance_document)
@@ -2390,11 +3224,34 @@ def main() -> None:
         bad_provenance_document = json.loads(json.dumps(provenance_document))
         release_checkpoint = bad_provenance_document["transparency"]["anchor_response"]["anchors"][0]["external_checkpoint"]
         release_checkpoint["receipt"]["signature"] = "ed25519:test"
+        bad_provenance_document["transparency"]["inclusion_proof"]["item"]["external_checkpoint"] = json.loads(
+            json.dumps(release_checkpoint)
+        )
         write(tmp / "release-provenance.json", bad_provenance_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
         rejected_release_receipt = run_verifier(tmp)
         if rejected_release_receipt.returncode == 0 or "release provenance external transparency receipt signature verification failed" not in detail(rejected_release_receipt):
             raise AssertionError(f"completion verifier accepted release provenance with a forged external receipt: {detail(rejected_release_receipt)}")
+        write(tmp / "release-provenance.json", provenance_document)
+        write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+
+        split_checkpoint_document = json.loads(json.dumps(provenance_document))
+        split_checkpoint = split_checkpoint_document["transparency"]["inclusion_proof"]["item"][
+            "external_checkpoint"
+        ]
+        split_checkpoint["provider"] = "untrusted-split-log"
+        split_checkpoint["log_id"] = digest("0")
+        write(tmp / "release-provenance.json", split_checkpoint_document)
+        write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+        rejected_split_checkpoint = run_verifier(tmp)
+        if (
+            rejected_split_checkpoint.returncode == 0
+            or "transparency inclusion and anchor response used different external checkpoints"
+            not in detail(rejected_split_checkpoint)
+        ):
+            raise AssertionError(
+                f"completion verifier accepted split external checkpoints: {detail(rejected_split_checkpoint)}"
+            )
         write(tmp / "release-provenance.json", provenance_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
 
@@ -2422,6 +3279,9 @@ def main() -> None:
         image_checkpoint = bad_image_document["metadata"]["transparency"]["anchorResponse"]["anchors"][0]["external_checkpoint"]
         image_checkpoint["log_id"] = digest("a")
         image_checkpoint["receipt"]["payload"]["log_id"] = digest("a")
+        bad_image_document["metadata"]["transparency"]["inclusionProof"]["item"]["external_checkpoint"] = json.loads(
+            json.dumps(image_checkpoint)
+        )
         write(tmp / "image-signatures-summary.json", bad_image_summary)
         write(tmp / "image-signatures.json", bad_image_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
@@ -2430,6 +3290,7 @@ def main() -> None:
         if rejected_image_log.returncode == 0 or not (
             "image signature bundle external transparency log does not match live readiness" in rejected_image_log_detail
             or "image signature bundle external transparency receipt public key does not match log id" in rejected_image_log_detail
+            or "image signature bundle external transparency log is not the trusted log" in rejected_image_log_detail
         ):
             raise AssertionError(f"completion verifier accepted image signatures from another external log: {detail(rejected_image_log)}")
         write(tmp / "image-signatures-summary.json", image_summary)
@@ -2439,6 +3300,9 @@ def main() -> None:
         bad_image_summary, bad_image_document = image_signatures(provenance_summary["provenance_digest"])
         image_checkpoint = bad_image_document["metadata"]["transparency"]["anchorResponse"]["anchors"][0]["external_checkpoint"]
         image_checkpoint["receipt"]["signature"] = "ed25519:test"
+        bad_image_document["metadata"]["transparency"]["inclusionProof"]["item"]["external_checkpoint"] = json.loads(
+            json.dumps(image_checkpoint)
+        )
         write(tmp / "image-signatures-summary.json", bad_image_summary)
         write(tmp / "image-signatures.json", bad_image_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
@@ -2458,6 +3322,31 @@ def main() -> None:
         rejected_image_bundle_digest = run_verifier(tmp)
         if rejected_image_bundle_digest.returncode == 0 or "image serverware Sigstore bundle digest mismatch" not in detail(rejected_image_bundle_digest):
             raise AssertionError(f"completion verifier accepted image signatures with a forged Sigstore bundle digest: {detail(rejected_image_bundle_digest)}")
+        write(tmp / "image-signatures-summary.json", image_summary)
+        write(tmp / "image-signatures.json", image_document)
+        write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+
+        forged_sigstore_summary, forged_sigstore_document = image_signatures(
+            provenance_summary["provenance_digest"]
+        )
+        forged_sigstore = forged_sigstore_document["images"][0]["sigstore"]
+        forged_signature = "ed25519:" + b64e(b"\x00" * 64)
+        forged_sigstore["signature"] = forged_signature
+        forged_sigstore["bundle"]["messageSignature"]["signature"] = forged_signature
+        forged_sigstore_document["images"][0]["signature"] = forged_signature
+        refresh_image_signature_bundle(forged_sigstore_summary, forged_sigstore_document)
+        write(tmp / "image-signatures-summary.json", forged_sigstore_summary)
+        write(tmp / "image-signatures.json", forged_sigstore_document)
+        write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+        rejected_forged_sigstore = run_verifier(tmp)
+        if (
+            rejected_forged_sigstore.returncode == 0
+            or "image serverware Sigstore message signature verification failed"
+            not in detail(rejected_forged_sigstore)
+        ):
+            raise AssertionError(
+                f"completion verifier accepted forged Sigstore evidence: {detail(rejected_forged_sigstore)}"
+            )
         write(tmp / "image-signatures-summary.json", image_summary)
         write(tmp / "image-signatures.json", image_document)
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))

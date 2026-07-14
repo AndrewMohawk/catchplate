@@ -145,15 +145,13 @@ def append_log(entry: dict[str, Any]) -> dict[str, Any]:
 
 def sign_blob(args: list[str]) -> None:
     bundle_path = option_value(args, "--bundle")
-    signature_path = option_value(args, "--output-signature")
-    if not bundle_path or not signature_path:
-        raise SystemExit("cosign fixture sign-blob requires --bundle and --output-signature")
+    if not bundle_path:
+        raise SystemExit("cosign fixture sign-blob requires --bundle")
     statement_path = input_path(args)
     statement_bytes = statement_path.read_bytes()
     key = load_key()
     info = public_key_info(key)
     signature = "cosign-fixture-ed25519:" + b64e(key.sign(statement_bytes))
-    Path(signature_path).write_text(signature + "\n", encoding="utf-8")
     tlog_entries: list[dict[str, Any]] = []
     if not os.getenv("SERVERWARE_COSIGN_FIXTURE_NO_TRANSPARENCY"):
         tlog_entries.append(
@@ -187,12 +185,11 @@ def verify_blob(args: list[str]) -> None:
     if os.getenv("SERVERWARE_COSIGN_FIXTURE_VERIFY_FAIL"):
         raise SystemExit("forced cosign fixture verify failure")
     bundle_path = option_value(args, "--bundle")
-    signature_path = option_value(args, "--signature")
-    if not bundle_path or not signature_path:
-        raise SystemExit("cosign fixture verify-blob requires --bundle and --signature")
+    if not bundle_path:
+        raise SystemExit("cosign fixture verify-blob requires --bundle")
     statement_path = input_path(args)
     bundle = json.loads(Path(bundle_path).read_text(encoding="utf-8"))
-    signature = Path(signature_path).read_text(encoding="utf-8").strip()
+    signature = str((bundle.get("messageSignature") or {}).get("signature") or "")
     if not signature.startswith("cosign-fixture-ed25519:"):
         raise SystemExit("unsupported fixture signature")
     public_key_pem = ((bundle.get("verificationMaterial") or {}).get("publicKey") or "").encode("ascii")
@@ -210,6 +207,8 @@ def main() -> None:
         sign_blob(args)
     elif command == "verify-blob":
         verify_blob(args)
+    elif command == "version":
+        print(json.dumps({"gitVersion": "v3.0.2"}))
     else:
         raise SystemExit(f"unsupported cosign fixture command: {command}")
 

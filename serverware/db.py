@@ -26,9 +26,23 @@ from serverware.config import (
     METADATA_STORE_POSTGRES_DSN,
     OAUTH_PENDING_CREDENTIAL_MAX_COUNT,
     RBAC_BINDINGS_PATH,
+    SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS,
+    SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING,
+    SETUP_SESSION_EVENT_MAX_BYTES,
+    SETUP_SESSION_EVENT_MAX_COUNT,
+    SETUP_SESSION_EVIDENCE_MAX_BYTES,
+    SETUP_SESSION_EVIDENCE_MAX_COUNT,
+    SETUP_SESSION_MAX_ACTIVE,
+    SETUP_SESSION_MAX_RETAINED,
+    SETUP_SESSION_RETENTION_SECONDS,
+    SETUP_SESSION_TTL_SECONDS,
     ensure_data_dirs,
 )
-from serverware.crypto import decrypt_secret_envelope, encrypt_secret_envelope, load_master_key
+from serverware.crypto import (
+    decrypt_secret_envelope,
+    encrypt_secret_envelope,
+    load_master_key,
+)
 
 
 def utcnow() -> datetime:
@@ -93,6 +107,33 @@ class ManagedOAuthCredentialError(ValueError):
     pass
 
 
+class SetupSessionError(MetadataStoreError):
+    pass
+
+
+class SetupSessionNotFoundError(SetupSessionError):
+    pass
+
+
+class SetupSessionCapacityError(SetupSessionError):
+    pass
+
+
+class SetupSessionValidationError(SetupSessionError, ValueError):
+    pass
+
+
+class SetupSessionStaleRevisionError(SetupSessionError):
+    def __init__(self, session_id: str, expected_revision: int, current_revision: int):
+        self.session_id = session_id
+        self.expected_revision = expected_revision
+        self.current_revision = current_revision
+        super().__init__(
+            f"setup session {session_id} revision changed: "
+            f"expected {expected_revision}, current {current_revision}"
+        )
+
+
 _AUDIT_CHAIN_LOCK_KEY = 0x5357524155444348
 _CREDENTIAL_LEASE_REPLAY_LOCK_KEY = 0x5357524C45415345
 _CREDENTIAL_LEASE_REPLAY_RETENTION_MS = 24 * 60 * 60 * 1000
@@ -105,6 +146,7 @@ _PENDING_OAUTH_CREATION_LOCK_KEY = 0x5357524F41555448
 _OIDC_LOGIN_STATE_CREATION_LOCK_KEY = 0x5357524F49444353
 _OAUTH_REVOCATION_WORK_LOCK_KEY = 0x5357524F41555257
 _POLICY_HIGH_WATER_LOCK_KEY = 0x535752504F4C4943
+_SETUP_SESSION_LOCK_KEY = 0x5357525345545550
 _PENDING_APPROVAL_MAX_COUNT = 10_000
 _PENDING_APPROVAL_MAX_PAYLOAD_BYTES = 64 * 1024
 _OIDC_LOGIN_GLOBAL_PENDING_MAX = 2_000
@@ -175,6 +217,148 @@ _SENSITIVE_CREDENTIAL_METADATA_SUFFIXES = (
     "token",
 )
 
+_SETUP_TERMINAL_STATUSES = {"complete", "cancelled", "failed", "superseded", "expired"}
+_SETUP_DIGEST_FIELDS = {
+    "assignment_digest",
+    "enrollment_packet_digest",
+    "oauth_state_digest",
+    "policy_hash",
+    "route_policy_digest",
+    "verifier_nonce_hash",
+}
+_SETUP_BINDING_FIELDS = {
+    "assignment_digest",
+    "canary_id",
+    "credential_id",
+    "credential_version",
+    "enrollment_packet_digest",
+    "enrollment_session_id",
+    "oauth_pending_credential_id",
+    "oauth_provider",
+    "oauth_state_digest",
+    "policy_hash",
+    "principal_id",
+    "route_id",
+    "route_policy_digest",
+    "template_id",
+    "verifier_nonce_hash",
+}
+_SETUP_EVIDENCE_TRANSITIONS = {
+    "record_enrollment_evidence": ("enrollment_verification", "ca_installed"),
+    "record_canary_evidence": ("canary_result", "canaries_verified"),
+    "record_runtime_evidence": ("runtime_verification", "runtime_verified"),
+    "record_hardware_receipt": ("hardware_assurance", "hardware_verified"),
+}
+_SETUP_TRANSITIONS: dict[str, dict[str, Any]] = {
+    "claim": {
+        "phases": None,
+        "next_phase": None,
+        "updates": {"current_assignee_id"},
+    },
+    "handoff": {
+        "phases": None,
+        "next_phase": None,
+        "updates": {"current_assignee_id"},
+    },
+    "bind_oauth_flow": {
+        "phases": {"created", "oauth_started"},
+        "next_phase": "oauth_started",
+        "updates": {"oauth_provider", "oauth_state_digest"},
+    },
+    "bind_pending_credential": {
+        "phases": {"oauth_started", "oauth_verified"},
+        "next_phase": "oauth_verified",
+        "updates": {"oauth_pending_credential_id"},
+    },
+    "bind_credential": {
+        "phases": {
+            "created",
+            "oauth_started",
+            "oauth_verified",
+            "credential_activated",
+        },
+        "next_phase": "credential_activated",
+        "updates": {
+            "assignment_digest",
+            "credential_id",
+            "credential_version",
+            "oauth_provider",
+            "principal_id",
+            "route_id",
+            "route_policy_digest",
+            "template_id",
+        },
+    },
+    "bind_candidate": {
+        "phases": {"credential_activated", "policy_staged"},
+        "next_phase": "policy_staged",
+        "updates": {
+            "assignment_digest",
+            "canary_id",
+            "policy_hash",
+            "route_policy_digest",
+        },
+    },
+    "activate_policy": {
+        "phases": {"policy_staged", "policy_activated"},
+        "next_phase": "policy_activated",
+        "updates": {"assignment_digest", "policy_hash"},
+    },
+    "bind_enrollment": {
+        "phases": {"policy_activated", "enrollment_issued"},
+        "next_phase": "enrollment_issued",
+        "updates": {
+            "enrollment_packet_digest",
+            "enrollment_session_id",
+            "verifier_nonce_hash",
+        },
+    },
+    "record_enrollment_evidence": {
+        "phases": {"enrollment_issued", "ca_installed"},
+        "next_phase": "ca_installed",
+        "updates": set(),
+    },
+    "record_canary_evidence": {
+        "phases": {"ca_installed", "canaries_verified"},
+        "next_phase": "canaries_verified",
+        "updates": set(),
+    },
+    "record_runtime_evidence": {
+        "phases": {"canaries_verified", "runtime_verified"},
+        "next_phase": "runtime_verified",
+        "updates": set(),
+    },
+    "record_hardware_receipt": {
+        "phases": {"runtime_verified", "hardware_verified"},
+        "next_phase": "hardware_verified",
+        "updates": set(),
+    },
+    "complete": {
+        "phases": {"hardware_verified"},
+        "next_phase": "complete",
+        "updates": set(),
+        "status": "complete",
+    },
+    "cancel": {
+        "phases": None,
+        "next_phase": "cancelled",
+        "updates": set(),
+        "status": "cancelled",
+    },
+    "fail": {
+        "phases": None,
+        "next_phase": "failed",
+        "updates": set(),
+        "status": "failed",
+    },
+    "supersede": {
+        "phases": None,
+        "next_phase": "superseded",
+        "updates": set(),
+        "status": "superseded",
+    },
+}
+
 
 def audit_store_backend_name() -> str:
     if AUDIT_STORE_BACKEND in {"", "sqlite", "local"}:
@@ -193,7 +377,9 @@ def metadata_store_backend_name() -> str:
         return "sqlite"
     if METADATA_STORE_BACKEND in {"postgres", "postgresql"}:
         return "postgres"
-    raise MetadataStoreError(f"unsupported metadata store backend: {METADATA_STORE_BACKEND}")
+    raise MetadataStoreError(
+        f"unsupported metadata store backend: {METADATA_STORE_BACKEND}"
+    )
 
 
 def metadata_uses_postgres() -> bool:
@@ -230,14 +416,21 @@ def get_rbac_role_binding(subject_id: str) -> dict[str, Any] | None:
         raise RBACBindingStoreError("RBAC subject binding is invalid")
     binding_status = binding.get("status")
     raw_roles = binding.get("roles")
-    if binding_status not in {"active", "deprovisioned"} or not isinstance(raw_roles, list):
+    if binding_status not in {"active", "deprovisioned"} or not isinstance(
+        raw_roles, list
+    ):
         raise RBACBindingStoreError("RBAC subject binding is invalid")
-    if any(not isinstance(role, str) or not role or role != role.strip() for role in raw_roles):
+    if any(
+        not isinstance(role, str) or not role or role != role.strip()
+        for role in raw_roles
+    ):
         raise RBACBindingStoreError("RBAC subject roles are invalid")
     roles = sorted(set(raw_roles))
     if len(roles) != len(raw_roles) or set(roles) - _VALID_RBAC_ROLES:
         raise RBACBindingStoreError("RBAC subject roles are invalid")
-    if (binding_status == "active" and not roles) or (binding_status == "deprovisioned" and roles):
+    if (binding_status == "active" and not roles) or (
+        binding_status == "deprovisioned" and roles
+    ):
         raise RBACBindingStoreError("RBAC subject binding is invalid")
     return {
         "subject_id": subject_id,
@@ -260,13 +453,17 @@ def _metadata_psycopg():
         import psycopg
         from psycopg.rows import dict_row
     except ImportError as exc:
-        raise MetadataStoreError("postgres metadata store requires psycopg[binary]") from exc
+        raise MetadataStoreError(
+            "postgres metadata store requires psycopg[binary]"
+        ) from exc
     return psycopg, dict_row
 
 
 def _audit_pg_connect():
     if not AUDIT_STORE_POSTGRES_DSN:
-        raise AuditStoreError("SERVERWARE_AUDIT_STORE_POSTGRES_DSN is required for postgres audit store")
+        raise AuditStoreError(
+            "SERVERWARE_AUDIT_STORE_POSTGRES_DSN is required for postgres audit store"
+        )
     psycopg, dict_row = _audit_psycopg()
     return psycopg.connect(
         AUDIT_STORE_POSTGRES_DSN,
@@ -277,7 +474,9 @@ def _audit_pg_connect():
 
 def _metadata_pg_connect_raw():
     if not METADATA_STORE_POSTGRES_DSN:
-        raise MetadataStoreError("SERVERWARE_METADATA_STORE_POSTGRES_DSN is required for postgres metadata store")
+        raise MetadataStoreError(
+            "SERVERWARE_METADATA_STORE_POSTGRES_DSN is required for postgres metadata store"
+        )
     psycopg, dict_row = _metadata_psycopg()
     return psycopg.connect(
         METADATA_STORE_POSTGRES_DSN,
@@ -387,9 +586,7 @@ def _pending_approval_key_from_row(row: Any) -> str:
             else None
         ),
         grant_max_uses=(
-            int(row["grant_max_uses"])
-            if row["grant_max_uses"] is not None
-            else None
+            int(row["grant_max_uses"]) if row["grant_max_uses"] is not None else None
         ),
     )
 
@@ -498,7 +695,9 @@ def _append_sqlite_audit_event(
     event_json = dumps(event)
     event_id = idempotency_key or str(uuid.uuid4())
     if idempotency_key is not None:
-        existing = conn.execute("SELECT * FROM audit_events WHERE id = ?", (event_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM audit_events WHERE id = ?", (event_id,)
+        ).fetchone()
         if existing is not None:
             if (
                 existing["event_type"] != event_type
@@ -506,7 +705,9 @@ def _append_sqlite_audit_event(
                 or existing["actor_id"] != actor_id
                 or existing["event_json"] != event_json
             ):
-                raise AuditStoreError("audit idempotency key was reused with different event data")
+                raise AuditStoreError(
+                    "audit idempotency key was reused with different event data"
+                )
             return {
                 "id": existing["id"],
                 "event_type": existing["event_type"],
@@ -539,7 +740,16 @@ def _append_sqlite_audit_event(
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (event_id, event_type, actor_type, actor_id, event_json, prev_hash, event_hash, created_at),
+        (
+            event_id,
+            event_type,
+            actor_type,
+            actor_id,
+            event_json,
+            prev_hash,
+            event_hash,
+            created_at,
+        ),
     )
     return {
         "id": event_id,
@@ -566,7 +776,10 @@ def _append_postgres_audit_event(
     with _audit_pg_connect() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_xact_lock(%(lock_key)s)", {"lock_key": _AUDIT_CHAIN_LOCK_KEY})
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(%(lock_key)s)",
+                    {"lock_key": _AUDIT_CHAIN_LOCK_KEY},
+                )
                 if idempotency_key is not None:
                     existing = cur.execute(
                         "SELECT * FROM serverware_audit_events WHERE id = %(id)s",
@@ -579,7 +792,9 @@ def _append_postgres_audit_event(
                             or existing["actor_id"] != actor_id
                             or existing["event_json"] != event_json
                         ):
-                            raise AuditStoreError("audit idempotency key was reused with different event data")
+                            raise AuditStoreError(
+                                "audit idempotency key was reused with different event data"
+                            )
                         return {
                             "id": existing["id"],
                             "event_type": existing["event_type"],
@@ -647,7 +862,9 @@ def append_audit_event(
     event: dict[str, Any],
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
-    if idempotency_key is not None and (not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 256):
+    if idempotency_key is not None and (
+        not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 256
+    ):
         raise AuditStoreError("audit idempotency key must contain 1-256 characters")
     if audit_uses_postgres():
         return _append_postgres_audit_event(
@@ -675,7 +892,9 @@ def record_audit_event(
     *,
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
-    if idempotency_key is not None and (not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 256):
+    if idempotency_key is not None and (
+        not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 256
+    ):
         raise AuditStoreError("audit idempotency key must contain 1-256 characters")
     if audit_uses_postgres():
         return _append_postgres_audit_event(
@@ -764,6 +983,92 @@ def init_db(path: Path = DB_PATH) -> None:
 
             CREATE INDEX IF NOT EXISTS pending_oauth_credentials_expiry
                 ON pending_oauth_credentials (expires_at);
+
+            CREATE TABLE IF NOT EXISTS setup_sessions (
+                id TEXT PRIMARY KEY,
+                owner_id TEXT NOT NULL,
+                current_assignee_id TEXT,
+                status TEXT NOT NULL,
+                phase TEXT NOT NULL,
+                revision BIGINT NOT NULL,
+                template_id TEXT,
+                principal_id TEXT,
+                route_id TEXT,
+                route_policy_digest TEXT,
+                credential_id TEXT,
+                credential_version BIGINT,
+                policy_hash TEXT,
+                assignment_digest TEXT,
+                oauth_provider TEXT,
+                oauth_state_digest TEXT,
+                oauth_pending_credential_id TEXT,
+                canary_id TEXT,
+                enrollment_session_id TEXT,
+                enrollment_packet_digest TEXT,
+                verifier_nonce_hash TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                terminal_at TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS setup_sessions_owner_updated
+                ON setup_sessions (owner_id, updated_at);
+            CREATE INDEX IF NOT EXISTS setup_sessions_assignee_updated
+                ON setup_sessions (current_assignee_id, updated_at);
+            CREATE INDEX IF NOT EXISTS setup_sessions_status_expiry
+                ON setup_sessions (status, expires_at);
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_oauth_state
+                ON setup_sessions (oauth_state_digest)
+                WHERE oauth_state_digest IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_pending_oauth
+                ON setup_sessions (oauth_pending_credential_id)
+                WHERE oauth_pending_credential_id IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_canary
+                ON setup_sessions (canary_id)
+                WHERE canary_id IS NOT NULL;
+            CREATE UNIQUE INDEX IF NOT EXISTS setup_sessions_one_enrollment
+                ON setup_sessions (enrollment_session_id)
+                WHERE enrollment_session_id IS NOT NULL;
+
+            CREATE TABLE IF NOT EXISTS setup_session_evidence (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES setup_sessions(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                evidence_json TEXT NOT NULL,
+                evidence_digest TEXT NOT NULL,
+                verifier_key_id TEXT NOT NULL,
+                observed_at TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE (session_id, kind, evidence_digest)
+            );
+
+            CREATE INDEX IF NOT EXISTS setup_session_evidence_session_created
+                ON setup_session_evidence (session_id, created_at);
+
+            CREATE TABLE IF NOT EXISTS setup_session_events (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL REFERENCES setup_sessions(id) ON DELETE CASCADE,
+                sequence BIGINT NOT NULL,
+                transition TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                payload_digest TEXT NOT NULL,
+                event_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                audit_status TEXT NOT NULL,
+                audit_claim_id TEXT,
+                audit_claimed_at TEXT,
+                audit_attempts BIGINT NOT NULL DEFAULT 0,
+                audited_at TEXT,
+                audit_event_hash TEXT,
+                audit_last_error TEXT,
+                UNIQUE (session_id, sequence)
+            );
+
+            CREATE INDEX IF NOT EXISTS setup_session_events_session_sequence
+                ON setup_session_events (session_id, sequence);
+            CREATE INDEX IF NOT EXISTS setup_session_events_audit_outbox
+                ON setup_session_events (audit_status, audit_claimed_at, created_at);
 
             CREATE TABLE IF NOT EXISTS oidc_login_states (
                 id TEXT PRIMARY KEY,
@@ -1060,24 +1365,52 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(conn, "approval_requests", "approval_authn", "TEXT")
         _ensure_column(conn, "approval_requests", "approval_challenge_id", "TEXT")
         _ensure_column(conn, "approval_requests", "pending_key", "TEXT")
-        _ensure_column(conn, "control_plane_approvals", "request_json", "TEXT NOT NULL DEFAULT '{}'")
+        _ensure_column(
+            conn,
+            "control_plane_approvals",
+            "request_json",
+            "TEXT NOT NULL DEFAULT '{}'",
+        )
         _ensure_column(conn, "control_plane_approvals", "approved_by", "TEXT")
         _ensure_column(conn, "control_plane_approvals", "approved_at", "TEXT")
         _ensure_column(conn, "control_plane_approvals", "consumed_by", "TEXT")
         _ensure_column(conn, "control_plane_approvals", "consumed_at", "TEXT")
         _ensure_column(conn, "control_plane_approvals", "decision_note", "TEXT")
         _ensure_column(conn, "control_plane_approvals", "approval_authn", "TEXT")
-        _ensure_column(conn, "pending_oauth_credentials", "status", "TEXT NOT NULL DEFAULT 'pending'")
-        _ensure_column(conn, "pending_oauth_credentials", "target_credential_id", "TEXT")
-        _ensure_column(conn, "pending_oauth_credentials", "target_credential_version", "INTEGER")
+        _ensure_column(
+            conn,
+            "pending_oauth_credentials",
+            "status",
+            "TEXT NOT NULL DEFAULT 'pending'",
+        )
+        _ensure_column(
+            conn, "pending_oauth_credentials", "target_credential_id", "TEXT"
+        )
+        _ensure_column(
+            conn, "pending_oauth_credentials", "target_credential_version", "INTEGER"
+        )
         _ensure_column(conn, "pending_oauth_credentials", "revocation_status", "TEXT")
         _ensure_column(conn, "pending_oauth_credentials", "revocation_error", "TEXT")
-        _ensure_column(conn, "pending_oauth_credentials", "revocation_attempts", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "pending_oauth_credentials", "revocation_next_attempt_at", "TEXT")
-        _ensure_column(conn, "pending_oauth_credentials", "revocation_lease_owner", "TEXT")
-        _ensure_column(conn, "pending_oauth_credentials", "revocation_lease_until", "TEXT")
+        _ensure_column(
+            conn,
+            "pending_oauth_credentials",
+            "revocation_attempts",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            conn, "pending_oauth_credentials", "revocation_next_attempt_at", "TEXT"
+        )
+        _ensure_column(
+            conn, "pending_oauth_credentials", "revocation_lease_owner", "TEXT"
+        )
+        _ensure_column(
+            conn, "pending_oauth_credentials", "revocation_lease_until", "TEXT"
+        )
         _ensure_column(conn, "pending_oauth_credentials", "updated_at", "TEXT")
-        _ensure_column(conn, "oidc_login_states", "source_key", "TEXT NOT NULL DEFAULT 'internal'")
+        _ensure_column(conn, "setup_sessions", "route_policy_digest", "TEXT")
+        _ensure_column(
+            conn, "oidc_login_states", "source_key", "TEXT NOT NULL DEFAULT 'internal'"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS oidc_login_states_source_expiry "
             "ON oidc_login_states (source_key, expires_at)"
@@ -1098,21 +1431,44 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(conn, "credentials", "secret_nonce", "TEXT")
         _ensure_column(conn, "credentials", "secret_ciphertext", "TEXT")
         _ensure_column(conn, "credentials", "secret_kek_id", "TEXT")
-        _ensure_column(conn, "credentials", "credential_version", "INTEGER NOT NULL DEFAULT 1")
+        _ensure_column(
+            conn, "credentials", "credential_version", "INTEGER NOT NULL DEFAULT 1"
+        )
         _ensure_column(conn, "credentials", "secret_updated_at", "TEXT")
-        _ensure_column(conn, "credentials", "lifecycle_status", "TEXT NOT NULL DEFAULT 'active'")
+        _ensure_column(
+            conn, "credentials", "lifecycle_status", "TEXT NOT NULL DEFAULT 'active'"
+        )
         _ensure_column(conn, "credentials", "revocation_error", "TEXT")
         _ensure_column(conn, "credentials", "revocation_requested_at", "TEXT")
         _ensure_column(conn, "webauthn_credentials", "attestation_fmt", "TEXT")
-        _ensure_column(conn, "webauthn_credentials", "attestation_trusted", "INTEGER NOT NULL DEFAULT 0")
-        _ensure_column(conn, "webauthn_credentials", "attestation_trust_path", "TEXT NOT NULL DEFAULT '[]'")
+        _ensure_column(
+            conn,
+            "webauthn_credentials",
+            "attestation_trusted",
+            "INTEGER NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            conn,
+            "webauthn_credentials",
+            "attestation_trust_path",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )
         _ensure_column(conn, "webauthn_credentials", "attestation_leaf_sha256", "TEXT")
         _ensure_column(conn, "webauthn_credentials", "attestation_root_sha256", "TEXT")
-        _ensure_column(conn, "webauthn_credentials", "attestation_trust_bundle_digest", "TEXT")
-        _ensure_column(conn, "webauthn_credentials", "attestation_trust_bundle_sequence", "INTEGER")
+        _ensure_column(
+            conn, "webauthn_credentials", "attestation_trust_bundle_digest", "TEXT"
+        )
+        _ensure_column(
+            conn, "webauthn_credentials", "attestation_trust_bundle_sequence", "INTEGER"
+        )
         _ensure_column(conn, "webauthn_credentials", "attestation_verified_at", "TEXT")
-        for row in conn.execute("SELECT id, credential_version FROM credentials").fetchall():
-            _record_credential_generation(conn, str(row["id"]), int(row["credential_version"] or 1))
+        for row in conn.execute(
+            "SELECT id, credential_version FROM credentials"
+        ).fetchall():
+            _record_credential_generation(
+                conn, str(row["id"]), int(row["credential_version"] or 1)
+            )
+
 
 def _ensure_column(conn: Any, table: str, column: str, decl: str) -> None:
     if isinstance(conn, PostgresMetadataConnection):
@@ -1129,9 +1485,1201 @@ def _ensure_column(conn: Any, table: str, column: str, decl: str) -> None:
         if not row:
             conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
         return
-    columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    columns = {
+        row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
     if column not in columns:
         conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+
+
+def _setup_now(value: datetime | None = None) -> datetime:
+    current = value or utcnow()
+    if current.tzinfo is None:
+        raise SetupSessionValidationError(
+            "setup session timestamps must include a timezone"
+        )
+    return current.astimezone(timezone.utc)
+
+
+def _setup_text(
+    label: str, value: Any, *, maximum: int = 512, required: bool = True
+) -> str | None:
+    if value is None and not required:
+        return None
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value.encode("utf-8")) > maximum
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise SetupSessionValidationError(
+            f"{label} must be a non-empty trimmed string of at most {maximum} bytes"
+        )
+    return value
+
+
+def _setup_digest(label: str, value: Any, *, required: bool = True) -> str | None:
+    digest = _setup_text(label, value, maximum=71, required=required)
+    if digest is not None and not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise SetupSessionValidationError(f"{label} must be a lowercase sha256 digest")
+    return digest
+
+
+def _setup_timestamp(label: str, value: Any) -> str:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise SetupSessionValidationError(
+                f"{label} must be an ISO-8601 timestamp"
+            ) from exc
+    else:
+        raise SetupSessionValidationError(f"{label} must be an ISO-8601 timestamp")
+    if parsed.tzinfo is None:
+        raise SetupSessionValidationError(f"{label} must include a timezone")
+    return parsed.astimezone(timezone.utc).isoformat()
+
+
+def _setup_canonical_json(value: Any, *, maximum_bytes: int, label: str) -> str:
+    key_count = 0
+
+    def walk(item: Any, depth: int) -> None:
+        nonlocal key_count
+        if depth > 12:
+            raise SetupSessionValidationError(
+                f"{label} exceeds the maximum nesting depth"
+            )
+        if isinstance(item, dict):
+            key_count += len(item)
+            if key_count > 2048:
+                raise SetupSessionValidationError(f"{label} contains too many keys")
+            for key, child in item.items():
+                if (
+                    not isinstance(key, str)
+                    or not key
+                    or len(key.encode("utf-8")) > 256
+                ):
+                    raise SetupSessionValidationError(
+                        f"{label} keys must be non-empty strings of at most 256 bytes"
+                    )
+                compact = "".join(
+                    character
+                    for character in key.strip().lower()
+                    if character.isalnum()
+                )
+                if (
+                    compact in _SENSITIVE_CREDENTIAL_METADATA_KEYS_COMPACT
+                    or compact.endswith(_SENSITIVE_CREDENTIAL_METADATA_SUFFIXES)
+                ):
+                    raise SetupSessionValidationError(
+                        f"{label} key {key!r} may contain secret material"
+                    )
+                walk(child, depth + 1)
+        elif isinstance(item, list):
+            for child in item:
+                walk(child, depth + 1)
+
+    if not isinstance(value, dict):
+        raise SetupSessionValidationError(f"{label} must be a JSON object")
+    walk(value, 0)
+    try:
+        encoded = json.dumps(
+            value,
+            separators=(",", ":"),
+            sort_keys=True,
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise SetupSessionValidationError(f"{label} must contain finite JSON") from exc
+    if len(encoded) > maximum_bytes:
+        raise SetupSessionValidationError(f"{label} exceeds {maximum_bytes} bytes")
+    return encoded.decode("ascii")
+
+
+def _setup_sha256(value: str) -> str:
+    return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _row_to_setup_session(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "owner_id": str(row["owner_id"]),
+        "current_assignee_id": (
+            str(row["current_assignee_id"]) if row["current_assignee_id"] else None
+        ),
+        "status": str(row["status"]),
+        "phase": str(row["phase"]),
+        "revision": int(row["revision"]),
+        "template_id": str(row["template_id"]) if row["template_id"] else None,
+        "principal_id": str(row["principal_id"]) if row["principal_id"] else None,
+        "route_id": str(row["route_id"]) if row["route_id"] else None,
+        "route_policy_digest": (
+            str(row["route_policy_digest"]) if row["route_policy_digest"] else None
+        ),
+        "credential_id": str(row["credential_id"]) if row["credential_id"] else None,
+        "credential_version": (
+            int(row["credential_version"])
+            if row["credential_version"] is not None
+            else None
+        ),
+        "policy_hash": str(row["policy_hash"]) if row["policy_hash"] else None,
+        "assignment_digest": (
+            str(row["assignment_digest"]) if row["assignment_digest"] else None
+        ),
+        "oauth_provider": str(row["oauth_provider"]) if row["oauth_provider"] else None,
+        "oauth_state_digest": (
+            str(row["oauth_state_digest"]) if row["oauth_state_digest"] else None
+        ),
+        "oauth_pending_credential_id": (
+            str(row["oauth_pending_credential_id"])
+            if row["oauth_pending_credential_id"]
+            else None
+        ),
+        "canary_id": str(row["canary_id"]) if row["canary_id"] else None,
+        "enrollment_session_id": (
+            str(row["enrollment_session_id"]) if row["enrollment_session_id"] else None
+        ),
+        "enrollment_packet_digest": (
+            str(row["enrollment_packet_digest"])
+            if row["enrollment_packet_digest"]
+            else None
+        ),
+        "verifier_nonce_hash": (
+            str(row["verifier_nonce_hash"]) if row["verifier_nonce_hash"] else None
+        ),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+        "expires_at": str(row["expires_at"]),
+        "terminal_at": str(row["terminal_at"]) if row["terminal_at"] else None,
+    }
+
+
+def _row_to_setup_evidence(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "session_id": str(row["session_id"]),
+        "kind": str(row["kind"]),
+        "document": loads(row["evidence_json"], {}),
+        "evidence_digest": str(row["evidence_digest"]),
+        "verifier_key_id": str(row["verifier_key_id"]),
+        "observed_at": str(row["observed_at"]),
+        "created_at": str(row["created_at"]),
+    }
+
+
+def _row_to_setup_event(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "session_id": str(row["session_id"]),
+        "sequence": int(row["sequence"]),
+        "transition": str(row["transition"]),
+        "actor_id": str(row["actor_id"]),
+        "payload_digest": str(row["payload_digest"]),
+        "event": loads(row["event_json"], {}),
+        "created_at": str(row["created_at"]),
+        "audit_status": str(row["audit_status"]),
+        "audit_claim_id": str(row["audit_claim_id"]) if row["audit_claim_id"] else None,
+        "audit_claimed_at": str(row["audit_claimed_at"])
+        if row["audit_claimed_at"]
+        else None,
+        "audit_attempts": int(row["audit_attempts"] or 0),
+        "audited_at": str(row["audited_at"]) if row["audited_at"] else None,
+        "audit_event_hash": str(row["audit_event_hash"])
+        if row["audit_event_hash"]
+        else None,
+        "audit_last_error": str(row["audit_last_error"])
+        if row["audit_last_error"]
+        else None,
+    }
+
+
+def _lock_setup_sessions(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.execute("SELECT pg_advisory_xact_lock(?)", (_SETUP_SESSION_LOCK_KEY,))
+    elif not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def _setup_outbox_count(conn: Any) -> int:
+    row = conn.execute(
+        "SELECT COUNT(*) AS count FROM setup_session_events "
+        "WHERE audit_status IN ('pending', 'claimed')"
+    ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def _ensure_setup_outbox_capacity(conn: Any, additional: int) -> None:
+    if additional < 0:
+        raise SetupSessionValidationError(
+            "setup outbox capacity reservation is invalid"
+        )
+    if _setup_outbox_count(conn) + additional > SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING:
+        raise SetupSessionCapacityError("setup session audit outbox is at capacity")
+
+
+def _insert_setup_event(
+    conn: Any,
+    *,
+    session_id: str,
+    transition: str,
+    actor_id: str,
+    from_phase: str | None,
+    to_phase: str,
+    binding_updates: dict[str, Any],
+    evidence_digests: list[str],
+    details: dict[str, Any],
+    created_at: str,
+) -> dict[str, Any]:
+    sequence_row = conn.execute(
+        "SELECT COALESCE(MAX(sequence), 0) AS sequence, COUNT(*) AS count "
+        "FROM setup_session_events WHERE session_id = ?",
+        (session_id,),
+    ).fetchone()
+    event_count = int(sequence_row["count"] if sequence_row else 0)
+    if event_count >= SETUP_SESSION_EVENT_MAX_COUNT:
+        raise SetupSessionCapacityError("setup session event capacity is exhausted")
+    sequence = int(sequence_row["sequence"] if sequence_row else 0) + 1
+    document = {
+        "version": "serverware.setupTransition/v1",
+        "setup_session_id": session_id,
+        "transition": transition,
+        "from_phase": from_phase,
+        "to_phase": to_phase,
+        "binding_updates": binding_updates,
+        "evidence_digests": evidence_digests,
+        "details": details,
+    }
+    event_json = _setup_canonical_json(
+        document,
+        maximum_bytes=SETUP_SESSION_EVENT_MAX_BYTES,
+        label="setup transition event",
+    )
+    event_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO setup_session_events (
+            id, session_id, sequence, transition, actor_id, payload_digest,
+            event_json, created_at, audit_status, audit_attempts
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0)
+        """,
+        (
+            event_id,
+            session_id,
+            sequence,
+            transition,
+            actor_id,
+            _setup_sha256(event_json),
+            event_json,
+            created_at,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM setup_session_events WHERE id = ?", (event_id,)
+    ).fetchone()
+    return _row_to_setup_event(row)
+
+
+def _expire_and_prune_setup_sessions(
+    conn: Any, now: datetime, *, reserve_outbox: int = 0
+) -> dict[str, int]:
+    now_s = now.isoformat()
+    expiring = conn.execute(
+        "SELECT * FROM setup_sessions WHERE status = 'active' AND expires_at <= ? "
+        "ORDER BY expires_at ASC, id ASC",
+        (now_s,),
+    ).fetchall()
+    _ensure_setup_outbox_capacity(conn, len(expiring) + reserve_outbox)
+    expired_count = 0
+    for row in expiring:
+        existing_events = conn.execute(
+            "SELECT COUNT(*) AS count FROM setup_session_events WHERE session_id = ?",
+            (row["id"],),
+        ).fetchone()
+        if (
+            int(existing_events["count"] if existing_events else 0)
+            >= SETUP_SESSION_EVENT_MAX_COUNT
+        ):
+            raise SetupSessionCapacityError(
+                f"setup session {row['id']} has no event capacity for expiration"
+            )
+        result = conn.execute(
+            """
+            UPDATE setup_sessions
+            SET status = 'expired', phase = 'expired', revision = revision + 1,
+                updated_at = ?, terminal_at = expires_at
+            WHERE id = ? AND status = 'active' AND revision = ?
+            """,
+            (now_s, row["id"], row["revision"]),
+        )
+        if result.rowcount != 1:
+            raise SetupSessionStaleRevisionError(
+                str(row["id"]), int(row["revision"]), int(row["revision"]) + 1
+            )
+        _insert_setup_event(
+            conn,
+            session_id=str(row["id"]),
+            transition="expire",
+            actor_id="system:setup-expiry",
+            from_phase=str(row["phase"]),
+            to_phase="expired",
+            binding_updates={},
+            evidence_digests=[],
+            details={"reason": "ttl_expired"},
+            created_at=now_s,
+        )
+        expired_count += 1
+
+    cutoff = (now - timedelta(seconds=SETUP_SESSION_RETENTION_SECONDS)).isoformat()
+    deleted = conn.execute(
+        """
+        DELETE FROM setup_sessions
+        WHERE status IN ('complete', 'cancelled', 'failed', 'superseded', 'expired')
+          AND terminal_at IS NOT NULL
+          AND terminal_at <= ?
+          AND NOT EXISTS (
+              SELECT 1 FROM setup_session_events
+              WHERE setup_session_events.session_id = setup_sessions.id
+                AND setup_session_events.audit_status != 'audited'
+          )
+        """,
+        (cutoff,),
+    )
+    return {"expired": expired_count, "pruned": max(0, int(deleted.rowcount))}
+
+
+def _expire_setup_sessions_before_mutation(now: datetime) -> None:
+    """Commit TTL expiry before a later setup mutation can be rejected."""
+    with connect() as conn:
+        _lock_setup_sessions(conn)
+        _expire_and_prune_setup_sessions(conn, now)
+
+
+def _validate_setup_bindings(
+    values: dict[str, Any], *, partial: bool
+) -> dict[str, Any]:
+    allowed = _SETUP_BINDING_FIELDS | {"current_assignee_id"}
+    unknown = set(values) - allowed
+    if unknown:
+        raise SetupSessionValidationError(
+            "unsupported setup binding fields: " + ", ".join(sorted(unknown))
+        )
+    validated: dict[str, Any] = {}
+    for field, value in values.items():
+        if value is None:
+            if partial:
+                raise SetupSessionValidationError(
+                    f"setup binding {field} cannot be cleared"
+                )
+            validated[field] = None
+            continue
+        if field == "credential_version":
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise SetupSessionValidationError(
+                    "credential_version must be a positive integer"
+                )
+            validated[field] = value
+        elif field in _SETUP_DIGEST_FIELDS:
+            validated[field] = _setup_digest(field, value)
+        elif field == "oauth_provider":
+            validated[field] = _setup_text(field, value, maximum=128)
+        else:
+            validated[field] = _setup_text(field, value, maximum=512)
+    credential_id = validated.get("credential_id")
+    credential_version = validated.get("credential_version")
+    if (credential_id is None) != (credential_version is None) and not partial:
+        raise SetupSessionValidationError(
+            "credential_id and credential_version must be provided together"
+        )
+    if (
+        not partial
+        and validated.get("route_policy_digest") is not None
+        and validated.get("route_id") is None
+    ):
+        raise SetupSessionValidationError("route_policy_digest requires route_id")
+    return validated
+
+
+def _assert_setup_binding_unique(
+    conn: Any,
+    *,
+    field: str,
+    value: Any,
+    session_id: str | None,
+) -> None:
+    if (
+        field
+        not in {
+            "oauth_state_digest",
+            "oauth_pending_credential_id",
+            "canary_id",
+            "enrollment_session_id",
+        }
+        or value is None
+    ):
+        return
+    sql = f"SELECT id FROM setup_sessions WHERE {field} = ?"
+    params: list[Any] = [value]
+    if session_id is not None:
+        sql += " AND id != ?"
+        params.append(session_id)
+    row = conn.execute(sql, params).fetchone()
+    if row:
+        raise SetupSessionValidationError(
+            f"setup binding {field} is already assigned to another session"
+        )
+
+
+def _prepare_setup_evidence(
+    transition: str,
+    evidence: list[dict[str, Any]] | None,
+    *,
+    created_at: str,
+) -> list[dict[str, Any]]:
+    items = evidence or []
+    evidence_contract = _SETUP_EVIDENCE_TRANSITIONS.get(transition)
+    if evidence_contract is None:
+        if items:
+            raise SetupSessionValidationError(
+                f"setup transition {transition} does not accept evidence"
+            )
+        return []
+    if len(items) != 1:
+        raise SetupSessionValidationError(
+            f"setup transition {transition} requires exactly one evidence record"
+        )
+    item = items[0]
+    if not isinstance(item, dict) or set(item) - {
+        "kind",
+        "document",
+        "verifier_key_id",
+        "observed_at",
+    }:
+        raise SetupSessionValidationError("setup evidence contains unsupported fields")
+    required_kind = evidence_contract[0]
+    if item.get("kind") != required_kind:
+        raise SetupSessionValidationError(
+            f"setup transition {transition} requires evidence kind {required_kind}"
+        )
+    document_json = _setup_canonical_json(
+        item.get("document"),
+        maximum_bytes=SETUP_SESSION_EVIDENCE_MAX_BYTES,
+        label="setup evidence",
+    )
+    return [
+        {
+            "id": str(uuid.uuid4()),
+            "kind": required_kind,
+            "evidence_json": document_json,
+            "evidence_digest": _setup_sha256(document_json),
+            "verifier_key_id": _setup_text(
+                "verifier_key_id", item.get("verifier_key_id"), maximum=512
+            ),
+            "observed_at": _setup_timestamp(
+                "observed_at", item.get("observed_at", created_at)
+            ),
+            "created_at": created_at,
+        }
+    ]
+
+
+def create_setup_session(
+    *,
+    owner_id: str,
+    current_assignee_id: str | None = None,
+    template_id: str | None = None,
+    principal_id: str | None = None,
+    route_id: str | None = None,
+    route_policy_digest: str | None = None,
+    credential_id: str | None = None,
+    credential_version: int | None = None,
+    policy_hash: str | None = None,
+    assignment_digest: str | None = None,
+    ttl_seconds: int | None = None,
+    actor_id: str | None = None,
+) -> dict[str, Any]:
+    owner = _setup_text("owner_id", owner_id, maximum=512)
+    actor = _setup_text("actor_id", actor_id or owner, maximum=512)
+    effective_ttl = SETUP_SESSION_TTL_SECONDS if ttl_seconds is None else ttl_seconds
+    if (
+        isinstance(effective_ttl, bool)
+        or not isinstance(effective_ttl, int)
+        or not 300 <= effective_ttl <= 604_800
+    ):
+        raise SetupSessionValidationError(
+            "setup session ttl_seconds must be between 300 and 604800"
+        )
+    bindings = _validate_setup_bindings(
+        {
+            "current_assignee_id": current_assignee_id,
+            "template_id": template_id,
+            "principal_id": principal_id,
+            "route_id": route_id,
+            "route_policy_digest": route_policy_digest,
+            "credential_id": credential_id,
+            "credential_version": credential_version,
+            "policy_hash": policy_hash,
+            "assignment_digest": assignment_digest,
+        },
+        partial=False,
+    )
+    now = utcnow()
+    now_s = now.isoformat()
+    session_id = str(uuid.uuid4())
+    expires_at = (now + timedelta(seconds=effective_ttl)).isoformat()
+    _expire_setup_sessions_before_mutation(now)
+    with connect() as conn:
+        _lock_setup_sessions(conn)
+        _ensure_setup_outbox_capacity(conn, 1)
+        active_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM setup_sessions "
+            "WHERE status = 'active' AND expires_at > ?",
+            (now_s,),
+        ).fetchone()
+        if int(active_row["count"] if active_row else 0) >= SETUP_SESSION_MAX_ACTIVE:
+            raise SetupSessionCapacityError(
+                "active setup session capacity is exhausted"
+            )
+        total_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM setup_sessions"
+        ).fetchone()
+        if int(total_row["count"] if total_row else 0) >= SETUP_SESSION_MAX_RETAINED:
+            raise SetupSessionCapacityError(
+                "retained setup session capacity is exhausted"
+            )
+        for field, value in bindings.items():
+            _assert_setup_binding_unique(
+                conn, field=field, value=value, session_id=None
+            )
+        conn.execute(
+            """
+            INSERT INTO setup_sessions (
+                id, owner_id, current_assignee_id, status, phase, revision,
+                template_id, principal_id, route_id, route_policy_digest,
+                credential_id, credential_version,
+                policy_hash, assignment_digest, created_at, updated_at, expires_at
+            ) VALUES (?, ?, ?, 'active', 'created', 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                owner,
+                bindings["current_assignee_id"],
+                bindings["template_id"],
+                bindings["principal_id"],
+                bindings["route_id"],
+                bindings["route_policy_digest"],
+                bindings["credential_id"],
+                bindings["credential_version"],
+                bindings["policy_hash"],
+                bindings["assignment_digest"],
+                now_s,
+                now_s,
+                expires_at,
+            ),
+        )
+        _insert_setup_event(
+            conn,
+            session_id=session_id,
+            transition="create",
+            actor_id=actor,
+            from_phase=None,
+            to_phase="created",
+            binding_updates={},
+            evidence_digests=[],
+            details={},
+            created_at=now_s,
+        )
+        row = conn.execute(
+            "SELECT * FROM setup_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    return _row_to_setup_session(row)
+
+
+def get_setup_session(
+    session_id: str,
+    *,
+    include_evidence: bool = False,
+    include_events: bool = False,
+) -> dict[str, Any] | None:
+    setup_id = _setup_text("session_id", session_id, maximum=64)
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM setup_sessions WHERE id = ?", (setup_id,)
+        ).fetchone()
+        if not row:
+            return None
+        item = _row_to_setup_session(row)
+        if include_evidence:
+            evidence_rows = conn.execute(
+                "SELECT * FROM setup_session_evidence WHERE session_id = ? "
+                "ORDER BY created_at ASC, id ASC",
+                (setup_id,),
+            ).fetchall()
+            item["evidence"] = [
+                _row_to_setup_evidence(value) for value in evidence_rows
+            ]
+        if include_events:
+            event_rows = conn.execute(
+                "SELECT * FROM setup_session_events WHERE session_id = ? ORDER BY sequence ASC",
+                (setup_id,),
+            ).fetchall()
+            item["events"] = [_row_to_setup_event(value) for value in event_rows]
+    return item
+
+
+def list_setup_sessions(
+    *,
+    owner_id: str | None = None,
+    current_assignee_id: str | None = None,
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise SetupSessionValidationError(
+            "setup session list limit must be between 1 and 500"
+        )
+    where: list[str] = []
+    params: list[Any] = []
+    if owner_id is not None:
+        where.append("owner_id = ?")
+        params.append(_setup_text("owner_id", owner_id, maximum=512))
+    if current_assignee_id is not None:
+        where.append("current_assignee_id = ?")
+        params.append(
+            _setup_text("current_assignee_id", current_assignee_id, maximum=512)
+        )
+    if status is not None:
+        valid_statuses = {"active"} | _SETUP_TERMINAL_STATUSES
+        if status not in valid_statuses:
+            raise SetupSessionValidationError("unsupported setup session status")
+        where.append("status = ?")
+        params.append(status)
+    sql = "SELECT * FROM setup_sessions"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY updated_at DESC, id DESC LIMIT ?"
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(sql, params).fetchall()
+    return [_row_to_setup_session(row) for row in rows]
+
+
+def get_setup_session_by_oauth_pending_credential(
+    pending_credential_id: str,
+) -> dict[str, Any] | None:
+    pending_id = _setup_text(
+        "oauth_pending_credential_id",
+        pending_credential_id,
+        maximum=512,
+    )
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM setup_sessions WHERE oauth_pending_credential_id = ?",
+            (pending_id,),
+        ).fetchone()
+    return _row_to_setup_session(row) if row else None
+
+
+def _prepare_setup_oauth_callback_binding(
+    *,
+    session_id: str | None,
+    expected_revision: int | None,
+    actor_id: str | None,
+    provider_id: str | None,
+    state_digest: str | None,
+) -> dict[str, Any] | None:
+    values = (
+        session_id,
+        expected_revision,
+        actor_id,
+        provider_id,
+        state_digest,
+    )
+    if all(value is None for value in values):
+        return None
+    if any(value is None for value in values):
+        raise SetupSessionValidationError(
+            "setup OAuth callback binding must be provided completely"
+        )
+    setup_id = _setup_text("setup_session_id", session_id, maximum=64)
+    actor = _setup_text("setup_actor_id", actor_id, maximum=512)
+    provider = _setup_text("setup_oauth_provider", provider_id, maximum=128)
+    digest = _setup_digest("setup_oauth_state_digest", state_digest)
+    if (
+        isinstance(expected_revision, bool)
+        or not isinstance(expected_revision, int)
+        or expected_revision < 0
+    ):
+        raise SetupSessionValidationError(
+            "setup expected revision must be a non-negative integer"
+        )
+    return {
+        "session_id": setup_id,
+        "expected_revision": expected_revision,
+        "actor_id": actor,
+        "provider_id": provider,
+        "state_digest": digest,
+    }
+
+
+def _lock_setup_oauth_callback_binding(
+    conn: Any, binding: dict[str, Any]
+) -> dict[str, Any]:
+    _lock_setup_sessions(conn)
+    _ensure_setup_outbox_capacity(conn, 1)
+    row = conn.execute(
+        "SELECT * FROM setup_sessions WHERE id = ?", (binding["session_id"],)
+    ).fetchone()
+    if row is None:
+        raise SetupSessionNotFoundError(
+            f"setup session not found: {binding['session_id']}"
+        )
+    current_revision = int(row["revision"])
+    if current_revision != binding["expected_revision"]:
+        raise SetupSessionStaleRevisionError(
+            binding["session_id"],
+            int(binding["expected_revision"]),
+            current_revision,
+        )
+    if not (
+        row["status"] == "active"
+        and row["phase"] == "oauth_started"
+        and row["owner_id"] == binding["actor_id"]
+        and row["oauth_provider"] == binding["provider_id"]
+        and isinstance(row["oauth_state_digest"], str)
+        and hmac.compare_digest(
+            str(row["oauth_state_digest"]), str(binding["state_digest"])
+        )
+    ):
+        raise SetupSessionValidationError(
+            "OAuth callback no longer matches the active setup session"
+        )
+    return dict(row)
+
+
+def transition_setup_session(
+    session_id: str,
+    *,
+    expected_revision: int,
+    transition: str,
+    actor_id: str,
+    updates: dict[str, Any] | None = None,
+    evidence: list[dict[str, Any]] | None = None,
+    event: dict[str, Any] | None = None,
+    required_active_credential_id: str | None = None,
+    required_active_credential_version: int | None = None,
+    _connection: Any | None = None,
+    _now: datetime | None = None,
+) -> dict[str, Any]:
+    setup_id = _setup_text("session_id", session_id, maximum=64)
+    actor = _setup_text("actor_id", actor_id, maximum=512)
+    if (
+        isinstance(expected_revision, bool)
+        or not isinstance(expected_revision, int)
+        or expected_revision < 0
+    ):
+        raise SetupSessionValidationError(
+            "expected_revision must be a non-negative integer"
+        )
+    contract = _SETUP_TRANSITIONS.get(transition)
+    if not contract:
+        raise SetupSessionValidationError(f"unsupported setup transition: {transition}")
+    requested_updates = updates or {}
+    if not isinstance(requested_updates, dict):
+        raise SetupSessionValidationError("setup transition updates must be an object")
+    if set(requested_updates) - contract["updates"]:
+        raise SetupSessionValidationError(
+            f"setup transition {transition} contains unsupported update fields"
+        )
+    if (required_active_credential_id is None) != (
+        required_active_credential_version is None
+    ):
+        raise SetupSessionValidationError(
+            "active credential ID and generation must be provided together"
+        )
+    if required_active_credential_id is not None:
+        if transition != "activate_policy":
+            raise SetupSessionValidationError(
+                "active credential generation checks are only valid for policy activation"
+            )
+        _setup_text(
+            "required_active_credential_id",
+            required_active_credential_id,
+            maximum=512,
+        )
+        if (
+            isinstance(required_active_credential_version, bool)
+            or not isinstance(required_active_credential_version, int)
+            or required_active_credential_version < 1
+        ):
+            raise SetupSessionValidationError(
+                "required active credential generation must be a positive integer"
+            )
+    validated_updates = _validate_setup_bindings(requested_updates, partial=True)
+    details = event or {}
+    details_json = _setup_canonical_json(
+        details,
+        maximum_bytes=SETUP_SESSION_EVENT_MAX_BYTES,
+        label="setup transition details",
+    )
+    details = loads(details_json, {})
+    now = _now or utcnow()
+    now_s = now.isoformat()
+    prepared_evidence = _prepare_setup_evidence(transition, evidence, created_at=now_s)
+
+    if _connection is None:
+        _expire_setup_sessions_before_mutation(now)
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
+        _lock_setup_sessions(conn)
+        _ensure_setup_outbox_capacity(conn, 1)
+        row = conn.execute(
+            "SELECT * FROM setup_sessions WHERE id = ?", (setup_id,)
+        ).fetchone()
+        if not row:
+            raise SetupSessionNotFoundError(f"setup session not found: {setup_id}")
+        current_revision = int(row["revision"])
+        if current_revision != expected_revision:
+            raise SetupSessionStaleRevisionError(
+                setup_id, expected_revision, current_revision
+            )
+        if row["status"] != "active":
+            raise SetupSessionValidationError(
+                f"setup session is terminal with status {row['status']}"
+            )
+        phases = contract["phases"]
+        if phases is not None and row["phase"] not in phases:
+            raise SetupSessionValidationError(
+                f"setup transition {transition} is invalid from phase {row['phase']}"
+            )
+        if required_active_credential_id is not None:
+            if (
+                row["credential_id"] != required_active_credential_id
+                or int(row["credential_version"] or 0)
+                != required_active_credential_version
+            ):
+                raise SetupSessionValidationError(
+                    "setup policy activation credential binding changed"
+                )
+            _lock_credential_mutation(conn, required_active_credential_id)
+            active_credential = conn.execute(
+                "SELECT lifecycle_status, credential_version FROM credentials WHERE id = ?",
+                (required_active_credential_id,),
+            ).fetchone()
+            if not (
+                active_credential is not None
+                and str(active_credential["lifecycle_status"] or "active") == "active"
+                and int(active_credential["credential_version"] or 0)
+                == required_active_credential_version
+            ):
+                raise SetupSessionValidationError(
+                    "active credential generation no longer matches the setup assignment"
+                )
+        next_phase = contract["next_phase"] or str(row["phase"])
+        next_status = contract.get("status", "active")
+        terminal_at = now_s if next_status in _SETUP_TERMINAL_STATUSES else None
+        for field, value in validated_updates.items():
+            if (
+                field != "current_assignee_id"
+                and row[field] is not None
+                and row[field] != value
+            ):
+                raise SetupSessionValidationError(
+                    f"immutable setup binding {field} cannot be rebound"
+                )
+            _assert_setup_binding_unique(
+                conn, field=field, value=value, session_id=setup_id
+            )
+
+        effective = dict(row)
+        effective.update(validated_updates)
+        if transition == "bind_oauth_flow" and (
+            not effective.get("oauth_provider")
+            or not effective.get("oauth_state_digest")
+        ):
+            raise SetupSessionValidationError(
+                "bind_oauth_flow requires provider and state digest"
+            )
+        if transition == "bind_pending_credential" and not effective.get(
+            "oauth_pending_credential_id"
+        ):
+            raise SetupSessionValidationError(
+                "bind_pending_credential requires a pending credential ID"
+            )
+        if transition == "bind_credential" and (
+            not effective.get("credential_id")
+            or effective.get("credential_version") is None
+        ):
+            raise SetupSessionValidationError(
+                "bind_credential requires an exact credential generation"
+            )
+        if transition in {"bind_candidate", "activate_policy"} and (
+            not effective.get("policy_hash") or not effective.get("assignment_digest")
+        ):
+            raise SetupSessionValidationError(
+                f"{transition} requires policy and assignment digests"
+            )
+        if transition == "bind_candidate" and not effective.get("canary_id"):
+            raise SetupSessionValidationError("bind_candidate requires a canary ID")
+        if transition == "bind_candidate" and (
+            not effective.get("route_id") or not effective.get("route_policy_digest")
+        ):
+            raise SetupSessionValidationError(
+                "bind_candidate requires an exact route and reviewed route policy digest"
+            )
+        if transition == "bind_enrollment" and (
+            not effective.get("enrollment_session_id")
+            or not effective.get("enrollment_packet_digest")
+            or not effective.get("verifier_nonce_hash")
+        ):
+            raise SetupSessionValidationError(
+                "bind_enrollment requires session, packet, and verifier nonce digests"
+            )
+
+        evidence_count_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM setup_session_evidence WHERE session_id = ?",
+            (setup_id,),
+        ).fetchone()
+        if (
+            int(evidence_count_row["count"] if evidence_count_row else 0)
+            + len(prepared_evidence)
+            > SETUP_SESSION_EVIDENCE_MAX_COUNT
+        ):
+            raise SetupSessionCapacityError(
+                "setup session evidence capacity is exhausted"
+            )
+        event_count_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM setup_session_events WHERE session_id = ?",
+            (setup_id,),
+        ).fetchone()
+        event_count = int(event_count_row["count"] if event_count_row else 0)
+        event_limit = SETUP_SESSION_EVENT_MAX_COUNT
+        if next_status == "active":
+            event_limit -= 1
+        if event_count >= event_limit:
+            raise SetupSessionCapacityError("setup session event capacity is exhausted")
+        for evidence_item in prepared_evidence:
+            replay = conn.execute(
+                "SELECT id FROM setup_session_evidence "
+                "WHERE session_id = ? AND kind = ? AND evidence_digest = ?",
+                (setup_id, evidence_item["kind"], evidence_item["evidence_digest"]),
+            ).fetchone()
+            if replay:
+                raise SetupSessionValidationError("setup evidence replay was rejected")
+
+        assignments = {
+            "status": next_status,
+            "phase": next_phase,
+            "updated_at": now_s,
+            "terminal_at": terminal_at,
+            **validated_updates,
+        }
+        set_clause = ", ".join(f"{field} = ?" for field in assignments)
+        params = list(assignments.values()) + [setup_id, expected_revision]
+        changed = conn.execute(
+            f"UPDATE setup_sessions SET {set_clause}, revision = revision + 1 "
+            "WHERE id = ? AND revision = ? AND status = 'active'",
+            params,
+        )
+        if changed.rowcount != 1:
+            current = conn.execute(
+                "SELECT revision FROM setup_sessions WHERE id = ?", (setup_id,)
+            ).fetchone()
+            if not current:
+                raise SetupSessionNotFoundError(f"setup session not found: {setup_id}")
+            raise SetupSessionStaleRevisionError(
+                setup_id, expected_revision, int(current["revision"])
+            )
+        for evidence_item in prepared_evidence:
+            conn.execute(
+                """
+                INSERT INTO setup_session_evidence (
+                    id, session_id, kind, evidence_json, evidence_digest,
+                    verifier_key_id, observed_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    evidence_item["id"],
+                    setup_id,
+                    evidence_item["kind"],
+                    evidence_item["evidence_json"],
+                    evidence_item["evidence_digest"],
+                    evidence_item["verifier_key_id"],
+                    evidence_item["observed_at"],
+                    evidence_item["created_at"],
+                ),
+            )
+        _insert_setup_event(
+            conn,
+            session_id=setup_id,
+            transition=transition,
+            actor_id=actor,
+            from_phase=str(row["phase"]),
+            to_phase=next_phase,
+            binding_updates=validated_updates,
+            evidence_digests=[item["evidence_digest"] for item in prepared_evidence],
+            details=details,
+            created_at=now_s,
+        )
+        result = conn.execute(
+            "SELECT * FROM setup_sessions WHERE id = ?", (setup_id,)
+        ).fetchone()
+    return _row_to_setup_session(result)
+
+
+def claim_or_handoff_setup_session(
+    session_id: str,
+    *,
+    expected_revision: int,
+    actor_id: str,
+    assignee_id: str,
+    handoff: bool = False,
+) -> dict[str, Any]:
+    assignee = _setup_text("assignee_id", assignee_id, maximum=512)
+    transition = "handoff" if handoff else "claim"
+    return transition_setup_session(
+        session_id,
+        expected_revision=expected_revision,
+        transition=transition,
+        actor_id=actor_id,
+        updates={"current_assignee_id": assignee},
+        event={"mode": transition},
+    )
+
+
+def cancel_setup_session(
+    session_id: str,
+    *,
+    expected_revision: int,
+    actor_id: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    details: dict[str, Any] = {}
+    if reason is not None:
+        details["reason"] = _setup_text("reason", reason, maximum=2048)
+    return transition_setup_session(
+        session_id,
+        expected_revision=expected_revision,
+        transition="cancel",
+        actor_id=actor_id,
+        event=details,
+    )
+
+
+def prune_setup_sessions(*, now: datetime | None = None) -> dict[str, int]:
+    current = _setup_now(now)
+    with connect() as conn:
+        _lock_setup_sessions(conn)
+        return _expire_and_prune_setup_sessions(conn, current)
+
+
+def claim_setup_session_audit_outbox(
+    *,
+    worker_id: str,
+    limit: int = 100,
+    now: datetime | None = None,
+    claim_ttl_seconds: int | None = None,
+) -> list[dict[str, Any]]:
+    worker = _setup_text("worker_id", worker_id, maximum=128)
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise SetupSessionValidationError(
+            "setup outbox claim limit must be between 1 and 500"
+        )
+    ttl = (
+        SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS
+        if claim_ttl_seconds is None
+        else claim_ttl_seconds
+    )
+    if isinstance(ttl, bool) or not isinstance(ttl, int) or not 5 <= ttl <= 3600:
+        raise SetupSessionValidationError(
+            "setup outbox claim ttl must be between 5 and 3600"
+        )
+    current = _setup_now(now)
+    now_s = current.isoformat()
+    stale_before = (current - timedelta(seconds=ttl)).isoformat()
+    claim_id = f"{worker}:{uuid.uuid4()}"
+    with connect() as conn:
+        _lock_setup_sessions(conn)
+        conn.execute(
+            """
+            UPDATE setup_session_events
+            SET audit_status = 'pending', audit_claim_id = NULL, audit_claimed_at = NULL
+            WHERE audit_status = 'claimed' AND audit_claimed_at <= ?
+            """,
+            (stale_before,),
+        )
+        rows = conn.execute(
+            "SELECT * FROM setup_session_events WHERE audit_status = 'pending' "
+            "ORDER BY created_at ASC, id ASC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        claimed: list[dict[str, Any]] = []
+        for row in rows:
+            updated = conn.execute(
+                """
+                UPDATE setup_session_events
+                SET audit_status = 'claimed', audit_claim_id = ?, audit_claimed_at = ?,
+                    audit_attempts = audit_attempts + 1, audit_last_error = NULL
+                WHERE id = ? AND audit_status = 'pending'
+                """,
+                (claim_id, now_s, row["id"]),
+            )
+            if updated.rowcount == 1:
+                value = conn.execute(
+                    "SELECT * FROM setup_session_events WHERE id = ?", (row["id"],)
+                ).fetchone()
+                item = _row_to_setup_event(value)
+                item["audit_event_type"] = f"setup.{item['transition']}"
+                item["audit_idempotency_key"] = item["id"]
+                claimed.append(item)
+    return claimed
+
+
+def finish_setup_session_audit_outbox(
+    event_id: str,
+    *,
+    claim_id: str,
+    audit_event_hash: str | None = None,
+    error: str | None = None,
+    now: datetime | None = None,
+) -> bool:
+    item_id = _setup_text("event_id", event_id, maximum=64)
+    claim = _setup_text("claim_id", claim_id, maximum=256)
+    if (audit_event_hash is None) == (error is None):
+        raise SetupSessionValidationError(
+            "finish setup outbox requires exactly one of audit_event_hash or error"
+        )
+    current = _setup_now(now).isoformat()
+    with connect() as conn:
+        _lock_setup_sessions(conn)
+        if error is not None:
+            message = _setup_text("error", error, maximum=2048)
+            result = conn.execute(
+                """
+                UPDATE setup_session_events
+                SET audit_status = 'pending', audit_claim_id = NULL,
+                    audit_claimed_at = NULL, audit_last_error = ?
+                WHERE id = ? AND audit_status = 'claimed' AND audit_claim_id = ?
+                """,
+                (message, item_id, claim),
+            )
+        else:
+            event_hash = _setup_digest("audit_event_hash", audit_event_hash)
+            result = conn.execute(
+                """
+                UPDATE setup_session_events
+                SET audit_status = 'audited', audited_at = ?, audit_event_hash = ?,
+                    audit_claim_id = NULL, audit_claimed_at = NULL, audit_last_error = NULL
+                WHERE id = ? AND audit_status = 'claimed' AND audit_claim_id = ?
+                """,
+                (current, event_hash, item_id, claim),
+            )
+    return result.rowcount == 1
 
 
 def get_policy_high_water() -> dict[str, Any] | None:
@@ -1165,13 +2713,17 @@ def advance_policy_high_water(
         raise MetadataStoreError("policy sequence must be a positive integer")
     if rollback_epoch < 1:
         raise MetadataStoreError("policy rollback epoch must be a positive integer")
-    if not isinstance(policy_hash, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", policy_hash):
+    if not isinstance(policy_hash, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", policy_hash
+    ):
         raise MetadataStoreError("policy hash must be a canonical SHA-256 digest")
 
     now_s = iso_now()
     with connect() as conn:
         if isinstance(conn, PostgresMetadataConnection):
-            conn.execute("SELECT pg_advisory_xact_lock(?)", (_POLICY_HIGH_WATER_LOCK_KEY,))
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(?)", (_POLICY_HIGH_WATER_LOCK_KEY,)
+            )
         elif not conn.in_transaction:
             conn.execute("BEGIN IMMEDIATE")
         current = conn.execute(
@@ -1189,7 +2741,10 @@ def advance_policy_high_water(
                     f"policy id changed from {current_policy_id} to {policy_id}"
                 )
             if policy_hash == current_policy_hash:
-                if sequence != current_sequence or rollback_epoch != current_rollback_epoch:
+                if (
+                    sequence != current_sequence
+                    or rollback_epoch != current_rollback_epoch
+                ):
                     raise MetadataStoreError(
                         "policy hash reappeared with different monotonic metadata"
                     )
@@ -1261,8 +2816,12 @@ def row_to_pending_oauth_credential(row: Any) -> dict[str, Any]:
             else None
         ),
         "status": str(row["status"] or "pending"),
-        "revocation_status": str(row["revocation_status"]) if row["revocation_status"] else None,
-        "revocation_error": str(row["revocation_error"]) if row["revocation_error"] else None,
+        "revocation_status": str(row["revocation_status"])
+        if row["revocation_status"]
+        else None,
+        "revocation_error": str(row["revocation_error"])
+        if row["revocation_error"]
+        else None,
         "revocation_attempts": int(row["revocation_attempts"] or 0),
         "revocation_next_attempt_at": (
             str(row["revocation_next_attempt_at"])
@@ -1279,8 +2838,12 @@ def _encrypted_secret_placeholder() -> str:
     return "envelope:v2"
 
 
-def _envelope_values(item_id: str, secret: str, credential_version: int) -> dict[str, Any]:
-    encrypted = encrypt_secret_envelope(secret, credential_id=item_id, credential_version=credential_version)
+def _envelope_values(
+    item_id: str, secret: str, credential_version: int
+) -> dict[str, Any]:
+    encrypted = encrypt_secret_envelope(
+        secret, credential_id=item_id, credential_version=credential_version
+    )
     return {
         "encrypted_secret": _encrypted_secret_placeholder(),
         "encrypted_dek": encrypted["encrypted_dek"],
@@ -1307,13 +2870,26 @@ def validate_credential_metadata(metadata: dict[str, Any] | None) -> dict[str, A
             if key_count > _CREDENTIAL_METADATA_MAX_KEYS:
                 raise ValueError("credential metadata has too many keys")
             for key, child in item.items():
-                if not isinstance(key, str) or not key or len(key.encode("utf-8")) > 256:
-                    raise ValueError("credential metadata keys must be non-empty strings up to 256 bytes")
-                compact = "".join(character for character in key.strip().lower() if character.isalnum())
-                if compact in _SENSITIVE_CREDENTIAL_METADATA_KEYS_COMPACT or compact.endswith(
-                    _SENSITIVE_CREDENTIAL_METADATA_SUFFIXES
+                if (
+                    not isinstance(key, str)
+                    or not key
+                    or len(key.encode("utf-8")) > 256
                 ):
-                    raise ValueError(f"credential metadata key {key!r} may contain secret material")
+                    raise ValueError(
+                        "credential metadata keys must be non-empty strings up to 256 bytes"
+                    )
+                compact = "".join(
+                    character
+                    for character in key.strip().lower()
+                    if character.isalnum()
+                )
+                if (
+                    compact in _SENSITIVE_CREDENTIAL_METADATA_KEYS_COMPACT
+                    or compact.endswith(_SENSITIVE_CREDENTIAL_METADATA_SUFFIXES)
+                ):
+                    raise ValueError(
+                        f"credential metadata key {key!r} may contain secret material"
+                    )
                 walk(child, depth + 1)
         elif isinstance(item, list):
             for child in item:
@@ -1345,9 +2921,13 @@ def validate_credential_secret(secret: str) -> str:
 
 def validate_managed_oauth_identity(metadata: Any) -> tuple[str, str]:
     if not isinstance(metadata, dict) or metadata.get("oauth") is not True:
-        raise ManagedOAuthCredentialError("OAuth credential is not managed by the verified provider flow")
+        raise ManagedOAuthCredentialError(
+            "OAuth credential is not managed by the verified provider flow"
+        )
     if metadata.get("provider_identity_verified") is not True:
-        raise ManagedOAuthCredentialError("OAuth credential provider identity is not verified")
+        raise ManagedOAuthCredentialError(
+            "OAuth credential provider identity is not verified"
+        )
     provider_id = metadata.get("provider_id")
     provider_subject = metadata.get("provider_subject")
     for label, value, maximum in (
@@ -1373,19 +2953,28 @@ def validate_managed_oauth_account_identity(metadata: Any) -> tuple[str, str, st
         or not provider_account
         or provider_account != provider_account.strip()
         or len(provider_account) > 512
-        or any(ord(character) < 32 or ord(character) == 127 for character in provider_account)
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in provider_account
+        )
     ):
-        raise ManagedOAuthCredentialError("OAuth credential provider account is invalid")
+        raise ManagedOAuthCredentialError(
+            "OAuth credential provider account is invalid"
+        )
     return provider_id, provider_subject, provider_account
 
 
 def _credential_mutation_lock_key(item_id: str) -> int:
-    digest = hashlib.sha256(f"serverware:credential-mutation:{item_id}".encode("utf-8")).digest()
+    digest = hashlib.sha256(
+        f"serverware:credential-mutation:{item_id}".encode("utf-8")
+    ).digest()
     return int.from_bytes(digest[:8], "big", signed=True)
 
 
 def _oauth_refresh_lock_key(item_id: str) -> int:
-    digest = hashlib.sha256(f"serverware:oauth-refresh:{item_id}".encode("utf-8")).digest()
+    digest = hashlib.sha256(
+        f"serverware:oauth-refresh:{item_id}".encode("utf-8")
+    ).digest()
     return int.from_bytes(digest[:8], "big", signed=True)
 
 
@@ -1396,12 +2985,17 @@ def oauth_refresh_lock(item_id: str):
         conn.autocommit = True
         try:
             with conn.cursor() as cur:
-                cur.execute("SELECT pg_advisory_lock(%s)", (_oauth_refresh_lock_key(item_id),))
+                cur.execute(
+                    "SELECT pg_advisory_lock(%s)", (_oauth_refresh_lock_key(item_id),)
+                )
             yield
         finally:
             try:
                 with conn.cursor() as cur:
-                    cur.execute("SELECT pg_advisory_unlock(%s)", (_oauth_refresh_lock_key(item_id),))
+                    cur.execute(
+                        "SELECT pg_advisory_unlock(%s)",
+                        (_oauth_refresh_lock_key(item_id),),
+                    )
             finally:
                 conn.close()
         return
@@ -1420,7 +3014,9 @@ def oauth_refresh_lock(item_id: str):
 
 def _lock_credential_mutation(conn: Any, item_id: str) -> None:
     if metadata_uses_postgres():
-        conn.execute("SELECT pg_advisory_xact_lock(?)", (_credential_mutation_lock_key(item_id),))
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)", (_credential_mutation_lock_key(item_id),)
+        )
     elif not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
 
@@ -1461,7 +3057,9 @@ def reserve_credential_lease_nonce(
     tombstone_expires_at_epoch_ms = now_epoch_ms + _CREDENTIAL_LEASE_REPLAY_RETENTION_MS
     with connect() as conn:
         if metadata_uses_postgres():
-            conn.execute("SELECT pg_advisory_xact_lock(?)", (_CREDENTIAL_LEASE_REPLAY_LOCK_KEY,))
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(?)", (_CREDENTIAL_LEASE_REPLAY_LOCK_KEY,)
+            )
         elif not conn.in_transaction:
             conn.execute("BEGIN IMMEDIATE")
         deleted = conn.execute(
@@ -1473,14 +3071,18 @@ def reserve_credential_lease_nonce(
             ("global",),
         ).fetchone()
         if state is None:
-            counted = conn.execute("SELECT COUNT(*) AS count FROM credential_lease_nonces").fetchone()
+            counted = conn.execute(
+                "SELECT COUNT(*) AS count FROM credential_lease_nonces"
+            ).fetchone()
             nonce_count = int(counted["count"])
             conn.execute(
                 "INSERT INTO credential_lease_replay_state (scope, nonce_count) VALUES (?, ?)",
                 ("global", nonce_count),
             )
         else:
-            nonce_count = max(0, int(state["nonce_count"]) - max(0, int(deleted.rowcount)))
+            nonce_count = max(
+                0, int(state["nonce_count"]) - max(0, int(deleted.rowcount))
+            )
             if nonce_count != int(state["nonce_count"]):
                 conn.execute(
                     "UPDATE credential_lease_replay_state SET nonce_count = ? WHERE scope = ?",
@@ -1529,7 +3131,11 @@ def credential_lease_nonce_reserved(
 
 
 def _needs_envelope_migration(row: sqlite3.Row) -> bool:
-    return not row["encrypted_dek"] or not row["secret_nonce"] or not row["secret_ciphertext"]
+    return (
+        not row["encrypted_dek"]
+        or not row["secret_nonce"]
+        or not row["secret_ciphertext"]
+    )
 
 
 def create_credential(
@@ -1539,12 +3145,35 @@ def create_credential(
     metadata: dict[str, Any] | None = None,
     *,
     revocation_work_id: str | None = None,
+    setup_session_id: str | None = None,
+    setup_expected_revision: int | None = None,
+    setup_actor_id: str | None = None,
+    setup_oauth_provider: str | None = None,
+    setup_oauth_state_digest: str | None = None,
 ) -> dict[str, Any]:
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
+    setup_binding = _prepare_setup_oauth_callback_binding(
+        session_id=setup_session_id,
+        expected_revision=setup_expected_revision,
+        actor_id=setup_actor_id,
+        provider_id=setup_oauth_provider,
+        state_digest=setup_oauth_state_digest,
+    )
+    if setup_binding is not None:
+        provider_id, _ = validate_managed_oauth_identity(metadata)
+        if kind != "oauth2" or provider_id != setup_binding["provider_id"]:
+            raise ManagedOAuthCredentialError(
+                "setup-bound credential must match the verified OAuth provider"
+            )
     item_id = str(uuid.uuid4())
-    now = iso_now()
+    now = utcnow()
+    now_s = now.isoformat()
+    if setup_binding is not None:
+        _expire_setup_sessions_before_mutation(now)
     with connect() as conn:
+        if setup_binding is not None:
+            _lock_setup_oauth_callback_binding(conn, setup_binding)
         _lock_credential_mutation(conn, item_id)
         credential_version = _next_credential_generation(conn, item_id)
         encrypted = _envelope_values(item_id, secret, credential_version)
@@ -1569,13 +3198,30 @@ def create_credential(
                 encrypted["credential_version"],
                 encrypted["secret_updated_at"],
                 dumps(metadata or {}),
-                now,
-                now,
+                now_s,
+                now_s,
             ),
         )
         if revocation_work_id is not None:
             _consume_oauth_revocation_work(conn, revocation_work_id)
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
+        if setup_binding is not None:
+            transition_setup_session(
+                setup_binding["session_id"],
+                expected_revision=int(setup_binding["expected_revision"]),
+                transition="bind_credential",
+                actor_id=str(setup_binding["actor_id"]),
+                updates={
+                    "credential_id": item_id,
+                    "credential_version": int(row["credential_version"]),
+                    "oauth_provider": str(setup_binding["provider_id"]),
+                },
+                event={"provider_account": metadata.get("provider_account")},
+                _connection=conn,
+                _now=now,
+            )
     return row_to_credential(row)
 
 
@@ -1611,51 +3257,88 @@ def _validate_oauth_activation_review(
     target_credential_version: int | None,
 ) -> None:
     if set(review) - _OAUTH_ACTIVATION_REVIEW_FIELDS:
-        raise ManagedOAuthCredentialError("pending OAuth credential review contains unsupported fields")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review contains unsupported fields"
+        )
     if not _OAUTH_ACTIVATION_REQUIRED_REVIEW_FIELDS.issubset(review):
-        raise ManagedOAuthCredentialError("pending OAuth credential review is incomplete")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review is incomplete"
+        )
     provider_account = metadata.get("provider_account")
     if review.get("credential_type") != kind or review.get("credential_name") != name:
-        raise ManagedOAuthCredentialError("pending OAuth credential review does not match the credential")
-    if review.get("provider") != provider_id or review.get("provider_subject") != provider_subject:
-        raise ManagedOAuthCredentialError("pending OAuth credential review does not match the verified identity")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review does not match the credential"
+        )
+    if (
+        review.get("provider") != provider_id
+        or review.get("provider_subject") != provider_subject
+    ):
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review does not match the verified identity"
+        )
     if review.get("provider_account") != provider_account:
-        raise ManagedOAuthCredentialError("pending OAuth credential review does not match the verified account")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review does not match the verified account"
+        )
     scopes = review.get("scopes")
     metadata_scopes = metadata.get("scopes")
     if (
         not isinstance(scopes, list)
         or not scopes
-        or any(not isinstance(scope, str) or not scope or len(scope) > 1024 for scope in scopes)
+        or any(
+            not isinstance(scope, str) or not scope or len(scope) > 1024
+            for scope in scopes
+        )
         or len(scopes) != len(set(scopes))
         or scopes != metadata_scopes
     ):
-        raise ManagedOAuthCredentialError("pending OAuth credential review scopes are invalid")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review scopes are invalid"
+        )
     metadata_keys = review.get("metadata_keys")
     if metadata_keys != sorted(metadata):
-        raise ManagedOAuthCredentialError("pending OAuth credential review metadata keys are invalid")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review metadata keys are invalid"
+        )
     expires_at_epoch_ms = review.get("expires_at_epoch_ms")
     if expires_at_epoch_ms is not None and (
         not isinstance(expires_at_epoch_ms, int)
         or isinstance(expires_at_epoch_ms, bool)
         or expires_at_epoch_ms <= 0
     ):
-        raise ManagedOAuthCredentialError("pending OAuth credential review expiry is invalid")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review expiry is invalid"
+        )
     if expires_at_epoch_ms != metadata.get("expires_at_epoch_ms"):
-        raise ManagedOAuthCredentialError("pending OAuth credential review expiry does not match metadata")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review expiry does not match metadata"
+        )
     if provider_id == "x":
-        if not isinstance(review.get("x_app_id"), str) or review.get("x_app_id") != metadata.get("x_app_id"):
-            raise ManagedOAuthCredentialError("pending X OAuth credential review app binding is invalid")
+        if not isinstance(review.get("x_app_id"), str) or review.get(
+            "x_app_id"
+        ) != metadata.get("x_app_id"):
+            raise ManagedOAuthCredentialError(
+                "pending X OAuth credential review app binding is invalid"
+            )
     elif "x_app_id" in review:
-        raise ManagedOAuthCredentialError("pending OAuth credential review has an unexpected X app binding")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review has an unexpected X app binding"
+        )
     if target_credential_id is None:
-        if "reconnect_credential_id" in review or "reconnect_credential_version" in review:
-            raise ManagedOAuthCredentialError("new OAuth credential review has an unexpected reconnect binding")
+        if (
+            "reconnect_credential_id" in review
+            or "reconnect_credential_version" in review
+        ):
+            raise ManagedOAuthCredentialError(
+                "new OAuth credential review has an unexpected reconnect binding"
+            )
     elif (
         review.get("reconnect_credential_id") != target_credential_id
         or review.get("reconnect_credential_version") != target_credential_version
     ):
-        raise ManagedOAuthCredentialError("pending OAuth credential review has an invalid reconnect binding")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review has an invalid reconnect binding"
+        )
 
 
 def create_pending_oauth_credential(
@@ -1671,20 +3354,36 @@ def create_pending_oauth_credential(
     target_credential_id: str | None = None,
     target_credential_version: int | None = None,
     revocation_work_id: str | None = None,
+    setup_session_id: str | None = None,
+    setup_expected_revision: int | None = None,
+    setup_actor_id: str | None = None,
+    setup_oauth_provider: str | None = None,
+    setup_oauth_state_digest: str | None = None,
 ) -> dict[str, Any]:
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     provider_id, provider_subject = validate_managed_oauth_identity(metadata)
     if kind != "oauth2":
-        raise ManagedOAuthCredentialError("pending OAuth credential kind must be oauth2")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential kind must be oauth2"
+        )
     if not isinstance(requester_id, str) or not requester_id or len(requester_id) > 512:
-        raise ManagedOAuthCredentialError("pending OAuth credential requester is invalid")
-    if not isinstance(payload_digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", payload_digest) is None:
-        raise ManagedOAuthCredentialError("pending OAuth credential payload digest is invalid")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential requester is invalid"
+        )
+    if (
+        not isinstance(payload_digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", payload_digest) is None
+    ):
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential payload digest is invalid"
+        )
     if not isinstance(review, dict):
         raise ManagedOAuthCredentialError("pending OAuth credential review is invalid")
     if (target_credential_id is None) != (target_credential_version is None):
-        raise ManagedOAuthCredentialError("pending OAuth reconnect binding is incomplete")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth reconnect binding is incomplete"
+        )
     if target_credential_id is not None and (
         not isinstance(target_credential_id, str)
         or not target_credential_id
@@ -1704,32 +3403,62 @@ def create_pending_oauth_credential(
         target_credential_id=target_credential_id,
         target_credential_version=target_credential_version,
     )
-    expected_payload_digest = "sha256:" + hashlib.sha256(
-        dumps(
-            {
-                "action": "credential.oauth.activate",
-                "review": review,
-                "encrypted_token_source_sha256": "sha256:"
-                + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
-            }
-        ).encode("utf-8")
-    ).hexdigest()
+    expected_payload_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            dumps(
+                {
+                    "action": "credential.oauth.activate",
+                    "review": review,
+                    "encrypted_token_source_sha256": "sha256:"
+                    + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     if payload_digest != expected_payload_digest:
-        raise ManagedOAuthCredentialError("pending OAuth credential payload digest does not bind the review and token")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential payload digest does not bind the review and token"
+        )
     if not 60 <= ttl_seconds <= 3600:
-        raise ManagedOAuthCredentialError("pending OAuth credential ttl must be between 60 and 3600 seconds")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential ttl must be between 60 and 3600 seconds"
+        )
+    setup_binding = _prepare_setup_oauth_callback_binding(
+        session_id=setup_session_id,
+        expected_revision=setup_expected_revision,
+        actor_id=setup_actor_id,
+        provider_id=setup_oauth_provider,
+        state_digest=setup_oauth_state_digest,
+    )
+    if setup_binding is not None and (
+        requester_id != setup_binding["actor_id"]
+        or provider_id != setup_binding["provider_id"]
+    ):
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential does not match its setup callback binding"
+        )
     try:
         review_json = dumps(review)
     except (TypeError, ValueError) as exc:
-        raise ManagedOAuthCredentialError("pending OAuth credential review must be finite JSON") from exc
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review must be finite JSON"
+        ) from exc
     if len(review_json.encode("utf-8")) > 16 * 1024:
-        raise ManagedOAuthCredentialError("pending OAuth credential review exceeds 16 KiB")
+        raise ManagedOAuthCredentialError(
+            "pending OAuth credential review exceeds 16 KiB"
+        )
 
     item_id = str(uuid.uuid4())
-    created_at = iso_now()
-    expires_at = (utcnow() + timedelta(seconds=ttl_seconds)).isoformat()
+    now = utcnow()
+    created_at = now.isoformat()
+    expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
     encrypted = _envelope_values(item_id, secret, 1)
+    if setup_binding is not None:
+        _expire_setup_sessions_before_mutation(now)
     with connect() as conn:
+        if setup_binding is not None:
+            _lock_setup_oauth_callback_binding(conn, setup_binding)
         _lock_pending_oauth_creation(conn)
         _mark_expired_pending_oauth_credentials(conn, created_at)
         if target_credential_id is not None:
@@ -1738,27 +3467,50 @@ def create_pending_oauth_credential(
                 "SELECT * FROM credentials WHERE id = ?",
                 (target_credential_id,),
             ).fetchone()
-            if target is None or str(target["lifecycle_status"] or "active") != "active":
-                raise ManagedOAuthCredentialError("OAuth reconnect target is unavailable")
+            if (
+                target is None
+                or str(target["lifecycle_status"] or "active") != "active"
+            ):
+                raise ManagedOAuthCredentialError(
+                    "OAuth reconnect target is unavailable"
+                )
             if target["kind"] != "oauth2":
-                raise ManagedOAuthCredentialError("OAuth reconnect target kind is invalid")
-            target_identity = validate_managed_oauth_account_identity(loads(target["metadata"], {}))
+                raise ManagedOAuthCredentialError(
+                    "OAuth reconnect target kind is invalid"
+                )
+            target_identity = validate_managed_oauth_account_identity(
+                loads(target["metadata"], {})
+            )
             pending_identity = validate_managed_oauth_account_identity(metadata)
             if target_identity != pending_identity:
-                raise ManagedOAuthCredentialError("OAuth reconnect target identity changed")
+                raise ManagedOAuthCredentialError(
+                    "OAuth reconnect target identity changed"
+                )
             if int(target["credential_version"] or 1) != target_credential_version:
-                raise ManagedOAuthCredentialError("OAuth reconnect target version changed")
+                raise ManagedOAuthCredentialError(
+                    "OAuth reconnect target version changed"
+                )
         count_row = conn.execute(
             "SELECT COUNT(*) AS count FROM pending_oauth_credentials WHERE status = 'pending'"
         ).fetchone()
-        if int(count_row["count"] if count_row else 0) >= OAUTH_PENDING_CREDENTIAL_MAX_COUNT:
-            raise ManagedOAuthCredentialError("pending OAuth credential capacity has been reached")
+        if (
+            int(count_row["count"] if count_row else 0)
+            >= OAUTH_PENDING_CREDENTIAL_MAX_COUNT
+        ):
+            raise ManagedOAuthCredentialError(
+                "pending OAuth credential capacity has been reached"
+            )
         backlog_row = conn.execute(
             "SELECT COUNT(*) AS count FROM pending_oauth_credentials "
             "WHERE status IN ('cancelled', 'expired', 'rejected')"
         ).fetchone()
-        if int(backlog_row["count"] if backlog_row else 0) >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT:
-            raise ManagedOAuthCredentialError("OAuth revocation backlog capacity has been reached")
+        if (
+            int(backlog_row["count"] if backlog_row else 0)
+            >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT
+        ):
+            raise ManagedOAuthCredentialError(
+                "OAuth revocation backlog capacity has been reached"
+            )
         conn.execute(
             """
             INSERT INTO pending_oauth_credentials (
@@ -1793,7 +3545,20 @@ def create_pending_oauth_credential(
         )
         if revocation_work_id is not None:
             _consume_oauth_revocation_work(conn, revocation_work_id)
-        row = conn.execute("SELECT * FROM pending_oauth_credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM pending_oauth_credentials WHERE id = ?", (item_id,)
+        ).fetchone()
+        if setup_binding is not None:
+            transition_setup_session(
+                setup_binding["session_id"],
+                expected_revision=int(setup_binding["expected_revision"]),
+                transition="bind_pending_credential",
+                actor_id=str(setup_binding["actor_id"]),
+                updates={"oauth_pending_credential_id": item_id},
+                event={"provider_account": review.get("provider_account")},
+                _connection=conn,
+                _now=now,
+            )
     return row_to_pending_oauth_credential(row)
 
 
@@ -1890,10 +3655,16 @@ def create_oidc_login_state(
         ("code verifier", code_verifier, 43, 128),
         ("OIDC nonce", oidc_nonce, 43, 128),
     ):
-        if not isinstance(value, str) or not minimum <= len(value) <= maximum or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+        if (
+            not isinstance(value, str)
+            or not minimum <= len(value) <= maximum
+            or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None
+        ):
             raise MetadataStoreError(f"OIDC login {label} is invalid")
     if not 60 <= ttl_seconds <= 900:
-        raise MetadataStoreError("OIDC login state ttl must be between 60 and 900 seconds")
+        raise MetadataStoreError(
+            "OIDC login state ttl must be between 60 and 900 seconds"
+        )
     source_key = _oidc_login_source_context.get() or "internal"
     now = utcnow()
     item_id = _oidc_login_state_id(state)
@@ -1913,18 +3684,28 @@ def create_oidc_login_state(
     ).isoformat()
     with connect() as conn:
         _lock_oidc_login_creation(conn)
-        conn.execute("DELETE FROM oidc_login_states WHERE expires_at <= ?", (created_at,))
-        conn.execute("DELETE FROM oidc_login_rate_buckets WHERE expires_at <= ?", (created_at,))
+        conn.execute(
+            "DELETE FROM oidc_login_states WHERE expires_at <= ?", (created_at,)
+        )
+        conn.execute(
+            "DELETE FROM oidc_login_rate_buckets WHERE expires_at <= ?", (created_at,)
+        )
         global_count = conn.execute(
             "SELECT COUNT(*) AS count FROM oidc_login_states"
         ).fetchone()
-        if int(global_count["count"] if global_count else 0) >= _OIDC_LOGIN_GLOBAL_PENDING_MAX:
+        if (
+            int(global_count["count"] if global_count else 0)
+            >= _OIDC_LOGIN_GLOBAL_PENDING_MAX
+        ):
             raise MetadataStoreError("OIDC login state capacity has been reached")
         source_count = conn.execute(
             "SELECT COUNT(*) AS count FROM oidc_login_states WHERE source_key = ?",
             (source_key,),
         ).fetchone()
-        if int(source_count["count"] if source_count else 0) >= _OIDC_LOGIN_SOURCE_PENDING_MAX:
+        if (
+            int(source_count["count"] if source_count else 0)
+            >= _OIDC_LOGIN_SOURCE_PENDING_MAX
+        ):
             raise MetadataStoreError("OIDC login source capacity has been reached")
         if _oidc_login_bucket_count(conn, global_bucket) >= _OIDC_LOGIN_GLOBAL_RATE_MAX:
             raise MetadataStoreError("OIDC login global rate limit has been reached")
@@ -1967,22 +3748,34 @@ def create_oidc_login_state(
 
 
 def consume_oidc_login_state(*, state: str, browser_nonce: str) -> dict[str, str]:
-    if not isinstance(state, str) or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", state) is None:
+    if (
+        not isinstance(state, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", state) is None
+    ):
         raise MetadataStoreError("OIDC login state is malformed")
-    if not isinstance(browser_nonce, str) or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", browser_nonce) is None:
+    if (
+        not isinstance(browser_nonce, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{43,128}", browser_nonce) is None
+    ):
         raise MetadataStoreError("OIDC login browser nonce is malformed")
     item_id = _oidc_login_state_id(state)
     now_s = iso_now()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        row = conn.execute("SELECT * FROM oidc_login_states WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM oidc_login_states WHERE id = ?", (item_id,)
+        ).fetchone()
         if row is None:
             raise MetadataStoreError("OIDC login state is unknown or already consumed")
         if row["expires_at"] <= now_s:
             conn.execute("DELETE FROM oidc_login_states WHERE id = ?", (item_id,))
             raise MetadataStoreError("OIDC login state expired")
-        expected_browser_hash = "sha256:" + hashlib.sha256(browser_nonce.encode("ascii")).hexdigest()
-        if not hmac.compare_digest(str(row["browser_nonce_sha256"]), expected_browser_hash):
+        expected_browser_hash = (
+            "sha256:" + hashlib.sha256(browser_nonce.encode("ascii")).hexdigest()
+        )
+        if not hmac.compare_digest(
+            str(row["browser_nonce_sha256"]), expected_browser_hash
+        ):
             raise MetadataStoreError("OIDC login browser binding mismatch")
         code_verifier = decrypt_secret_envelope(row)
         oidc_nonce = str(row["oidc_nonce"])
@@ -2005,13 +3798,33 @@ def get_pending_oauth_credential(item_id: str) -> dict[str, Any] | None:
     return row_to_pending_oauth_credential(row) if row else None
 
 
-def list_pending_oauth_credentials() -> list[dict[str, Any]]:
+def list_pending_oauth_credentials(
+    *, requester_id: str | None = None
+) -> list[dict[str, Any]]:
     now_s = iso_now()
+    requester = None
+    if requester_id is not None:
+        if (
+            not isinstance(requester_id, str)
+            or not requester_id
+            or len(requester_id) > 512
+        ):
+            raise ManagedOAuthCredentialError(
+                "pending OAuth credential requester is invalid"
+            )
+        requester = requester_id
     with connect() as conn:
         _mark_expired_pending_oauth_credentials(conn, now_s)
-        rows = conn.execute(
-            "SELECT * FROM pending_oauth_credentials ORDER BY created_at DESC",
-        ).fetchall()
+        if requester is None:
+            rows = conn.execute(
+                "SELECT * FROM pending_oauth_credentials ORDER BY created_at DESC",
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM pending_oauth_credentials WHERE requester_id = ? "
+                "ORDER BY created_at DESC",
+                (requester,),
+            ).fetchall()
     return [row_to_pending_oauth_credential(row) for row in rows]
 
 
@@ -2114,7 +3927,9 @@ def finish_pending_oauth_revocation(
             },
         )
         if succeeded:
-            conn.execute("DELETE FROM pending_oauth_credentials WHERE id = ?", (item_id,))
+            conn.execute(
+                "DELETE FROM pending_oauth_credentials WHERE id = ?", (item_id,)
+            )
             return {"ok": True, "revocation_status": "revoked", "deleted": True}
         attempts = int(row["revocation_attempts"] or 0) + 1
         next_attempt_at = (
@@ -2196,7 +4011,9 @@ def reserve_oauth_revocation_work(
     item_id = str(uuid.uuid4())
     now = utcnow()
     now_s = now.isoformat()
-    reservation_expires_at = (now + timedelta(seconds=_OAUTH_REVOCATION_RESERVED_SECONDS)).isoformat()
+    reservation_expires_at = (
+        now + timedelta(seconds=_OAUTH_REVOCATION_RESERVED_SECONDS)
+    ).isoformat()
     encrypted = _envelope_values(item_id, "{}", 1)
     with connect() as conn:
         _lock_oauth_revocation_work(conn)
@@ -2207,8 +4024,13 @@ def reserve_oauth_revocation_work(
         count_row = conn.execute(
             "SELECT COUNT(*) AS count FROM oauth_revocation_work"
         ).fetchone()
-        if int(count_row["count"] if count_row else 0) >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT:
-            raise ManagedOAuthCredentialError("OAuth revocation work capacity has been reached")
+        if (
+            int(count_row["count"] if count_row else 0)
+            >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT
+        ):
+            raise ManagedOAuthCredentialError(
+                "OAuth revocation work capacity has been reached"
+            )
         conn.execute(
             """
             INSERT INTO oauth_revocation_work (
@@ -2268,7 +4090,9 @@ def attach_oauth_revocation_material(work_id: str, *, secret: str) -> None:
             ),
         )
         if updated.rowcount != 1:
-            raise ManagedOAuthCredentialError("OAuth revocation work reservation is unavailable")
+            raise ManagedOAuthCredentialError(
+                "OAuth revocation work reservation is unavailable"
+            )
 
 
 def create_oauth_revocation_work(
@@ -2346,7 +4170,9 @@ def _consume_oauth_revocation_work(conn: Any, work_id: str) -> None:
         (work_id,),
     )
     if deleted.rowcount != 1:
-        raise ManagedOAuthCredentialError("OAuth revocation work binding is unavailable")
+        raise ManagedOAuthCredentialError(
+            "OAuth revocation work binding is unavailable"
+        )
 
 
 def _x_oauth_retirement_secret(
@@ -2355,18 +4181,28 @@ def _x_oauth_retirement_secret(
 ) -> str | None:
     try:
         current = json.loads(current_secret)
-        replacement = json.loads(replacement_secret) if replacement_secret is not None else None
+        replacement = (
+            json.loads(replacement_secret) if replacement_secret is not None else None
+        )
     except (json.JSONDecodeError, TypeError):
-        raise ManagedOAuthCredentialError("OAuth token retirement material is malformed") from None
-    if not isinstance(current, dict) or (replacement is not None and not isinstance(replacement, dict)):
-        raise ManagedOAuthCredentialError("OAuth token retirement material is malformed")
+        raise ManagedOAuthCredentialError(
+            "OAuth token retirement material is malformed"
+        ) from None
+    if not isinstance(current, dict) or (
+        replacement is not None and not isinstance(replacement, dict)
+    ):
+        raise ManagedOAuthCredentialError(
+            "OAuth token retirement material is malformed"
+        )
 
     token_sets = (current,) if replacement is None else (current, replacement)
     for token_set in token_sets:
         for field in ("access_token", "refresh_token"):
             value = token_set.get(field)
             if not isinstance(value, str) or not value:
-                raise ManagedOAuthCredentialError("OAuth token retirement material is malformed")
+                raise ManagedOAuthCredentialError(
+                    "OAuth token retirement material is malformed"
+                )
 
     if replacement is None:
         retirement = {
@@ -2421,13 +4257,20 @@ def _queue_superseded_oauth_secret(
         ).fetchone()
     else:
         if not isinstance(replacing_work_id, str) or not replacing_work_id:
-            raise ManagedOAuthCredentialError("OAuth revocation work replacement is invalid")
+            raise ManagedOAuthCredentialError(
+                "OAuth revocation work replacement is invalid"
+            )
         count_row = conn.execute(
             "SELECT COUNT(*) AS count FROM oauth_revocation_work WHERE id <> ?",
             (replacing_work_id,),
         ).fetchone()
-    if int(count_row["count"] if count_row else 0) >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT:
-        raise ManagedOAuthCredentialError("OAuth revocation work capacity has been reached")
+    if (
+        int(count_row["count"] if count_row else 0)
+        >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT
+    ):
+        raise ManagedOAuthCredentialError(
+            "OAuth revocation work capacity has been reached"
+        )
 
     work_id = str(uuid.uuid4())
     now_s = iso_now()
@@ -2606,7 +4449,11 @@ def finish_oauth_revocation_work(
                 work_id,
             ),
         )
-    return {"ok": False, "reason": "provider_revocation_failed", "retry_at": next_attempt_at}
+    return {
+        "ok": False,
+        "reason": "provider_revocation_failed",
+        "retry_at": next_attempt_at,
+    }
 
 
 def activate_pending_oauth_credential(
@@ -2614,10 +4461,55 @@ def activate_pending_oauth_credential(
     *,
     approval_id: str,
     actor_id: str,
+    setup_session_id: str | None = None,
+    setup_expected_revision: int | None = None,
 ) -> dict[str, Any]:
-    now_s = iso_now()
+    if (setup_session_id is None) != (setup_expected_revision is None):
+        raise SetupSessionValidationError(
+            "setup_session_id and setup_expected_revision must be provided together"
+        )
+    setup_id = None
+    if setup_session_id is not None:
+        setup_id = _setup_text("setup_session_id", setup_session_id, maximum=64)
+        if (
+            isinstance(setup_expected_revision, bool)
+            or not isinstance(setup_expected_revision, int)
+            or setup_expected_revision < 0
+        ):
+            raise SetupSessionValidationError(
+                "setup_expected_revision must be a non-negative integer"
+            )
+    now = utcnow()
+    now_s = now.isoformat()
     action = "credential.oauth.activate"
+    if setup_id is not None:
+        _expire_setup_sessions_before_mutation(now)
     with connect() as conn:
+        setup_row = None
+        if setup_id is not None:
+            _lock_setup_sessions(conn)
+            _ensure_setup_outbox_capacity(conn, 1)
+            setup_row = conn.execute(
+                "SELECT * FROM setup_sessions WHERE id = ?", (setup_id,)
+            ).fetchone()
+            if setup_row is None:
+                raise SetupSessionNotFoundError(f"setup session not found: {setup_id}")
+            current_revision = int(setup_row["revision"])
+            if current_revision != setup_expected_revision:
+                raise SetupSessionStaleRevisionError(
+                    setup_id,
+                    int(setup_expected_revision),
+                    current_revision,
+                )
+            if not (
+                setup_row["status"] == "active"
+                and setup_row["phase"] == "oauth_verified"
+                and setup_row["owner_id"] == actor_id
+                and setup_row["oauth_pending_credential_id"] == item_id
+            ):
+                raise SetupSessionValidationError(
+                    "pending OAuth grant no longer matches the setup session"
+                )
         _lock_credential_mutation(conn, item_id)
         pending = conn.execute(
             "SELECT * FROM pending_oauth_credentials WHERE id = ?",
@@ -2638,6 +4530,18 @@ def activate_pending_oauth_credential(
             return {"ok": False, "reason": f"pending_credential_{pending['status']}"}
         if pending["requester_id"] != actor_id:
             return {"ok": False, "reason": "requester_mismatch"}
+        if setup_row is not None:
+            review = loads(pending["review_json"], {})
+            pending_provider = (
+                review.get("provider") if isinstance(review, dict) else None
+            )
+            if (
+                not isinstance(pending_provider, str)
+                or setup_row["oauth_provider"] != pending_provider
+            ):
+                raise SetupSessionValidationError(
+                    "pending OAuth provider no longer matches the setup session"
+                )
 
         target_credential_id = pending["target_credential_id"]
         reconnect_target = None
@@ -2694,9 +4598,13 @@ def activate_pending_oauth_credential(
             return {"ok": False, "reason": f"approval_{approval['status']}"}
         if approval["expires_at"] <= now_s:
             return {"ok": False, "reason": "approval_expired"}
-        if reconnect_target is None and conn.execute(
-            "SELECT 1 FROM credentials WHERE id = ?", (item_id,)
-        ).fetchone() is not None:
+        if (
+            reconnect_target is None
+            and conn.execute(
+                "SELECT 1 FROM credentials WHERE id = ?", (item_id,)
+            ).fetchone()
+            is not None
+        ):
             return {"ok": False, "reason": "credential_already_active"}
 
         consumed = conn.execute(
@@ -2773,7 +4681,9 @@ def activate_pending_oauth_credential(
                     now_s,
                 ),
             )
-            _record_credential_generation(conn, item_id, int(pending["credential_version"]))
+            _record_credential_generation(
+                conn, item_id, int(pending["credential_version"])
+            )
             credential_id = item_id
         conn.execute("DELETE FROM pending_oauth_credentials WHERE id = ?", (item_id,))
         append_audit_event(
@@ -2800,10 +4710,73 @@ def activate_pending_oauth_credential(
             "SELECT * FROM control_plane_approvals WHERE id = ?",
             (approval_id,),
         ).fetchone()
+        setup_result = None
+        if setup_row is not None:
+            setup_updates = {
+                "credential_id": credential_id,
+                "credential_version": int(credential_row["credential_version"]),
+                "oauth_provider": str(setup_row["oauth_provider"]),
+            }
+            changed = conn.execute(
+                """
+                UPDATE setup_sessions
+                SET phase = 'credential_activated', credential_id = ?,
+                    credential_version = ?, updated_at = ?, revision = revision + 1
+                WHERE id = ? AND revision = ? AND status = 'active'
+                  AND phase = 'oauth_verified' AND owner_id = ?
+                  AND oauth_pending_credential_id = ?
+                """,
+                (
+                    credential_id,
+                    int(credential_row["credential_version"]),
+                    now_s,
+                    setup_id,
+                    int(setup_expected_revision),
+                    actor_id,
+                    item_id,
+                ),
+            )
+            if changed.rowcount != 1:
+                current = conn.execute(
+                    "SELECT revision FROM setup_sessions WHERE id = ?", (setup_id,)
+                ).fetchone()
+                if current is None:
+                    raise SetupSessionNotFoundError(
+                        f"setup session not found: {setup_id}"
+                    )
+                raise SetupSessionStaleRevisionError(
+                    setup_id,
+                    int(setup_expected_revision),
+                    int(current["revision"]),
+                )
+            _insert_setup_event(
+                conn,
+                session_id=setup_id,
+                transition="bind_credential",
+                actor_id=actor_id,
+                from_phase="oauth_verified",
+                to_phase="credential_activated",
+                binding_updates=setup_updates,
+                evidence_digests=[],
+                details={
+                    "provider_account": review.get("provider_account"),
+                    "pending_credential_id": item_id,
+                    "approval_id": approval_id,
+                },
+                created_at=now_s,
+            )
+            setup_result = conn.execute(
+                "SELECT * FROM setup_sessions WHERE id = ?", (setup_id,)
+            ).fetchone()
     return {
         "ok": True,
         "credential": row_to_credential(credential_row),
         "approval": row_to_control_plane_approval(approval_row),
+        **(
+            {"setup_session": _row_to_setup_session(setup_result)}
+            if setup_result is not None
+            else {}
+        ),
     }
 
 
@@ -2818,20 +4791,38 @@ def reconnect_oauth_credential(
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
     next_identity = validate_managed_oauth_account_identity(metadata)
-    if not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 1:
-        raise ManagedOAuthCredentialError("OAuth reconnect credential version is invalid")
+    if (
+        not isinstance(expected_version, int)
+        or isinstance(expected_version, bool)
+        or expected_version < 1
+    ):
+        raise ManagedOAuthCredentialError(
+            "OAuth reconnect credential version is invalid"
+        )
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        current = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        current = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         if current is None:
-            raise ManagedOAuthCredentialError("OAuth reconnect credential no longer exists")
+            raise ManagedOAuthCredentialError(
+                "OAuth reconnect credential no longer exists"
+            )
         if str(current["lifecycle_status"] or "active") != "active":
-            raise ManagedOAuthCredentialError("OAuth reconnect credential is not active")
+            raise ManagedOAuthCredentialError(
+                "OAuth reconnect credential is not active"
+            )
         if current["kind"] != "oauth2":
-            raise ManagedOAuthCredentialError("OAuth reconnect credential kind is invalid")
+            raise ManagedOAuthCredentialError(
+                "OAuth reconnect credential kind is invalid"
+            )
         if int(current["credential_version"] or 1) != expected_version:
-            raise ManagedOAuthCredentialError("OAuth reconnect credential changed during authorization")
-        current_identity = validate_managed_oauth_account_identity(loads(current["metadata"], {}))
+            raise ManagedOAuthCredentialError(
+                "OAuth reconnect credential changed during authorization"
+            )
+        current_identity = validate_managed_oauth_account_identity(
+            loads(current["metadata"], {})
+        )
         if current_identity != next_identity:
             raise ManagedOAuthCredentialError(
                 "OAuth reconnect must verify the exact existing provider subject and account"
@@ -2870,7 +4861,9 @@ def reconnect_oauth_credential(
         )
         if revocation_work_id is not None:
             _consume_oauth_revocation_work(conn, revocation_work_id)
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_credential(row)
 
 
@@ -2887,11 +4880,14 @@ def upsert_credential_with_id(
     now = iso_now()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        existing = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         if existing:
             existing_metadata = loads(existing["metadata"], {})
             if existing["kind"] == "oauth2" or (
-                isinstance(existing_metadata, dict) and existing_metadata.get("oauth") is True
+                isinstance(existing_metadata, dict)
+                and existing_metadata.get("oauth") is True
             ):
                 raise ManagedOAuthCredentialError(
                     "managed OAuth credentials cannot be replaced through the fixed-ID upsert path"
@@ -2974,7 +4970,9 @@ def upsert_credential_with_id(
                     now,
                 ),
             )
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_credential(row)
 
 
@@ -2982,20 +4980,27 @@ def update_credential(item_id: str, payload: dict[str, Any]) -> dict[str, Any] |
     if "secret" in payload and payload["secret"] is not None:
         payload = {**payload, "secret": validate_credential_secret(payload["secret"])}
     if "metadata" in payload:
-        payload = {**payload, "metadata": validate_credential_metadata(payload["metadata"])}
+        payload = {
+            **payload,
+            "metadata": validate_credential_metadata(payload["metadata"]),
+        }
     if ("secret" in payload and payload["secret"] is not None) or "metadata" in payload:
         load_master_key()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        current = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        current = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         if not current:
             return None
         if str(current["lifecycle_status"] or "active") != "active":
-            raise ManagedOAuthCredentialError("credential is unavailable while provider revocation is pending")
+            raise ManagedOAuthCredentialError(
+                "credential is unavailable while provider revocation is pending"
+            )
         current_metadata = loads(current["metadata"], {})
-        if (current["kind"] == "oauth2" or current_metadata.get("oauth") is True) and any(
-            field in payload for field in ("kind", "secret", "metadata")
-        ):
+        if (
+            current["kind"] == "oauth2" or current_metadata.get("oauth") is True
+        ) and any(field in payload for field in ("kind", "secret", "metadata")):
             raise ManagedOAuthCredentialError(
                 "managed OAuth credentials can only be renamed; reconnect to change the account or scopes"
             )
@@ -3007,11 +5012,20 @@ def update_credential(item_id: str, payload: dict[str, Any]) -> dict[str, Any] |
         if "kind" in payload:
             fields.append("kind = ?")
             values.append(payload["kind"])
-        if ("secret" in payload and payload["secret"] is not None) or "metadata" in payload:
+        if (
+            "secret" in payload and payload["secret"] is not None
+        ) or "metadata" in payload:
             current_secret = decrypt_secret_envelope(current)
-            next_secret = payload.get("secret") if payload.get("secret") is not None else current_secret
+            next_secret = (
+                payload.get("secret")
+                if payload.get("secret") is not None
+                else current_secret
+            )
             secret_changed = current_secret != next_secret
-            metadata_changed = "metadata" in payload and loads(current["metadata"], {}) != payload["metadata"]
+            metadata_changed = (
+                "metadata" in payload
+                and loads(current["metadata"], {}) != payload["metadata"]
+            )
             needs_migration = _needs_envelope_migration(current)
             if secret_changed or metadata_changed or needs_migration:
                 next_version = int(current["credential_version"] or 1) + (
@@ -3039,7 +5053,9 @@ def update_credential(item_id: str, payload: dict[str, Any]) -> dict[str, Any] |
         values.append(iso_now())
         values.append(item_id)
         conn.execute(f"UPDATE credentials SET {', '.join(fields)} WHERE id = ?", values)
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_credential(row) if row else None
 
 
@@ -3058,7 +5074,9 @@ def update_credential_secret_if_version(
     load_master_key()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        current = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        current = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         if not current:
             return None, False
         if str(current["lifecycle_status"] or "active") != "active":
@@ -3119,7 +5137,9 @@ def update_credential_secret_if_version(
         )
         if revocation_work_id is not None:
             _consume_oauth_revocation_work(conn, revocation_work_id)
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
     return (row_to_credential(row, include_secret=True) if row else None), True
 
 
@@ -3130,8 +5150,14 @@ def get_credential(
     include_inactive: bool = False,
 ) -> dict[str, Any] | None:
     with connect() as conn:
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
-    if row is not None and not include_inactive and str(row["lifecycle_status"] or "active") != "active":
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
+    if (
+        row is not None
+        and not include_inactive
+        and str(row["lifecycle_status"] or "active") != "active"
+    ):
         return None
     return row_to_credential(row, include_secret) if row else None
 
@@ -3142,7 +5168,9 @@ def credential_lease_snapshot(item_id: str):
     load_master_key()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         if row is not None and str(row["lifecycle_status"] or "active") != "active":
             row = None
         yield row_to_credential(row, include_secret=True) if row else None
@@ -3150,7 +5178,9 @@ def credential_lease_snapshot(item_id: str):
 
 def list_credentials() -> list[dict[str, Any]]:
     with connect() as conn:
-        rows = conn.execute("SELECT * FROM credentials ORDER BY created_at DESC").fetchall()
+        rows = conn.execute(
+            "SELECT * FROM credentials ORDER BY created_at DESC"
+        ).fetchall()
     return [row_to_credential(row) for row in rows]
 
 
@@ -3158,16 +5188,26 @@ def begin_oauth_credential_disconnect(item_id: str) -> dict[str, Any]:
     now_s = iso_now()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         if row is None:
             return {"ok": False, "reason": "credential_not_found"}
         metadata = loads(row["metadata"], {})
         if row["kind"] != "oauth2" and metadata.get("oauth") is not True:
             return {"ok": False, "reason": "credential_not_managed_oauth"}
-        provider_id, provider_subject, provider_account = validate_managed_oauth_account_identity(metadata)
+        provider_id, provider_subject, provider_account = (
+            validate_managed_oauth_account_identity(metadata)
+        )
         lifecycle_status = str(row["lifecycle_status"] or "active")
-        if lifecycle_status not in {"active", "revocation_pending", "revocation_failed"}:
-            raise ManagedOAuthCredentialError("OAuth credential lifecycle state is invalid")
+        if lifecycle_status not in {
+            "active",
+            "revocation_pending",
+            "revocation_failed",
+        }:
+            raise ManagedOAuthCredentialError(
+                "OAuth credential lifecycle state is invalid"
+            )
         conn.execute(
             """
             UPDATE credentials
@@ -3177,7 +5217,9 @@ def begin_oauth_credential_disconnect(item_id: str) -> dict[str, Any]:
             """,
             (now_s, now_s, item_id),
         )
-        current = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        current = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         result = row_to_credential(current, include_secret=True)
     return {
         "ok": True,
@@ -3198,15 +5240,21 @@ def finish_oauth_credential_disconnect(
     error: str | None = None,
 ) -> dict[str, Any]:
     if error is not None and (not isinstance(error, str) or len(error) > 500):
-        raise ManagedOAuthCredentialError("OAuth credential revocation error is invalid")
+        raise ManagedOAuthCredentialError(
+            "OAuth credential revocation error is invalid"
+        )
     now_s = iso_now()
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         if row is None:
             return {"ok": False, "reason": "credential_not_found"}
         metadata = loads(row["metadata"], {})
-        provider_id, provider_subject, provider_account = validate_managed_oauth_account_identity(metadata)
+        provider_id, provider_subject, provider_account = (
+            validate_managed_oauth_account_identity(metadata)
+        )
         if int(row["credential_version"] or 1) != expected_version:
             return {"ok": False, "reason": "credential_changed_during_revocation"}
         if str(row["lifecycle_status"] or "active") != "revocation_pending":
@@ -3241,7 +5289,9 @@ def finish_oauth_credential_disconnect(
             """,
             (error or "provider revocation failed", now_s, item_id),
         )
-        failed = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        failed = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
     return {
         "ok": False,
         "reason": "provider_revocation_failed",
@@ -3252,7 +5302,9 @@ def finish_oauth_credential_disconnect(
 def delete_credential(item_id: str) -> bool:
     with connect() as conn:
         _lock_credential_mutation(conn, item_id)
-        row = conn.execute("SELECT * FROM credentials WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM credentials WHERE id = ?", (item_id,)
+        ).fetchone()
         if row is not None:
             metadata = loads(row["metadata"], {})
             if row["kind"] == "oauth2" or metadata.get("oauth") is True:
@@ -3312,7 +5364,9 @@ def upsert_route_with_id(item_id: str, payload: dict[str, Any]) -> dict[str, Any
         item_id,
     )
     with connect() as conn:
-        existing = conn.execute("SELECT id FROM routes WHERE id = ?", (item_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT id FROM routes WHERE id = ?", (item_id,)
+        ).fetchone()
         if existing:
             conn.execute(
                 """
@@ -3452,7 +5506,9 @@ def ensure_control_plane_approval(
     now = utcnow()
     now_s = now.isoformat()
     expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
-    resource_clause = "resource_id IS NULL" if resource_id is None else "resource_id = ?"
+    resource_clause = (
+        "resource_id IS NULL" if resource_id is None else "resource_id = ?"
+    )
     resource_args: tuple[Any, ...] = () if resource_id is None else (resource_id,)
     with connect() as conn:
         existing = conn.execute(
@@ -3481,7 +5537,16 @@ def ensure_control_plane_approval(
             )
             VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)
             """,
-            (item_id, action, resource_id, payload_digest, requester_id, now_s, expires_at, dumps(request)),
+            (
+                item_id,
+                action,
+                resource_id,
+                payload_digest,
+                requester_id,
+                now_s,
+                expires_at,
+                dumps(request),
+            ),
         )
         append_audit_event(
             conn,
@@ -3498,13 +5563,17 @@ def ensure_control_plane_approval(
                 "request": request,
             },
         )
-        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_control_plane_approval(row)
 
 
 def get_control_plane_approval(item_id: str) -> dict[str, Any] | None:
     with connect() as conn:
-        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_control_plane_approval(row) if row else None
 
 
@@ -3517,7 +5586,9 @@ def approve_control_plane_approval(
 ) -> dict[str, Any] | None:
     now_s = iso_now()
     with connect() as conn:
-        existing = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
+        ).fetchone()
         if not existing:
             return None
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
@@ -3554,7 +5625,9 @@ def approve_control_plane_approval(
                 "note": note,
             },
         )
-        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_control_plane_approval(row) if row else None
 
 
@@ -3568,7 +5641,9 @@ def consume_control_plane_approval(
 ) -> dict[str, Any]:
     now_s = iso_now()
     with connect() as conn:
-        existing = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
+        ).fetchone()
         if not existing:
             return {"ok": False, "reason": "approval_not_found"}
         if existing["action"] != action:
@@ -3611,14 +5686,20 @@ def consume_control_plane_approval(
                 "approved_by": existing["approved_by"],
             },
         )
-        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
+        ).fetchone()
     return {"ok": True, "approval": row_to_control_plane_approval(row)}
 
 
-def deny_control_plane_approval(item_id: str, *, actor_id: str, note: str | None = None) -> dict[str, Any] | None:
+def deny_control_plane_approval(
+    item_id: str, *, actor_id: str, note: str | None = None
+) -> dict[str, Any] | None:
     now_s = iso_now()
     with connect() as conn:
-        existing = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
+        ).fetchone()
         if not existing:
             return None
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
@@ -3634,7 +5715,10 @@ def deny_control_plane_approval(item_id: str, *, actor_id: str, note: str | None
         )
         if cur.rowcount != 1:
             return None
-        if existing["action"] == "credential.oauth.activate" and existing["resource_id"]:
+        if (
+            existing["action"] == "credential.oauth.activate"
+            and existing["resource_id"]
+        ):
             pending_update = conn.execute(
                 """
                 UPDATE pending_oauth_credentials
@@ -3664,11 +5748,15 @@ def deny_control_plane_approval(item_id: str, *, actor_id: str, note: str | None
                 "note": note,
             },
         )
-        row = conn.execute("SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_control_plane_approval(row) if row else None
 
 
-def list_control_plane_approvals(status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+def list_control_plane_approvals(
+    status: str | None = None, limit: int = 100
+) -> list[dict[str, Any]]:
     args: list[Any] = []
     where = ""
     if status:
@@ -3683,9 +5771,13 @@ def list_control_plane_approvals(status: str | None = None, limit: int = 100) ->
     return [row_to_control_plane_approval(row) for row in rows]
 
 
-def create_approval_request(route_id: str, method: str, url: str, ttl_seconds: int = 300) -> dict[str, Any]:
+def create_approval_request(
+    route_id: str, method: str, url: str, ttl_seconds: int = 300
+) -> dict[str, Any]:
     if not 1 <= ttl_seconds <= 3600:
-        raise MetadataStoreError("pending approval ttl_seconds must be between 1 and 3600")
+        raise MetadataStoreError(
+            "pending approval ttl_seconds must be between 1 and 3600"
+        )
     _validate_pending_approval_payload(route_id, method, url)
     now = utcnow()
     now_s = now.isoformat()
@@ -3734,7 +5826,9 @@ def create_approval_request(route_id: str, method: str, url: str, ttl_seconds: i
                 pending_key,
             ),
         )
-        row = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_approval(row)
 
 
@@ -3765,8 +5859,12 @@ def ensure_jit_approval_request(
         )
     if grant_max_uses < 1:
         raise MetadataStoreError("pending approval grant_max_uses must be positive")
-    if not isinstance(canonical_request, dict) or not isinstance(redacted_display, dict):
-        raise MetadataStoreError("pending approval review payloads must be JSON objects")
+    if not isinstance(canonical_request, dict) or not isinstance(
+        redacted_display, dict
+    ):
+        raise MetadataStoreError(
+            "pending approval review payloads must be JSON objects"
+        )
     canonical_json = dumps(canonical_request)
     redacted_json = dumps(redacted_display)
     _validate_pending_approval_payload(
@@ -3854,12 +5952,16 @@ def ensure_jit_approval_request(
                 pending_key,
             ),
         )
-        row = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_approval(row)
 
 
 def _ensure_policy_route_reference(conn: Any, route_id: str) -> None:
-    existing = conn.execute("SELECT id FROM routes WHERE id = ?", (route_id,)).fetchone()
+    existing = conn.execute(
+        "SELECT id FROM routes WHERE id = ?", (route_id,)
+    ).fetchone()
     if existing:
         return
     now_s = iso_now()
@@ -3883,7 +5985,9 @@ def _ensure_policy_route_reference(conn: Any, route_id: str) -> None:
 
 def get_approval_request(item_id: str) -> dict[str, Any] | None:
     with connect() as conn:
-        row = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_approval(row) if row else None
 
 
@@ -3918,7 +6022,9 @@ def approve_request(
     now_s = now.isoformat()
     approved_until = (now + timedelta(seconds=ttl_seconds)).isoformat()
     with connect() as conn:
-        existing = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
+        ).fetchone()
         if not existing:
             return None
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
@@ -3939,10 +6045,9 @@ def approve_request(
         ):
             raise MetadataStoreError("approval grant binding is incomplete")
         if existing["request_digest"] and grants.uses_postgres():
-            if (
-                not isinstance(conn, PostgresMetadataConnection)
-                or not grants.can_share_transaction(METADATA_STORE_POSTGRES_DSN)
-            ):
+            if not isinstance(
+                conn, PostgresMetadataConnection
+            ) or not grants.can_share_transaction(METADATA_STORE_POSTGRES_DSN):
                 raise MetadataStoreError(
                     "postgres approval and grant stores must use the same DSN for atomic issuance"
                 )
@@ -3958,7 +6063,15 @@ def approve_request(
                 approval_challenge_id = ?
             WHERE id = ? AND status = 'pending' AND expires_at > ?
             """,
-            (approved_until, note, actor_id, dumps(authn or {}), challenge_id, item_id, now_s),
+            (
+                approved_until,
+                note,
+                actor_id,
+                dumps(authn or {}),
+                challenge_id,
+                item_id,
+                now_s,
+            ),
         )
         if cur.rowcount != 1:
             return None
@@ -4029,12 +6142,16 @@ def approve_request(
                 "approval_authn": authn or {},
                 "approval_challenge_id": challenge_id,
                 "grant_max_uses": grant_max_uses,
-                "grant_store_backend": (grant_result or {"backend": grants.backend_name()}).get("backend"),
+                "grant_store_backend": (
+                    grant_result or {"backend": grants.backend_name()}
+                ).get("backend"),
                 "grant_id": (grant_result or {}).get("id"),
                 "note": note,
             },
         )
-        row = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_approval(row) if row else None
 
 
@@ -4145,7 +6262,9 @@ def consume_jit_grant_result(
                 actor_id=route_id,
             )
             try:
-                grants.mark_consumption_audited(result["consumption_id"], audit["event_hash"])
+                grants.mark_consumption_audited(
+                    result["consumption_id"], audit["event_hash"]
+                )
             except grants.GrantStoreError as exc:
                 result["audit_mark_error"] = str(exc)
             result["audit_event_hash"] = audit["event_hash"]
@@ -4461,7 +6580,9 @@ def consume_jit_grant(
     )
 
 
-def _rate_limit_retry_after(window_start_epoch_ms: int, window_seconds: int, now_epoch_ms: int) -> int:
+def _rate_limit_retry_after(
+    window_start_epoch_ms: int, window_seconds: int, now_epoch_ms: int
+) -> int:
     reset_at = window_start_epoch_ms + window_seconds * 1000
     return max(1, int((max(reset_at - now_epoch_ms, 0) + 999) // 1000))
 
@@ -4491,7 +6612,9 @@ def _rate_limit_response(
         "remaining": remaining,
         "retry_after_seconds": 0
         if allowed
-        else _rate_limit_retry_after(window_start_epoch_ms, window_seconds, now_epoch_ms),
+        else _rate_limit_retry_after(
+            window_start_epoch_ms, window_seconds, now_epoch_ms
+        ),
         "rate_limit_store_backend": metadata_store_backend_name(),
         "rate_limit_store_ha": metadata_uses_postgres(),
     }
@@ -4579,7 +6702,11 @@ def _consume_rate_limit_sqlite(
             window_start = now_epoch_ms
             count = 0
         if count >= max_count:
-            if expired or int(row["window_seconds"]) != window_seconds or int(row["max_count"]) != max_count:
+            if (
+                expired
+                or int(row["window_seconds"]) != window_seconds
+                or int(row["max_count"]) != max_count
+            ):
                 conn.execute(
                     """
                     UPDATE rate_limit_counters
@@ -4619,7 +6746,12 @@ def _consume_rate_limit_sqlite(
 
         if consume:
             count += 1
-        if consume or expired or int(row["window_seconds"]) != window_seconds or int(row["max_count"]) != max_count:
+        if (
+            consume
+            or expired
+            or int(row["window_seconds"]) != window_seconds
+            or int(row["max_count"]) != max_count
+        ):
             conn.execute(
                 """
                 UPDATE rate_limit_counters
@@ -4721,7 +6853,9 @@ def _consume_rate_limit_postgres(
                 row = cur.fetchone()
                 if row is None:
                     if consume:
-                        raise RateLimitStoreError("postgres rate limit counter insert did not create a locked row")
+                        raise RateLimitStoreError(
+                            "postgres rate limit counter insert did not create a locked row"
+                        )
                     return _rate_limit_response(
                         allowed=True,
                         reason="available",
@@ -4736,7 +6870,9 @@ def _consume_rate_limit_postgres(
 
                 window_start = int(row["window_start_epoch_ms"])
                 count = int(row["count"])
-                expired = now_epoch_ms >= window_start + int(row["window_seconds"]) * 1000
+                expired = (
+                    now_epoch_ms >= window_start + int(row["window_seconds"]) * 1000
+                )
                 if expired:
                     if not consume:
                         return _rate_limit_response(
@@ -4753,7 +6889,11 @@ def _consume_rate_limit_postgres(
                     window_start = now_epoch_ms
                     count = 0
                 if count >= max_count:
-                    if expired or int(row["window_seconds"]) != window_seconds or int(row["max_count"]) != max_count:
+                    if (
+                        expired
+                        or int(row["window_seconds"]) != window_seconds
+                        or int(row["max_count"]) != max_count
+                    ):
                         cur.execute(
                             """
                             UPDATE rate_limit_counters
@@ -4801,7 +6941,12 @@ def _consume_rate_limit_postgres(
 
                 if consume:
                     count += 1
-                if consume or expired or int(row["window_seconds"]) != window_seconds or int(row["max_count"]) != max_count:
+                if (
+                    consume
+                    or expired
+                    or int(row["window_seconds"]) != window_seconds
+                    or int(row["max_count"]) != max_count
+                ):
                     cur.execute(
                         """
                         UPDATE rate_limit_counters
@@ -4869,8 +7014,12 @@ def consume_rate_limit(
     if not counter_key.startswith("sha256:") or len(counter_key) != 71:
         raise RateLimitStoreError("rate limit counter_key must be a sha256: digest")
     if window_seconds < 1 or max_count < 1:
-        raise RateLimitStoreError("rate limit max_count and window_seconds must be positive")
-    now_ms = int(now_epoch_ms if now_epoch_ms is not None else utcnow().timestamp() * 1000)
+        raise RateLimitStoreError(
+            "rate limit max_count and window_seconds must be positive"
+        )
+    now_ms = int(
+        now_epoch_ms if now_epoch_ms is not None else utcnow().timestamp() * 1000
+    )
     if metadata_uses_postgres():
         result = _consume_rate_limit_postgres(
             counter_key=counter_key,
@@ -4904,7 +7053,9 @@ def consume_rate_limit(
     if audit and (consume or not result["allowed"]):
         try:
             audit_event = record_audit_event(
-                "rate_limit.consumed" if result["allowed"] and consume else "rate_limit.denied",
+                "rate_limit.consumed"
+                if result["allowed"] and consume
+                else "rate_limit.denied",
                 {
                     "counter_key": counter_key,
                     "principal_id": principal_id,
@@ -4934,21 +7085,29 @@ def consume_rate_limit(
     return result
 
 
-def clear_rate_limit_counters(route_ids: list[str] | tuple[str, ...] | None = None) -> int:
+def clear_rate_limit_counters(
+    route_ids: list[str] | tuple[str, ...] | None = None,
+) -> int:
     with connect() as conn:
         if route_ids is None:
             cur = conn.execute("DELETE FROM rate_limit_counters")
             return int(cur.rowcount or 0)
         deleted = 0
         for route_id in route_ids:
-            cur = conn.execute("DELETE FROM rate_limit_counters WHERE route_id = ?", (route_id,))
+            cur = conn.execute(
+                "DELETE FROM rate_limit_counters WHERE route_id = ?", (route_id,)
+            )
             deleted += int(cur.rowcount or 0)
         return deleted
 
 
-def deny_request(item_id: str, note: str | None = None, actor_id: str = "admin") -> dict[str, Any] | None:
+def deny_request(
+    item_id: str, note: str | None = None, actor_id: str = "admin"
+) -> dict[str, Any] | None:
     with connect() as conn:
-        existing = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
+        existing = conn.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
+        ).fetchone()
         if not existing:
             return None
         now_s = iso_now()
@@ -4982,7 +7141,9 @@ def deny_request(item_id: str, note: str | None = None, actor_id: str = "admin")
                     "note": note,
                 },
             )
-        row = conn.execute("SELECT * FROM approval_requests WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_approval(row) if row else None
 
 
@@ -5001,7 +7162,9 @@ def list_approvals(status: str | None = None, limit: int = 50) -> list[dict[str,
     return [row_to_approval(row) for row in rows]
 
 
-def list_similar_approvals(approval: dict[str, Any], limit: int = 5) -> list[dict[str, Any]]:
+def list_similar_approvals(
+    approval: dict[str, Any], limit: int = 5
+) -> list[dict[str, Any]]:
     args: list[Any] = [approval["id"]]
     clauses = ["id <> ?"]
     for field in ("principal_id", "route_id", "credential_id", "policy_hash"):
@@ -5014,7 +7177,7 @@ def list_similar_approvals(approval: dict[str, Any], limit: int = 5) -> list[dic
         rows = conn.execute(
             f"""
             SELECT * FROM approval_requests
-            WHERE {' AND '.join(clauses)}
+            WHERE {" AND ".join(clauses)}
             ORDER BY requested_at DESC
             LIMIT ?
             """,
@@ -5206,9 +7369,20 @@ def create_webauthn_challenge(
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (item_id, challenge, challenge_type, user_id, approval_request_id, dumps(payload), expires_at, now_s),
+            (
+                item_id,
+                challenge,
+                challenge_type,
+                user_id,
+                approval_request_id,
+                dumps(payload),
+                expires_at,
+                now_s,
+            ),
         )
-        row = conn.execute("SELECT * FROM webauthn_challenges WHERE id = ?", (item_id,)).fetchone()
+        row = conn.execute(
+            "SELECT * FROM webauthn_challenges WHERE id = ?", (item_id,)
+        ).fetchone()
     return row_to_webauthn_challenge(row)
 
 
@@ -5317,7 +7491,9 @@ def mark_webauthn_challenge_used(challenge_id: str) -> None:
         )
 
 
-def cache_gmail_message_ids(route_id: str, message_ids: list[str], source_url: str, ttl_seconds: int) -> None:
+def cache_gmail_message_ids(
+    route_id: str, message_ids: list[str], source_url: str, ttl_seconds: int
+) -> None:
     if not message_ids:
         return
     now = iso_now()
@@ -5332,7 +7508,10 @@ def cache_gmail_message_ids(route_id: str, message_ids: list[str], source_url: s
                 source_url = excluded.source_url,
                 created_at = excluded.created_at
             """,
-            [(route_id, message_id, expires, source_url, now) for message_id in message_ids],
+            [
+                (route_id, message_id, expires, source_url, now)
+                for message_id in message_ids
+            ],
         )
 
 
@@ -5371,7 +7550,16 @@ def log_request(
             INSERT INTO request_logs (id, route_id, method, url, action, status_code, reason, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (str(uuid.uuid4()), route_id, method, url, action, status_code, reason, created_at),
+            (
+                str(uuid.uuid4()),
+                route_id,
+                method,
+                url,
+                action,
+                status_code,
+                reason,
+                created_at,
+            ),
         )
         audit_event = {
             "route_id": route_id,
@@ -5480,10 +7668,25 @@ def _audit_value_matches(value: Any, expected: str) -> bool:
 AUDIT_SEARCH_ALIASES: dict[str, set[str]] = {
     "principal_id": {"principal_id", "principalId", "principal"},
     "route_id": {"route_id", "routeId"},
-    "policy_hash": {"policy_hash", "policyHash", "policy_bundle_digest", "policyBundleDigest"},
-    "credential_id": {"credential_id", "credentialId", "credential_ref", "credentialRef"},
+    "policy_hash": {
+        "policy_hash",
+        "policyHash",
+        "policy_bundle_digest",
+        "policyBundleDigest",
+    },
+    "credential_id": {
+        "credential_id",
+        "credentialId",
+        "credential_ref",
+        "credentialRef",
+    },
     "credential_version": {"credential_version", "credentialVersion"},
-    "approval_id": {"approval_id", "approvalId", "approval_request_id", "approvalRequestId"},
+    "approval_id": {
+        "approval_id",
+        "approvalId",
+        "approval_request_id",
+        "approvalRequestId",
+    },
     "decision": {"decision", "action", "status", "reason", "consume_result", "result"},
     "attestation_measurement": {
         "attestation_measurement",
@@ -5569,7 +7772,10 @@ def search_audit_events(
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with _audit_pg_connect() as conn:
             with conn.cursor() as cur:
-                cur.execute(f"SELECT COUNT(*)::bigint AS count FROM serverware_audit_events {where}", params)
+                cur.execute(
+                    f"SELECT COUNT(*)::bigint AS count FROM serverware_audit_events {where}",
+                    params,
+                )
                 total_candidates = int(cur.fetchone()["count"])
                 cur.execute(
                     f"""
@@ -5603,7 +7809,12 @@ def search_audit_events(
             params_list.append(end)
         where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
         with connect() as conn:
-            total_candidates = int(conn.execute(f"SELECT COUNT(*) AS count FROM audit_events {where}", tuple(params_list)).fetchone()["count"])
+            total_candidates = int(
+                conn.execute(
+                    f"SELECT COUNT(*) AS count FROM audit_events {where}",
+                    tuple(params_list),
+                ).fetchone()["count"]
+            )
             rows = conn.execute(
                 f"""
                 SELECT * FROM audit_events
@@ -5619,7 +7830,9 @@ def search_audit_events(
         "route_id": route_id,
         "policy_hash": policy_hash,
         "credential_id": credential_id,
-        "credential_version": None if credential_version is None else str(credential_version),
+        "credential_version": None
+        if credential_version is None
+        else str(credential_version),
         "approval_id": approval_id,
         "decision": decision,
         "attestation_measurement": attestation_measurement,
@@ -5797,7 +8010,9 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
     if audit_uses_postgres():
         with _audit_pg_connect() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT COUNT(*)::bigint AS count FROM serverware_audit_events")
+                cur.execute(
+                    "SELECT COUNT(*)::bigint AS count FROM serverware_audit_events"
+                )
                 total = int(cur.fetchone()["count"])
                 query = """
                     SELECT id, event_type, actor_type, actor_id, event_json,
@@ -5811,17 +8026,23 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
                     params["limit"] = limit
                 cur.execute(query, params)
                 rows = cur.fetchall()
-        return _verify_audit_rows(rows, total=total, limit=limit, backend="postgres", ha=True)
+        return _verify_audit_rows(
+            rows, total=total, limit=limit, backend="postgres", ha=True
+        )
 
     with connect() as conn:
-        total = conn.execute("SELECT COUNT(*) AS count FROM audit_events").fetchone()["count"]
+        total = conn.execute("SELECT COUNT(*) AS count FROM audit_events").fetchone()[
+            "count"
+        ]
         query = "SELECT * FROM audit_events ORDER BY rowid ASC"
         params: tuple[Any, ...] = ()
         if limit is not None:
             query += " LIMIT ?"
             params = (limit,)
         rows = conn.execute(query, params).fetchall()
-    return _verify_audit_rows(list(rows), total=total, limit=limit, backend="sqlite", ha=False)
+    return _verify_audit_rows(
+        list(rows), total=total, limit=limit, backend="sqlite", ha=False
+    )
 
 
 def audit_store_status() -> dict[str, Any]:
@@ -5867,6 +8088,9 @@ def metadata_store_status() -> dict[str, Any]:
     tables = [
         "credentials",
         "pending_oauth_credentials",
+        "setup_sessions",
+        "setup_session_evidence",
+        "setup_session_events",
         "oidc_login_states",
         "oauth_revocation_work",
         "routes",

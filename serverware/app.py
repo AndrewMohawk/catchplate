@@ -21,9 +21,25 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+)
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from serverware import __version__
 from serverware.attestation import (
@@ -76,7 +92,22 @@ from serverware.config import (
     validate_internal_service_auth,
 )
 from serverware import db, grants, runtime
-from serverware.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, OIDC_SESSION_COOKIE_NAME, AdminIdentity, OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError, admin_status, issue_csrf_cookie, oidc_identity_from_token, require_admin, require_role, rotate_generated_admin_token, validate_csrf_request
+from serverware.auth import (
+    CSRF_COOKIE_NAME,
+    CSRF_HEADER_NAME,
+    OIDC_SESSION_COOKIE_NAME,
+    AdminIdentity,
+    OIDCAuthError,
+    OIDCAccessDenied,
+    OIDCAuthoritativeStateError,
+    admin_status,
+    issue_csrf_cookie,
+    oidc_identity_from_token,
+    require_admin,
+    require_role,
+    rotate_generated_admin_token,
+    validate_csrf_request,
+)
 from serverware.crypto import encrypt_credential_lease_envelope
 from serverware.enrollment import (
     AgentEnrollmentError,
@@ -84,7 +115,11 @@ from serverware.enrollment import (
     canonical_control_plane_url,
     policy_principal_summaries,
 )
-from serverware.key_release import KeyReleaseError, release_material, status as key_release_status
+from serverware.key_release import (
+    KeyReleaseError,
+    release_material,
+    status as key_release_status,
+)
 from serverware.oauth import (
     OAUTH_REFRESH_SKEW_SECONDS,
     OAuthError,
@@ -98,7 +133,12 @@ from serverware.oauth import (
     revoke_oauth_token,
     resolve_requested_scopes,
 )
-from serverware.operator_oidc import OperatorOIDCError, browser_login_configured, complete_operator_login, start_operator_login
+from serverware.operator_oidc import (
+    OperatorOIDCError,
+    browser_login_configured,
+    complete_operator_login,
+    start_operator_login,
+)
 from serverware.policy_bundle import (
     PolicyBundleError,
     compile_policy_bundle,
@@ -122,7 +162,11 @@ from serverware.webauthn import (
     verify_approval_assertion,
     verify_registration,
 )
-from serverware.webauthn_trust import WebAuthnTrustError, status as webauthn_trust_status, write_trust_bundle
+from serverware.webauthn_trust import (
+    WebAuthnTrustError,
+    status as webauthn_trust_status,
+    write_trust_bundle,
+)
 
 
 app = FastAPI(title="Serverware", version=__version__)
@@ -147,7 +191,11 @@ async def csrf_middleware(request: Request, call_next):
     try:
         validate_csrf_request(request)
     except HTTPException as exc:
-        return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers)
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+            headers=exc.headers,
+        )
     return await call_next(request)
 
 
@@ -158,17 +206,27 @@ async def bounded_control_plane_request_middleware(request: Request, call_next):
         try:
             content_length = int(raw_content_length)
         except ValueError:
-            return JSONResponse(status_code=400, content={"detail": "invalid Content-Length"})
+            return JSONResponse(
+                status_code=400, content={"detail": "invalid Content-Length"}
+            )
         if content_length < 0:
-            return JSONResponse(status_code=400, content={"detail": "invalid Content-Length"})
+            return JSONResponse(
+                status_code=400, content={"detail": "invalid Content-Length"}
+            )
         if content_length > _CONTROL_PLANE_REQUEST_MAX_BYTES:
-            return JSONResponse(status_code=413, content={"detail": "control-plane request exceeds 2 MiB"})
+            return JSONResponse(
+                status_code=413,
+                content={"detail": "control-plane request exceeds 2 MiB"},
+            )
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         body = bytearray()
         async for chunk in request.stream():
             body.extend(chunk)
             if len(body) > _CONTROL_PLANE_REQUEST_MAX_BYTES:
-                return JSONResponse(status_code=413, content={"detail": "control-plane request exceeds 2 MiB"})
+                return JSONResponse(
+                    status_code=413,
+                    content={"detail": "control-plane request exceeds 2 MiB"},
+                )
         request._body = bytes(body)
         request._stream_consumed = False
     return await call_next(request)
@@ -181,7 +239,9 @@ async def signed_response_middleware(request: Request, call_next):
     async for chunk in response.body_iterator:
         body_buffer.extend(chunk)
         if len(body_buffer) > _SIGNED_RESPONSE_MAX_BYTES:
-            return JSONResponse(status_code=503, content={"detail": "signed response exceeds 8 MiB"})
+            return JSONResponse(
+                status_code=503, content={"detail": "signed response exceeds 8 MiB"}
+            )
     body = bytes(body_buffer)
     snapshot = get_policy_snapshot()
     statement = response_statement(
@@ -238,12 +298,30 @@ class CredentialUpdate(BaseModel):
 
 
 class OAuthStartRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
     provider: str = Field(min_length=1)
     credential_name: str | None = Field(default=None, alias="credentialName")
-    credential_id: str | None = Field(default=None, max_length=512, alias="credentialId")
+    credential_id: str | None = Field(
+        default=None, max_length=512, alias="credentialId"
+    )
+    setup_session_id: str | None = Field(
+        default=None,
+        alias="setupSessionId",
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    )
+    setup_revision: int | None = Field(default=None, alias="setupRevision", ge=0)
     scopes: list[str] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     mfa: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_setup_binding(self) -> OAuthStartRequest:
+        if (self.setup_session_id is None) != (self.setup_revision is None):
+            raise ValueError(
+                "setupSessionId and setupRevision must be provided together"
+            )
+        return self
 
     @field_validator("metadata")
     @classmethod
@@ -252,9 +330,23 @@ class OAuthStartRequest(BaseModel):
 
 
 class OAuthPendingActivateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     mfa: dict[str, Any] | None = None
+    setup_session_id: str | None = Field(
+        default=None,
+        alias="setupSessionId",
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    )
+    setup_revision: int | None = Field(default=None, alias="setupRevision", ge=0)
+
+    @model_validator(mode="after")
+    def validate_setup_binding(self) -> OAuthPendingActivateRequest:
+        if (self.setup_session_id is None) != (self.setup_revision is None):
+            raise ValueError(
+                "setupSessionId and setupRevision must be provided together"
+            )
+        return self
 
 
 class RouteCreate(BaseModel):
@@ -303,8 +395,12 @@ class BreakGlassGrantRequest(BaseModel):
     grant_ttl_seconds: int = Field(default=300, alias="grantTtlSeconds", ge=1, le=3600)
     grant_max_uses: int = Field(default=1, alias="grantMaxUses", ge=1, le=5)
     reason: str = Field(min_length=1, max_length=2000)
-    canonical_request: dict[str, Any] = Field(default_factory=dict, alias="canonicalRequest")
-    redacted_display: dict[str, Any] = Field(default_factory=dict, alias="redactedDisplay")
+    canonical_request: dict[str, Any] = Field(
+        default_factory=dict, alias="canonicalRequest"
+    )
+    redacted_display: dict[str, Any] = Field(
+        default_factory=dict, alias="redactedDisplay"
+    )
     mfa: dict[str, Any] | None = None
 
 
@@ -348,7 +444,9 @@ class PolicyCandidateRequest(BaseModel):
 class PolicyPublishRequest(PolicyCandidateRequest):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    activation_mode: str = Field(default="full", alias="activationMode", pattern="^(full|canary)$")
+    activation_mode: str = Field(
+        default="full", alias="activationMode", pattern="^(full|canary)$"
+    )
     mfa: dict[str, Any] | None = None
 
 
@@ -356,7 +454,9 @@ class PolicyCanaryActivationRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     canary_id: str = Field(alias="canaryId", min_length=1)
-    min_observation_seconds: int | None = Field(default=None, alias="minObservationSeconds", ge=0)
+    min_observation_seconds: int | None = Field(
+        default=None, alias="minObservationSeconds", ge=0
+    )
     min_audit_events: int | None = Field(default=None, alias="minAuditEvents", ge=0)
     max_denials: int | None = Field(default=None, alias="maxDenials", ge=0)
     mfa: dict[str, Any] | None = None
@@ -394,7 +494,9 @@ class WebAuthnRegistrationStart(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     label: str = "YubiKey"
-    bootstrap_token: str | None = Field(default=None, alias="bootstrapToken", max_length=1024)
+    bootstrap_token: str | None = Field(
+        default=None, alias="bootstrapToken", max_length=1024
+    )
     mfa: dict[str, Any] | None = None
 
 
@@ -429,17 +531,25 @@ class DataPlaneAuditBatch(BaseModel):
 class CredentialLeaseRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    api_version: Literal["serverware.credentialLeaseRequest/v2"] = Field(alias="apiVersion")
+    api_version: Literal["serverware.credentialLeaseRequest/v2"] = Field(
+        alias="apiVersion"
+    )
     principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
     credential_id: str = Field(alias="credentialId", min_length=1, max_length=256)
-    recipient_public_key: str = Field(alias="recipientPublicKey", min_length=1, max_length=43)
+    recipient_public_key: str = Field(
+        alias="recipientPublicKey", min_length=1, max_length=43
+    )
     recipient_key_id: str = Field(alias="recipientKeyId", min_length=1, max_length=71)
     recipient_nonce: str = Field(alias="recipientNonce", min_length=1, max_length=43)
     policy_hash: str = Field(alias="policyHash", min_length=1, max_length=71)
-    data_plane_binary_digest: str = Field(alias="dataPlaneBinaryDigest", min_length=1, max_length=71)
+    data_plane_binary_digest: str = Field(
+        alias="dataPlaneBinaryDigest", min_length=1, max_length=71
+    )
     max_ttl_seconds: int = Field(alias="maxTtlSeconds", ge=1, le=10)
-    recipient_attestation: dict[str, Any] | None = Field(default=None, alias="recipientAttestation")
+    recipient_attestation: dict[str, Any] | None = Field(
+        default=None, alias="recipientAttestation"
+    )
 
     @model_validator(mode="after")
     def validate_recipient_attestation_size(self) -> CredentialLeaseRequest:
@@ -471,11 +581,17 @@ class DataPlaneGrantConsume(BaseModel):
     request_digest: str = Field(alias="requestDigest", min_length=1)
     operation_digest: str | None = Field(default=None, alias="operationDigest")
     flow_id: str = Field(alias="flowId", min_length=1)
-    attempt_id: str | None = Field(default=None, alias="attemptId", min_length=1, max_length=256)
+    attempt_id: str | None = Field(
+        default=None, alias="attemptId", min_length=1, max_length=256
+    )
     method: str = Field(default="UNKNOWN", min_length=1)
     url: str = Field(default="serverware://data-plane/jit", min_length=1)
-    canonical_request: dict[str, Any] = Field(default_factory=dict, alias="canonicalRequest")
-    redacted_display: dict[str, Any] = Field(default_factory=dict, alias="redactedDisplay")
+    canonical_request: dict[str, Any] = Field(
+        default_factory=dict, alias="canonicalRequest"
+    )
+    redacted_display: dict[str, Any] = Field(
+        default_factory=dict, alias="redactedDisplay"
+    )
     consume: bool = True
 
 
@@ -485,12 +601,16 @@ class DataPlaneRateLimitConsume(BaseModel):
     counter_key: str = Field(alias="counterKey", pattern=r"^sha256:[0-9a-f]{64}$")
     principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
-    credential_ref: str | None = Field(default=None, alias="credentialRef", max_length=256)
+    credential_ref: str | None = Field(
+        default=None, alias="credentialRef", max_length=256
+    )
     credential_version: int = Field(alias="credentialVersion", ge=0)
     policy_hash: str = Field(alias="policyHash", pattern=r"^sha256:[0-9a-f]{64}$")
     constraint_id: str = Field(alias="constraintId", min_length=1, max_length=256)
     operation: str | None = Field(default=None, max_length=256)
-    operation_context: dict[str, Any] = Field(default_factory=dict, alias="operationContext")
+    operation_context: dict[str, Any] = Field(
+        default_factory=dict, alias="operationContext"
+    )
     max_count: int = Field(alias="max", ge=1, le=1_000_000_000)
     window_seconds: int = Field(alias="windowSeconds", ge=1, le=31_536_000)
     consume: bool = True
@@ -517,11 +637,15 @@ class AgentEnrollmentCreate(BaseModel):
 
     principal_id: str = Field(alias="principalId", min_length=1)
     proxy_url: str = Field(alias="proxyUrl", min_length=1)
-    control_plane_url: str | None = Field(default=None, alias="controlPlaneUrl", min_length=1, max_length=2048)
+    control_plane_url: str | None = Field(
+        default=None, alias="controlPlaneUrl", min_length=1, max_length=2048
+    )
     proxy_egress_cidrs: list[str] = Field(alias="proxyEgressCidrs", min_length=1)
     namespace: str = "serverware-agents"
     pod_selector: dict[str, str] = Field(default_factory=dict, alias="podSelector")
-    ca_mount_path: str = Field(default="/etc/serverware/serverware-ca.pem", alias="caMountPath")
+    ca_mount_path: str = Field(
+        default="/etc/serverware/serverware-ca.pem", alias="caMountPath"
+    )
     nonce: str = Field(min_length=32, max_length=256, pattern=r"^[A-Za-z0-9_-]+$")
     ttl_seconds: int = Field(default=300, alias="ttlSeconds", ge=30, le=900)
 
@@ -532,6 +656,10 @@ class SetupVerificationRequest(BaseModel):
     principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
     route_id: str = Field(alias="routeId", min_length=1, max_length=256)
     credential_id: str = Field(alias="credentialId", min_length=1, max_length=256)
+    route_policy_digest: str = Field(
+        alias="routePolicyDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
     nonce: str = Field(min_length=32, max_length=256, pattern=r"^[A-Za-z0-9_-]+$")
     enrollment_session_id: str | None = Field(
         default=None,
@@ -542,24 +670,100 @@ class SetupVerificationRequest(BaseModel):
     )
 
 
+class SetupSessionCreateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    template_id: str | None = Field(default=None, alias="templateId", max_length=512)
+    principal_id: str | None = Field(default=None, alias="principalId", max_length=512)
+    route_id: str | None = Field(default=None, alias="routeId", max_length=512)
+    route_policy_digest: str | None = Field(
+        default=None,
+        alias="routePolicyDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    ttl_seconds: int | None = Field(
+        default=None, alias="ttlSeconds", ge=300, le=604_800
+    )
+
+    @model_validator(mode="after")
+    def validate_route_policy_binding(self) -> SetupSessionCreateRequest:
+        if self.route_policy_digest is not None and self.route_id is None:
+            raise ValueError("routePolicyDigest requires routeId")
+        return self
+
+
+class SetupSessionRevisionRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    expected_revision: int = Field(alias="expectedRevision", ge=0)
+
+
+class SetupSessionHandoffRequest(SetupSessionRevisionRequest):
+    assignee_id: str = Field(alias="assigneeId", min_length=1, max_length=512)
+
+
+class SetupSessionCancelRequest(SetupSessionRevisionRequest):
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class SetupSessionCredentialRequest(SetupSessionRevisionRequest):
+    credential_id: str = Field(alias="credentialId", min_length=1, max_length=512)
+
+
+class SetupSessionCanaryRequest(SetupSessionRevisionRequest):
+    canary_id: str = Field(alias="canaryId", min_length=1, max_length=512)
+
+
+class SetupSessionEnrollmentRequest(SetupSessionRevisionRequest):
+    enrollment_session_id: str = Field(
+        alias="enrollmentSessionId",
+        min_length=18,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+    verifier_nonce: str = Field(
+        alias="verifierNonce",
+        min_length=32,
+        max_length=256,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
+
+
+class SetupSessionVerifyRequest(SetupSessionRevisionRequest):
+    nonce: str = Field(min_length=32, max_length=256, pattern=r"^[A-Za-z0-9_-]+$")
+
+
 class KeyReleaseVerify(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     material: str = Field(min_length=1)
     expected_policy_hash: str | None = Field(default=None, alias="expectedPolicyHash")
-    expected_policy_sequence: int | None = Field(default=None, alias="expectedPolicySequence", ge=1)
-    expected_policy_high_water_digest: str | None = Field(default=None, alias="expectedPolicyHighWaterDigest")
+    expected_policy_sequence: int | None = Field(
+        default=None, alias="expectedPolicySequence", ge=1
+    )
+    expected_policy_high_water_digest: str | None = Field(
+        default=None, alias="expectedPolicyHighWaterDigest"
+    )
     expected_ca_spki: str | None = Field(default=None, alias="expectedCaSpki")
-    expected_rollback_epoch: int | None = Field(default=None, alias="expectedRollbackEpoch")
-    expected_release_channel: str | None = Field(default=None, alias="expectedReleaseChannel")
-    expected_provenance_digest: str | None = Field(default=None, alias="expectedProvenanceDigest")
-    expected_data_plane_binary_digest: str | None = Field(default=None, alias="expectedDataPlaneBinaryDigest")
+    expected_rollback_epoch: int | None = Field(
+        default=None, alias="expectedRollbackEpoch"
+    )
+    expected_release_channel: str | None = Field(
+        default=None, alias="expectedReleaseChannel"
+    )
+    expected_provenance_digest: str | None = Field(
+        default=None, alias="expectedProvenanceDigest"
+    )
+    expected_data_plane_binary_digest: str | None = Field(
+        default=None, alias="expectedDataPlaneBinaryDigest"
+    )
 
 
 @app.on_event("startup")
 def startup() -> None:
     validate_internal_service_auth()
     db.init_db()
+    _drain_setup_session_audit_outbox()
     snapshot = get_policy_snapshot()
     if snapshot is not None:
         enforce_policy_high_water(snapshot)
@@ -614,9 +818,12 @@ def _operator_oidc_source_key(request: Request) -> str:
         canonical_peer = ipaddress.ip_address(str(peer_host)).compressed
     except ValueError:
         canonical_peer = "unknown"
-    return "sha256:" + hashlib.sha256(
-        f"serverware-oidc-peer:{canonical_peer}".encode("ascii")
-    ).hexdigest()
+    return (
+        "sha256:"
+        + hashlib.sha256(
+            f"serverware-oidc-peer:{canonical_peer}".encode("ascii")
+        ).hexdigest()
+    )
 
 
 @app.get("/api/auth/oidc/start")
@@ -627,7 +834,9 @@ def operator_oidc_start(response: Response, request: Request) -> dict[str, Any]:
             started = start_operator_login()
     except (OperatorOIDCError, db.MetadataStoreError, ValueError) as exc:
         detail = str(exc)
-        status_code = 429 if "rate limit" in detail or "source capacity" in detail else 503
+        status_code = (
+            429 if "rate limit" in detail or "source capacity" in detail else 503
+        )
         raise HTTPException(status_code=status_code, detail=detail) from exc
     response.set_cookie(
         "serverware_oidc_flow",
@@ -646,7 +855,10 @@ def operator_oidc_start(response: Response, request: Request) -> dict[str, Any]:
             "source_key": source_key,
         },
     )
-    return {"authorizationUrl": started["authorization_url"], "expiresAt": started["expires_at"]}
+    return {
+        "authorizationUrl": started["authorization_url"],
+        "expiresAt": started["expires_at"],
+    }
 
 
 @app.get("/api/auth/oidc/callback")
@@ -657,7 +869,10 @@ def operator_oidc_callback(
     error: str | None = None,
 ) -> Response:
     if error or not state or not code:
-        raise HTTPException(status_code=400, detail="OIDC login was denied or returned an incomplete callback")
+        raise HTTPException(
+            status_code=400,
+            detail="OIDC login was denied or returned an incomplete callback",
+        )
     try:
         completed = complete_operator_login(
             state=state,
@@ -713,12 +928,17 @@ def operator_logout(
     return {"ok": True}
 
 
-def _approval_jit_policy(approval: dict[str, Any], *, require_current_policy: bool = False) -> dict[str, Any]:
+def _approval_jit_policy(
+    approval: dict[str, Any], *, require_current_policy: bool = False
+) -> dict[str, Any]:
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
     if require_current_policy and snapshot.hash != approval.get("policy_hash"):
-        raise HTTPException(status_code=409, detail="active policy changed after approval request; request a new approval")
+        raise HTTPException(
+            status_code=409,
+            detail="active policy changed after approval request; request a new approval",
+        )
     route = _active_route_by_id(str(approval.get("route_id") or ""), snapshot=snapshot)
     return route.jit or {}
 
@@ -729,19 +949,24 @@ def _active_route_by_id(route_id: str, *, snapshot: Any | None = None) -> Any:
         raise HTTPException(status_code=503, detail="policy bundle missing")
     route = next((item for item in snapshot.routes if item.id == route_id), None)
     if not route:
-        raise HTTPException(status_code=409, detail="approval route is not in the active policy")
+        raise HTTPException(
+            status_code=409, detail="approval route is not in the active policy"
+        )
     return route
 
 
 def _approval_authn_policy(jit: dict[str, Any]) -> dict[str, Any]:
-    return ((jit.get("approvers") or {}).get("authn") or {})
+    return (jit.get("approvers") or {}).get("authn") or {}
 
 
 def _assert_approver_allowed(identity: AdminIdentity, jit: dict[str, Any]) -> None:
     approvers = jit.get("approvers") or {}
     users = set(approvers.get("users") or [])
     if users and "*" not in users and identity.user_id not in users:
-        raise HTTPException(status_code=403, detail="current user is not an allowed approver for this route")
+        raise HTTPException(
+            status_code=403,
+            detail="current user is not an allowed approver for this route",
+        )
 
 
 def _webauthn_required(authn_policy: dict[str, Any]) -> bool:
@@ -752,20 +977,33 @@ def _canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
-def _decode_unpadded_base64url(value: str, *, field_name: str, expected_length: int) -> bytes:
+def _decode_unpadded_base64url(
+    value: str, *, field_name: str, expected_length: int
+) -> bytes:
     if "=" in value or not re.fullmatch(r"[A-Za-z0-9_-]+", value):
-        raise HTTPException(status_code=400, detail=f"{field_name} must be unpadded base64url")
+        raise HTTPException(
+            status_code=400, detail=f"{field_name} must be unpadded base64url"
+        )
     try:
-        decoded = base64.b64decode(value + "=" * (-len(value) % 4), altchars=b"-_", validate=True)
+        decoded = base64.b64decode(
+            value + "=" * (-len(value) % 4), altchars=b"-_", validate=True
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=f"{field_name} must be unpadded base64url") from exc
+        raise HTTPException(
+            status_code=400, detail=f"{field_name} must be unpadded base64url"
+        ) from exc
     if len(decoded) != expected_length:
         raise HTTPException(
             status_code=400,
             detail=f"{field_name} must decode to exactly {expected_length} bytes",
         )
-    if not hmac.compare_digest(base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("="), value):
-        raise HTTPException(status_code=400, detail=f"{field_name} must use canonical base64url encoding")
+    if not hmac.compare_digest(
+        base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("="), value
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail=f"{field_name} must use canonical base64url encoding",
+        )
     return decoded
 
 
@@ -778,15 +1016,21 @@ async def _bounded_credential_lease_request(request: Request) -> CredentialLease
     if content_length is not None:
         try:
             if int(content_length) > _CREDENTIAL_LEASE_REQUEST_MAX_BYTES:
-                raise HTTPException(status_code=413, detail="credential lease request exceeds 96 KiB")
+                raise HTTPException(
+                    status_code=413, detail="credential lease request exceeds 96 KiB"
+                )
         except ValueError as exc:
-            raise HTTPException(status_code=400, detail="invalid Content-Length") from exc
+            raise HTTPException(
+                status_code=400, detail="invalid Content-Length"
+            ) from exc
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
         if len(body) > _CREDENTIAL_LEASE_REQUEST_MAX_BYTES:
             body.clear()
-            raise HTTPException(status_code=413, detail="credential lease request exceeds 96 KiB")
+            raise HTTPException(
+                status_code=413, detail="credential lease request exceeds 96 KiB"
+            )
     try:
         return CredentialLeaseRequest.model_validate_json(body)
     except ValidationError as exc:
@@ -813,19 +1057,30 @@ def _verify_credential_lease_recipient_attestation(
         not DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED
         or not DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND
     ):
-        raise HTTPException(status_code=503, detail="production recipient attestation is not configured fail-closed")
+        raise HTTPException(
+            status_code=503,
+            detail="production recipient attestation is not configured fail-closed",
+        )
     if evidence is None:
         if DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED:
-            raise HTTPException(status_code=403, detail="recipient attestation is required")
+            raise HTTPException(
+                status_code=403, detail="recipient attestation is required"
+            )
         return
     if not DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND:
-        raise HTTPException(status_code=503, detail="recipient attestation verifier is not configured")
+        raise HTTPException(
+            status_code=503, detail="recipient attestation verifier is not configured"
+        )
     try:
         command = shlex.split(DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND)
     except ValueError as exc:
-        raise HTTPException(status_code=503, detail="recipient attestation verifier command is invalid") from exc
+        raise HTTPException(
+            status_code=503, detail="recipient attestation verifier command is invalid"
+        ) from exc
     if not command:
-        raise HTTPException(status_code=503, detail="recipient attestation verifier is not configured")
+        raise HTTPException(
+            status_code=503, detail="recipient attestation verifier is not configured"
+        )
 
     verifier_input = {
         "recipientAttestation": evidence,
@@ -838,10 +1093,17 @@ def _verify_credential_lease_recipient_attestation(
         "credentialId": credential_id,
     }
     if not _recipient_attestation_verifier_slots.acquire(timeout=1.0):
-        raise HTTPException(status_code=503, detail="recipient attestation verifier is at capacity")
+        raise HTTPException(
+            status_code=503, detail="recipient attestation verifier is at capacity"
+        )
     try:
-        with tempfile.TemporaryFile() as verifier_stdin, tempfile.TemporaryFile() as verifier_stdout:
-            verifier_stdin.write((_canonical_json(verifier_input) + "\n").encode("utf-8"))
+        with (
+            tempfile.TemporaryFile() as verifier_stdin,
+            tempfile.TemporaryFile() as verifier_stdout,
+        ):
+            verifier_stdin.write(
+                (_canonical_json(verifier_input) + "\n").encode("utf-8")
+            )
             verifier_stdin.seek(0)
             verifier_env = {
                 key: os.environ[key]
@@ -858,7 +1120,10 @@ def _verify_credential_lease_recipient_attestation(
                     start_new_session=True,
                 )
             except OSError as exc:
-                raise HTTPException(status_code=503, detail="recipient attestation verifier is unavailable") from exc
+                raise HTTPException(
+                    status_code=503,
+                    detail="recipient attestation verifier is unavailable",
+                ) from exc
             deadline = time.monotonic() + 10.0
             while True:
                 output_size = os.fstat(verifier_stdout.fileno()).st_size
@@ -881,10 +1146,15 @@ def _verify_credential_lease_recipient_attestation(
                     except OSError:
                         process.kill()
                     process.wait()
-                    raise HTTPException(status_code=503, detail="recipient attestation verifier timed out")
+                    raise HTTPException(
+                        status_code=503,
+                        detail="recipient attestation verifier timed out",
+                    )
                 time.sleep(0.005)
             if return_code != 0:
-                raise HTTPException(status_code=403, detail="recipient attestation verification failed")
+                raise HTTPException(
+                    status_code=403, detail="recipient attestation verification failed"
+                )
             verifier_stdout.seek(0)
             verifier_output = verifier_stdout.read(_RECIPIENT_ATTESTATION_MAX_BYTES + 1)
     finally:
@@ -892,11 +1162,19 @@ def _verify_credential_lease_recipient_attestation(
     try:
         verified = json.loads(verifier_output.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="recipient attestation verifier returned invalid JSON") from exc
+        raise HTTPException(
+            status_code=503,
+            detail="recipient attestation verifier returned invalid JSON",
+        ) from exc
     if not isinstance(verified, dict):
-        raise HTTPException(status_code=503, detail="recipient attestation verifier returned invalid JSON")
+        raise HTTPException(
+            status_code=503,
+            detail="recipient attestation verifier returned invalid JSON",
+        )
     if verified.get("ok") is not True:
-        raise HTTPException(status_code=403, detail="recipient attestation verification failed")
+        raise HTTPException(
+            status_code=403, detail="recipient attestation verification failed"
+        )
     expected_bindings = {
         "recipientKeyId": recipient_key_id,
         "recipientNonce": recipient_nonce,
@@ -911,19 +1189,31 @@ def _verify_credential_lease_recipient_attestation(
         or not hmac.compare_digest(verified[field], expected)
         for field, expected in expected_bindings.items()
     ):
-        raise HTTPException(status_code=403, detail="recipient attestation binding mismatch")
-    if RELEASE_CHANNEL.strip().lower() not in {"dev", "development"} and verified.get("debug") is not False:
-        raise HTTPException(status_code=403, detail="debug recipient attestation is not allowed for this release channel")
+        raise HTTPException(
+            status_code=403, detail="recipient attestation binding mismatch"
+        )
+    if (
+        RELEASE_CHANNEL.strip().lower() not in {"dev", "development"}
+        and verified.get("debug") is not False
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="debug recipient attestation is not allowed for this release channel",
+        )
 
 
 def _control_plane_payload_digest(value: dict[str, Any]) -> str:
-    return "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+    return (
+        "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+    )
 
 
 def _control_plane_mutation_authn_policy() -> dict[str, Any]:
     policy: dict[str, Any] = {"userVerification": "required"}
     if CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES:
-        policy["allowedAuthenticatorClasses"] = list(CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES)
+        policy["allowedAuthenticatorClasses"] = list(
+            CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES
+        )
     if CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION:
         policy["requireHardwareAttestation"] = True
     return policy
@@ -974,7 +1264,11 @@ def _control_plane_two_person_required(action: str) -> bool:
 def _control_plane_approval_id(mfa: dict[str, Any] | None) -> str | None:
     if not isinstance(mfa, dict):
         return None
-    value = mfa.get("approvalId") or mfa.get("approval_id") or mfa.get("controlPlaneApprovalId")
+    value = (
+        mfa.get("approvalId")
+        or mfa.get("approval_id")
+        or mfa.get("controlPlaneApprovalId")
+    )
     return str(value) if value else None
 
 
@@ -991,7 +1285,9 @@ def _control_plane_approval_roles(action: str) -> set[str]:
 def _assert_control_plane_approval_role(identity: AdminIdentity, action: str) -> None:
     required = _control_plane_approval_roles(action)
     if not identity.has_any_role(required):
-        raise HTTPException(status_code=403, detail=f"required role: {' or '.join(sorted(required))}")
+        raise HTTPException(
+            status_code=403, detail=f"required role: {' or '.join(sorted(required))}"
+        )
 
 
 def _require_control_plane_two_person(
@@ -1054,7 +1350,9 @@ def _require_control_plane_two_person(
     )
 
 
-def _reconcile_oauth_revocations(*, limit: int = _OAUTH_REVOCATION_RECONCILE_BATCH_SIZE) -> dict[str, int]:
+def _reconcile_oauth_revocations(
+    *, limit: int = _OAUTH_REVOCATION_RECONCILE_BATCH_SIZE
+) -> dict[str, int]:
     worker_id = f"oauth-reconciler-{os.getpid()}-{secrets.token_hex(8)}"
     claimed = db.claim_oauth_revocations(worker_id=worker_id, limit=limit)
     revoked = 0
@@ -1227,10 +1525,16 @@ def _disconnect_credential(credential_id: str, *, actor_id: str) -> dict[str, bo
 
 
 def _policy_ids(raw: dict[str, Any], key: str) -> dict[str, dict[str, Any]]:
-    return {str(item.get("id")): item for item in raw.get(key) or [] if isinstance(item, dict) and item.get("id")}
+    return {
+        str(item.get("id")): item
+        for item in raw.get(key) or []
+        if isinstance(item, dict) and item.get("id")
+    }
 
 
-def _policy_diff(previous: dict[str, Any] | None, candidate: dict[str, Any]) -> dict[str, Any]:
+def _policy_diff(
+    previous: dict[str, Any] | None, candidate: dict[str, Any]
+) -> dict[str, Any]:
     previous = previous or {}
     diff: dict[str, Any] = {}
     for key in ("principals", "credentials", "routes"):
@@ -1246,8 +1550,12 @@ def _policy_diff(previous: dict[str, Any] | None, candidate: dict[str, Any]) -> 
             "removed": sorted(set(old) - set(new)),
             "changed": changed,
         }
-    old_meta = previous.get("metadata") if isinstance(previous.get("metadata"), dict) else {}
-    new_meta = candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+    old_meta = (
+        previous.get("metadata") if isinstance(previous.get("metadata"), dict) else {}
+    )
+    new_meta = (
+        candidate.get("metadata") if isinstance(candidate.get("metadata"), dict) else {}
+    )
     diff["metadata"] = {
         "previousSequence": old_meta.get("sequence"),
         "newSequence": new_meta.get("sequence"),
@@ -1265,7 +1573,9 @@ def _policy_metadata_int(raw: dict[str, Any], key: str) -> int:
         return 0
 
 
-def _assert_policy_publish_monotonic(current: dict[str, Any] | None, candidate: dict[str, Any]) -> None:
+def _assert_policy_publish_monotonic(
+    current: dict[str, Any] | None, candidate: dict[str, Any]
+) -> None:
     if not current:
         return
     current_sequence = _policy_metadata_int(current, "sequence")
@@ -1273,12 +1583,18 @@ def _assert_policy_publish_monotonic(current: dict[str, Any] | None, candidate: 
     current_epoch = _policy_metadata_int(current, "rollbackEpoch")
     candidate_epoch = _policy_metadata_int(candidate, "rollbackEpoch")
     if candidate_epoch < current_epoch:
-        raise HTTPException(status_code=409, detail="policy rollbackEpoch cannot decrease")
+        raise HTTPException(
+            status_code=409, detail="policy rollbackEpoch cannot decrease"
+        )
     if candidate_sequence <= current_sequence:
-        raise HTTPException(status_code=409, detail="policy sequence must increase monotonically")
+        raise HTTPException(
+            status_code=409, detail="policy sequence must increase monotonically"
+        )
 
 
-def _run_policy_dry_runs(snapshot: Any, cases: list[PolicyDryRunCase]) -> dict[str, Any]:
+def _run_policy_dry_runs(
+    snapshot: Any, cases: list[PolicyDryRunCase]
+) -> dict[str, Any]:
     results: list[dict[str, Any]] = []
     for index, case in enumerate(cases):
         principal = snapshot.principals.get(case.principal_id)
@@ -1334,18 +1650,32 @@ def _policy_candidate_report(
     current_raw = current.raw if current else None
     try:
         signed = sign_policy_bundle(bundle)
-        candidate = compile_policy_bundle(signed, verify_signature=True, validate_schema=True)
+        candidate = compile_policy_bundle(
+            signed, verify_signature=True, validate_schema=True
+        )
     except PolicyBundleError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if enforce_monotonic:
         _assert_policy_publish_monotonic(current_raw, signed)
     dry_run_result = _run_policy_dry_runs(candidate, dry_run)
     if POLICY_PUBLISH_DRY_RUN_REQUIRED and not dry_run:
-        raise HTTPException(status_code=412, detail="policy publish requires dry-run decision tests")
+        raise HTTPException(
+            status_code=412, detail="policy publish requires dry-run decision tests"
+        )
     if not dry_run_result["passed"]:
-        raise HTTPException(status_code=409, detail={"error": "policy dry-run failed", "dryRun": dry_run_result})
-    metadata = signed.get("metadata") if isinstance(signed.get("metadata"), dict) else {}
-    current_metadata = current_raw.get("metadata") if isinstance(current_raw, dict) and isinstance(current_raw.get("metadata"), dict) else {}
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "policy dry-run failed", "dryRun": dry_run_result},
+        )
+    metadata = (
+        signed.get("metadata") if isinstance(signed.get("metadata"), dict) else {}
+    )
+    current_metadata = (
+        current_raw.get("metadata")
+        if isinstance(current_raw, dict)
+        and isinstance(current_raw.get("metadata"), dict)
+        else {}
+    )
     return {
         "ok": True,
         "candidate": {
@@ -1379,7 +1709,9 @@ def _policy_publish_payload_digest(payload: PolicyPublishRequest) -> str:
     )
 
 
-def _policy_canary_activate_payload_digest(payload: PolicyCanaryActivationRequest) -> str:
+def _policy_canary_activate_payload_digest(
+    payload: PolicyCanaryActivationRequest,
+) -> str:
     return _control_plane_payload_digest(
         {
             "canaryId": payload.canary_id,
@@ -1414,7 +1746,9 @@ def _ca_cert_path() -> Path:
 def _ca_file_response(*, headers: dict[str, str]) -> FileResponse:
     ca_path = _ca_cert_path()
     if not ca_path.exists():
-        raise HTTPException(status_code=404, detail="mitmproxy CA has not been generated yet")
+        raise HTTPException(
+            status_code=404, detail="mitmproxy CA has not been generated yet"
+        )
     response_headers = {
         "Cache-Control": "no-store",
         "X-Serverware-Install-Path": "verifier-mediated-attestation",
@@ -1434,15 +1768,21 @@ def _read_ca_install_sessions() -> dict[str, Any]:
     try:
         state = json.loads(CA_INSTALL_SESSIONS_PATH.read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="CA install session state is unreadable") from exc
+        raise HTTPException(
+            status_code=503, detail="CA install session state is unreadable"
+        ) from exc
     if not isinstance(state, dict) or not isinstance(state.get("sessions"), dict):
-        raise HTTPException(status_code=503, detail="CA install session state is invalid")
+        raise HTTPException(
+            status_code=503, detail="CA install session state is invalid"
+        )
     return state
 
 
 def _write_ca_install_sessions(state: dict[str, Any]) -> None:
     CA_INSTALL_SESSIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = CA_INSTALL_SESSIONS_PATH.with_suffix(CA_INSTALL_SESSIONS_PATH.suffix + ".tmp")
+    temporary = CA_INSTALL_SESSIONS_PATH.with_suffix(
+        CA_INSTALL_SESSIONS_PATH.suffix + ".tmp"
+    )
     temporary.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
     temporary.replace(CA_INSTALL_SESSIONS_PATH)
 
@@ -1454,7 +1794,10 @@ _CA_INSTALL_SESSION_THREAD_LOCK = threading.RLock()
 def _ca_install_sessions_lock():
     lock_path = Path(str(CA_INSTALL_SESSIONS_PATH) + ".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    with _CA_INSTALL_SESSION_THREAD_LOCK, lock_path.open("a+", encoding="utf-8") as lock_file:
+    with (
+        _CA_INSTALL_SESSION_THREAD_LOCK,
+        lock_path.open("a+", encoding="utf-8") as lock_file,
+    ):
         fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
         try:
             yield
@@ -1462,7 +1805,9 @@ def _ca_install_sessions_lock():
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
-def _prune_ca_install_sessions(state: dict[str, Any], *, now: datetime | None = None) -> bool:
+def _prune_ca_install_sessions(
+    state: dict[str, Any], *, now: datetime | None = None
+) -> bool:
     current = now or datetime.now(timezone.utc)
     sessions = state.setdefault("sessions", {})
     changed = False
@@ -1478,10 +1823,16 @@ def _prune_ca_install_sessions(state: dict[str, Any], *, now: datetime | None = 
             claimed_at = _parse_iso_datetime(session.get("consume_claimed_at"))
             claim_stale = (
                 claimed_at is None
-                or claimed_at + timedelta(seconds=max(1, CA_INSTALL_SESSION_CLAIM_TTL_SECONDS)) <= current
+                or claimed_at
+                + timedelta(seconds=max(1, CA_INSTALL_SESSION_CLAIM_TTL_SECONDS))
+                <= current
             )
             if claim_stale:
-                session["status"] = "expired" if expires_at is None or expires_at <= current else "active"
+                session["status"] = (
+                    "expired"
+                    if expires_at is None or expires_at <= current
+                    else "active"
+                )
                 session.pop("consume_claim_id", None)
                 session.pop("consume_claimed_at", None)
                 if session["status"] == "expired":
@@ -1496,7 +1847,11 @@ def _prune_ca_install_sessions(state: dict[str, Any], *, now: datetime | None = 
         if status not in {"consumed", "expired"}:
             continue
         consume_outbox = session.get("consume_audit_outbox")
-        if status == "consumed" and isinstance(consume_outbox, dict) and consume_outbox.get("status") != "delivered":
+        if (
+            status == "consumed"
+            and isinstance(consume_outbox, dict)
+            and consume_outbox.get("status") != "delivered"
+        ):
             continue
         terminal_at = _parse_iso_datetime(
             (session.get("expires_at") or session.get("expired_at"))
@@ -1504,14 +1859,18 @@ def _prune_ca_install_sessions(state: dict[str, Any], *, now: datetime | None = 
             else (session.get("consumed_at") or session.get("expires_at"))
         )
         if terminal_at is not None and (
-            terminal_at + timedelta(seconds=max(0, CA_INSTALL_SESSION_RETENTION_SECONDS)) <= current
+            terminal_at
+            + timedelta(seconds=max(0, CA_INSTALL_SESSION_RETENTION_SECONDS))
+            <= current
         ):
             del sessions[session_id]
             changed = True
     return changed
 
 
-def _ca_install_session_public(session: dict[str, Any], *, include_token: str | None = None) -> dict[str, Any]:
+def _ca_install_session_public(
+    session: dict[str, Any], *, include_token: str | None = None
+) -> dict[str, Any]:
     result = {
         "id": session.get("id"),
         "nonce": session.get("nonce"),
@@ -1540,9 +1899,13 @@ def _create_ca_install_session(
 ) -> tuple[dict[str, Any], str]:
     _drain_ca_install_session_audit_outbox(max_entries=32)
     now = datetime.now(timezone.utc)
-    bounded_ttl = min(CA_INSTALL_SESSION_TTL_SECONDS, ttl_seconds or CA_INSTALL_SESSION_TTL_SECONDS)
+    bounded_ttl = min(
+        CA_INSTALL_SESSION_TTL_SECONDS, ttl_seconds or CA_INSTALL_SESSION_TTL_SECONDS
+    )
     if bounded_ttl < 30 or bounded_ttl > 900:
-        raise HTTPException(status_code=503, detail="CA install session lifetime is invalid")
+        raise HTTPException(
+            status_code=503, detail="CA install session lifetime is invalid"
+        )
     token = secrets.token_urlsafe(32)
     session_id = secrets.token_urlsafe(18)
     session = {
@@ -1563,10 +1926,14 @@ def _create_ca_install_session(
         state = _read_ca_install_sessions()
         _prune_ca_install_sessions(state, now=now)
         if CA_INSTALL_SESSION_MAX_ENTRIES < 1:
-            raise HTTPException(status_code=503, detail="CA install session capacity is invalid")
+            raise HTTPException(
+                status_code=503, detail="CA install session capacity is invalid"
+            )
         if len(state.setdefault("sessions", {})) >= CA_INSTALL_SESSION_MAX_ENTRIES:
             _write_ca_install_sessions(state)
-            raise HTTPException(status_code=429, detail="CA install session capacity reached")
+            raise HTTPException(
+                status_code=429, detail="CA install session capacity reached"
+            )
         state.setdefault("sessions", {})[session_id] = session
         _write_ca_install_sessions(state)
     db.record_audit_event(
@@ -1586,7 +1953,9 @@ def _create_ca_install_session(
     return session, token
 
 
-def _active_ca_install_session_unlocked(session_id: str, token: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+def _active_ca_install_session_unlocked(
+    session_id: str, token: str | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
     if not token:
         raise HTTPException(status_code=401, detail="CA install token required")
     state = _read_ca_install_sessions()
@@ -1598,18 +1967,26 @@ def _active_ca_install_session_unlocked(session_id: str, token: str | None) -> t
     if session.get("status") == "expired":
         raise HTTPException(status_code=410, detail="CA install session expired")
     if session.get("status") != "active":
-        raise HTTPException(status_code=409, detail=f"CA install session is {session.get('status')}")
-    if not hmac.compare_digest(str(session.get("token_sha256") or ""), _sha256_text(token)):
+        raise HTTPException(
+            status_code=409, detail=f"CA install session is {session.get('status')}"
+        )
+    if not hmac.compare_digest(
+        str(session.get("token_sha256") or ""), _sha256_text(token)
+    ):
         raise HTTPException(status_code=403, detail="CA install token mismatch")
     return state, session
 
 
-def _active_ca_install_session(session_id: str, token: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+def _active_ca_install_session(
+    session_id: str, token: str | None
+) -> tuple[dict[str, Any], dict[str, Any]]:
     with _ca_install_sessions_lock():
         return _active_ca_install_session_unlocked(session_id, token)
 
 
-def _prepare_ca_install_session_consumption(session_id: str, token: str | None) -> dict[str, Any]:
+def _prepare_ca_install_session_consumption(
+    session_id: str, token: str | None
+) -> dict[str, Any]:
     with _ca_install_sessions_lock():
         if not token:
             raise HTTPException(status_code=401, detail="CA install token required")
@@ -1619,18 +1996,27 @@ def _prepare_ca_install_session_consumption(session_id: str, token: str | None) 
         session = state.setdefault("sessions", {}).get(session_id)
         if not isinstance(session, dict):
             raise HTTPException(status_code=404, detail="CA install session not found")
-        if not hmac.compare_digest(str(session.get("token_sha256") or ""), _sha256_text(token)):
+        if not hmac.compare_digest(
+            str(session.get("token_sha256") or ""), _sha256_text(token)
+        ):
             raise HTTPException(status_code=403, detail="CA install token mismatch")
         status = session.get("status")
         if status == "expired":
             raise HTTPException(status_code=410, detail="CA install session expired")
         if status == "consumed":
             outbox = session.get("consume_audit_outbox")
-            if isinstance(outbox, dict) and outbox.get("status") in {"pending", "delivering"}:
+            if isinstance(outbox, dict) and outbox.get("status") in {
+                "pending",
+                "delivering",
+            }:
                 return dict(session)
-            raise HTTPException(status_code=409, detail="CA install session is consumed")
+            raise HTTPException(
+                status_code=409, detail="CA install session is consumed"
+            )
         if status != "active":
-            raise HTTPException(status_code=409, detail=f"CA install session is {status}")
+            raise HTTPException(
+                status_code=409, detail=f"CA install session is {status}"
+            )
         consumed_at = _now_iso()
         outbox_id = f"ca-consume:{session_id}:{secrets.token_urlsafe(12)}"
         session["status"] = "consumed"
@@ -1657,7 +2043,9 @@ def _claim_ca_install_session_audit_delivery(
         state = _read_ca_install_sessions()
         session = state.setdefault("sessions", {}).get(session_id)
         if not isinstance(session, dict) or session.get("status") != "consumed":
-            raise HTTPException(status_code=409, detail="CA install session is not durably consumed")
+            raise HTTPException(
+                status_code=409, detail="CA install session is not durably consumed"
+            )
         if not internal and not hmac.compare_digest(
             str(session.get("token_sha256") or ""),
             _sha256_text(str(token)),
@@ -1665,15 +2053,23 @@ def _claim_ca_install_session_audit_delivery(
             raise HTTPException(status_code=403, detail="CA install token mismatch")
         outbox = session.get("consume_audit_outbox")
         if not isinstance(outbox, dict):
-            raise HTTPException(status_code=503, detail="CA install consumption audit outbox is unavailable")
+            raise HTTPException(
+                status_code=503,
+                detail="CA install consumption audit outbox is unavailable",
+            )
         if outbox.get("status") == "delivered":
-            raise HTTPException(status_code=409, detail="CA install session is consumed")
+            raise HTTPException(
+                status_code=409, detail="CA install session is consumed"
+            )
         if outbox.get("status") == "delivering":
             claimed_at = _parse_iso_datetime(outbox.get("claimed_at"))
             if claimed_at is not None and claimed_at + timedelta(
                 seconds=max(1, CA_INSTALL_SESSION_CLAIM_TTL_SECONDS)
             ) > datetime.now(timezone.utc):
-                raise HTTPException(status_code=409, detail="CA install consumption audit delivery is in progress")
+                raise HTTPException(
+                    status_code=409,
+                    detail="CA install consumption audit delivery is in progress",
+                )
         delivery_claim_id = secrets.token_urlsafe(18)
         outbox["status"] = "delivering"
         outbox["claim_id"] = delivery_claim_id
@@ -1691,13 +2087,17 @@ def _finish_ca_install_session_audit_delivery(
     with _ca_install_sessions_lock():
         state = _read_ca_install_sessions()
         session = state.setdefault("sessions", {}).get(session_id)
-        outbox = session.get("consume_audit_outbox") if isinstance(session, dict) else None
+        outbox = (
+            session.get("consume_audit_outbox") if isinstance(session, dict) else None
+        )
         if (
             not isinstance(outbox, dict)
             or outbox.get("status") != "delivering"
             or outbox.get("claim_id") != delivery_claim_id
         ):
-            raise HTTPException(status_code=409, detail="CA install consumption audit claim changed")
+            raise HTTPException(
+                status_code=409, detail="CA install consumption audit claim changed"
+            )
         outbox["status"] = "delivered"
         outbox["delivered_at"] = _now_iso()
         outbox["event_hash"] = event_hash
@@ -1706,11 +2106,15 @@ def _finish_ca_install_session_audit_delivery(
         _write_ca_install_sessions(state)
 
 
-def _rollback_ca_install_session_audit_delivery(session_id: str, delivery_claim_id: str) -> None:
+def _rollback_ca_install_session_audit_delivery(
+    session_id: str, delivery_claim_id: str
+) -> None:
     with _ca_install_sessions_lock():
         state = _read_ca_install_sessions()
         session = state.setdefault("sessions", {}).get(session_id)
-        outbox = session.get("consume_audit_outbox") if isinstance(session, dict) else None
+        outbox = (
+            session.get("consume_audit_outbox") if isinstance(session, dict) else None
+        )
         if (
             not isinstance(outbox, dict)
             or outbox.get("status") != "delivering"
@@ -1782,7 +2186,9 @@ def _drain_ca_install_session_audit_outbox(*, max_entries: int) -> int:
                 status == "delivering"
                 and (
                     claimed_at is None
-                    or claimed_at + timedelta(seconds=max(1, CA_INSTALL_SESSION_CLAIM_TTL_SECONDS)) <= now
+                    or claimed_at
+                    + timedelta(seconds=max(1, CA_INSTALL_SESSION_CLAIM_TTL_SECONDS))
+                    <= now
                 )
             ):
                 candidates.append(str(session_id))
@@ -1791,7 +2197,9 @@ def _drain_ca_install_session_audit_outbox(*, max_entries: int) -> int:
     delivered = 0
     for session_id in candidates:
         try:
-            _deliver_ca_install_session_consumption_audit(session_id, None, internal=True)
+            _deliver_ca_install_session_consumption_audit(
+                session_id, None, internal=True
+            )
         except Exception:
             continue
         delivered += 1
@@ -1802,13 +2210,33 @@ def _bind_enrollment_session_packet(session_id: str, packet: dict[str, Any]) -> 
     with _ca_install_sessions_lock():
         state = _read_ca_install_sessions()
         session = state.setdefault("sessions", {}).get(session_id)
-        if not isinstance(session, dict) or session.get("status") != "active" or session.get("purpose") != "agent-enrollment":
-            raise HTTPException(status_code=503, detail="agent enrollment capability state is unavailable")
-        authenticity = packet.get("authenticity") if isinstance(packet.get("authenticity"), dict) else {}
-        statement = authenticity.get("statement") if isinstance(authenticity.get("statement"), dict) else {}
+        if (
+            not isinstance(session, dict)
+            or session.get("status") != "active"
+            or session.get("purpose") != "agent-enrollment"
+        ):
+            raise HTTPException(
+                status_code=503,
+                detail="agent enrollment capability state is unavailable",
+            )
+        authenticity = (
+            packet.get("authenticity")
+            if isinstance(packet.get("authenticity"), dict)
+            else {}
+        )
+        statement = (
+            authenticity.get("statement")
+            if isinstance(authenticity.get("statement"), dict)
+            else {}
+        )
         packet_sha256 = statement.get("packetSha256")
-        if not isinstance(packet_sha256, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", packet_sha256) is None:
-            raise HTTPException(status_code=503, detail="agent enrollment packet digest is unavailable")
+        if (
+            not isinstance(packet_sha256, str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", packet_sha256) is None
+        ):
+            raise HTTPException(
+                status_code=503, detail="agent enrollment packet digest is unavailable"
+            )
         assignments = []
         for route in packet.get("allowedRoutes") or []:
             if not isinstance(route, dict):
@@ -1816,7 +2244,24 @@ def _bind_enrollment_session_packet(session_id: str, packet: dict[str, Any]) -> 
             route_id = route.get("id")
             credential_id = route.get("credentialRef")
             if isinstance(route_id, str) and isinstance(credential_id, str):
-                assignments.append({"route_id": route_id, "credential_id": credential_id})
+                credential = db.get_credential(credential_id, include_inactive=True)
+                credential_version = (
+                    int(credential.get("credential_version") or 0)
+                    if isinstance(credential, dict)
+                    else 0
+                )
+                if credential_version < 1:
+                    raise HTTPException(
+                        status_code=503,
+                        detail="agent enrollment credential generation is unavailable",
+                    )
+                assignments.append(
+                    {
+                        "route_id": route_id,
+                        "credential_id": credential_id,
+                        "credential_version": credential_version,
+                    }
+                )
         session["enrollment_packet_sha256"] = packet_sha256
         session["allowed_assignments"] = assignments
         _write_ca_install_sessions(state)
@@ -1828,7 +2273,9 @@ def _read_policy_canary_state() -> dict[str, Any] | None:
     try:
         state = json.loads(POLICY_CANARY_STATE_PATH.read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="policy canary state is unreadable") from exc
+        raise HTTPException(
+            status_code=503, detail="policy canary state is unreadable"
+        ) from exc
     if not isinstance(state, dict):
         raise HTTPException(status_code=503, detail="policy canary state is invalid")
     return state
@@ -1836,14 +2283,18 @@ def _read_policy_canary_state() -> dict[str, Any] | None:
 
 def _write_policy_canary_state(state: dict[str, Any]) -> None:
     POLICY_CANARY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = POLICY_CANARY_STATE_PATH.with_suffix(POLICY_CANARY_STATE_PATH.suffix + ".tmp")
+    temporary = POLICY_CANARY_STATE_PATH.with_suffix(
+        POLICY_CANARY_STATE_PATH.suffix + ".tmp"
+    )
     temporary.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n")
     temporary.replace(POLICY_CANARY_STATE_PATH)
 
 
 def _write_policy_canary_bundle(signed_bundle: dict[str, Any]) -> None:
     POLICY_CANARY_BUNDLE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = POLICY_CANARY_BUNDLE_PATH.with_suffix(POLICY_CANARY_BUNDLE_PATH.suffix + ".tmp")
+    temporary = POLICY_CANARY_BUNDLE_PATH.with_suffix(
+        POLICY_CANARY_BUNDLE_PATH.suffix + ".tmp"
+    )
     temporary.write_text(json.dumps(signed_bundle, indent=2, sort_keys=True) + "\n")
     temporary.replace(POLICY_CANARY_BUNDLE_PATH)
 
@@ -1898,7 +2349,14 @@ def _audit_event_decision(event_type: str, event: dict[str, Any]) -> str:
 
 
 def _audit_event_latency(event: dict[str, Any]) -> float | None:
-    for key in ("latency_ms", "latencyMs", "duration_ms", "durationMs", "upstream_latency_ms", "upstreamLatencyMs"):
+    for key in (
+        "latency_ms",
+        "latencyMs",
+        "duration_ms",
+        "durationMs",
+        "upstream_latency_ms",
+        "upstreamLatencyMs",
+    ):
         value = event.get(key)
         if value is None:
             continue
@@ -1915,12 +2373,33 @@ def _policy_canary_route_filter(state: dict[str, Any]) -> set[str]:
     route_ids: set[str] = set()
     for key in ("added", "changed", "removed"):
         route_ids.update(str(item) for item in routes.get(key) or [])
+    if not route_ids:
+        signed_bundle = state.get("signed_bundle")
+        if isinstance(signed_bundle, dict):
+            route_ids.update(
+                str(item["id"])
+                for item in (signed_bundle.get("routes") or [])
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            )
     return route_ids
 
 
-def _policy_canary_monitor(state: dict[str, Any], *, limit: int = 1000) -> dict[str, Any]:
-    started_at = _parse_iso_datetime(state.get("started_at")) or datetime.now(timezone.utc)
+_POLICY_CANARY_EVIDENCE_EVENT_TYPES = {
+    "data_plane.request.denied",
+    "data_plane.request.streamed",
+    "data_plane.response.blocked",
+    "data_plane.response.released",
+}
+
+
+def _policy_canary_monitor(
+    state: dict[str, Any], *, limit: int = 1000
+) -> dict[str, Any]:
+    started_at = _parse_iso_datetime(state.get("started_at")) or datetime.now(
+        timezone.utc
+    )
     route_filter = _policy_canary_route_filter(state)
+    candidate_policy_hash = state.get("candidate_policy_hash")
     events = db.list_audit_events(limit=limit)
     matched = 0
     denials = 0
@@ -1932,12 +2411,12 @@ def _policy_canary_monitor(state: dict[str, Any], *, limit: int = 1000) -> dict[
             continue
         event = item.get("event") if isinstance(item.get("event"), dict) else {}
         event_type = str(item.get("event_type") or "")
-        if event_type.startswith("policy.canary."):
+        if event_type not in _POLICY_CANARY_EVIDENCE_EVENT_TYPES:
+            continue
+        if event.get("policy_hash") != candidate_policy_hash:
             continue
         route_id = _audit_event_route_id(event)
-        if route_filter and route_id and route_id not in route_filter:
-            continue
-        if route_filter and not route_id and event_type.startswith("request."):
+        if route_filter and route_id not in route_filter:
             continue
         matched += 1
         newest_event_at = newest_event_at or item.get("created_at")
@@ -1954,7 +2433,9 @@ def _policy_canary_monitor(state: dict[str, Any], *, limit: int = 1000) -> dict[
     return {
         "startedAt": state.get("started_at"),
         "newestEventAt": newest_event_at,
-        "observationSeconds": max(0, int((datetime.now(timezone.utc) - started_at).total_seconds())),
+        "observationSeconds": max(
+            0, int((datetime.now(timezone.utc) - started_at).total_seconds())
+        ),
         "routeFilter": sorted(route_filter),
         "auditEvents": matched,
         "denials": denials,
@@ -1984,8 +2465,14 @@ def _start_policy_canary(
             },
         )
     signed_bundle = report["signedBundle"]
-    metadata = signed_bundle.get("metadata") if isinstance(signed_bundle.get("metadata"), dict) else {}
-    canary_id = _policy_canary_id(report["candidate"]["policyHash"], metadata.get("sequence"))
+    metadata = (
+        signed_bundle.get("metadata")
+        if isinstance(signed_bundle.get("metadata"), dict)
+        else {}
+    )
+    canary_id = _policy_canary_id(
+        report["candidate"]["policyHash"], metadata.get("sequence")
+    )
     started_at = _now_iso()
     _write_policy_canary_bundle(signed_bundle)
     state = {
@@ -2039,9 +2526,15 @@ def _require_policy_canary_activation_thresholds(
     monitor: dict[str, Any],
     payload: PolicyCanaryActivationRequest,
 ) -> dict[str, int]:
-    required_observation = max(POLICY_CANARY_MIN_OBSERVATION_SECONDS, payload.min_observation_seconds or 0)
+    required_observation = max(
+        POLICY_CANARY_MIN_OBSERVATION_SECONDS, payload.min_observation_seconds or 0
+    )
     required_events = max(POLICY_CANARY_MIN_AUDIT_EVENTS, payload.min_audit_events or 0)
-    max_denials = min(POLICY_CANARY_MAX_DENIALS, payload.max_denials) if payload.max_denials is not None else POLICY_CANARY_MAX_DENIALS
+    max_denials = (
+        min(POLICY_CANARY_MAX_DENIALS, payload.max_denials)
+        if payload.max_denials is not None
+        else POLICY_CANARY_MAX_DENIALS
+    )
     if monitor["observationSeconds"] < required_observation:
         raise HTTPException(
             status_code=412,
@@ -2062,6 +2555,15 @@ def _require_policy_canary_activation_thresholds(
                 "observedAuditEvents": monitor["auditEvents"],
             },
         )
+    if monitor["complete"] is not True:
+        raise HTTPException(
+            status_code=412,
+            detail={
+                "error": "policy_canary_audit_scan_incomplete",
+                "canaryId": state.get("id"),
+                "requiredCompleteScan": True,
+            },
+        )
     if monitor["denials"] > max_denials:
         raise HTTPException(
             status_code=409,
@@ -2079,7 +2581,14 @@ def _require_policy_canary_activation_thresholds(
     }
 
 
-VALID_RBAC_ROLES = {"admin", "policy_author", "policy_publisher", "credential_owner", "approver", "auditor"}
+VALID_RBAC_ROLES = {
+    "admin",
+    "policy_author",
+    "policy_publisher",
+    "credential_owner",
+    "approver",
+    "auditor",
+}
 
 
 def _read_rbac_bindings() -> dict[str, Any]:
@@ -2088,7 +2597,9 @@ def _read_rbac_bindings() -> dict[str, Any]:
     try:
         data = json.loads(RBAC_BINDINGS_PATH.read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="RBAC binding state is unreadable") from exc
+        raise HTTPException(
+            status_code=503, detail="RBAC binding state is unreadable"
+        ) from exc
     if not isinstance(data, dict) or not isinstance(data.get("subjects"), dict):
         raise HTTPException(status_code=503, detail="RBAC binding state is invalid")
     return data
@@ -2105,9 +2616,13 @@ def _normalized_rbac_roles(roles: list[str]) -> list[str]:
     normalized = sorted({str(role).strip() for role in roles if str(role).strip()})
     invalid = sorted(set(normalized) - VALID_RBAC_ROLES)
     if invalid:
-        raise HTTPException(status_code=400, detail={"error": "invalid_rbac_roles", "roles": invalid})
+        raise HTTPException(
+            status_code=400, detail={"error": "invalid_rbac_roles", "roles": invalid}
+        )
     if not normalized:
-        raise HTTPException(status_code=400, detail="at least one RBAC role is required")
+        raise HTTPException(
+            status_code=400, detail="at least one RBAC role is required"
+        )
     return normalized
 
 
@@ -2162,7 +2677,9 @@ def _approval_is_expired(approval: dict[str, Any]) -> bool:
 def _approval_body_hash(canonical: dict[str, Any] | None) -> str | None:
     if not isinstance(canonical, dict):
         return None
-    request = canonical.get("request") if isinstance(canonical.get("request"), dict) else {}
+    request = (
+        canonical.get("request") if isinstance(canonical.get("request"), dict) else {}
+    )
     for key in ("body_sha256", "bodySha256", "body_hash", "bodyHash"):
         value = request.get(key) or canonical.get(key)
         if value:
@@ -2191,13 +2708,22 @@ def _approval_source_identity(canonical: dict[str, Any] | None) -> dict[str, Any
     if not isinstance(canonical, dict):
         return {}
     result: dict[str, Any] = {}
-    for key in ("client_ip", "clientIp", "client_cert_sha256", "clientCertSha256", "spiffe_id", "spiffeId"):
+    for key in (
+        "client_ip",
+        "clientIp",
+        "client_cert_sha256",
+        "clientCertSha256",
+        "spiffe_id",
+        "spiffeId",
+    ):
         if canonical.get(key):
             result[key] = canonical[key]
     principal = canonical.get("principal") or canonical.get("principal_id")
     if principal:
         result["principal"] = principal
-    if canonical.get("proxy_authorization_hash") or canonical.get("proxyAuthorizationHash"):
+    if canonical.get("proxy_authorization_hash") or canonical.get(
+        "proxyAuthorizationHash"
+    ):
         result["proxy_authorization"] = "hash-bound"
     return result
 
@@ -2227,7 +2753,9 @@ def _approval_operation_fields(canonical: dict[str, Any] | None) -> dict[str, An
     return _redact_review_value(selected)
 
 
-def _approval_retry_semantics(approval: dict[str, Any], jit: dict[str, Any]) -> dict[str, Any]:
+def _approval_retry_semantics(
+    approval: dict[str, Any], jit: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "agent_action": "retry-identical-request-through-proxy",
         "server_side_grant": True,
@@ -2249,7 +2777,11 @@ def _approval_risk_flags(approval: dict[str, Any], jit: dict[str, Any]) -> list[
         flags.append("credential_version_bound")
     if approval.get("policy_hash"):
         snapshot = get_policy_snapshot()
-        flags.append("policy_hash_current" if snapshot and snapshot.hash == approval.get("policy_hash") else "policy_hash_not_current")
+        flags.append(
+            "policy_hash_current"
+            if snapshot and snapshot.hash == approval.get("policy_hash")
+            else "policy_hash_not_current"
+        )
     authn = _approval_authn_policy(jit)
     if _webauthn_required(authn):
         flags.append("webauthn_required")
@@ -2261,7 +2793,11 @@ def _approval_risk_flags(approval: dict[str, Any], jit: dict[str, Any]) -> list[
 
 
 def _approval_history_item(item: dict[str, Any]) -> dict[str, Any]:
-    authn = item.get("approval_authn") if isinstance(item.get("approval_authn"), dict) else {}
+    authn = (
+        item.get("approval_authn")
+        if isinstance(item.get("approval_authn"), dict)
+        else {}
+    )
     return {
         "id": item["id"],
         "status": item.get("status"),
@@ -2281,8 +2817,16 @@ def _approval_history_item(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _approval_review_document(approval: dict[str, Any]) -> dict[str, Any]:
-    canonical = approval.get("canonical_request") if isinstance(approval.get("canonical_request"), dict) else {}
-    redacted_display = approval.get("redacted_display") if isinstance(approval.get("redacted_display"), dict) else {}
+    canonical = (
+        approval.get("canonical_request")
+        if isinstance(approval.get("canonical_request"), dict)
+        else {}
+    )
+    redacted_display = (
+        approval.get("redacted_display")
+        if isinstance(approval.get("redacted_display"), dict)
+        else {}
+    )
     try:
         jit = _approval_jit_policy(approval)
     except HTTPException:
@@ -2305,7 +2849,9 @@ def _approval_review_document(approval: dict[str, Any]) -> dict[str, Any]:
         "risk_flags": _approval_risk_flags(approval, jit),
         "requested_at": approval.get("requested_at"),
         "expires_at": approval.get("expires_at"),
-        "previous_similar_approvals": [_approval_history_item(item) for item in similar],
+        "previous_similar_approvals": [
+            _approval_history_item(item) for item in similar
+        ],
         "retry_semantics": _approval_retry_semantics(approval, jit),
     }
 
@@ -2316,19 +2862,26 @@ def attestation(nonce: str | None = None) -> dict[str, Any]:
 
 
 @app.post("/api/ca/install-sessions")
-def ca_install_session_create(identity: AdminIdentity = Depends(require_role("admin"))) -> dict[str, Any]:
+def ca_install_session_create(
+    identity: AdminIdentity = Depends(require_role("admin")),
+) -> dict[str, Any]:
     snapshot = get_policy_snapshot()
     session, token = _create_ca_install_session(
         created_by=identity.user_id,
         policy_hash=snapshot.hash if snapshot is not None else None,
     )
-    return {"ok": True, "session": _ca_install_session_public(session, include_token=token)}
+    return {
+        "ok": True,
+        "session": _ca_install_session_public(session, include_token=token),
+    }
 
 
 @app.get("/api/ca/install-sessions/{session_id}/policy")
 def ca_install_session_policy(
     session_id: str,
-    x_serverware_ca_install_token: str | None = Header(default=None, alias="X-Serverware-CA-Install-Token"),
+    x_serverware_ca_install_token: str | None = Header(
+        default=None, alias="X-Serverware-CA-Install-Token"
+    ),
 ) -> dict[str, Any]:
     _, session = _active_ca_install_session(session_id, x_serverware_ca_install_token)
     result = _policy_status_document()
@@ -2341,35 +2894,52 @@ def ca_install_session_policy(
 @app.get("/api/ca/install-sessions/{session_id}/ca.pem")
 def ca_install_session_download(
     session_id: str,
-    x_serverware_ca_install_token: str | None = Header(default=None, alias="X-Serverware-CA-Install-Token"),
+    x_serverware_ca_install_token: str | None = Header(
+        default=None, alias="X-Serverware-CA-Install-Token"
+    ),
 ) -> FileResponse:
     if not _ca_cert_path().exists():
-        raise HTTPException(status_code=404, detail="mitmproxy CA has not been generated yet")
+        raise HTTPException(
+            status_code=404, detail="mitmproxy CA has not been generated yet"
+        )
     _prepare_ca_install_session_consumption(session_id, x_serverware_ca_install_token)
-    _deliver_ca_install_session_consumption_audit(session_id, x_serverware_ca_install_token)
+    _deliver_ca_install_session_consumption_audit(
+        session_id, x_serverware_ca_install_token
+    )
     return _ca_file_response(headers={"X-Serverware-CA-Install-Session": session_id})
 
 
 @app.get("/api/release/provenance")
-def release_provenance_api(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def release_provenance_api(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     document = release_provenance_document()
     if document is None:
-        raise HTTPException(status_code=404, detail="release provenance has not been published")
+        raise HTTPException(
+            status_code=404, detail="release provenance has not been published"
+        )
     return document
 
 
 @app.get("/api/release/image-signatures")
-def image_signatures_api(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def image_signatures_api(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     document = image_signatures_document()
     if document is None:
-        raise HTTPException(status_code=404, detail="image signatures have not been published")
+        raise HTTPException(
+            status_code=404, detail="image signatures have not been published"
+        )
     return document
 
 
 @app.get("/ca.pem")
 def ca_pem(identity: AdminIdentity = Depends(require_role("admin"))) -> FileResponse:
     if not DIRECT_CA_DOWNLOAD_ENABLED:
-        raise HTTPException(status_code=403, detail="direct CA download is disabled; use verifier-mediated install sessions")
+        raise HTTPException(
+            status_code=403,
+            detail="direct CA download is disabled; use verifier-mediated install sessions",
+        )
     db.record_audit_event(
         "ca.direct_download",
         {
@@ -2387,7 +2957,9 @@ def ca_pem(identity: AdminIdentity = Depends(require_role("admin"))) -> FileResp
 
 
 @app.get("/api/key-release/status")
-def key_release_status_api(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def key_release_status_api(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     return key_release_status()
 
 
@@ -2417,11 +2989,23 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
     snapshot = get_policy_snapshot()
     metadata = snapshot.raw.get("metadata") if snapshot else {}
     can_view_credentials = identity.has_any_role({"policy_author", "credential_owner"})
-    can_view_routes = identity.has_any_role({"policy_author", "policy_publisher", "auditor"})
+    can_view_routes = identity.has_any_role(
+        {"policy_author", "policy_publisher", "auditor"}
+    )
     can_view_approvals = identity.has_any_role({"approver", "auditor"})
     can_view_logs = identity.has_any_role({"auditor"})
     credentials = db.list_credentials() if can_view_credentials else []
-    pending_oauth_credentials = db.list_pending_oauth_credentials() if can_view_credentials else []
+    pending_oauth_credentials = (
+        db.list_pending_oauth_credentials(
+            requester_id=(
+                None
+                if identity.has_any_role({"admin"})
+                else identity.user_id
+            )
+        )
+        if can_view_credentials
+        else []
+    )
     routes = db.list_routes() if can_view_routes else []
     approvals = db.list_approvals(limit=100) if can_view_approvals else []
     logs = db.list_logs(limit=150) if can_view_logs else []
@@ -2440,8 +3024,12 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "ca_ready": (MITMPROXY_CONF_DIR / "mitmproxy-ca-cert.pem").exists(),
         "policy_ready": snapshot is not None,
         "policy_hash": snapshot.hash if snapshot else None,
-        "policy_signature": metadata.get("signature") if isinstance(metadata, dict) else None,
-        "policy_signing_key_id": metadata.get("signingKeyId") if isinstance(metadata, dict) else None,
+        "policy_signature": metadata.get("signature")
+        if isinstance(metadata, dict)
+        else None,
+        "policy_signing_key_id": metadata.get("signingKeyId")
+        if isinstance(metadata, dict)
+        else None,
         "policy_path": str(POLICY_BUNDLE_PATH),
         "publicUrl": canonical_control_plane_url(PUBLIC_URL),
         "policyPrincipals": policy_principals,
@@ -2451,7 +3039,8 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "webauthnCredentialCount": webauthn_credential_count,
         "webauthnBootstrapRequired": (
             webauthn_credential_count == 0
-            and RELEASE_CHANNEL.strip().lower() not in {"dev", "development", "local", "test"}
+            and RELEASE_CHANNEL.strip().lower()
+            not in {"dev", "development", "local", "test"}
         ),
         **admin_status(),
     }
@@ -2475,7 +3064,9 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
 
 
 @app.get("/api/csrf")
-def csrf_token(response: Response, request: Request, _: AdminIdentity = Depends(require_admin)) -> dict[str, Any]:
+def csrf_token(
+    response: Response, request: Request, _: AdminIdentity = Depends(require_admin)
+) -> dict[str, Any]:
     token = issue_csrf_cookie(response, request)
     return {
         "ok": True,
@@ -2488,7 +3079,11 @@ def csrf_token(response: Response, request: Request, _: AdminIdentity = Depends(
 @app.post("/api/control-plane/mutations/webauthn/options")
 def control_plane_mutation_webauthn_options(
     payload: ControlPlaneMutationWebAuthnOptions,
-    identity: AdminIdentity = Depends(require_role("admin", "policy_author", "policy_publisher", "credential_owner", "approver")),
+    identity: AdminIdentity = Depends(
+        require_role(
+            "admin", "policy_author", "policy_publisher", "credential_owner", "approver"
+        )
+    ),
 ) -> dict[str, Any]:
     return control_plane_mutation_options(
         user_id=identity.user_id,
@@ -2500,7 +3095,9 @@ def control_plane_mutation_webauthn_options(
 
 
 @app.get("/api/rbac/role-bindings")
-def rbac_role_bindings(_: AdminIdentity = Depends(require_role("admin", "auditor"))) -> dict[str, Any]:
+def rbac_role_bindings(
+    _: AdminIdentity = Depends(require_role("admin", "auditor")),
+) -> dict[str, Any]:
     return _read_rbac_bindings()
 
 
@@ -2529,7 +3126,9 @@ def rbac_role_binding_update(
     )
     state = _read_rbac_bindings()
     subjects = state.setdefault("subjects", {})
-    previous = subjects.get(subject_id) if isinstance(subjects.get(subject_id), dict) else {}
+    previous = (
+        subjects.get(subject_id) if isinstance(subjects.get(subject_id), dict) else {}
+    )
     previous_roles = previous.get("roles") or []
     binding = {
         "subject_id": subject_id,
@@ -2580,7 +3179,11 @@ def rbac_deprovision_subject(
     )
     state = _read_rbac_bindings()
     subjects = state.setdefault("subjects", {})
-    previous = subjects.get(payload.subject_id) if isinstance(subjects.get(payload.subject_id), dict) else {}
+    previous = (
+        subjects.get(payload.subject_id)
+        if isinstance(subjects.get(payload.subject_id), dict)
+        else {}
+    )
     previous_roles = previous.get("roles") or []
     binding = {
         "subject_id": payload.subject_id,
@@ -2612,7 +3215,11 @@ def control_plane_admin_token_rotate(
     payload: AdminTokenRotateRequest | None = Body(default=None),
     identity: AdminIdentity = Depends(require_role("admin")),
 ) -> dict[str, Any]:
-    request_payload = payload if isinstance(payload, AdminTokenRotateRequest) else AdminTokenRotateRequest()
+    request_payload = (
+        payload
+        if isinstance(payload, AdminTokenRotateRequest)
+        else AdminTokenRotateRequest()
+    )
     payload_digest = _admin_token_rotation_payload_digest(request_payload)
     mfa = _require_control_plane_mutation_mfa(
         action="control_plane.token.rotate",
@@ -2659,7 +3266,9 @@ def control_plane_admin_token_rotate(
 def control_plane_approvals(
     status: str | None = None,
     limit: int = Query(100, ge=1, le=500),
-    _: AdminIdentity = Depends(require_role("auditor", "policy_publisher", "credential_owner", "policy_author")),
+    _: AdminIdentity = Depends(
+        require_role("auditor", "policy_publisher", "credential_owner", "policy_author")
+    ),
 ) -> list[dict[str, Any]]:
     return db.list_control_plane_approvals(status=status, limit=limit)
 
@@ -2675,9 +3284,15 @@ def control_plane_approval_approve(
     if not approval:
         raise HTTPException(status_code=404, detail="control-plane approval not found")
     if approval["status"] != "pending":
-        raise HTTPException(status_code=409, detail=f"control-plane approval is already {approval['status']}")
+        raise HTTPException(
+            status_code=409,
+            detail=f"control-plane approval is already {approval['status']}",
+        )
     if approval["requester_id"] == identity.user_id:
-        raise HTTPException(status_code=403, detail="requester cannot approve their own control-plane mutation")
+        raise HTTPException(
+            status_code=403,
+            detail="requester cannot approve their own control-plane mutation",
+        )
     _assert_control_plane_approval_role(identity, approval["action"])
     updated = db.approve_control_plane_approval(
         approval_id,
@@ -2686,7 +3301,10 @@ def control_plane_approval_approve(
         authn={"method": identity.auth_method, "user_id": identity.user_id},
     )
     if not updated:
-        raise HTTPException(status_code=409, detail="control-plane approval state changed before it could be approved")
+        raise HTTPException(
+            status_code=409,
+            detail="control-plane approval state changed before it could be approved",
+        )
     return updated
 
 
@@ -2701,7 +3319,10 @@ def control_plane_approval_deny(
     if not approval:
         raise HTTPException(status_code=404, detail="control-plane approval not found")
     if approval["status"] != "pending":
-        raise HTTPException(status_code=409, detail=f"control-plane approval is already {approval['status']}")
+        raise HTTPException(
+            status_code=409,
+            detail=f"control-plane approval is already {approval['status']}",
+        )
     _assert_control_plane_approval_role(identity, approval["action"])
     updated = db.deny_control_plane_approval(
         approval_id,
@@ -2709,7 +3330,10 @@ def control_plane_approval_deny(
         note=decision.note if decision else None,
     )
     if not updated:
-        raise HTTPException(status_code=409, detail="control-plane approval state changed before it could be denied")
+        raise HTTPException(
+            status_code=409,
+            detail="control-plane approval state changed before it could be denied",
+        )
     if updated["action"] == "credential.oauth.activate" and updated.get("resource_id"):
         updated = {
             **updated,
@@ -2726,7 +3350,9 @@ def policy_candidate(
     payload: PolicyCandidateRequest,
     _: AdminIdentity = Depends(require_role("policy_author", "policy_publisher")),
 ) -> dict[str, Any]:
-    return _policy_candidate_report(bundle=payload.bundle, dry_run=payload.dry_run, enforce_monotonic=False)
+    return _policy_candidate_report(
+        bundle=payload.bundle, dry_run=payload.dry_run, enforce_monotonic=False
+    )
 
 
 @app.post("/api/policy/publish")
@@ -2734,12 +3360,21 @@ def policy_publish(
     payload: PolicyPublishRequest,
     identity: AdminIdentity = Depends(require_role("policy_publisher")),
 ) -> dict[str, Any]:
-    report = _policy_candidate_report(bundle=payload.bundle, dry_run=payload.dry_run, enforce_monotonic=True)
-    metadata = report["signedBundle"].get("metadata") if isinstance(report["signedBundle"].get("metadata"), dict) else {}
+    report = _policy_candidate_report(
+        bundle=payload.bundle, dry_run=payload.dry_run, enforce_monotonic=True
+    )
+    metadata = (
+        report["signedBundle"].get("metadata")
+        if isinstance(report["signedBundle"].get("metadata"), dict)
+        else {}
+    )
     policy_id = metadata.get("id")
     payload_digest = _policy_publish_payload_digest(payload)
     if payload.activation_mode == "full" and POLICY_CANARY_REQUIRED:
-        raise HTTPException(status_code=412, detail="policy canary activation is required before full publish")
+        raise HTTPException(
+            status_code=412,
+            detail="policy canary activation is required before full publish",
+        )
     mfa = _require_control_plane_mutation_mfa(
         action="policy.publish",
         resource_id=policy_id,
@@ -2803,7 +3438,9 @@ def policy_publish(
 
 @app.get("/api/policy/canary/status")
 def policy_canary_status(
-    _: AdminIdentity = Depends(require_role("auditor", "policy_publisher", "policy_author")),
+    _: AdminIdentity = Depends(
+        require_role("auditor", "policy_publisher", "policy_author")
+    ),
 ) -> dict[str, Any]:
     state = _read_policy_canary_state()
     if not state:
@@ -2824,25 +3461,41 @@ def policy_canary_activate(
     if not state or state.get("id") != payload.canary_id:
         raise HTTPException(status_code=404, detail="policy canary not found")
     if state.get("status") != "running":
-        raise HTTPException(status_code=409, detail=f"policy canary is {state.get('status')}")
+        raise HTTPException(
+            status_code=409, detail=f"policy canary is {state.get('status')}"
+        )
     signed_bundle = state.get("signed_bundle")
     if not isinstance(signed_bundle, dict):
-        raise HTTPException(status_code=503, detail="policy canary signed bundle is missing")
+        raise HTTPException(
+            status_code=503, detail="policy canary signed bundle is missing"
+        )
     try:
-        candidate = compile_policy_bundle(signed_bundle, verify_signature=True, validate_schema=True)
+        candidate = compile_policy_bundle(
+            signed_bundle, verify_signature=True, validate_schema=True
+        )
     except PolicyBundleError as exc:
-        raise HTTPException(status_code=409, detail=f"policy canary bundle is invalid: {exc}") from exc
+        raise HTTPException(
+            status_code=409, detail=f"policy canary bundle is invalid: {exc}"
+        ) from exc
     if candidate.hash != state.get("candidate_policy_hash"):
-        raise HTTPException(status_code=409, detail="policy canary bundle hash no longer matches state")
+        raise HTTPException(
+            status_code=409, detail="policy canary bundle hash no longer matches state"
+        )
     current = get_policy_snapshot()
     current_hash = current.hash if current else None
     if current_hash != state.get("previous_policy_hash"):
-        raise HTTPException(status_code=409, detail="active policy changed after canary start")
+        raise HTTPException(
+            status_code=409, detail="active policy changed after canary start"
+        )
     _assert_policy_publish_monotonic(current.raw if current else None, signed_bundle)
     monitor = _policy_canary_monitor(state)
     thresholds = _require_policy_canary_activation_thresholds(state, monitor, payload)
     payload_digest = _policy_canary_activate_payload_digest(payload)
-    metadata = signed_bundle.get("metadata") if isinstance(signed_bundle.get("metadata"), dict) else {}
+    metadata = (
+        signed_bundle.get("metadata")
+        if isinstance(signed_bundle.get("metadata"), dict)
+        else {}
+    )
     policy_id = metadata.get("id")
     mfa = _require_control_plane_mutation_mfa(
         action="policy.publish",
@@ -2889,9 +3542,15 @@ def policy_canary_activate(
         "policy_id": policy_id,
         "previous_policy_hash": state.get("previous_policy_hash"),
         "new_policy_hash": snapshot.hash,
-        "previous_sequence": (current.raw.get("metadata") or {}).get("sequence") if current else None,
+        "previous_sequence": (current.raw.get("metadata") or {}).get("sequence")
+        if current
+        else None,
         "new_sequence": metadata.get("sequence"),
-        "previous_rollback_epoch": (current.raw.get("metadata") or {}).get("rollbackEpoch") if current else None,
+        "previous_rollback_epoch": (current.raw.get("metadata") or {}).get(
+            "rollbackEpoch"
+        )
+        if current
+        else None,
         "new_rollback_epoch": metadata.get("rollbackEpoch"),
         "diff": state.get("diff"),
         "dry_run": state.get("dry_run"),
@@ -2901,7 +3560,9 @@ def policy_canary_activate(
         "control_plane_approval": two_person,
         "payload_digest": payload_digest,
     }
-    db.record_audit_event("policy.canary.activated", audit_payload, actor_id=identity.user_id)
+    db.record_audit_event(
+        "policy.canary.activated", audit_payload, actor_id=identity.user_id
+    )
     db.record_audit_event("policy.published", audit_payload, actor_id=identity.user_id)
     return {
         "ok": True,
@@ -2934,7 +3595,9 @@ def policy_canary_cancel(
     if not state or state.get("id") != payload.canary_id:
         raise HTTPException(status_code=404, detail="policy canary not found")
     if state.get("status") != "running":
-        raise HTTPException(status_code=409, detail=f"policy canary is {state.get('status')}")
+        raise HTTPException(
+            status_code=409, detail=f"policy canary is {state.get('status')}"
+        )
     state.update(
         {
             "status": "cancelled",
@@ -2997,7 +3660,6 @@ def _setup_audit_evidence_candidates(
         credential_id=credential_id,
         credential_version=credential_version,
         start=start,
-        q=enrollment_session_id,
     )
     if not isinstance(result, dict) or result.get("complete") is not True:
         return []
@@ -3007,8 +3669,13 @@ def _setup_audit_evidence_candidates(
     evidence: list[dict[str, Any]] = []
     for item in items:
         event = item.get("event") if isinstance(item.get("event"), dict) else {}
-        event_enrollment_session_id = event.get("enrollment_session_id") or event.get("enrollmentSessionId")
-        if enrollment_session_id is not None and event_enrollment_session_id != enrollment_session_id:
+        event_enrollment_session_id = event.get("enrollment_session_id") or event.get(
+            "enrollmentSessionId"
+        )
+        if (
+            enrollment_session_id is not None
+            and event_enrollment_session_id != enrollment_session_id
+        ):
             continue
         evidence.append(
             {
@@ -3017,8 +3684,10 @@ def _setup_audit_evidence_candidates(
                 "eventHash": item.get("event_hash"),
                 "actorType": item.get("actor_type"),
                 "enrollmentSessionId": event_enrollment_session_id,
-                "requestDigest": event.get("request_digest") or event.get("requestDigest"),
-                "operationDigest": event.get("operation_digest") or event.get("operationDigest"),
+                "requestDigest": event.get("request_digest")
+                or event.get("requestDigest"),
+                "operationDigest": event.get("operation_digest")
+                or event.get("operationDigest"),
                 "flowId": event.get("flow_id") or event.get("flowId"),
                 "grantId": event.get("grant_id") or event.get("grantId"),
                 "approvalId": (
@@ -3027,7 +3696,16 @@ def _setup_audit_evidence_candidates(
                     or event.get("approval_request_id")
                     or event.get("approvalRequestId")
                 ),
-                "consumptionId": event.get("consumption_id") or event.get("consumptionId"),
+                "consumptionId": event.get("consumption_id")
+                or event.get("consumptionId"),
+                "outcome": event.get("outcome"),
+                "upstreamStatus": event.get("upstream_status")
+                or event.get("upstreamStatus"),
+                "responseBodySha256": event.get("response_body_sha256")
+                or event.get("responseBodySha256"),
+                "responseValidation": event.get("response_validation")
+                if "response_validation" in event
+                else event.get("responseValidation"),
             }
         )
     return evidence
@@ -3037,6 +3715,7 @@ def _setup_enrollment_session_evidence(
     payload: SetupVerificationRequest,
     *,
     policy_hash: str,
+    credential_version: int,
 ) -> dict[str, Any] | None:
     if not payload.enrollment_session_id:
         return None
@@ -3047,10 +3726,15 @@ def _setup_enrollment_session_evidence(
     if not isinstance(session, dict):
         return None
     assignments = session.get("allowed_assignments")
-    assignment_matches = isinstance(assignments, list) and {
-        "route_id": payload.route_id,
-        "credential_id": payload.credential_id,
-    } in assignments
+    assignment_matches = (
+        isinstance(assignments, list)
+        and {
+            "route_id": payload.route_id,
+            "credential_id": payload.credential_id,
+            "credential_version": credential_version,
+        }
+        in assignments
+    )
     consumed_at = _parse_iso_datetime(session.get("consumed_at"))
     if not (
         session.get("purpose") == "agent-enrollment"
@@ -3082,7 +3766,8 @@ def _setup_credential_binding_checks(
     checks = [
         _setup_check(
             "credential.active",
-            passed=credential is not None and credential.get("lifecycle_status", "active") == "active",
+            passed=credential is not None
+            and credential.get("lifecycle_status", "active") == "active",
             summary="Credential exists in the active lifecycle state.",
             evidence=(
                 {
@@ -3127,9 +3812,17 @@ def _setup_credential_binding_checks(
         )
         return checks
 
-    metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+    metadata = (
+        credential.get("metadata")
+        if isinstance(credential.get("metadata"), dict)
+        else {}
+    )
     stored_kind = str(credential.get("kind") or "")
-    injection = policy_credential.injection if isinstance(policy_credential.injection, dict) else {}
+    injection = (
+        policy_credential.injection
+        if isinstance(policy_credential.injection, dict)
+        else {}
+    )
     injection_type = str(injection.get("type") or "")
     expected_type = "bearer" if stored_kind == "oauth2" else stored_kind
     injection_matches = bool(injection_type) and injection_type == expected_type
@@ -3141,7 +3834,9 @@ def _setup_credential_binding_checks(
     if injection_matches and injection_type in {"header", "query", "cookie"}:
         injection_matches = injection.get("name") == metadata.get("injection_name")
     if injection_matches and injection_type == "basic":
-        injection_matches = bool(metadata.get("username")) and injection.get("username") == metadata.get("username")
+        injection_matches = bool(metadata.get("username")) and injection.get(
+            "username"
+        ) == metadata.get("username")
     if injection_matches and metadata.get("injection_field") is not None:
         injection_matches = injection.get("field") == metadata.get("injection_field")
     if injection_matches and metadata.get("injection_prefix") is not None:
@@ -3151,7 +3846,10 @@ def _setup_credential_binding_checks(
             "credential.injectionBinding",
             passed=injection_matches,
             summary="Stored and signed-policy injection shapes agree.",
-            evidence={"storedKind": stored_kind, "policyInjectionType": injection_type or None},
+            evidence={
+                "storedKind": stored_kind,
+                "policyInjectionType": injection_type or None,
+            },
         )
     )
 
@@ -3178,7 +3876,9 @@ def _setup_credential_binding_checks(
     provider_id = None
     provider_subject = None
     try:
-        provider_id, provider_subject, _ = db.validate_managed_oauth_account_identity(metadata)
+        provider_id, provider_subject, _ = db.validate_managed_oauth_account_identity(
+            metadata
+        )
         normalized_provider_id = _normalized_credential_provider(provider_id)
         policy_provider = _normalized_credential_provider(policy_credential.provider)
         provider_binding = (
@@ -3188,7 +3888,9 @@ def _setup_credential_binding_checks(
         )
         if provider_binding and normalized_provider_id == "x":
             app_id = metadata.get("x_app_id") or metadata.get("app_id")
-            configured_app_ids = route.adapter_config.get("appIds") if route is not None else None
+            configured_app_ids = (
+                route.adapter_config.get("appIds") if route is not None else None
+            )
             provider_binding = (
                 isinstance(app_id, str)
                 and bool(app_id)
@@ -3202,7 +3904,10 @@ def _setup_credential_binding_checks(
             "credential.providerBinding",
             passed=provider_binding,
             summary="Verified OAuth subject is bound to the same provider and signed policy subject.",
-            evidence={"provider": provider_id, "providerSubjectBound": bool(provider_subject)},
+            evidence={
+                "provider": provider_id,
+                "providerSubjectBound": bool(provider_subject),
+            },
         )
     )
     granted_scopes = metadata.get("scopes")
@@ -3229,7 +3934,9 @@ def _setup_credential_binding_checks(
             summary="Stored and signed-policy OAuth scope sets agree exactly and are non-empty.",
             evidence={
                 "policyScopeCount": len(policy_credential.scopes),
-                "grantedScopeCount": len(granted_scopes) if isinstance(granted_scopes, list) else 0,
+                "grantedScopeCount": len(granted_scopes)
+                if isinstance(granted_scopes, list)
+                else 0,
             },
         )
     )
@@ -3239,8 +3946,33 @@ def _setup_credential_binding_checks(
 def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, Any]:
     snapshot = get_policy_snapshot()
     if snapshot is None:
-        raise HTTPException(status_code=503, detail="active signed policy is unavailable")
-    route = next((item for item in snapshot.routes if item.id == payload.route_id), None)
+        raise HTTPException(
+            status_code=503, detail="active signed policy is unavailable"
+        )
+    route = next(
+        (item for item in snapshot.routes if item.id == payload.route_id), None
+    )
+    raw_route = next(
+        (
+            item
+            for item in (snapshot.raw.get("routes") or [])
+            if isinstance(item, dict) and item.get("id") == payload.route_id
+        ),
+        None,
+    )
+    active_route_policy_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                raw_route,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+            ).encode("utf-8")
+        ).hexdigest()
+        if raw_route is not None
+        else None
+    )
     credential = db.get_credential(payload.credential_id, include_inactive=True)
     principal_exists = payload.principal_id in snapshot.principals
     route_principal = route is not None and (
@@ -3270,6 +4002,15 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
             passed=route_principal,
             summary="Route is assigned to the selected principal.",
         ),
+        _setup_check(
+            "route.policyBinding",
+            passed=(
+                active_route_policy_digest is not None
+                and active_route_policy_digest == payload.route_policy_digest
+            ),
+            summary="The active route policy exactly matches the reviewed restriction.",
+            evidence={"routePolicyDigest": active_route_policy_digest},
+        ),
     ]
     checks.extend(
         _setup_credential_binding_checks(
@@ -3281,7 +4022,11 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
     )
 
     attestation = attestation_document(payload.nonce)
-    assurance = attestation.get("assurance") if isinstance(attestation.get("assurance"), dict) else {}
+    assurance = (
+        attestation.get("assurance")
+        if isinstance(attestation.get("assurance"), dict)
+        else {}
+    )
     attestation_matches = (
         attestation.get("nonce") == payload.nonce
         and attestation.get("policy_bundle_digest") == snapshot.hash
@@ -3319,9 +4064,17 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
         )
     )
 
-    required_checks_pass = all(item["status"] == "pass" for item in checks if item["required"])
-    credential_version = int(credential.get("credential_version") or 0) if credential else 0
-    enrollment_evidence = _setup_enrollment_session_evidence(payload, policy_hash=snapshot.hash)
+    required_checks_pass = all(
+        item["status"] == "pass" for item in checks if item["required"]
+    )
+    credential_version = (
+        int(credential.get("credential_version") or 0) if credential else 0
+    )
+    enrollment_evidence = _setup_enrollment_session_evidence(
+        payload,
+        policy_hash=snapshot.hash,
+        credential_version=credential_version,
+    )
     checks.append(
         _setup_check(
             "enrollment.caCapabilityConsumed",
@@ -3332,9 +4085,14 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
         )
     )
     release_evidence = None
+    response_evidence = None
     jit_evidence = None
     authoritative_jit_evidence = None
-    if required_checks_pass and credential_version > 0 and enrollment_evidence is not None:
+    if (
+        required_checks_pass
+        and credential_version > 0
+        and enrollment_evidence is not None
+    ):
         evidence_start = str(enrollment_evidence["evidenceNotBefore"])
         enrollment_session_id = str(enrollment_evidence["sessionId"])
         release_candidates = _setup_audit_evidence_candidates(
@@ -3348,14 +4106,70 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
             actor_type="data-plane",
             enrollment_session_id=enrollment_session_id,
         )
-        release_evidence = next(
-            (
-                item
-                for item in release_candidates
-                if item.get("requestDigest") and item.get("operationDigest")
-            ),
-            None,
+        response_candidates = _setup_audit_evidence_candidates(
+            "data_plane.response.released",
+            principal_id=payload.principal_id,
+            route_id=payload.route_id,
+            policy_hash=snapshot.hash,
+            credential_id=payload.credential_id,
+            credential_version=credential_version,
+            start=evidence_start,
+            actor_type="data-plane",
+            enrollment_session_id=enrollment_session_id,
         )
+        valid_response_candidates = [
+            item
+            for item in response_candidates
+            if (
+                item.get("outcome") == "released"
+                and isinstance(item.get("upstreamStatus"), int)
+                and 100 <= item["upstreamStatus"] <= 599
+                and isinstance(item.get("responseBodySha256"), str)
+                and re.fullmatch(r"sha256:[0-9a-f]{64}", item["responseBodySha256"])
+                and isinstance(item.get("responseValidation"), dict)
+                and all(
+                    isinstance(item.get(field), str) and item.get(field)
+                    for field in ("requestDigest", "operationDigest", "flowId")
+                )
+            )
+        ]
+
+        def response_for_release(
+            candidate_release: dict[str, Any],
+        ) -> dict[str, Any] | None:
+            release_created_at = _parse_iso_datetime(candidate_release.get("createdAt"))
+            for candidate_response in valid_response_candidates:
+                if any(
+                    candidate_response.get(field) != candidate_release.get(field)
+                    for field in ("requestDigest", "operationDigest", "flowId")
+                ):
+                    continue
+                response_created_at = _parse_iso_datetime(
+                    candidate_response.get("createdAt")
+                )
+                if (
+                    release_created_at is not None
+                    and response_created_at is not None
+                    and response_created_at < release_created_at
+                ):
+                    continue
+                return candidate_response
+            return None
+
+        for candidate_release in release_candidates:
+            if not all(
+                isinstance(candidate_release.get(field), str)
+                and candidate_release.get(field)
+                for field in ("requestDigest", "operationDigest", "flowId")
+            ):
+                continue
+            if release_evidence is None:
+                release_evidence = candidate_release
+            candidate_response = response_for_release(candidate_release)
+            if candidate_response is not None:
+                release_evidence = candidate_release
+                response_evidence = candidate_response
+                break
         if route is not None and route.jit.get("required") is True:
             jit_candidates = _setup_audit_evidence_candidates(
                 "data_plane.jit.grant_consumed",
@@ -3389,7 +4203,13 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
                 for item in authoritative_jit_candidates
                 if all(
                     isinstance(item.get(field), str) and item.get(field)
-                    for field in ("requestDigest", "operationDigest", "flowId", "grantId", "approvalId")
+                    for field in (
+                        "requestDigest",
+                        "operationDigest",
+                        "flowId",
+                        "grantId",
+                        "approvalId",
+                    )
                 )
             }
             data_plane_by_correlation = {
@@ -3403,9 +4223,19 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
                 for item in jit_candidates
                 if all(
                     isinstance(item.get(field), str) and item.get(field)
-                    for field in ("requestDigest", "operationDigest", "flowId", "grantId", "approvalId")
+                    for field in (
+                        "requestDigest",
+                        "operationDigest",
+                        "flowId",
+                        "grantId",
+                        "approvalId",
+                    )
                 )
             }
+            release_without_jit = release_evidence
+            release_evidence = release_without_jit
+            response_evidence = None
+            jit_fallback = None
             for candidate_release in release_candidates:
                 release_correlation = (
                     candidate_release.get("requestDigest"),
@@ -3414,15 +4244,38 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
                     candidate_release.get("grantId"),
                     candidate_release.get("approvalId"),
                 )
-                if not all(isinstance(value, str) and value for value in release_correlation):
+                if not all(
+                    isinstance(value, str) and value for value in release_correlation
+                ):
                     continue
                 candidate = data_plane_by_correlation.get(release_correlation)
-                authoritative_candidate = authoritative_by_correlation.get(release_correlation)
+                authoritative_candidate = authoritative_by_correlation.get(
+                    release_correlation
+                )
+                candidate_response = response_for_release(candidate_release)
                 if candidate is not None and authoritative_candidate is not None:
+                    if jit_fallback is None:
+                        jit_fallback = (
+                            candidate_release,
+                            candidate,
+                            authoritative_candidate,
+                        )
+                    if (
+                        candidate_response is None
+                        or candidate_response.get("grantId") != release_correlation[3]
+                        or candidate_response.get("approvalId")
+                        != release_correlation[4]
+                    ):
+                        continue
                     release_evidence = candidate_release
+                    response_evidence = candidate_response
                     jit_evidence = candidate
                     authoritative_jit_evidence = authoritative_candidate
                     break
+            if response_evidence is None and jit_fallback is not None:
+                release_evidence, jit_evidence, authoritative_jit_evidence = (
+                    jit_fallback
+                )
     jit_required = route is not None and route.jit.get("required") is True
     checks.extend(
         [
@@ -3430,8 +4283,15 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
                 "runtime.credentialRelease",
                 passed=release_evidence is not None,
                 required=False,
-                summary="A durable pre-release audit event proves this exact assignment was exercised.",
+                summary="A durable pre-release audit event proves this exact assignment began an upstream send.",
                 evidence=release_evidence,
+            ),
+            _setup_check(
+                "runtime.responseReleased",
+                passed=response_evidence is not None,
+                required=False,
+                summary="A correlated response passed policy validation and was released to the enrolled agent.",
+                evidence=response_evidence,
             ),
             _setup_check(
                 "runtime.jitConsumption",
@@ -3447,14 +4307,19 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
                         "dataPlane": jit_evidence,
                         "grantStore": authoritative_jit_evidence,
                     }
-                    if jit_evidence is not None and authoritative_jit_evidence is not None
+                    if jit_evidence is not None
+                    and authoritative_jit_evidence is not None
                     else None
                 ),
             ),
         ]
     )
-    runtime_verified = required_checks_pass and enrollment_evidence is not None and release_evidence is not None and (
-        not jit_required or jit_evidence is not None
+    runtime_verified = (
+        required_checks_pass
+        and enrollment_evidence is not None
+        and release_evidence is not None
+        and response_evidence is not None
+        and (not jit_required or jit_evidence is not None)
     )
     assignment = {
         "principalId": payload.principal_id,
@@ -3462,10 +4327,16 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
         "credentialId": payload.credential_id,
         "credentialVersion": credential_version or None,
         "policyHash": snapshot.hash,
+        "routePolicyDigest": active_route_policy_digest,
     }
-    assignment_digest = "sha256:" + hashlib.sha256(
-        json.dumps(assignment, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-    ).hexdigest()
+    assignment_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            json.dumps(
+                assignment, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     if not required_checks_pass:
         next_action = "repair_active_assignment"
     elif not enrollment_evidence:
@@ -3474,6 +4345,8 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
         next_action = "enroll_agent_and_exercise_route"
     elif jit_required and not jit_evidence:
         next_action = "approve_and_retry_exact_request"
+    elif not response_evidence:
+        next_action = "wait_for_validated_response_evidence"
     elif not hardware_verified:
         next_action = "verify_on_hardware_backed_deployment"
     else:
@@ -3502,10 +4375,741 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
     }
 
 
+_SETUP_SESSION_READ_ROLES = {
+    "admin",
+    "auditor",
+    "credential_owner",
+    "policy_author",
+    "policy_publisher",
+}
+_SETUP_SESSION_MUTATION_ROLES = {
+    "admin",
+    "credential_owner",
+    "policy_author",
+    "policy_publisher",
+}
+
+
+def _setup_sha256_json(value: Any) -> str:
+    return (
+        "sha256:" + hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+    )
+
+
+def _setup_active_route(
+    snapshot: Any, route_id: str
+) -> tuple[Any | None, dict[str, Any] | None, str | None]:
+    route = next((item for item in snapshot.routes if item.id == route_id), None)
+    raw_route = next(
+        (
+            item
+            for item in (snapshot.raw.get("routes") or [])
+            if isinstance(item, dict) and item.get("id") == route_id
+        ),
+        None,
+    )
+    return (
+        route,
+        raw_route,
+        _setup_sha256_json(raw_route) if raw_route is not None else None,
+    )
+
+
+def _require_authoritative_setup_route_binding(
+    *, route_id: str | None, route_policy_digest: str | None
+) -> None:
+    if route_id is None and route_policy_digest is None:
+        return
+    if route_id is None or route_policy_digest is None:
+        raise HTTPException(
+            status_code=409,
+            detail="setup route and reviewed route policy digest must be bound together",
+        )
+    snapshot = get_policy_snapshot()
+    if snapshot is None:
+        raise HTTPException(
+            status_code=503,
+            detail="active signed policy is unavailable for setup route verification",
+        )
+    route, raw_route, active_digest = _setup_active_route(snapshot, route_id)
+    if route is None or raw_route is None or active_digest is None:
+        raise HTTPException(
+            status_code=409,
+            detail="the authoritative active setup route is unavailable",
+        )
+    if not hmac.compare_digest(route_policy_digest, active_digest):
+        raise HTTPException(
+            status_code=409,
+            detail="reviewed route policy does not match the active route",
+        )
+
+
+def _setup_assignment(
+    *,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    route_policy_digest: str,
+) -> tuple[dict[str, Any], str]:
+    assignment = {
+        "principalId": principal_id,
+        "routeId": route_id,
+        "credentialId": credential_id,
+        "credentialVersion": credential_version,
+        "policyHash": policy_hash,
+        "routePolicyDigest": route_policy_digest,
+    }
+    return assignment, _setup_sha256_json(assignment)
+
+
+def _setup_session_public(item: dict[str, Any]) -> dict[str, Any]:
+    field_names = {
+        "owner_id": "ownerId",
+        "current_assignee_id": "currentAssigneeId",
+        "template_id": "templateId",
+        "principal_id": "principalId",
+        "route_id": "routeId",
+        "route_policy_digest": "routePolicyDigest",
+        "credential_id": "credentialId",
+        "credential_version": "credentialVersion",
+        "policy_hash": "policyHash",
+        "assignment_digest": "assignmentDigest",
+        "oauth_provider": "oauthProvider",
+        "oauth_state_digest": "oauthStateDigest",
+        "oauth_pending_credential_id": "oauthPendingCredentialId",
+        "canary_id": "canaryId",
+        "enrollment_session_id": "enrollmentSessionId",
+        "enrollment_packet_digest": "enrollmentPacketDigest",
+        "verifier_nonce_hash": "verifierNonceHash",
+        "created_at": "createdAt",
+        "updated_at": "updatedAt",
+        "expires_at": "expiresAt",
+        "terminal_at": "terminalAt",
+    }
+    public = {field_names.get(key, key): value for key, value in item.items()}
+    public["apiVersion"] = "serverware.setupSession/v1"
+    return public
+
+
+def _setup_session_error(exc: db.SetupSessionError) -> None:
+    if isinstance(exc, db.SetupSessionNotFoundError):
+        raise HTTPException(status_code=404, detail="setup session not found") from exc
+    if isinstance(exc, db.SetupSessionStaleRevisionError):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "setup_session_stale_revision",
+                "setupSessionId": exc.session_id,
+                "expectedRevision": exc.expected_revision,
+                "currentRevision": exc.current_revision,
+            },
+        ) from exc
+    if isinstance(exc, db.SetupSessionCapacityError):
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def _drain_setup_session_audit_outbox(*, limit: int = 100) -> dict[str, int]:
+    claimed = db.claim_setup_session_audit_outbox(
+        worker_id=f"api:{os.getpid()}:{threading.get_ident()}",
+        limit=limit,
+    )
+    audited = 0
+    failed = 0
+    for item in claimed:
+        try:
+            result = db.record_audit_event(
+                item["audit_event_type"],
+                {
+                    **item["event"],
+                    "setup_event_id": item["id"],
+                    "setup_event_sequence": item["sequence"],
+                    "setup_event_payload_digest": item["payload_digest"],
+                },
+                actor_type="admin",
+                actor_id=item["actor_id"],
+                idempotency_key=item["audit_idempotency_key"],
+            )
+            if not db.finish_setup_session_audit_outbox(
+                item["id"],
+                claim_id=str(item["audit_claim_id"]),
+                audit_event_hash=result["event_hash"],
+            ):
+                raise db.SetupSessionError("setup audit outbox claim was lost")
+            audited += 1
+        except Exception as exc:
+            failed += 1
+            try:
+                db.finish_setup_session_audit_outbox(
+                    item["id"],
+                    claim_id=str(item["audit_claim_id"]),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+    return {"claimed": len(claimed), "audited": audited, "failed": failed}
+
+
+def _load_setup_session_for_identity(
+    session_id: str,
+    identity: AdminIdentity,
+    *,
+    mutate: bool = False,
+    include_evidence: bool = False,
+    include_events: bool = False,
+) -> dict[str, Any]:
+    try:
+        item = db.get_setup_session(
+            session_id,
+            include_evidence=include_evidence,
+            include_events=include_events,
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    if item is None:
+        raise HTTPException(status_code=404, detail="setup session not found")
+    privileged = identity.has_any_role({"admin"}) or (
+        not mutate and identity.has_any_role({"auditor"})
+    )
+    participant = identity.user_id in {item["owner_id"], item["current_assignee_id"]}
+    if not privileged and not participant:
+        raise HTTPException(
+            status_code=403, detail="setup session is assigned to another operator"
+        )
+    if mutate and not identity.has_any_role(_SETUP_SESSION_MUTATION_ROLES):
+        raise HTTPException(
+            status_code=403, detail="setup session mutation role is required"
+        )
+    return item
+
+
+def _finish_setup_transition(item: dict[str, Any]) -> dict[str, Any]:
+    audit = _drain_setup_session_audit_outbox()
+    return {"session": _setup_session_public(item), "audit": audit}
+
+
+@app.post("/api/setup/sessions")
+def setup_session_create(
+    payload: SetupSessionCreateRequest,
+    identity: AdminIdentity = Depends(
+        require_role("admin", "policy_author", "policy_publisher", "credential_owner")
+    ),
+) -> dict[str, Any]:
+    route_policy_digest = payload.route_policy_digest
+    _require_authoritative_setup_route_binding(
+        route_id=payload.route_id,
+        route_policy_digest=route_policy_digest,
+    )
+    try:
+        item = db.create_setup_session(
+            owner_id=identity.user_id,
+            current_assignee_id=identity.user_id,
+            template_id=payload.template_id,
+            principal_id=payload.principal_id,
+            route_id=payload.route_id,
+            route_policy_digest=route_policy_digest,
+            ttl_seconds=payload.ttl_seconds,
+            actor_id=identity.user_id,
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return _finish_setup_transition(item)
+
+
+@app.get("/api/setup/sessions")
+def setup_sessions(
+    status: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+    identity: AdminIdentity = Depends(require_role(*sorted(_SETUP_SESSION_READ_ROLES))),
+) -> dict[str, Any]:
+    _drain_setup_session_audit_outbox()
+    try:
+        if identity.has_any_role({"admin", "auditor"}):
+            items = db.list_setup_sessions(status=status, limit=limit)
+        else:
+            owned = db.list_setup_sessions(
+                owner_id=identity.user_id, status=status, limit=limit
+            )
+            assigned = db.list_setup_sessions(
+                current_assignee_id=identity.user_id, status=status, limit=limit
+            )
+            by_id = {item["id"]: item for item in [*owned, *assigned]}
+            items = sorted(
+                by_id.values(),
+                key=lambda item: (item["updated_at"], item["id"]),
+                reverse=True,
+            )[:limit]
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return {"sessions": [_setup_session_public(item) for item in items]}
+
+
+@app.get("/api/setup/sessions/{session_id}")
+def setup_session_get(
+    session_id: str,
+    identity: AdminIdentity = Depends(require_role(*sorted(_SETUP_SESSION_READ_ROLES))),
+) -> dict[str, Any]:
+    _drain_setup_session_audit_outbox()
+    item = _load_setup_session_for_identity(
+        session_id,
+        identity,
+        include_evidence=True,
+        include_events=True,
+    )
+    return {"session": _setup_session_public(item)}
+
+
+@app.post("/api/setup/sessions/{session_id}/claim")
+def setup_session_claim(
+    session_id: str,
+    payload: SetupSessionRevisionRequest,
+    identity: AdminIdentity = Depends(
+        require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
+    ),
+) -> dict[str, Any]:
+    item = _load_setup_session_for_identity(session_id, identity, mutate=True)
+    try:
+        updated = db.claim_or_handoff_setup_session(
+            session_id,
+            expected_revision=payload.expected_revision,
+            actor_id=identity.user_id,
+            assignee_id=identity.user_id,
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    assert item
+    return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/handoff")
+def setup_session_handoff(
+    session_id: str,
+    payload: SetupSessionHandoffRequest,
+    identity: AdminIdentity = Depends(
+        require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
+    ),
+) -> dict[str, Any]:
+    item = _load_setup_session_for_identity(session_id, identity, mutate=True)
+    if identity.user_id != item["owner_id"] and not identity.has_any_role({"admin"}):
+        raise HTTPException(
+            status_code=403,
+            detail="only the setup owner or an admin can hand off this session",
+        )
+    try:
+        updated = db.claim_or_handoff_setup_session(
+            session_id,
+            expected_revision=payload.expected_revision,
+            actor_id=identity.user_id,
+            assignee_id=payload.assignee_id,
+            handoff=True,
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/cancel")
+def setup_session_cancel(
+    session_id: str,
+    payload: SetupSessionCancelRequest,
+    identity: AdminIdentity = Depends(
+        require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
+    ),
+) -> dict[str, Any]:
+    _load_setup_session_for_identity(session_id, identity, mutate=True)
+    try:
+        updated = db.cancel_setup_session(
+            session_id,
+            expected_revision=payload.expected_revision,
+            actor_id=identity.user_id,
+            reason=payload.reason,
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/credential")
+def setup_session_bind_credential(
+    session_id: str,
+    payload: SetupSessionCredentialRequest,
+    identity: AdminIdentity = Depends(
+        require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
+    ),
+) -> dict[str, Any]:
+    item = _load_setup_session_for_identity(session_id, identity, mutate=True)
+    credential = db.get_credential(payload.credential_id)
+    if credential is None:
+        raise HTTPException(status_code=404, detail="active credential not found")
+    version = int(credential.get("credential_version") or 0)
+    if version < 1:
+        raise HTTPException(
+            status_code=409, detail="credential generation is unavailable"
+        )
+    try:
+        updated = db.transition_setup_session(
+            session_id,
+            expected_revision=payload.expected_revision,
+            transition="bind_credential",
+            actor_id=identity.user_id,
+            updates={
+                "credential_id": payload.credential_id,
+                "credential_version": version,
+                **(
+                    {"route_policy_digest": item["route_policy_digest"]}
+                    if item.get("route_policy_digest") is not None
+                    else {}
+                ),
+            },
+            event={
+                "credential_lifecycle_status": credential.get(
+                    "lifecycle_status", "active"
+                )
+            },
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/canary")
+def setup_session_bind_canary(
+    session_id: str,
+    payload: SetupSessionCanaryRequest,
+    identity: AdminIdentity = Depends(
+        require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
+    ),
+) -> dict[str, Any]:
+    item = _load_setup_session_for_identity(session_id, identity, mutate=True)
+    state = _read_policy_canary_state()
+    if not state or state.get("id") != payload.canary_id:
+        raise HTTPException(status_code=404, detail="policy canary not found")
+    if state.get("status") not in {"running", "activated"}:
+        raise HTTPException(status_code=409, detail="policy canary is not usable")
+    signed_bundle = state.get("signed_bundle")
+    if not isinstance(signed_bundle, dict):
+        raise HTTPException(
+            status_code=503, detail="policy canary signed bundle is missing"
+        )
+    try:
+        candidate = compile_policy_bundle(
+            signed_bundle, verify_signature=True, validate_schema=True
+        )
+    except PolicyBundleError as exc:
+        raise HTTPException(
+            status_code=409, detail=f"policy canary bundle is invalid: {exc}"
+        ) from exc
+    if candidate.hash != state.get("candidate_policy_hash"):
+        raise HTTPException(
+            status_code=409,
+            detail="policy canary hash does not match its signed bundle",
+        )
+    route, raw_route, route_digest = _setup_active_route(
+        candidate, str(item.get("route_id") or "")
+    )
+    if route is None or raw_route is None or route_digest is None:
+        raise HTTPException(
+            status_code=409, detail="candidate does not contain the setup route"
+        )
+    if item.get("principal_id") not in route.principals and "*" not in route.principals:
+        raise HTTPException(
+            status_code=409,
+            detail="candidate route is not assigned to the setup principal",
+        )
+    if route.credential_ref != item.get("credential_id"):
+        raise HTTPException(
+            status_code=409, detail="candidate route does not use the setup credential"
+        )
+    assignment, assignment_digest = _setup_assignment(
+        principal_id=str(item["principal_id"]),
+        route_id=str(item["route_id"]),
+        credential_id=str(item["credential_id"]),
+        credential_version=int(item["credential_version"]),
+        policy_hash=candidate.hash,
+        route_policy_digest=route_digest,
+    )
+    try:
+        updated = db.transition_setup_session(
+            session_id,
+            expected_revision=payload.expected_revision,
+            transition="bind_candidate",
+            actor_id=identity.user_id,
+            updates={
+                "canary_id": payload.canary_id,
+                "policy_hash": candidate.hash,
+                "route_policy_digest": route_digest,
+                "assignment_digest": assignment_digest,
+            },
+            event={"assignment": assignment, "canary_status": state.get("status")},
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/policy")
+def setup_session_bind_active_policy(
+    session_id: str,
+    payload: SetupSessionRevisionRequest,
+    identity: AdminIdentity = Depends(
+        require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
+    ),
+) -> dict[str, Any]:
+    item = _load_setup_session_for_identity(session_id, identity, mutate=True)
+    snapshot = get_policy_snapshot()
+    if snapshot is None or snapshot.hash != item.get("policy_hash"):
+        raise HTTPException(
+            status_code=409,
+            detail="the setup candidate is not the active signed policy",
+        )
+    route, _, route_digest = _setup_active_route(
+        snapshot, str(item.get("route_id") or "")
+    )
+    if route is None or route_digest != item.get("route_policy_digest"):
+        raise HTTPException(
+            status_code=409,
+            detail="the active route differs from the reviewed setup route",
+        )
+    if route.credential_ref != item.get("credential_id"):
+        raise HTTPException(
+            status_code=409, detail="the active route uses a different credential"
+        )
+    assignment, assignment_digest = _setup_assignment(
+        principal_id=str(item["principal_id"]),
+        route_id=str(item["route_id"]),
+        credential_id=str(item["credential_id"]),
+        credential_version=int(item["credential_version"]),
+        policy_hash=snapshot.hash,
+        route_policy_digest=str(route_digest),
+    )
+    if assignment_digest != item.get("assignment_digest"):
+        raise HTTPException(
+            status_code=409,
+            detail="the active assignment differs from the staged setup assignment",
+        )
+    try:
+        updated = db.transition_setup_session(
+            session_id,
+            expected_revision=payload.expected_revision,
+            transition="activate_policy",
+            actor_id=identity.user_id,
+            updates={
+                "policy_hash": snapshot.hash,
+                "assignment_digest": assignment_digest,
+            },
+            event={"assignment": assignment},
+            required_active_credential_id=str(item["credential_id"]),
+            required_active_credential_version=int(item["credential_version"]),
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/enrollment")
+def setup_session_bind_enrollment(
+    session_id: str,
+    payload: SetupSessionEnrollmentRequest,
+    identity: AdminIdentity = Depends(
+        require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
+    ),
+) -> dict[str, Any]:
+    item = _load_setup_session_for_identity(session_id, identity, mutate=True)
+    with _ca_install_sessions_lock():
+        state = _read_ca_install_sessions()
+        raw = state.get("sessions", {}).get(payload.enrollment_session_id)
+        enrollment = dict(raw) if isinstance(raw, dict) else None
+    if enrollment is None:
+        raise HTTPException(
+            status_code=404, detail="agent enrollment session not found"
+        )
+    assignment = {
+        "route_id": item.get("route_id"),
+        "credential_id": item.get("credential_id"),
+        "credential_version": item.get("credential_version"),
+    }
+    if not (
+        enrollment.get("purpose") == "agent-enrollment"
+        and enrollment.get("status") in {"active", "claimed", "consumed"}
+        and enrollment.get("principal_id") == item.get("principal_id")
+        and enrollment.get("policy_hash") == item.get("policy_hash")
+        and assignment in (enrollment.get("allowed_assignments") or [])
+        and isinstance(enrollment.get("enrollment_packet_sha256"), str)
+        and hmac.compare_digest(
+            str(enrollment.get("nonce") or ""), payload.verifier_nonce
+        )
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="enrollment session does not match the exact setup assignment",
+        )
+    nonce_hash = (
+        "sha256:" + hashlib.sha256(payload.verifier_nonce.encode("ascii")).hexdigest()
+    )
+    try:
+        updated = db.transition_setup_session(
+            session_id,
+            expected_revision=payload.expected_revision,
+            transition="bind_enrollment",
+            actor_id=identity.user_id,
+            updates={
+                "enrollment_session_id": payload.enrollment_session_id,
+                "enrollment_packet_digest": enrollment["enrollment_packet_sha256"],
+                "verifier_nonce_hash": nonce_hash,
+            },
+            event={"enrollment_status": enrollment.get("status")},
+        )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    return _finish_setup_transition(updated)
+
+
+@app.post("/api/setup/sessions/{session_id}/verify")
+def setup_session_verify(
+    session_id: str,
+    payload: SetupSessionVerifyRequest,
+    identity: AdminIdentity = Depends(
+        require_role(*sorted(_SETUP_SESSION_MUTATION_ROLES))
+    ),
+) -> dict[str, Any]:
+    item = _load_setup_session_for_identity(session_id, identity, mutate=True)
+    if payload.expected_revision != item["revision"]:
+        _setup_session_error(
+            db.SetupSessionStaleRevisionError(
+                session_id, payload.expected_revision, item["revision"]
+            )
+        )
+    required = (
+        "principal_id",
+        "route_id",
+        "credential_id",
+        "route_policy_digest",
+        "enrollment_session_id",
+    )
+    if any(item.get(field) is None for field in required):
+        raise HTTPException(
+            status_code=409,
+            detail="setup session does not have a complete active assignment",
+        )
+    result = _build_setup_verification(
+        SetupVerificationRequest(
+            principalId=item["principal_id"],
+            routeId=item["route_id"],
+            credentialId=item["credential_id"],
+            routePolicyDigest=item["route_policy_digest"],
+            nonce=payload.nonce,
+            enrollmentSessionId=item["enrollment_session_id"],
+        )
+    )
+    current = item
+    try:
+        if current["phase"] == "enrollment_issued":
+            enrollment_check = next(
+                (
+                    check
+                    for check in result["checks"]
+                    if check["id"] == "enrollment.caCapabilityConsumed"
+                ),
+                None,
+            )
+            if enrollment_check and enrollment_check["status"] == "pass":
+                current = db.transition_setup_session(
+                    session_id,
+                    expected_revision=current["revision"],
+                    transition="record_enrollment_evidence",
+                    actor_id=identity.user_id,
+                    evidence=[
+                        {
+                            "kind": "enrollment_verification",
+                            "document": {
+                                "assignmentDigest": result["assignmentDigest"],
+                                "enrollment": enrollment_check.get("evidence"),
+                                "verificationClass": "server-observed-capability-consumption",
+                            },
+                            "verifier_key_id": "serverware-control-plane",
+                            "observed_at": result["checkedAt"],
+                        }
+                    ],
+                )
+        if current["phase"] == "ca_installed":
+            canary = _read_policy_canary_state()
+            if (
+                canary
+                and canary.get("id") == current.get("canary_id")
+                and canary.get("status") == "activated"
+                and canary.get("candidate_policy_hash") == current.get("policy_hash")
+            ):
+                monitoring = canary.get("activation_monitoring")
+                if not isinstance(monitoring, dict):
+                    monitoring = _policy_canary_monitor(canary)
+                if monitoring.get("complete") is True:
+                    current = db.transition_setup_session(
+                        session_id,
+                        expected_revision=current["revision"],
+                        transition="record_canary_evidence",
+                        actor_id=identity.user_id,
+                        evidence=[
+                            {
+                                "kind": "canary_result",
+                                "document": {
+                                    "canaryId": current["canary_id"],
+                                    "policyHash": current["policy_hash"],
+                                    "monitoring": monitoring,
+                                },
+                                "verifier_key_id": "serverware-audit-chain",
+                                "observed_at": result["checkedAt"],
+                            }
+                        ],
+                    )
+        if (
+            current["phase"] == "canaries_verified"
+            and result["runtimeVerified"] is True
+        ):
+            current = db.transition_setup_session(
+                session_id,
+                expected_revision=current["revision"],
+                transition="record_runtime_evidence",
+                actor_id=identity.user_id,
+                evidence=[
+                    {
+                        "kind": "runtime_verification",
+                        "document": {
+                            "assignment": result["assignment"],
+                            "assignmentDigest": result["assignmentDigest"],
+                            "configurationReady": result["configurationReady"],
+                            "runtimeVerified": result["runtimeVerified"],
+                        },
+                        "verifier_key_id": "serverware-audit-chain",
+                        "observed_at": result["checkedAt"],
+                    }
+                ],
+            )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
+        raise AssertionError("unreachable")
+    response = _finish_setup_transition(current)
+    response["verification"] = result
+    return response
+
+
 @app.post("/api/setup/verify")
 def setup_verification(
     payload: SetupVerificationRequest,
-    identity: AdminIdentity = Depends(require_role("policy_author", "policy_publisher", "credential_owner", "auditor")),
+    identity: AdminIdentity = Depends(
+        require_role("policy_author", "policy_publisher", "credential_owner", "auditor")
+    ),
 ) -> dict[str, Any]:
     result = _build_setup_verification(payload)
     db.record_audit_event(
@@ -3535,9 +5139,12 @@ def agent_enrollment(
         configured_control_plane_url = canonical_control_plane_url(PUBLIC_URL)
         if (
             payload.control_plane_url is not None
-            and canonical_control_plane_url(payload.control_plane_url) != configured_control_plane_url
+            and canonical_control_plane_url(payload.control_plane_url)
+            != configured_control_plane_url
         ):
-            raise AgentEnrollmentError("control plane URL must match configured SERVERWARE_PUBLIC_URL")
+            raise AgentEnrollmentError(
+                "control plane URL must match configured SERVERWARE_PUBLIC_URL"
+            )
         attestation = attestation_document(payload.nonce)
         enrollment_args = {
             "snapshot": snapshot,
@@ -3565,7 +5172,15 @@ def agent_enrollment(
         session_public = _ca_install_session_public(session, include_token=token)
         install_session = {
             field: session_public[field]
-            for field in ("id", "nonce", "token", "tokenHeader", "policyUrl", "downloadUrl", "expiresAt")
+            for field in (
+                "id",
+                "nonce",
+                "token",
+                "tokenHeader",
+                "policyUrl",
+                "downloadUrl",
+                "expiresAt",
+            )
         }
         packet = build_agent_enrollment(
             **enrollment_args,
@@ -3578,11 +5193,17 @@ def agent_enrollment(
 
 
 @app.get("/api/oauth/providers")
-def oauth_providers(_: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner"))) -> dict[str, Any]:
+def oauth_providers(
+    _: AdminIdentity = Depends(
+        require_role("admin", "policy_author", "credential_owner")
+    ),
+) -> dict[str, Any]:
     return {"providers": provider_status()}
 
 
-def _canonical_oauth_granted_scopes(raw_scopes: Any, *, field_name: str = "OAuth granted scopes") -> tuple[str, ...]:
+def _canonical_oauth_granted_scopes(
+    raw_scopes: Any, *, field_name: str = "OAuth granted scopes"
+) -> tuple[str, ...]:
     if not isinstance(raw_scopes, list) or not raw_scopes:
         raise OAuthError(f"{field_name} must be a non-empty array")
     scopes: list[str] = []
@@ -3609,13 +5230,15 @@ def _oauth_activation_review(
     reconnect_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     try:
-        provider_id, provider_subject, provider_account = db.validate_managed_oauth_account_identity(
-            credential_metadata
+        provider_id, provider_subject, provider_account = (
+            db.validate_managed_oauth_account_identity(credential_metadata)
         )
     except db.ManagedOAuthCredentialError as exc:
         raise OAuthError(str(exc)) from exc
     if exchanged.get("provider") != provider_id:
-        raise OAuthError("OAuth exchange provider does not match verified provider identity")
+        raise OAuthError(
+            "OAuth exchange provider does not match verified provider identity"
+        )
     review = {
         "credential_type": "oauth2",
         "provider": provider_id,
@@ -3637,12 +5260,14 @@ def _oauth_activation_review(
     return review
 
 
-def _oauth_reconnect_binding_from_credential(credential: dict[str, Any]) -> dict[str, Any]:
+def _oauth_reconnect_binding_from_credential(
+    credential: dict[str, Any],
+) -> dict[str, Any]:
     if credential.get("kind") != "oauth2":
         raise OAuthError("OAuth reconnect credential kind is invalid")
     try:
-        provider_id, provider_subject, provider_account = db.validate_managed_oauth_account_identity(
-            credential.get("metadata")
+        provider_id, provider_subject, provider_account = (
+            db.validate_managed_oauth_account_identity(credential.get("metadata"))
         )
     except db.ManagedOAuthCredentialError as exc:
         raise OAuthError(str(exc)) from exc
@@ -3677,15 +5302,19 @@ def _validate_oauth_reconnect_callback(
     expected_version = reconnect_binding.get("credential_version")
     if not isinstance(credential_id, str) or not credential_id:
         raise OAuthError("OAuth reconnect credential ID is invalid")
-    if not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 1:
+    if (
+        not isinstance(expected_version, int)
+        or isinstance(expected_version, bool)
+        or expected_version < 1
+    ):
         raise OAuthError("OAuth reconnect credential version is invalid")
     current = db.get_credential(credential_id)
     if current is None:
         raise OAuthError("OAuth reconnect credential is no longer active")
     current_binding = _oauth_reconnect_binding_from_credential(current)
     try:
-        provider_id, provider_subject, provider_account = db.validate_managed_oauth_account_identity(
-            credential_metadata
+        provider_id, provider_subject, provider_account = (
+            db.validate_managed_oauth_account_identity(credential_metadata)
         )
     except db.ManagedOAuthCredentialError as exc:
         raise OAuthError(str(exc)) from exc
@@ -3703,7 +5332,9 @@ def _validate_oauth_reconnect_callback(
         expected["provider_subject"],
         expected["provider_account"],
     ):
-        raise OAuthError("OAuth reconnect must verify the exact existing provider subject and account")
+        raise OAuthError(
+            "OAuth reconnect must verify the exact existing provider subject and account"
+        )
     if exchanged.get("name") != current.get("name"):
         raise OAuthError("OAuth reconnect credential name changed during authorization")
     return expected
@@ -3728,8 +5359,15 @@ def _ensure_oauth_exchange_revocation_work(
             source="callback_validation",
             secret=json.dumps(token_secret, separators=(",", ":"), sort_keys=True),
         )
-    except (db.ManagedOAuthCredentialError, db.MetadataStoreError, json.JSONDecodeError, ValueError) as exc:
-        raise OAuthError("OAuth exchange revocation material could not be retained") from exc
+    except (
+        db.ManagedOAuthCredentialError,
+        db.MetadataStoreError,
+        json.JSONDecodeError,
+        ValueError,
+    ) as exc:
+        raise OAuthError(
+            "OAuth exchange revocation material could not be retained"
+        ) from exc
     exchanged["revocationWorkId"] = work_id
     return work_id
 
@@ -3756,7 +5394,12 @@ def _revoke_rejected_oauth_exchange(
         elif retained["attempts"]:
             result = "retained_for_retry"
             reason = "provider_revocation_failed"
-    except (OAuthError, db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError):
+    except (
+        OAuthError,
+        db.ManagedOAuthCredentialError,
+        db.MetadataStoreError,
+        ValueError,
+    ):
         try:
             token_secret = json.loads(str(exchanged.get("secret") or ""))
             if not isinstance(provider_id, str) or not isinstance(token_secret, dict):
@@ -3814,7 +5457,8 @@ def _oauth_activation_payload_digest(
         {
             "action": "credential.oauth.activate",
             "review": review,
-            "encrypted_token_source_sha256": "sha256:" + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
+            "encrypted_token_source_sha256": "sha256:"
+            + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
         }
     )
 
@@ -3823,8 +5467,52 @@ def _oauth_activation_payload_digest(
 def oauth_start(
     payload: OAuthStartRequest,
     response: Response,
-    identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner")),
+    identity: AdminIdentity = Depends(
+        require_role("admin", "policy_author", "credential_owner")
+    ),
 ) -> dict[str, Any]:
+    setup_session = None
+    if payload.setup_session_id is not None:
+        if payload.credential_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="a durable setup session can connect a new OAuth grant but cannot reconnect an existing grant",
+            )
+        setup_session = _load_setup_session_for_identity(
+            payload.setup_session_id,
+            identity,
+            mutate=True,
+        )
+        if setup_session["owner_id"] != identity.user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="only the setup owner can initiate OAuth consent",
+            )
+        if setup_session["phase"] != "created":
+            raise HTTPException(
+                status_code=409,
+                detail="setup session has already started OAuth consent",
+            )
+        if setup_session["revision"] != payload.setup_revision:
+            _setup_session_error(
+                db.SetupSessionStaleRevisionError(
+                    payload.setup_session_id,
+                    int(payload.setup_revision),
+                    int(setup_session["revision"]),
+                )
+            )
+        if (
+            setup_session.get("route_id") is None
+            or setup_session.get("route_policy_digest") is None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="setup OAuth consent requires an authoritative route and reviewed policy digest",
+            )
+        _require_authoritative_setup_route_binding(
+            route_id=setup_session.get("route_id"),
+            route_policy_digest=setup_session.get("route_policy_digest"),
+        )
     reconnect_binding = None
     credential_name = payload.credential_name
     authorization_metadata = payload.metadata
@@ -3834,7 +5522,10 @@ def oauth_start(
     if payload.credential_id:
         existing = db.get_credential(payload.credential_id)
         if existing is None:
-            raise HTTPException(status_code=404, detail="OAuth reconnect credential not found or inactive")
+            raise HTTPException(
+                status_code=404,
+                detail="OAuth reconnect credential not found or inactive",
+            )
         try:
             reconnect_binding = _oauth_reconnect_binding_from_credential(existing)
         except OAuthError as exc:
@@ -3853,7 +5544,10 @@ def oauth_start(
                     "Disconnect this credential, then connect the Google account again."
                 ),
             )
-        if payload.credential_name is not None and payload.credential_name.strip() != existing["name"]:
+        if (
+            payload.credential_name is not None
+            and payload.credential_name.strip() != existing["name"]
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="OAuth reconnect preserves the existing credential name",
@@ -3868,12 +5562,17 @@ def oauth_start(
         if requested_scope_input is None:
             existing_scopes = existing["metadata"].get("scopes")
             if not isinstance(existing_scopes, list):
-                raise HTTPException(status_code=409, detail="OAuth reconnect credential scopes are invalid")
+                raise HTTPException(
+                    status_code=409,
+                    detail="OAuth reconnect credential scopes are invalid",
+                )
             requested_scope_input = existing_scopes
         mutation_action = "credential.update"
         mutation_resource_id = payload.credential_id
     try:
-        requested_scopes = list(resolve_requested_scopes(payload.provider, requested_scope_input))
+        requested_scopes = list(
+            resolve_requested_scopes(payload.provider, requested_scope_input)
+        )
     except OAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     mutation_payload = payload.model_dump(exclude={"mfa"})
@@ -3903,9 +5602,37 @@ def oauth_start(
             control_plane_mfa=mfa,
             control_plane_approval=two_person,
             reconnect_binding=reconnect_binding,
+            setup_session_id=payload.setup_session_id,
         )
     except OAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if setup_session is not None:
+        state_digest = (
+            "sha256:" + hashlib.sha256(started["state"].encode("ascii")).hexdigest()
+        )
+        try:
+            setup_session = db.transition_setup_session(
+                setup_session["id"],
+                expected_revision=int(payload.setup_revision),
+                transition="bind_oauth_flow",
+                actor_id=identity.user_id,
+                updates={
+                    "oauth_provider": started["provider"],
+                    "oauth_state_digest": state_digest,
+                },
+                event={"scopes": started["scopes"]},
+            )
+        except db.SetupSessionError as exc:
+            try:
+                consume_state(
+                    provider_id=payload.provider,
+                    state=started["state"],
+                    browser_nonce=browser_nonce,
+                )
+            except OAuthError:
+                pass
+            _setup_session_error(exc)
+        _drain_setup_session_audit_outbox()
     db.record_audit_event(
         "credential.oauth_authorization_started",
         {
@@ -3913,10 +5640,13 @@ def oauth_start(
             "credential_name": credential_name,
             "reconnect_credential_id": mutation_resource_id,
             "reconnect_credential_version": (
-                reconnect_binding.get("credential_version") if reconnect_binding else None
+                reconnect_binding.get("credential_version")
+                if reconnect_binding
+                else None
             ),
             "scopes": started["scopes"],
-            "state_hash": "sha256:" + hashlib.sha256(started["state"].encode("ascii")).hexdigest(),
+            "state_hash": "sha256:"
+            + hashlib.sha256(started["state"].encode("ascii")).hexdigest(),
             "expires_at_epoch": started["expiresAtEpoch"],
             "control_plane_mfa": mfa,
             "control_plane_approval": two_person,
@@ -3936,7 +5666,48 @@ def oauth_start(
         httponly=True,
         samesite="lax",
     )
+    if setup_session is not None:
+        started["setupSession"] = _setup_session_public(setup_session)
     return started
+
+
+def _fail_bound_oauth_setup_session(
+    *,
+    setup_session_id: object,
+    actor_id: object,
+    provider_id: str,
+    state: str,
+    reason: str,
+) -> None:
+    if not isinstance(setup_session_id, str) or not isinstance(actor_id, str):
+        return
+    try:
+        normalized_provider = normalize_provider_id(provider_id)
+    except OAuthError:
+        return
+    setup_session = db.get_setup_session(setup_session_id)
+    state_digest = "sha256:" + hashlib.sha256(state.encode("ascii")).hexdigest()
+    if not (
+        setup_session is not None
+        and setup_session["status"] == "active"
+        and setup_session["phase"] == "oauth_started"
+        and setup_session["owner_id"] == actor_id
+        and setup_session["oauth_provider"] == normalized_provider
+        and isinstance(setup_session.get("oauth_state_digest"), str)
+        and hmac.compare_digest(setup_session["oauth_state_digest"], state_digest)
+    ):
+        return
+    try:
+        db.transition_setup_session(
+            setup_session_id,
+            expected_revision=setup_session["revision"],
+            transition="fail",
+            actor_id=actor_id,
+            event={"reason": reason, "provider": normalized_provider},
+        )
+        _drain_setup_session_audit_outbox()
+    except db.SetupSessionError:
+        return
 
 
 @app.get("/api/oauth/callback/{provider_id}")
@@ -3965,7 +5736,11 @@ def oauth_callback(
                 headers={"Cache-Control": "no-store"},
             )
         try:
-            consume_state(provider_id=provider_id, state=state, browser_nonce=browser_nonce)
+            denied_state = consume_state(
+                provider_id=provider_id,
+                state=state,
+                browser_nonce=browser_nonce,
+            )
         except OAuthError as exc:
             detail = html.escape(str(exc))
             return HTMLResponse(
@@ -3973,6 +5748,14 @@ def oauth_callback(
                 status_code=400,
                 headers={"Cache-Control": "no-store"},
             )
+        setup_session_id = denied_state.get("setup_session_id")
+        _fail_bound_oauth_setup_session(
+            setup_session_id=setup_session_id,
+            actor_id=denied_state.get("actor_id"),
+            provider_id=provider_id,
+            state=state,
+            reason="oauth_consent_denied",
+        )
         detail = html.escape(error_description or error)
         denied = HTMLResponse(
             f"<h1>OAuth denied</h1><p>{detail}</p>",
@@ -3980,7 +5763,9 @@ def oauth_callback(
             headers={"Cache-Control": "no-store"},
         )
         if oauth_cookie_name:
-            denied.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+            denied.delete_cookie(
+                oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax"
+            )
         return denied
     if not code or not state:
         return HTMLResponse(
@@ -3989,6 +5774,8 @@ def oauth_callback(
             headers={"Cache-Control": "no-store"},
         )
     exchanged: dict[str, Any] | None = None
+    setup_session: dict[str, Any] | None = None
+    setup_state_digest: str | None = None
     try:
         exchanged = exchange_authorization_code(
             provider_id=provider_id,
@@ -3999,6 +5786,29 @@ def oauth_callback(
         if not isinstance(exchanged, dict):
             raise OAuthError("OAuth token exchange result is malformed")
         actor_id = str(exchanged.get("createdBy") or "oauth-callback")
+        setup_session_id = exchanged.get("setupSessionId")
+        if setup_session_id is not None:
+            if not isinstance(setup_session_id, str):
+                raise OAuthError("OAuth setup session binding is malformed")
+            setup_session = db.get_setup_session(setup_session_id)
+            setup_state_digest = (
+                "sha256:" + hashlib.sha256(state.encode("ascii")).hexdigest()
+            )
+            if not (
+                setup_session is not None
+                and setup_session["status"] == "active"
+                and setup_session["phase"] == "oauth_started"
+                and setup_session["owner_id"] == actor_id
+                and setup_session["oauth_provider"]
+                == normalize_provider_id(provider_id)
+                and isinstance(setup_session.get("oauth_state_digest"), str)
+                and hmac.compare_digest(
+                    setup_session["oauth_state_digest"], setup_state_digest
+                )
+            ):
+                raise OAuthError(
+                    "OAuth callback does not match the active setup session"
+                )
         revocation_work_id = _ensure_oauth_exchange_revocation_work(
             exchanged,
             actor_id=actor_id,
@@ -4012,9 +5822,13 @@ def oauth_callback(
             field_name="OAuth credential metadata scopes",
         )
         if metadata_scopes != granted_scopes:
-            raise OAuthError("OAuth credential metadata does not match the provider-granted scopes")
+            raise OAuthError(
+                "OAuth credential metadata does not match the provider-granted scopes"
+            )
         credential_metadata = {**credential_metadata, "scopes": list(granted_scopes)}
-        reconnect_binding = _validate_oauth_reconnect_callback(exchanged, credential_metadata)
+        reconnect_binding = _validate_oauth_reconnect_callback(
+            exchanged, credential_metadata
+        )
         activation_review = _oauth_activation_review(
             exchanged,
             credential_metadata,
@@ -4022,20 +5836,39 @@ def oauth_callback(
             reconnect_binding,
         )
     except OAuthError as exc:
+        failed_setup_id = (
+            exchanged.get("setupSessionId")
+            if isinstance(exchanged, dict)
+            else exc.setup_session_id
+        )
+        failed_actor_id = (
+            exchanged.get("createdBy") if isinstance(exchanged, dict) else exc.actor_id
+        )
         if isinstance(exchanged, dict):
             _revoke_rejected_oauth_exchange(
                 exchanged,
                 actor_id=str(exchanged.get("createdBy") or "oauth-callback"),
                 rejection_reason=str(exc),
             )
+        _fail_bound_oauth_setup_session(
+            setup_session_id=failed_setup_id,
+            actor_id=failed_actor_id,
+            provider_id=provider_id,
+            state=state,
+            reason="oauth_exchange_failed",
+        )
         detail = html.escape(str(exc))
         failed = HTMLResponse(
             f"<h1>OAuth failed</h1><p>{detail}</p>",
-            status_code=409 if isinstance(exchanged, dict) and exchanged.get("reconnect") is not None else 400,
+            status_code=409
+            if isinstance(exchanged, dict) and exchanged.get("reconnect") is not None
+            else 400,
             headers={"Cache-Control": "no-store"},
         )
         if oauth_cookie_name:
-            failed.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+            failed.delete_cookie(
+                oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax"
+            )
         return failed
     assert exchanged is not None
     actor_id = exchanged.get("createdBy") or "oauth-callback"
@@ -4059,15 +5892,79 @@ def oauth_callback(
                     reconnect_binding["credential_id"] if reconnect_binding else None
                 ),
                 target_credential_version=(
-                    reconnect_binding["credential_version"] if reconnect_binding else None
+                    reconnect_binding["credential_version"]
+                    if reconnect_binding
+                    else None
                 ),
                 revocation_work_id=revocation_work_id,
+                setup_session_id=(
+                    setup_session["id"] if setup_session is not None else None
+                ),
+                setup_expected_revision=(
+                    int(setup_session["revision"])
+                    if setup_session is not None
+                    else None
+                ),
+                setup_actor_id=(str(actor_id) if setup_session is not None else None),
+                setup_oauth_provider=(
+                    str(exchanged["provider"])
+                    if setup_session is not None
+                    else None
+                ),
+                setup_oauth_state_digest=(
+                    setup_state_digest if setup_session is not None else None
+                ),
             )
-        except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
+            if setup_session is not None:
+                setup_session = db.get_setup_session(setup_session["id"])
+                if setup_session is None:
+                    raise db.SetupSessionNotFoundError(
+                        "setup session disappeared after atomic OAuth staging"
+                    )
+                _drain_setup_session_audit_outbox()
+        except db.SetupSessionError as exc:
             _revoke_rejected_oauth_exchange(
                 exchanged,
                 actor_id=str(actor_id),
                 rejection_reason=str(exc),
+            )
+            _fail_bound_oauth_setup_session(
+                setup_session_id=(setup_session or {}).get("id"),
+                actor_id=str(actor_id),
+                provider_id=provider_id,
+                state=state,
+                reason="oauth_setup_binding_failed",
+            )
+            failed = HTMLResponse(
+                f"<h1>OAuth failed</h1><p>{html.escape(str(exc))}</p>",
+                status_code=409,
+                headers={"Cache-Control": "no-store"},
+            )
+            if oauth_cookie_name:
+                failed.delete_cookie(
+                    oauth_cookie_name,
+                    path="/",
+                    secure=True,
+                    httponly=True,
+                    samesite="lax",
+                )
+            return failed
+        except (
+            db.ManagedOAuthCredentialError,
+            db.MetadataStoreError,
+            ValueError,
+        ) as exc:
+            _revoke_rejected_oauth_exchange(
+                exchanged,
+                actor_id=str(actor_id),
+                rejection_reason=str(exc),
+            )
+            _fail_bound_oauth_setup_session(
+                setup_session_id=(setup_session or {}).get("id"),
+                actor_id=str(actor_id),
+                provider_id=provider_id,
+                state=state,
+                reason="oauth_credential_persistence_failed",
             )
             db.record_audit_event(
                 "credential.oauth_pending_failed",
@@ -4084,7 +5981,13 @@ def oauth_callback(
                 headers={"Cache-Control": "no-store"},
             )
             if oauth_cookie_name:
-                failed.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+                failed.delete_cookie(
+                    oauth_cookie_name,
+                    path="/",
+                    secure=True,
+                    httponly=True,
+                    samesite="lax",
+                )
             return failed
         db.record_audit_event(
             "credential.oauth_pending_approval",
@@ -4094,7 +5997,9 @@ def oauth_callback(
                 "payload_digest": payload_digest,
                 "expires_at": pending["expires_at"],
                 "pre_identity_control_plane_mfa": exchanged.get("controlPlaneMfa"),
-                "pre_identity_control_plane_approval": exchanged.get("controlPlaneApproval"),
+                "pre_identity_control_plane_approval": exchanged.get(
+                    "controlPlaneApproval"
+                ),
             },
             actor_id=actor_id,
         )
@@ -4110,7 +6015,7 @@ def oauth_callback(
             <h1>OAuth account verified</h1>
             <p><strong>{account}</strong>: {pending_message}</p>
             <script>
-              setTimeout(() => {{ window.location.href = "/"; }}, 1200);
+              setTimeout(() => {{ window.location.href = {json.dumps("/?setup=" + setup_session["id"] if setup_session is not None else "/")}; }}, 1200);
             </script>
             """,
             headers={"Cache-Control": "no-store"},
@@ -4132,12 +6037,45 @@ def oauth_callback(
                     exchanged["secret"],
                     credential_metadata,
                     revocation_work_id=revocation_work_id,
+                    setup_session_id=(
+                        setup_session["id"] if setup_session is not None else None
+                    ),
+                    setup_expected_revision=(
+                        int(setup_session["revision"])
+                        if setup_session is not None
+                        else None
+                    ),
+                    setup_actor_id=(
+                        str(actor_id) if setup_session is not None else None
+                    ),
+                    setup_oauth_provider=(
+                        str(exchanged["provider"])
+                        if setup_session is not None
+                        else None
+                    ),
+                    setup_oauth_state_digest=(
+                        setup_state_digest if setup_session is not None else None
+                    ),
                 )
-        except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
+            if setup_session is not None:
+                setup_session = db.get_setup_session(setup_session["id"])
+                if setup_session is None:
+                    raise db.SetupSessionNotFoundError(
+                        "setup session disappeared after atomic OAuth activation"
+                    )
+                _drain_setup_session_audit_outbox()
+        except db.SetupSessionError as exc:
             _revoke_rejected_oauth_exchange(
                 exchanged,
                 actor_id=str(actor_id),
                 rejection_reason=str(exc),
+            )
+            _fail_bound_oauth_setup_session(
+                setup_session_id=(setup_session or {}).get("id"),
+                actor_id=str(actor_id),
+                provider_id=provider_id,
+                state=state,
+                reason="oauth_setup_binding_failed",
             )
             failed = HTMLResponse(
                 f"<h1>OAuth failed</h1><p>{html.escape(str(exc))}</p>",
@@ -4145,11 +6083,50 @@ def oauth_callback(
                 headers={"Cache-Control": "no-store"},
             )
             if oauth_cookie_name:
-                failed.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+                failed.delete_cookie(
+                    oauth_cookie_name,
+                    path="/",
+                    secure=True,
+                    httponly=True,
+                    samesite="lax",
+                )
+            return failed
+        except (
+            db.ManagedOAuthCredentialError,
+            db.MetadataStoreError,
+            ValueError,
+        ) as exc:
+            _revoke_rejected_oauth_exchange(
+                exchanged,
+                actor_id=str(actor_id),
+                rejection_reason=str(exc),
+            )
+            _fail_bound_oauth_setup_session(
+                setup_session_id=(setup_session or {}).get("id"),
+                actor_id=str(actor_id),
+                provider_id=provider_id,
+                state=state,
+                reason="oauth_credential_persistence_failed",
+            )
+            failed = HTMLResponse(
+                f"<h1>OAuth failed</h1><p>{html.escape(str(exc))}</p>",
+                status_code=409,
+                headers={"Cache-Control": "no-store"},
+            )
+            if oauth_cookie_name:
+                failed.delete_cookie(
+                    oauth_cookie_name,
+                    path="/",
+                    secure=True,
+                    httponly=True,
+                    samesite="lax",
+                )
             return failed
         runtime.invalidate_secret_leases(credential["id"])
         db.record_audit_event(
-            "credential.oauth_reconnected" if reconnect_binding is not None else "credential.oauth_connected",
+            "credential.oauth_reconnected"
+            if reconnect_binding is not None
+            else "credential.oauth_connected",
             {
                 "credential_id": credential["id"],
                 "name": credential["name"],
@@ -4162,40 +6139,63 @@ def oauth_callback(
             },
             actor_id=actor_id,
         )
-        heading = "OAuth credential reconnected" if reconnect_binding is not None else "OAuth credential connected"
+        heading = (
+            "OAuth credential reconnected"
+            if reconnect_binding is not None
+            else "OAuth credential connected"
+        )
         connected = HTMLResponse(
             f"""
             <h1>{heading}</h1>
             <p>The credential is encrypted in Serverware and remains assigned to its policy routes.</p>
             <script>
-              setTimeout(() => {{ window.location.href = "/"; }}, 1200);
+              setTimeout(() => {{ window.location.href = {json.dumps("/?setup=" + setup_session["id"] if setup_session is not None else "/")}; }}, 1200);
             </script>
             """,
             headers={"Cache-Control": "no-store"},
         )
     if oauth_cookie_name:
-        connected.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+        connected.delete_cookie(
+            oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax"
+        )
     return connected
 
 
 @app.get("/api/oauth/pending")
 def oauth_pending_credentials(
-    _: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner")),
+    identity: AdminIdentity = Depends(
+        require_role("admin", "policy_author", "credential_owner")
+    ),
 ) -> dict[str, Any]:
-    return {"pendingCredentials": db.list_pending_oauth_credentials()}
+    return {
+        "pendingCredentials": db.list_pending_oauth_credentials(
+            requester_id=(
+                None
+                if identity.has_any_role({"admin"})
+                else identity.user_id
+            )
+        )
+    }
 
 
 @app.post("/api/oauth/pending/{pending_credential_id}/activate")
 def oauth_pending_credential_activate(
     pending_credential_id: str,
     payload: OAuthPendingActivateRequest,
-    identity: AdminIdentity = Depends(require_role("admin", "credential_owner")),
+    identity: AdminIdentity = Depends(
+        require_role("admin", "policy_author", "credential_owner")
+    ),
 ) -> dict[str, Any]:
     pending = db.get_pending_oauth_credential(pending_credential_id)
     if pending is None:
-        raise HTTPException(status_code=404, detail="pending OAuth credential not found or expired")
+        raise HTTPException(
+            status_code=404, detail="pending OAuth credential not found or expired"
+        )
     if pending["requester_id"] != identity.user_id:
-        raise HTTPException(status_code=403, detail="only the OAuth requester can activate this credential")
+        raise HTTPException(
+            status_code=403,
+            detail="only the OAuth requester can activate this credential",
+        )
     if pending.get("status") != "pending":
         status = str(pending.get("status") or "unusable")
         raise HTTPException(
@@ -4205,6 +6205,45 @@ def oauth_pending_credential_activate(
                 "reason": f"pending_credential_{status}",
                 "pendingCredentialId": pending_credential_id,
             },
+        )
+    setup_session = db.get_setup_session_by_oauth_pending_credential(
+        pending_credential_id
+    )
+    if setup_session is not None:
+        if (
+            payload.setup_session_id != setup_session["id"]
+            or payload.setup_revision is None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "oauth_setup_binding_required",
+                    "setupSessionId": setup_session["id"],
+                    "currentRevision": setup_session["revision"],
+                },
+            )
+        if not (
+            setup_session["status"] == "active"
+            and setup_session["phase"] == "oauth_verified"
+            and setup_session["owner_id"] == identity.user_id
+            and setup_session["revision"] == payload.setup_revision
+        ):
+            if setup_session["revision"] != payload.setup_revision:
+                _setup_session_error(
+                    db.SetupSessionStaleRevisionError(
+                        setup_session["id"],
+                        int(payload.setup_revision),
+                        int(setup_session["revision"]),
+                    )
+                )
+            raise HTTPException(
+                status_code=409,
+                detail="pending OAuth grant no longer matches the setup session",
+            )
+    elif payload.setup_session_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="pending OAuth grant is not bound to that setup session",
         )
     action = "credential.oauth.activate"
     payload_digest = pending["payload_digest"]
@@ -4243,7 +6282,13 @@ def oauth_pending_credential_activate(
             pending_credential_id,
             approval_id=approval_id,
             actor_id=identity.user_id,
+            setup_session_id=setup_session["id"] if setup_session is not None else None,
+            setup_expected_revision=(
+                int(payload.setup_revision) if setup_session is not None else None
+            ),
         )
+    except db.SetupSessionError as exc:
+        _setup_session_error(exc)
     except db.ManagedOAuthCredentialError as exc:
         detail = str(exc)
         if "revocation work capacity" in detail:
@@ -4259,7 +6304,13 @@ def oauth_pending_credential_activate(
         raise HTTPException(status_code=409, detail=detail) from exc
     if not result.get("ok"):
         reason = str(result.get("reason") or "activation_failed")
-        status_code = 404 if reason == "pending_credential_not_found" else 410 if reason == "pending_credential_expired" else 409
+        status_code = (
+            404
+            if reason == "pending_credential_not_found"
+            else 410
+            if reason == "pending_credential_expired"
+            else 409
+        )
         raise HTTPException(
             status_code=status_code,
             detail={
@@ -4271,6 +6322,9 @@ def oauth_pending_credential_activate(
         )
     credential = result["credential"]
     approval = result["approval"]
+    if setup_session is not None:
+        setup_session = result["setup_session"]
+        _drain_setup_session_audit_outbox()
     runtime.invalidate_secret_leases(credential["id"])
     db.record_audit_event(
         (
@@ -4298,7 +6352,16 @@ def oauth_pending_credential_activate(
         },
         actor_id=identity.user_id,
     )
-    return {"ok": True, "credential": credential, "approval": approval}
+    return {
+        "ok": True,
+        "credential": credential,
+        "approval": approval,
+        **(
+            {"setupSession": _setup_session_public(setup_session)}
+            if setup_session is not None
+            else {}
+        ),
+    }
 
 
 @app.delete("/api/oauth/pending/{pending_credential_id}")
@@ -4312,7 +6375,13 @@ def oauth_pending_credential_cancel(
     )
     if not result.get("ok"):
         reason = str(result.get("reason") or "cancel_failed")
-        status_code = 404 if reason == "pending_credential_not_found" else 403 if reason == "requester_mismatch" else 409
+        status_code = (
+            404
+            if reason == "pending_credential_not_found"
+            else 403
+            if reason == "requester_mismatch"
+            else 409
+        )
         raise HTTPException(
             status_code=status_code,
             detail={"error": "oauth_pending_cancel_failed", "reason": reason},
@@ -4333,22 +6402,38 @@ def oauth_pending_credential_revoke(
 ) -> dict[str, Any]:
     pending = db.get_pending_oauth_credential(pending_credential_id)
     if pending is None:
-        raise HTTPException(status_code=404, detail="pending OAuth credential not found")
-    if pending["requester_id"] != identity.user_id and not identity.has_any_role({"admin"}):
-        raise HTTPException(status_code=403, detail="only the OAuth requester or an admin can revoke this grant")
+        raise HTTPException(
+            status_code=404, detail="pending OAuth credential not found"
+        )
+    if pending["requester_id"] != identity.user_id and not identity.has_any_role(
+        {"admin"}
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="only the OAuth requester or an admin can revoke this grant",
+        )
     if pending.get("status") not in {"cancelled", "expired", "rejected"}:
-        raise HTTPException(status_code=409, detail="pending OAuth credential is not terminal")
+        raise HTTPException(
+            status_code=409, detail="pending OAuth credential is not terminal"
+        )
     result = _revoke_terminal_pending_oauth_credential(
         pending_credential_id,
         actor_id=identity.user_id,
     )
     if not result.get("ok"):
-        raise HTTPException(status_code=503, detail={"error": "oauth_revocation_failed", **result})
+        raise HTTPException(
+            status_code=503, detail={"error": "oauth_revocation_failed", **result}
+        )
     return result
 
 
 @app.post("/api/credentials")
-def create_credential(payload: CredentialCreate, identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner"))) -> dict[str, Any]:
+def create_credential(
+    payload: CredentialCreate,
+    identity: AdminIdentity = Depends(
+        require_role("admin", "policy_author", "credential_owner")
+    ),
+) -> dict[str, Any]:
     if payload.kind == "oauth2" or payload.metadata.get("oauth") is True:
         raise HTTPException(
             status_code=409,
@@ -4375,7 +6460,9 @@ def create_credential(payload: CredentialCreate, identity: AdminIdentity = Depen
             "metadata_keys": sorted(payload.metadata),
         },
     )
-    created = db.create_credential(payload.name, payload.kind, payload.secret, payload.metadata)
+    created = db.create_credential(
+        payload.name, payload.kind, payload.secret, payload.metadata
+    )
     db.record_audit_event(
         "credential.created",
         {
@@ -4398,10 +6485,14 @@ def create_credential(payload: CredentialCreate, identity: AdminIdentity = Depen
 def update_credential(
     credential_id: str,
     payload: CredentialUpdate,
-    identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner")),
+    identity: AdminIdentity = Depends(
+        require_role("admin", "policy_author", "credential_owner")
+    ),
 ) -> dict[str, Any]:
     changes = payload.model_dump(exclude_unset=True, exclude={"mfa"})
-    payload_digest = _control_plane_payload_digest({"credential_id": credential_id, "changes": changes})
+    payload_digest = _control_plane_payload_digest(
+        {"credential_id": credential_id, "changes": changes}
+    )
     mfa = _require_control_plane_mutation_mfa(
         action="credential.update",
         resource_id=credential_id,
@@ -4450,7 +6541,9 @@ def update_credential(
 def delete_credential(
     credential_id: str,
     payload: ControlPlaneMutationMfa | None = Body(default=None),
-    identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner")),
+    identity: AdminIdentity = Depends(
+        require_role("admin", "policy_author", "credential_owner")
+    ),
 ) -> dict[str, Any]:
     payload_digest = _control_plane_payload_digest({"credential_id": credential_id})
     mfa = _require_control_plane_mutation_mfa(
@@ -4488,7 +6581,10 @@ def delete_credential(
 
 
 @app.post("/api/routes")
-def create_route(payload: RouteCreate, identity: AdminIdentity = Depends(require_role("admin", "policy_author"))) -> dict[str, Any]:
+def create_route(
+    payload: RouteCreate,
+    identity: AdminIdentity = Depends(require_role("admin", "policy_author")),
+) -> dict[str, Any]:
     data = payload.model_dump(exclude={"mfa"})
     if data.get("credential_id") == "":
         data["credential_id"] = None
@@ -4541,7 +6637,9 @@ def update_route(
     data = payload.model_dump(exclude_unset=True, exclude={"mfa"})
     if data.get("credential_id") == "":
         data["credential_id"] = None
-    payload_digest = _control_plane_payload_digest({"route_id": route_id, "changes": data})
+    payload_digest = _control_plane_payload_digest(
+        {"route_id": route_id, "changes": data}
+    )
     mfa = _require_control_plane_mutation_mfa(
         action="route.update",
         resource_id=route_id,
@@ -4692,7 +6790,9 @@ def break_glass_grant(
         },
     )
     if not approved:
-        raise HTTPException(status_code=409, detail="break-glass grant could not be approved")
+        raise HTTPException(
+            status_code=409, detail="break-glass grant could not be approved"
+        )
     db.record_audit_event(
         "approval.break_glass_granted",
         {
@@ -4730,7 +6830,10 @@ def break_glass_grant(
 
 
 @app.get("/api/approvals")
-def approvals(status: str | None = None, _: AdminIdentity = Depends(require_role("approver", "auditor"))) -> list[dict[str, Any]]:
+def approvals(
+    status: str | None = None,
+    _: AdminIdentity = Depends(require_role("approver", "auditor")),
+) -> list[dict[str, Any]]:
     return db.list_approvals(status=status, limit=100)
 
 
@@ -4756,7 +6859,9 @@ def approve(
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
     if approval["status"] != "pending":
-        raise HTTPException(status_code=409, detail=f"approval is already {approval['status']}")
+        raise HTTPException(
+            status_code=409, detail=f"approval is already {approval['status']}"
+        )
     if _approval_is_expired(approval):
         raise HTTPException(status_code=409, detail="approval is expired")
     jit = _approval_jit_policy(approval, require_current_policy=True)
@@ -4765,9 +6870,13 @@ def approve(
     authn: dict[str, Any]
     if _webauthn_required(authn_policy) or (payload and payload.assertion):
         if not payload or not payload.assertion:
-            raise HTTPException(status_code=412, detail="WebAuthn assertion required for this approval")
+            raise HTTPException(
+                status_code=412, detail="WebAuthn assertion required for this approval"
+            )
         try:
-            authn = verify_approval_assertion(approval, identity.user_id, authn_policy, payload.assertion)
+            authn = verify_approval_assertion(
+                approval, identity.user_id, authn_policy, payload.assertion
+            )
         except WebAuthnError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
     else:
@@ -4781,7 +6890,9 @@ def approve(
         challenge_id=authn.get("challenge_id"),
     )
     if not updated:
-        raise HTTPException(status_code=409, detail="approval state changed before it could be approved")
+        raise HTTPException(
+            status_code=409, detail="approval state changed before it could be approved"
+        )
     gate_publish = runtime.publish_decision_gate_grant(updated)
     if gate_publish.get("enabled"):
         db.record_audit_event(
@@ -4802,9 +6913,7 @@ def approve(
             actor_id=identity.user_id,
         )
     updated["data_plane_grant_publish"] = {
-        key: value
-        for key, value in gate_publish.items()
-        if key != "payload"
+        key: value for key, value in gate_publish.items() if key != "payload"
     }
     return updated
 
@@ -4820,13 +6929,21 @@ def deny(
     if not approval:
         raise HTTPException(status_code=404, detail="approval not found")
     if approval["status"] != "pending":
-        raise HTTPException(status_code=409, detail=f"approval is already {approval['status']}")
+        raise HTTPException(
+            status_code=409, detail=f"approval is already {approval['status']}"
+        )
     if _approval_is_expired(approval):
         raise HTTPException(status_code=409, detail="approval is expired")
     _assert_approver_allowed(identity, _approval_jit_policy(approval))
-    updated = db.deny_request(approval_id, note=decision.reason if decision else None, actor_id=identity.user_id)
+    updated = db.deny_request(
+        approval_id,
+        note=decision.reason if decision else None,
+        actor_id=identity.user_id,
+    )
     if not updated:
-        raise HTTPException(status_code=409, detail="approval state changed before it could be denied")
+        raise HTTPException(
+            status_code=409, detail="approval state changed before it could be denied"
+        )
     return updated
 
 
@@ -4851,22 +6968,39 @@ def webauthn_register_options(
     identity: AdminIdentity = Depends(require_role("admin", "approver")),
 ) -> dict[str, Any]:
     existing = db.list_webauthn_credentials(identity.user_id)
-    production_release = RELEASE_CHANNEL.strip().lower() not in {"dev", "development", "local", "test"}
+    production_release = RELEASE_CHANNEL.strip().lower() not in {
+        "dev",
+        "development",
+        "local",
+        "test",
+    }
     payload_digest = _control_plane_payload_digest(
         {
             "user_id": identity.user_id,
             "label": payload.label,
-            "existing_credential_ids": sorted(str(item["credential_id"]) for item in existing),
+            "existing_credential_ids": sorted(
+                str(item["credential_id"]) for item in existing
+            ),
         }
     )
     if not existing:
         if production_release:
             if len(WEBAUTHN_BOOTSTRAP_TOKEN) < 32:
-                raise HTTPException(status_code=503, detail="WebAuthn bootstrap token is not configured safely")
-            if not payload.bootstrap_token or not hmac.compare_digest(WEBAUTHN_BOOTSTRAP_TOKEN, payload.bootstrap_token):
-                raise HTTPException(status_code=403, detail="valid WebAuthn bootstrap token required for first enrollment")
+                raise HTTPException(
+                    status_code=503,
+                    detail="WebAuthn bootstrap token is not configured safely",
+                )
+            if not payload.bootstrap_token or not hmac.compare_digest(
+                WEBAUTHN_BOOTSTRAP_TOKEN, payload.bootstrap_token
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="valid WebAuthn bootstrap token required for first enrollment",
+                )
         authorization = {
-            "mode": "bootstrap-token" if production_release else "development-bootstrap",
+            "mode": "bootstrap-token"
+            if production_release
+            else "development-bootstrap",
             "payload_digest": payload_digest,
             "existing_credential_count": 0,
         }
@@ -4884,7 +7018,11 @@ def webauthn_register_options(
             payload_digest=payload_digest,
             mfa=payload.mfa,
             identity=identity,
-            request={"user_id": identity.user_id, "label": payload.label, "existing_credential_count": len(existing)},
+            request={
+                "user_id": identity.user_id,
+                "label": payload.label,
+                "existing_credential_count": len(existing),
+            },
         )
         authorization = {
             "mode": "existing-webauthn",
@@ -4893,7 +7031,9 @@ def webauthn_register_options(
             "control_plane_mfa": mfa,
             "control_plane_approval": two_person,
         }
-    return registration_options(identity.user_id, payload.label, authorization=authorization)
+    return registration_options(
+        identity.user_id, payload.label, authorization=authorization
+    )
 
 
 @app.post("/api/webauthn/register/verify")
@@ -4920,7 +7060,9 @@ def webauthn_register_verify(
             "attestation_fmt": credential.get("attestation_fmt"),
             "attestation_trusted": credential.get("attestation_trusted"),
             "attestation_root_sha256": credential.get("attestation_root_sha256"),
-            "registration_authorization": credential.pop("_registration_authorization", None),
+            "registration_authorization": credential.pop(
+                "_registration_authorization", None
+            ),
         },
         actor_id=identity.user_id,
     )
@@ -4928,7 +7070,9 @@ def webauthn_register_verify(
 
 
 @app.get("/api/webauthn/credentials")
-def webauthn_credentials(identity: AdminIdentity = Depends(require_role("admin", "approver"))) -> list[dict[str, Any]]:
+def webauthn_credentials(
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> list[dict[str, Any]]:
     items = []
     for item in db.list_webauthn_credentials(identity.user_id):
         redacted = dict(item)
@@ -4939,7 +7083,9 @@ def webauthn_credentials(identity: AdminIdentity = Depends(require_role("admin",
 
 
 @app.get("/api/webauthn/trust/status")
-def webauthn_trust_status_api(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def webauthn_trust_status_api(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     try:
         return webauthn_trust_status()
     except WebAuthnTrustError as exc:
@@ -4969,7 +7115,9 @@ def webauthn_trust_publish(
 
 
 @app.post("/api/dev/webauthn/credential")
-def dev_webauthn_credential(identity: AdminIdentity = Depends(require_role("admin"))) -> dict[str, Any]:
+def dev_webauthn_credential(
+    identity: AdminIdentity = Depends(require_role("admin")),
+) -> dict[str, Any]:
     try:
         credential = create_dev_credential(identity.user_id)
     except WebAuthnError as exc:
@@ -4994,12 +7142,17 @@ def dev_webauthn_assertion(
 
 
 @app.get("/api/logs")
-def logs(limit: int = Query(100, ge=1, le=500), _: AdminIdentity = Depends(require_role("auditor"))) -> list[dict[str, Any]]:
+def logs(
+    limit: int = Query(100, ge=1, le=500),
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> list[dict[str, Any]]:
     return db.list_logs(limit=limit)
 
 
 @app.get("/api/grants/status")
-def grant_store_status(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def grant_store_status(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     try:
         return grants.status()
     except grants.GrantStoreError as exc:
@@ -5007,7 +7160,9 @@ def grant_store_status(_: AdminIdentity = Depends(require_role("auditor"))) -> d
 
 
 @app.get("/api/metadata/store/status")
-def metadata_store_status(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def metadata_store_status(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     try:
         return db.metadata_store_status()
     except db.MetadataStoreError as exc:
@@ -5022,7 +7177,10 @@ def clear_logs(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, A
 
 
 @app.get("/api/audit")
-def audit_events(limit: int = Query(100, ge=1, le=500), _: AdminIdentity = Depends(require_role("auditor"))) -> list[dict[str, Any]]:
+def audit_events(
+    limit: int = Query(100, ge=1, le=500),
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> list[dict[str, Any]]:
     return db.list_audit_events(limit=limit)
 
 
@@ -5040,7 +7198,9 @@ def audit_search(
     credential_version: int | None = Query(default=None, alias="credentialVersion"),
     approval_id: str | None = Query(default=None, alias="approvalId"),
     decision: str | None = None,
-    attestation_measurement: str | None = Query(default=None, alias="attestationMeasurement"),
+    attestation_measurement: str | None = Query(
+        default=None, alias="attestationMeasurement"
+    ),
     start: str | None = None,
     end: str | None = None,
     q: str | None = None,
@@ -5080,7 +7240,9 @@ def audit_export(
     credential_version: int | None = Query(default=None, alias="credentialVersion"),
     approval_id: str | None = Query(default=None, alias="approvalId"),
     decision: str | None = None,
-    attestation_measurement: str | None = Query(default=None, alias="attestationMeasurement"),
+    attestation_measurement: str | None = Query(
+        default=None, alias="attestationMeasurement"
+    ),
     start: str | None = None,
     end: str | None = None,
     q: str | None = None,
@@ -5114,7 +7276,9 @@ def audit_export(
 
 
 @app.get("/api/audit/store/status")
-def audit_store_status(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def audit_store_status(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     try:
         return db.audit_store_status()
     except db.AuditStoreError as exc:
@@ -5138,7 +7302,9 @@ def _record_credential_lease_audit(
         "reason": reason,
         "recipient_key_id": payload.recipient_key_id,
         "recipient_nonce_sha256": "sha256:"
-        + hashlib.sha256(payload.recipient_nonce.encode("ascii", errors="replace")).hexdigest(),
+        + hashlib.sha256(
+            payload.recipient_nonce.encode("ascii", errors="replace")
+        ).hexdigest(),
         "policy_hash": payload.policy_hash,
         "data_plane_binary_digest": payload.data_plane_binary_digest,
         "principal_id": payload.principal_id,
@@ -5163,14 +7329,17 @@ def _should_record_credential_lease_issuance(
     payload: CredentialLeaseRequest,
     credentials: list[dict[str, Any]],
 ) -> tuple[str, str, str, str, str, str, str] | None:
-    state_digest = "sha256:" + hashlib.sha256(
-        _canonical_json(
-            [
-                [item["credentialId"], int(item["credentialVersion"])]
-                for item in credentials
-            ]
-        ).encode("utf-8")
-    ).hexdigest()
+    state_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            _canonical_json(
+                [
+                    [item["credentialId"], int(item["credentialVersion"])]
+                    for item in credentials
+                ]
+            ).encode("utf-8")
+        ).hexdigest()
+    )
     key = (
         payload.recipient_key_id,
         payload.policy_hash,
@@ -5208,8 +7377,12 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
             if not isinstance(metadata, dict) or metadata.get("oauth") is not True:
                 return credential
             expires_at_epoch_ms = metadata.get("expires_at_epoch_ms")
-            if not isinstance(expires_at_epoch_ms, int) or isinstance(expires_at_epoch_ms, bool):
-                raise OAuthError("managed OAuth credential has no valid access-token expiry")
+            if not isinstance(expires_at_epoch_ms, int) or isinstance(
+                expires_at_epoch_ms, bool
+            ):
+                raise OAuthError(
+                    "managed OAuth credential has no valid access-token expiry"
+                )
             now_epoch_ms = time.time_ns() // 1_000_000
             if expires_at_epoch_ms > now_epoch_ms + OAUTH_REFRESH_SKEW_SECONDS * 1000:
                 return credential
@@ -5223,17 +7396,26 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                 if not credential:
                     return None
                 metadata = credential.get("metadata")
-                if credential.get("kind") != "oauth2" or not isinstance(metadata, dict) or metadata.get("oauth") is not True:
+                if (
+                    credential.get("kind") != "oauth2"
+                    or not isinstance(metadata, dict)
+                    or metadata.get("oauth") is not True
+                ):
                     return credential
                 provider_id = metadata.get("provider_id")
                 if not isinstance(provider_id, str) or not provider_id:
                     raise OAuthError("managed OAuth credential has no provider binding")
-                expires_at_epoch_ms = metadata.get("expires_at_epoch_ms") if isinstance(metadata, dict) else None
+                expires_at_epoch_ms = (
+                    metadata.get("expires_at_epoch_ms")
+                    if isinstance(metadata, dict)
+                    else None
+                )
                 now_epoch_ms = time.time_ns() // 1_000_000
                 if (
                     isinstance(expires_at_epoch_ms, int)
                     and not isinstance(expires_at_epoch_ms, bool)
-                    and expires_at_epoch_ms > now_epoch_ms + OAUTH_REFRESH_SKEW_SECONDS * 1000
+                    and expires_at_epoch_ms
+                    > now_epoch_ms + OAUTH_REFRESH_SKEW_SECONDS * 1000
                 ):
                     return credential
                 token_secret = json.loads(str(credential.get("secret") or ""))
@@ -5247,14 +7429,17 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                     raise OAuthError("OAuth refresh result is malformed")
                 refresh_revocation = {
                     "provider": provider_id,
-                    "secret": refreshed.get("revocationSecret") or refreshed.get("secret"),
+                    "secret": refreshed.get("revocationSecret")
+                    or refreshed.get("secret"),
                     "revocationWorkId": refreshed.get("revocationWorkId"),
                 }
                 refreshed["revocationWorkId"] = _ensure_oauth_exchange_revocation_work(
                     refresh_revocation,
                     actor_id="oauth-refresh",
                 )
-                refreshed_scopes = _canonical_oauth_granted_scopes(refreshed.get("scopes"))
+                refreshed_scopes = _canonical_oauth_granted_scopes(
+                    refreshed.get("scopes")
+                )
                 refreshed_metadata = refreshed.get("metadata")
                 if not isinstance(refreshed_metadata, dict):
                     raise OAuthError("OAuth refresh credential metadata is malformed")
@@ -5263,8 +7448,13 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                     field_name="OAuth refresh credential metadata scopes",
                 )
                 if refreshed_metadata_scopes != refreshed_scopes:
-                    raise OAuthError("OAuth refresh metadata does not match the provider-granted scopes")
-                refreshed_metadata = {**refreshed_metadata, "scopes": list(refreshed_scopes)}
+                    raise OAuthError(
+                        "OAuth refresh metadata does not match the provider-granted scopes"
+                    )
+                refreshed_metadata = {
+                    **refreshed_metadata,
+                    "scopes": list(refreshed_scopes),
+                }
                 persisted, rotated = db.update_credential_secret_if_version(
                     credential_id,
                     expected_version=int(credential.get("credential_version") or 0),
@@ -5297,10 +7487,14 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                     {
                         "credential_id": credential_id,
                         "provider": provider_id,
-                        "previous_credential_version": credential.get("credential_version"),
+                        "previous_credential_version": credential.get(
+                            "credential_version"
+                        ),
                         "credential_version": persisted.get("credential_version"),
                         "expires_at_epoch_ms": persisted_refresh["expiresAtEpochMs"],
-                        "refresh_token_rotated": persisted_refresh["refreshTokenRotated"],
+                        "refresh_token_rotated": persisted_refresh[
+                            "refreshTokenRotated"
+                        ],
                         "scopes": list(refreshed_scopes),
                     },
                     actor_type="system",
@@ -5356,34 +7550,49 @@ def _credential_metadata_scopes(metadata: dict[str, Any]) -> frozenset[str]:
         return frozenset()
     if isinstance(raw_scopes, str):
         scopes = [item for item in raw_scopes.split() if item]
-    elif isinstance(raw_scopes, list) and all(isinstance(item, str) and item for item in raw_scopes):
+    elif isinstance(raw_scopes, list) and all(
+        isinstance(item, str) and item for item in raw_scopes
+    ):
         scopes = raw_scopes
     else:
-        raise HTTPException(status_code=503, detail="credential scope metadata is invalid")
+        raise HTTPException(
+            status_code=503, detail="credential scope metadata is invalid"
+        )
     if len(scopes) != len(set(scopes)):
-        raise HTTPException(status_code=503, detail="credential scope metadata contains duplicates")
+        raise HTTPException(
+            status_code=503, detail="credential scope metadata contains duplicates"
+        )
     return frozenset(scopes)
 
 
-def _assert_credential_policy_binding(credential: dict[str, Any], credential_policy: Any) -> None:
+def _assert_credential_policy_binding(
+    credential: dict[str, Any], credential_policy: Any
+) -> None:
     metadata = credential.get("metadata") or {}
     if not isinstance(metadata, dict):
         raise HTTPException(status_code=503, detail="credential metadata is invalid")
     policy_provider = _normalized_credential_provider(credential_policy.provider)
-    stored_provider = _normalized_credential_provider(metadata.get("provider_id") or metadata.get("provider"))
+    stored_provider = _normalized_credential_provider(
+        metadata.get("provider_id") or metadata.get("provider")
+    )
     if policy_provider not in {"", "generic"} and stored_provider != policy_provider:
         raise HTTPException(
             status_code=409,
             detail="stored credential provider does not match the active signed policy",
         )
-    if credential_policy.provider_subject is not None and credential.get("kind") != "oauth2":
+    if (
+        credential_policy.provider_subject is not None
+        and credential.get("kind") != "oauth2"
+    ):
         raise HTTPException(
             status_code=409,
             detail="signed provider account binding requires a verified OAuth credential",
         )
     if credential.get("kind") == "oauth2":
         try:
-            verified_provider, stored_subject = db.validate_managed_oauth_identity(metadata)
+            verified_provider, stored_subject = db.validate_managed_oauth_identity(
+                metadata
+            )
         except db.ManagedOAuthCredentialError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         if _normalized_credential_provider(verified_provider) != policy_provider:
@@ -5431,11 +7640,17 @@ def _assert_credential_policy_binding(credential: dict[str, Any], credential_pol
         )
 
 
-def _credential_secret_for_lease(credential: dict[str, Any], credential_policy: Any) -> str:
+def _credential_secret_for_lease(
+    credential: dict[str, Any], credential_policy: Any
+) -> str:
     secret = str(credential.get("secret") or "")
     if credential.get("kind") != "oauth2":
         return secret
-    injection = credential_policy.injection if isinstance(credential_policy.injection, dict) else {}
+    injection = (
+        credential_policy.injection
+        if isinstance(credential_policy.injection, dict)
+        else {}
+    )
     if (
         injection.get("type") != "bearer"
         or str(injection.get("header") or "Authorization").lower() != "authorization"
@@ -5458,24 +7673,47 @@ def _credential_secret_for_lease(credential: dict[str, Any], credential_policy: 
     try:
         token = json.loads(secret, object_pairs_hook=reject_duplicate_keys)
     except (TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise HTTPException(status_code=503, detail="managed OAuth credential token material is malformed") from exc
+        raise HTTPException(
+            status_code=503,
+            detail="managed OAuth credential token material is malformed",
+        ) from exc
     access_token = token.get("access_token") if isinstance(token, dict) else None
-    if not isinstance(access_token, str) or not access_token or len(access_token.encode("utf-8")) > 64 * 1024:
-        raise HTTPException(status_code=503, detail="managed OAuth access token is missing or oversized")
+    if (
+        not isinstance(access_token, str)
+        or not access_token
+        or len(access_token.encode("utf-8")) > 64 * 1024
+    ):
+        raise HTTPException(
+            status_code=503, detail="managed OAuth access token is missing or oversized"
+        )
     return _canonical_json({"access_token": access_token})
 
 
-def _assert_credential_lease_route_binding(payload: CredentialLeaseRequest, snapshot: Any) -> Any:
+def _assert_credential_lease_route_binding(
+    payload: CredentialLeaseRequest, snapshot: Any
+) -> Any:
     if not hmac.compare_digest(snapshot.hash, payload.policy_hash):
-        raise HTTPException(status_code=409, detail="data-plane policy hash is not active")
+        raise HTTPException(
+            status_code=409, detail="data-plane policy hash is not active"
+        )
     route = _active_route_by_id(payload.route_id, snapshot=snapshot)
     if payload.principal_id not in route.principals and "*" not in route.principals:
-        raise HTTPException(status_code=409, detail="principal is not assigned to the requested active route")
-    if route.credential_ref is None or not hmac.compare_digest(route.credential_ref, payload.credential_id):
-        raise HTTPException(status_code=409, detail="credential does not match the requested active route")
+        raise HTTPException(
+            status_code=409,
+            detail="principal is not assigned to the requested active route",
+        )
+    if route.credential_ref is None or not hmac.compare_digest(
+        route.credential_ref, payload.credential_id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="credential does not match the requested active route",
+        )
     credential_policy = snapshot.credentials.get(payload.credential_id)
     if credential_policy is None:
-        raise HTTPException(status_code=409, detail="credential is not declared by the active policy")
+        raise HTTPException(
+            status_code=409, detail="credential is not declared by the active policy"
+        )
     return credential_policy
 
 
@@ -5487,12 +7725,22 @@ def data_plane_credential_leases(
     try:
         snapshot = get_policy_snapshot()
         if not snapshot:
-            raise HTTPException(status_code=503, detail="active signed policy bundle is unavailable")
+            raise HTTPException(
+                status_code=503, detail="active signed policy bundle is unavailable"
+            )
         credential_policy = _assert_credential_lease_route_binding(payload, snapshot)
         if not EXPECTED_DATA_PLANE_BINARY_DIGEST:
-            raise HTTPException(status_code=503, detail="expected data-plane binary digest is not configured")
-        if not hmac.compare_digest(EXPECTED_DATA_PLANE_BINARY_DIGEST, payload.data_plane_binary_digest):
-            raise HTTPException(status_code=409, detail="data-plane binary digest does not match configured digest")
+            raise HTTPException(
+                status_code=503,
+                detail="expected data-plane binary digest is not configured",
+            )
+        if not hmac.compare_digest(
+            EXPECTED_DATA_PLANE_BINARY_DIGEST, payload.data_plane_binary_digest
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="data-plane binary digest does not match configured digest",
+            )
 
         recipient_public_key = _decode_unpadded_base64url(
             payload.recipient_public_key,
@@ -5504,9 +7752,14 @@ def data_plane_credential_leases(
             field_name="recipientNonce",
             expected_length=32,
         )
-        expected_recipient_key_id = "sha256:" + hashlib.sha256(recipient_public_key).hexdigest()
+        expected_recipient_key_id = (
+            "sha256:" + hashlib.sha256(recipient_public_key).hexdigest()
+        )
         if not hmac.compare_digest(expected_recipient_key_id, payload.recipient_key_id):
-            raise HTTPException(status_code=400, detail="recipientKeyId does not match recipientPublicKey")
+            raise HTTPException(
+                status_code=400,
+                detail="recipientKeyId does not match recipientPublicKey",
+            )
         issued_at_epoch_ms = time.time_ns() // 1_000_000
         recipient_nonce_sha256 = "sha256:" + hashlib.sha256(recipient_nonce).hexdigest()
         if db.credential_lease_nonce_reserved(
@@ -5514,7 +7767,9 @@ def data_plane_credential_leases(
             recipient_nonce_sha256,
             now_epoch_ms=issued_at_epoch_ms,
         ):
-            raise HTTPException(status_code=409, detail="recipient nonce has already been used")
+            raise HTTPException(
+                status_code=409, detail="recipient nonce has already been used"
+            )
         _verify_credential_lease_recipient_attestation(
             payload.recipient_attestation,
             recipient_key_id=expected_recipient_key_id,
@@ -5531,37 +7786,66 @@ def data_plane_credential_leases(
             now_epoch_ms=issued_at_epoch_ms,
         )
         if replay_result == "replay":
-            raise HTTPException(status_code=409, detail="recipient nonce has already been used")
+            raise HTTPException(
+                status_code=409, detail="recipient nonce has already been used"
+            )
         if replay_result == "capacity":
-            raise HTTPException(status_code=503, detail="credential lease replay cache is at capacity")
+            raise HTTPException(
+                status_code=503, detail="credential lease replay cache is at capacity"
+            )
         if not (SECRET_LEASE_TTL_SECONDS > 0):
-            raise HTTPException(status_code=503, detail="credential lease TTL is not configured safely")
+            raise HTTPException(
+                status_code=503, detail="credential lease TTL is not configured safely"
+            )
 
-        ttl_ms = max(1, int(min(float(payload.max_ttl_seconds), SECRET_LEASE_TTL_SECONDS, 10.0) * 1000))
+        ttl_ms = max(
+            1,
+            int(
+                min(float(payload.max_ttl_seconds), SECRET_LEASE_TTL_SECONDS, 10.0)
+                * 1000
+            ),
+        )
         expires_at_epoch_ms = issued_at_epoch_ms + ttl_ms
 
         credential = _credential_for_lease(payload.credential_id)
         if not credential:
-            raise HTTPException(status_code=404, detail="requested credential is unavailable")
+            raise HTTPException(
+                status_code=404, detail="requested credential is unavailable"
+            )
         _assert_credential_policy_binding(credential, credential_policy)
 
         current_snapshot = get_policy_snapshot()
         if current_snapshot is None:
-            raise HTTPException(status_code=503, detail="active signed policy bundle became unavailable")
-        current_credential_policy = _assert_credential_lease_route_binding(payload, current_snapshot)
+            raise HTTPException(
+                status_code=503, detail="active signed policy bundle became unavailable"
+            )
+        current_credential_policy = _assert_credential_lease_route_binding(
+            payload, current_snapshot
+        )
         with db.credential_lease_snapshot(payload.credential_id) as current_credential:
             if not current_credential:
-                raise HTTPException(status_code=404, detail="requested credential became unavailable")
-            if int(current_credential.get("credential_version") or 0) != int(credential.get("credential_version") or 0):
-                raise HTTPException(status_code=409, detail="credential changed during lease authorization")
-            _assert_credential_policy_binding(current_credential, current_credential_policy)
+                raise HTTPException(
+                    status_code=404, detail="requested credential became unavailable"
+                )
+            if int(current_credential.get("credential_version") or 0) != int(
+                credential.get("credential_version") or 0
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail="credential changed during lease authorization",
+                )
+            _assert_credential_policy_binding(
+                current_credential, current_credential_policy
+            )
             credential = current_credential
             metadata = credential.get("metadata") or {}
             credentials = [
                 {
                     "credentialId": payload.credential_id,
                     "credentialVersion": int(credential["credential_version"]),
-                    "secret": _credential_secret_for_lease(credential, current_credential_policy),
+                    "secret": _credential_secret_for_lease(
+                        credential, current_credential_policy
+                    ),
                     "metadata": metadata,
                 }
             ]
@@ -5592,8 +7876,13 @@ def data_plane_credential_leases(
                 "expiresAtEpochMs": expires_at_epoch_ms,
                 "credentials": credentials,
             }
-            if len(_canonical_json(plaintext).encode("utf-8")) > _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES:
-                raise HTTPException(status_code=503, detail="credential lease plaintext exceeds 4 MiB")
+            if (
+                len(_canonical_json(plaintext).encode("utf-8"))
+                > _CREDENTIAL_LEASE_PLAINTEXT_MAX_BYTES
+            ):
+                raise HTTPException(
+                    status_code=503, detail="credential lease plaintext exceeds 4 MiB"
+                )
             try:
                 encrypted = encrypt_credential_lease_envelope(
                     recipient_public_key=recipient_public_key,
@@ -5602,10 +7891,15 @@ def data_plane_credential_leases(
                     plaintext=plaintext,
                 )
             except ValueError as exc:
-                raise HTTPException(status_code=400, detail="recipientPublicKey is not a valid X25519 public key") from exc
+                raise HTTPException(
+                    status_code=400,
+                    detail="recipientPublicKey is not a valid X25519 public key",
+                ) from exc
             response_body = _canonical_json({**aad, **encrypted}).encode("utf-8")
             if len(response_body) > _CREDENTIAL_LEASE_RESPONSE_MAX_BYTES:
-                raise HTTPException(status_code=503, detail="credential lease response exceeds 8 MiB")
+                raise HTTPException(
+                    status_code=503, detail="credential lease response exceeds 8 MiB"
+                )
     except HTTPException as exc:
         _record_credential_lease_audit(
             "rejected",
@@ -5623,7 +7917,9 @@ def data_plane_credential_leases(
             status_code=503,
             reason="credential lease issuance failed",
         )
-        raise HTTPException(status_code=503, detail="credential lease issuance failed") from exc
+        raise HTTPException(
+            status_code=503, detail="credential lease issuance failed"
+        ) from exc
 
     issuance_audit_key = _should_record_credential_lease_issuance(payload, credentials)
     if issuance_audit_key is not None:
@@ -5640,7 +7936,9 @@ def data_plane_credential_leases(
         except Exception as exc:
             with _credential_lease_audit_lock:
                 _credential_lease_audit_last.pop(issuance_audit_key, None)
-            raise HTTPException(status_code=503, detail="credential lease issuance audit is unavailable") from exc
+            raise HTTPException(
+                status_code=503, detail="credential lease issuance audit is unavailable"
+            ) from exc
     return Response(
         content=response_body,
         media_type="application/json",
@@ -5651,12 +7949,19 @@ def data_plane_credential_leases(
 @app.post("/api/data-plane/audit")
 def data_plane_audit(
     batch: DataPlaneAuditBatch,
-    x_serverware_data_plane_token: str | None = Header(default=None, alias="X-Serverware-Data-Plane-Token"),
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
 ) -> dict[str, Any]:
-    _require_data_plane_token(x_serverware_data_plane_token, DATA_PLANE_AUDIT_INGEST_TOKEN)
+    _require_data_plane_token(
+        x_serverware_data_plane_token, DATA_PLANE_AUDIT_INGEST_TOKEN
+    )
     for item in batch.events:
         if not item.event_type.startswith("data_plane."):
-            raise HTTPException(status_code=400, detail="data-plane audit event_type must start with data_plane.")
+            raise HTTPException(
+                status_code=400,
+                detail="data-plane audit event_type must start with data_plane.",
+            )
     accepted = 0
     for item in batch.events:
         db.record_audit_event(
@@ -5672,19 +7977,31 @@ def data_plane_audit(
 @app.post("/api/data-plane/grants/consume")
 def data_plane_grant_consume(
     payload: DataPlaneGrantConsume,
-    x_serverware_data_plane_token: str | None = Header(default=None, alias="X-Serverware-Data-Plane-Token"),
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
 ) -> dict[str, Any]:
-    _require_data_plane_token(x_serverware_data_plane_token, DATA_PLANE_GRANT_CONSUME_TOKEN)
+    _require_data_plane_token(
+        x_serverware_data_plane_token, DATA_PLANE_GRANT_CONSUME_TOKEN
+    )
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
     if snapshot.hash != payload.policy_hash:
-        raise HTTPException(status_code=409, detail="data-plane policy hash is not active")
+        raise HTTPException(
+            status_code=409, detail="data-plane policy hash is not active"
+        )
     route = _active_route_by_id(payload.route_id, snapshot=snapshot)
     if payload.principal_id not in route.principals and "*" not in route.principals:
-        raise HTTPException(status_code=409, detail="data-plane principal is not assigned to active route")
+        raise HTTPException(
+            status_code=409,
+            detail="data-plane principal is not assigned to active route",
+        )
     if route.credential_ref and route.credential_ref != payload.credential_ref:
-        raise HTTPException(status_code=409, detail="data-plane credential reference does not match active route")
+        raise HTTPException(
+            status_code=409,
+            detail="data-plane credential reference does not match active route",
+        )
     grant_args = {
         "principal_id": payload.principal_id,
         "route_id": payload.route_id,
@@ -5712,7 +8029,10 @@ def data_plane_grant_consume(
             headers={"Retry-After": "1"},
         )
     if result.get("reason") == "attempt_id_conflict":
-        raise HTTPException(status_code=409, detail="grant attempt id was already bound to a different request")
+        raise HTTPException(
+            status_code=409,
+            detail="grant attempt id was already bound to a different request",
+        )
     jit = route.jit or {}
     if not jit.get("required"):
         return {"ok": True, **result}
@@ -5725,7 +8045,9 @@ def data_plane_grant_consume(
         "route_id": payload.route_id,
         "principal": payload.principal_id,
         "operation": payload.canonical_request.get("operation"),
-        "body_sha256": (payload.canonical_request.get("request") or {}).get("body_sha256"),
+        "body_sha256": (payload.canonical_request.get("request") or {}).get(
+            "body_sha256"
+        ),
     }
     approval = db.ensure_jit_approval_request(
         route_id=payload.route_id,
@@ -5756,44 +8078,80 @@ def data_plane_grant_consume(
 @app.post("/api/data-plane/rate-limits/consume")
 def data_plane_rate_limit_consume(
     payload: DataPlaneRateLimitConsume,
-    x_serverware_data_plane_token: str | None = Header(default=None, alias="X-Serverware-Data-Plane-Token"),
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
 ) -> dict[str, Any]:
-    _require_data_plane_token(x_serverware_data_plane_token, DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN)
+    _require_data_plane_token(
+        x_serverware_data_plane_token, DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN
+    )
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
     if not hmac.compare_digest(snapshot.hash, payload.policy_hash):
-        raise HTTPException(status_code=409, detail="data-plane policy hash is not active")
+        raise HTTPException(
+            status_code=409, detail="data-plane policy hash is not active"
+        )
     route = _active_route_by_id(payload.route_id, snapshot=snapshot)
     if payload.principal_id not in route.principals and "*" not in route.principals:
-        raise HTTPException(status_code=409, detail="data-plane principal is not assigned to active route")
+        raise HTTPException(
+            status_code=409,
+            detail="data-plane principal is not assigned to active route",
+        )
     expected_credential_ref = route.credential_ref or ""
     if not hmac.compare_digest(payload.credential_ref or "", expected_credential_ref):
-        raise HTTPException(status_code=409, detail="data-plane credential reference does not match active route")
+        raise HTTPException(
+            status_code=409,
+            detail="data-plane credential reference does not match active route",
+        )
     if expected_credential_ref:
         credential = db.get_credential(expected_credential_ref)
-        if not credential or int(credential.get("credential_version") or 0) != payload.credential_version:
-            raise HTTPException(status_code=409, detail="data-plane credential version is not current")
+        if (
+            not credential
+            or int(credential.get("credential_version") or 0)
+            != payload.credential_version
+        ):
+            raise HTTPException(
+                status_code=409, detail="data-plane credential version is not current"
+            )
     elif payload.credential_version != 0:
-        raise HTTPException(status_code=409, detail="credential-less route must use credential version zero")
+        raise HTTPException(
+            status_code=409,
+            detail="credential-less route must use credential version zero",
+        )
     matching_constraints = [
         item
         for item in route.constraints
         if item.get("id") == payload.constraint_id and item.get("type") == "rateLimit"
     ]
-    if len(matching_constraints) != 1 or matching_constraints[0].get("store", "local") != "shared":
-        raise HTTPException(status_code=409, detail="shared rate-limit constraint is not active on the route")
+    if (
+        len(matching_constraints) != 1
+        or matching_constraints[0].get("store", "local") != "shared"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="shared rate-limit constraint is not active on the route",
+        )
     constraint = matching_constraints[0]
     expected_max = int(constraint["max"])
     expected_window_seconds = int(constraint["windowSeconds"])
-    if payload.max_count != expected_max or payload.window_seconds != expected_window_seconds:
-        raise HTTPException(status_code=409, detail="shared rate-limit parameters do not match active policy")
+    if (
+        payload.max_count != expected_max
+        or payload.window_seconds != expected_window_seconds
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="shared rate-limit parameters do not match active policy",
+        )
     operation_context = dict(payload.operation_context)
     operation_name = operation_context.get("operation")
     if not isinstance(operation_name, str):
         operation_name = ""
     if (payload.operation or "") != operation_name:
-        raise HTTPException(status_code=409, detail="shared rate-limit operation does not match operationContext")
+        raise HTTPException(
+            status_code=409,
+            detail="shared rate-limit operation does not match operationContext",
+        )
     expected_counter_key = _rate_limit_counter_key(
         constraint=constraint,
         route_id=route.id,
@@ -5803,7 +8161,10 @@ def data_plane_rate_limit_consume(
         operation_context=operation_context,
     )
     if not hmac.compare_digest(payload.counter_key, expected_counter_key):
-        raise HTTPException(status_code=409, detail="shared rate-limit counter key does not match active policy")
+        raise HTTPException(
+            status_code=409,
+            detail="shared rate-limit counter key does not match active policy",
+        )
     try:
         result = db.consume_rate_limit(
             counter_key=expected_counter_key,
@@ -5852,16 +8213,25 @@ def _rate_limit_counter_key(
     for field in key_policy.get("operationFields") or []:
         value = operation_context.get(field)
         material[f"operation.{field}"] = value if isinstance(value, str) else ""
-    return "sha256:" + hashlib.sha256(_canonical_json(material).encode("utf-8")).hexdigest()
+    return (
+        "sha256:"
+        + hashlib.sha256(_canonical_json(material).encode("utf-8")).hexdigest()
+    )
 
 
-def _require_data_plane_token(x_serverware_data_plane_token: str | None, expected_token: str) -> None:
+def _require_data_plane_token(
+    x_serverware_data_plane_token: str | None, expected_token: str
+) -> None:
     if not expected_token or not DATA_PLANE_INSTANCE_ID:
-        raise HTTPException(status_code=503, detail="data-plane authentication is not configured")
+        raise HTTPException(
+            status_code=503, detail="data-plane authentication is not configured"
+        )
     if not x_serverware_data_plane_token or not hmac.compare_digest(
         x_serverware_data_plane_token, expected_token
     ):
-        raise HTTPException(status_code=401, detail="data-plane authentication required")
+        raise HTTPException(
+            status_code=401, detail="data-plane authentication required"
+        )
 
 
 @app.get("/api/audit/verify")
@@ -5873,17 +8243,23 @@ def audit_verify(
 
 
 @app.get("/api/audit/anchors/status")
-def audit_anchor_status(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def audit_anchor_status(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     return runtime.audit_anchor_status()
 
 
 @app.post("/api/audit/anchors/flush")
-def audit_anchor_flush(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, Any]:
+def audit_anchor_flush(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, Any]:
     return runtime.flush_audit_anchor()
 
 
 @app.get("/api/runtime/metrics")
-def runtime_metrics(_: AdminIdentity = Depends(require_role("auditor"))) -> dict[str, int]:
+def runtime_metrics(
+    _: AdminIdentity = Depends(require_role("auditor")),
+) -> dict[str, int]:
     return runtime.metrics()
 
 
@@ -5910,19 +8286,29 @@ def _policy_status_document() -> dict[str, Any]:
 
 
 @app.get("/api/policy")
-def policy_status(_: AdminIdentity = Depends(require_role("auditor", "policy_author"))) -> dict[str, Any]:
+def policy_status(
+    _: AdminIdentity = Depends(require_role("auditor", "policy_author")),
+) -> dict[str, Any]:
     return _policy_status_document()
 
 
-def _upsert_credential(name: str, kind: str, secret: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
-    existing = next((item for item in db.list_credentials() if item["name"] == name), None)
+def _upsert_credential(
+    name: str, kind: str, secret: str, metadata: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    existing = next(
+        (item for item in db.list_credentials() if item["name"] == name), None
+    )
     if existing:
-        return db.update_credential(existing["id"], {"kind": kind, "secret": secret, "metadata": metadata or {}})
+        return db.update_credential(
+            existing["id"], {"kind": kind, "secret": secret, "metadata": metadata or {}}
+        )
     return db.create_credential(name, kind, secret, metadata or {})
 
 
 def _upsert_route(payload: dict[str, Any]) -> dict[str, Any]:
-    existing = next((item for item in db.list_routes() if item["name"] == payload["name"]), None)
+    existing = next(
+        (item for item in db.list_routes() if item["name"] == payload["name"]), None
+    )
     if existing:
         return db.update_route(existing["id"], payload)
     return db.create_route(payload)
@@ -5943,16 +8329,23 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
     next_rollback_epoch = int(bundle["metadata"]["rollbackEpoch"])
     if current_snapshot is not None:
         current_metadata = current_snapshot.raw.get("metadata") or {}
-        next_sequence = max(next_sequence, int(current_metadata.get("sequence") or 0) + 1)
+        next_sequence = max(
+            next_sequence, int(current_metadata.get("sequence") or 0) + 1
+        )
         next_rollback_epoch = max(
             next_rollback_epoch,
             int(current_metadata.get("rollbackEpoch") or 0),
         )
     if high_water is not None:
         if high_water["policy_id"] != bundle["metadata"]["id"]:
-            raise HTTPException(status_code=409, detail="demo policy id conflicts with persisted high-water state")
+            raise HTTPException(
+                status_code=409,
+                detail="demo policy id conflicts with persisted high-water state",
+            )
         next_sequence = max(next_sequence, int(high_water["sequence"]) + 1)
-        next_rollback_epoch = max(next_rollback_epoch, int(high_water["rollback_epoch"]))
+        next_rollback_epoch = max(
+            next_rollback_epoch, int(high_water["rollback_epoch"])
+        )
     bundle["metadata"]["sequence"] = next_sequence
     bundle["metadata"]["rollbackEpoch"] = next_rollback_epoch
     policy_snapshot = write_policy_bundle(bundle, enforce_high_water=True)
@@ -5989,8 +8382,15 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **common,
                 "name": "Demo Gmail recent mailbox",
                 "match_path_prefix": "/gmail/v1",
-                "policies": [{"type": "gmail_recent", "days": 30, "max_results": 10, "cache_ttl_seconds": 1800}],
-            }
+                "policies": [
+                    {
+                        "type": "gmail_recent",
+                        "days": 30,
+                        "max_results": 10,
+                        "cache_ttl_seconds": 1800,
+                    }
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.approval.legacy",
@@ -5998,8 +8398,15 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **common,
                 "name": "Demo approval gate",
                 "match_path_prefix": "/approval",
-                "policies": [{"type": "approval", "ttl_seconds": 30, "pending_ttl_seconds": 300, "scope": "url"}],
-            }
+                "policies": [
+                    {
+                        "type": "approval",
+                        "ttl_seconds": 30,
+                        "pending_ttl_seconds": 300,
+                        "scope": "url",
+                    }
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.npm.publish.jit",
@@ -6007,8 +8414,15 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **common,
                 "name": "Demo NPM publish JIT",
                 "match_path_prefix": "/npm",
-                "policies": [{"type": "approval", "ttl_seconds": 30, "pending_ttl_seconds": 300, "scope": "request_digest"}],
-            }
+                "policies": [
+                    {
+                        "type": "approval",
+                        "ttl_seconds": 30,
+                        "pending_ttl_seconds": 300,
+                        "scope": "request_digest",
+                    }
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.x.readonly",
@@ -6017,7 +8431,7 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 "name": "Demo X read-only",
                 "match_path_prefix": "/2",
                 "policies": [{"type": "x_read_only"}],
-            }
+            },
         ),
         _upsert_policy_route(
             "demo.echo",
@@ -6026,7 +8440,7 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 "name": "Demo HTTPS bearer injection",
                 "match_path_prefix": "/echo",
                 "policies": [],
-            }
+            },
         ),
         _upsert_policy_route(
             "demo.upload.stream",
@@ -6034,8 +8448,10 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **credentialless_stream,
                 "name": "Demo streaming upload",
                 "match_path_prefix": "/upload-bytes",
-                "policies": [{"type": "request_body_stream", "max_body_bytes": 1048576}],
-            }
+                "policies": [
+                    {"type": "request_body_stream", "max_body_bytes": 1048576}
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.jsonl.redact.stream",
@@ -6043,8 +8459,10 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **credentialless_stream,
                 "name": "Demo JSONL streaming redaction",
                 "match_path_prefix": "/jsonl-redact",
-                "policies": [{"type": "jsonl_stream_redaction", "max_body_bytes": 1048576}],
-            }
+                "policies": [
+                    {"type": "jsonl_stream_redaction", "max_body_bytes": 1048576}
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.json.array.redact.stream",
@@ -6052,8 +8470,10 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **credentialless_stream,
                 "name": "Demo JSON array streaming redaction",
                 "match_path_prefix": "/json-array-redact",
-                "policies": [{"type": "json_array_stream_redaction", "max_body_bytes": 1048576}],
-            }
+                "policies": [
+                    {"type": "json_array_stream_redaction", "max_body_bytes": 1048576}
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.json.sse.redact.stream",
@@ -6061,8 +8481,10 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **credentialless_stream,
                 "name": "Demo JSON SSE streaming redaction",
                 "match_path_prefix": "/json-sse-redact",
-                "policies": [{"type": "json_sse_stream_redaction", "max_body_bytes": 1048576}],
-            }
+                "policies": [
+                    {"type": "json_sse_stream_redaction", "max_body_bytes": 1048576}
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.json.nested.redact.stream",
@@ -6070,8 +8492,10 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **credentialless_stream,
                 "name": "Demo nested JSON streaming redaction",
                 "match_path_prefix": "/json-nested-redact",
-                "policies": [{"type": "json_nested_stream_redaction", "max_body_bytes": 1048576}],
-            }
+                "policies": [
+                    {"type": "json_nested_stream_redaction", "max_body_bytes": 1048576}
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.form.urlencoded.redact.stream",
@@ -6079,8 +8503,13 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **credentialless_stream,
                 "name": "Demo form-urlencoded streaming redaction",
                 "match_path_prefix": "/form-redact",
-                "policies": [{"type": "form_urlencoded_stream_redaction", "max_body_bytes": 1048576}],
-            }
+                "policies": [
+                    {
+                        "type": "form_urlencoded_stream_redaction",
+                        "max_body_bytes": 1048576,
+                    }
+                ],
+            },
         ),
         _upsert_policy_route(
             "demo.csv.redact.stream",
@@ -6088,11 +8517,15 @@ def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, An
                 **credentialless_stream,
                 "name": "Demo CSV streaming redaction",
                 "match_path_prefix": "/csv-redact",
-                "policies": [{"type": "csv_stream_redaction", "max_body_bytes": 1048576}],
-            }
+                "policies": [
+                    {"type": "csv_stream_redaction", "max_body_bytes": 1048576}
+                ],
+            },
         ),
     ]
-    cleared_rate_limit_counters = db.clear_rate_limit_counters(("demo.x.tweet.one_per_day",))
+    cleared_rate_limit_counters = db.clear_rate_limit_counters(
+        ("demo.x.tweet.one_per_day",)
+    )
     db.record_audit_event(
         "demo.seeded",
         {
@@ -6437,6 +8870,12 @@ UI_HTML = r"""
           <span id="setup-hardware-status" class="pill warn">Hardware unverified</span>
         </div>
         <p class="section-kicker">Active assignment and independently reported runtime evidence</p>
+        <div class="toolbar setup-session-controls">
+          <div><label for="setup-session">Setup run</label><select id="setup-session"><option value="">New setup</option></select></div>
+          <button id="setup-new-button" class="secondary" type="button" onclick="runUiAction('Create setup run', createSetupSession)">New run</button>
+          <div><label for="setup-assignee">Next operator</label><input id="setup-assignee" maxlength="512" placeholder="user:operator"></div>
+          <button id="setup-handoff-button" class="secondary" type="button" onclick="runUiAction('Hand off setup run', handoffSetupSession)" disabled>Hand off</button>
+        </div>
         <form id="setup-form">
           <div class="setup-form-grid">
             <div><label for="setup-template">Restriction template</label><select id="setup-template" name="template"></select></div>
@@ -6686,7 +9125,7 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], pendingOAuthCredentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
+    let state = {credentials: [], pendingOAuthCredentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, setupSessions: [], setupSession: null, oauthSetupSessionId: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
     let pendingMutation = null;
     let refreshInFlight = null;
     let hasRendered = false;
@@ -7180,6 +9619,20 @@ UI_HTML = r"""
       if (mutation.kind === 'policy-canary') {
         state.policyCandidate.stage = result;
         renderPolicyCandidate();
+        if (state.setupSession?.phase === 'credential_activated' && result?.canary?.id) {
+          const bound = await api(`/api/setup/sessions/${encodeURIComponent(state.setupSession.id)}/canary`, {
+            method: 'POST',
+            body: JSON.stringify({expectedRevision: state.setupSession.revision, canaryId: result.canary.id})
+          });
+          rememberSetupSession(bound.session);
+        }
+      }
+      if (mutation.kind === 'policy-canary-activate' && state.setupSession?.phase === 'policy_staged') {
+        const bound = await api(`/api/setup/sessions/${encodeURIComponent(state.setupSession.id)}/policy`, {
+          method: 'POST',
+          body: JSON.stringify({expectedRevision: state.setupSession.revision})
+        });
+        rememberSetupSession(bound.session);
       }
       if (mutation.kind === 'webauthn-register-options') {
         await completePasskeyRegistration(result);
@@ -7198,6 +9651,8 @@ UI_HTML = r"""
       refreshInFlight = (async () => {
         const retained = {
           enrollmentPacket: state.enrollmentPacket,
+          setupSession: state.setupSession,
+          oauthSetupSessionId: state.oauthSetupSessionId,
           setupVerification: state.setupVerification,
           approvalReview: state.approvalReview,
           policyCandidate: state.policyCandidate,
@@ -7206,12 +9661,24 @@ UI_HTML = r"""
           authStatus: state.authStatus
         };
         const bootstrap = await api('/api/bootstrap');
-        const [controlPlaneResult, policyResult, policyCanaryResult, attestationResult] = await Promise.allSettled([
+        const [controlPlaneResult, policyResult, policyCanaryResult, attestationResult, setupSessionsResult] = await Promise.allSettled([
           api('/api/control-plane/approvals?limit=100'),
           api('/api/policy'),
           api('/api/policy/canary/status'),
-          api(`/attestation?nonce=${encodeURIComponent(generateEnrollmentNonce())}`)
+          api(`/attestation?nonce=${encodeURIComponent(generateEnrollmentNonce())}`),
+          api('/api/setup/sessions?status=active&limit=100')
         ]);
+        const setupSessions = setupSessionsResult.status === 'fulfilled' ? setupSessionsResult.value.sessions || [] : [];
+        const requestedSetupId = new URLSearchParams(window.location.search).get('setup');
+        const selectedSetupId = requestedSetupId || retained.setupSession?.id || setupSessions[0]?.id || null;
+        let setupSession = null;
+        if (selectedSetupId) {
+          try {
+            setupSession = (await api(`/api/setup/sessions/${encodeURIComponent(selectedSetupId)}`)).session;
+          } catch (error) {
+            if (requestedSetupId && error.status !== 404 && error.status !== 403) throw error;
+          }
+        }
         state = {
           ...bootstrap,
           controlPlaneApprovals: controlPlaneResult.status === 'fulfilled' ? controlPlaneResult.value : [],
@@ -7220,8 +9687,12 @@ UI_HTML = r"""
           attestation: attestationResult.status === 'fulfilled'
             ? attestationResult.value
             : {error: String(attestationResult.reason?.message || attestationResult.reason || 'Attestation unavailable')},
+          setupSessions,
+          setupSession,
           ...retained
         };
+        state.setupSessions = setupSessions;
+        state.setupSession = setupSession;
         state.approvalReview = retained.approvalReview && state.approvals.some((item) => item.id === retained.approvalReview.id) ? retained.approvalReview : null;
         render(controlState);
       })();
@@ -7361,6 +9832,102 @@ UI_HTML = r"""
       $('policy-credential').disabled = !selected;
     }
 
+    function rememberSetupSession(session, {updateUrl = true} = {}) {
+      state.setupSession = session || null;
+      if (session) {
+        const existing = (state.setupSessions || []).filter((item) => item.id !== session.id);
+        state.setupSessions = [session, ...existing];
+      }
+      if (updateUrl) {
+        const url = new URL(window.location.href);
+        if (session?.id) url.searchParams.set('setup', session.id);
+        else url.searchParams.delete('setup');
+        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+      }
+      return session;
+    }
+
+    function setupSessionMatchesSelection(session = state.setupSession, selection = currentSetupSelection()) {
+      return Boolean(
+        session
+        && session.status === 'active'
+        && (!session.templateId || session.templateId === selection.template)
+        && (!session.principalId || session.principalId === selection.principalId)
+        && (!session.routeId || session.routeId === selection.routeId)
+        && (!session.credentialId || session.credentialId === selection.credentialId)
+      );
+    }
+
+    async function createSetupSession() {
+      const selection = currentSetupSelection();
+      if (!selection.template || !selection.principalId || !selection.routeId) {
+        throw new Error('Select a template, principal, and route before creating a setup run');
+      }
+      const result = await api('/api/setup/sessions', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: selection.template,
+          principalId: selection.principalId,
+          routeId: selection.routeId,
+          routePolicyDigest: null
+        })
+      });
+      rememberSetupSession(result.session);
+      state.setupVerification = null;
+      renderSetupWorkflow();
+      return result;
+    }
+
+    async function loadSetupSession(id) {
+      if (!id) {
+        rememberSetupSession(null);
+        state.setupVerification = null;
+        renderSetupWorkflow();
+        return null;
+      }
+      const result = await api(`/api/setup/sessions/${encodeURIComponent(id)}`);
+      rememberSetupSession(result.session);
+      state.setupVerification = null;
+      renderSetupWorkflow();
+      return result.session;
+    }
+
+    async function handoffSetupSession() {
+      const session = state.setupSession;
+      const assigneeId = $('setup-assignee').value.trim();
+      if (!session || !assigneeId) throw new Error('Select a setup run and enter the next operator');
+      const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/handoff`, {
+        method: 'POST',
+        body: JSON.stringify({expectedRevision: session.revision, assigneeId})
+      });
+      rememberSetupSession(result.session);
+      $('setup-assignee').value = '';
+      renderSetupWorkflow();
+      return result;
+    }
+
+    async function ensureSetupSession() {
+      if (setupSessionMatchesSelection()) return state.setupSession;
+      const result = await createSetupSession();
+      return result.session;
+    }
+
+    async function bindSetupCredential() {
+      let session = await ensureSetupSession();
+      const selection = currentSetupSelection();
+      if (session.credentialId) {
+        if (session.credentialId !== selection.credentialId) throw new Error('This setup run is bound to another credential');
+        return session;
+      }
+      if (session.phase !== 'created') throw new Error(`Setup run cannot bind a credential from ${session.phase}`);
+      const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/credential`, {
+        method: 'POST',
+        body: JSON.stringify({expectedRevision: session.revision, credentialId: selection.credentialId})
+      });
+      session = rememberSetupSession(result.session);
+      return session;
+    }
+
     function currentSetupSelection() {
       return {
         template: $('setup-template').value,
@@ -7369,6 +9936,17 @@ UI_HTML = r"""
         routeId: $('setup-route-id').value.trim(),
         approvers: $('setup-approvers').value.trim()
       };
+    }
+
+    function canonicalJson(value) {
+      if (value === null || typeof value !== 'object') return JSON.stringify(value);
+      if (Array.isArray(value)) return '[' + value.map((item) => canonicalJson(item)).join(',') + ']';
+      return '{' + Object.keys(value).sort().map((key) => JSON.stringify(key) + ':' + canonicalJson(value[key])).join(',') + '}';
+    }
+
+    async function sha256CanonicalJson(value) {
+      const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(canonicalJson(value)));
+      return 'sha256:' + Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
     }
 
     function setupAssignmentIsActive(selection = currentSetupSelection()) {
@@ -7402,28 +9980,39 @@ UI_HTML = r"""
     }
 
     function renderSetupWorkflow(controlState = {}) {
-      const savedTemplate = controlState['id:setup-template']?.value || $('setup-template').value;
+      const setupSession = state.setupSession;
+      const setupSessions = state.setupSessions || [];
+      $('setup-session').innerHTML = '<option value="">New setup</option>' + setupSessions.map((item) => `<option value="${esc(item.id)}">${esc(item.phase)} / ${esc(item.routeId || item.id)}</option>`).join('');
+      $('setup-session').value = setupSession?.id || '';
+      $('setup-handoff-button').disabled = !setupSession || setupSession.status !== 'active' || !setupSession.ownerId;
+
+      const savedTemplate = setupSession?.templateId || controlState['id:setup-template']?.value || $('setup-template').value;
       $('setup-template').innerHTML = Object.entries(policyTemplates).map(([key, item]) => `<option value="${esc(key)}">${esc(item.label)}</option>`).join('');
       $('setup-template').value = policyTemplates[savedTemplate] ? savedTemplate : Object.keys(policyTemplates)[0] || '';
       const template = policyTemplates[$('setup-template').value];
 
-      const savedPrincipal = controlState['id:setup-principal']?.value || $('setup-principal').value;
+      const savedPrincipal = setupSession?.principalId || controlState['id:setup-principal']?.value || $('setup-principal').value;
       $('setup-principal').innerHTML = (state.policyPrincipals || []).map((item) => `<option value="${esc(item.id)}">${esc(item.id)}</option>`).join('');
       if (Array.from($('setup-principal').options).some((item) => item.value === savedPrincipal)) $('setup-principal').value = savedPrincipal;
 
-      const savedCredential = controlState['id:setup-credential']?.value || $('setup-credential').value;
+      const savedCredential = setupSession?.credentialId || controlState['id:setup-credential']?.value || $('setup-credential').value;
       const credentials = template ? policyCredentialOptions(template) : [];
       $('setup-credential').innerHTML = credentials.map((item) => `<option value="${esc(item.id)}" ${item.compatible ? '' : 'disabled'} title="${esc(item.reason)}">${esc(item.label)}${item.compatible ? '' : ' (not compatible)'}</option>`).join('');
       const selectedCredential = credentials.find((item) => item.id === savedCredential && item.compatible) || credentials.find((item) => item.compatible);
       $('setup-credential').value = selectedCredential?.id || '';
       $('setup-credential').disabled = !selectedCredential;
 
-      const savedRoute = controlState['id:setup-route-id']?.value || $('setup-route-id').value.trim();
+      const savedRoute = setupSession?.routeId || controlState['id:setup-route-id']?.value || $('setup-route-id').value.trim();
       $('setup-route-id').value = savedRoute || template?.routeId || '';
       const savedApprovers = controlState['id:setup-approvers']?.value;
       if (savedApprovers != null) $('setup-approvers').value = savedApprovers;
       $('setup-approvers-row').hidden = !template?.jit;
       $('setup-approvers').required = Boolean(template?.jit);
+      const bindingsLocked = Boolean(setupSession && setupSession.phase !== 'created');
+      $('setup-template').disabled = bindingsLocked;
+      $('setup-principal').disabled = bindingsLocked;
+      $('setup-route-id').readOnly = bindingsLocked;
+      $('setup-credential').disabled = Boolean(setupSession?.credentialId);
 
       const selection = currentSetupSelection();
       const verification = setupVerificationForSelection(selection);
@@ -7442,17 +10031,19 @@ UI_HTML = r"""
       const active = setupAssignmentIsActive(selection);
       const packetMatches = Boolean(
         state.enrollmentPacket?.principalId === selection.principalId
+        && state.enrollmentPacket?.pinning?.policyHash === state.activePolicy?.policy_hash
+        && Number(state.enrollmentPacket?.expiresAtEpochMs || 0) > Date.now()
         && (state.enrollmentPacket?.allowedRoutes || []).some((item) => item.id === selection.routeId && item.credentialRef === selection.credentialId)
       );
       const oauthProvider = (state.oauthProviders || []).find((item) => item.id === template?.provider);
       $('setup-connect-button').textContent = oauthProvider ? 'Connect credential' : 'Add credential';
-      $('setup-connect-button').disabled = Boolean(oauthProvider && !oauthProvider.configured);
+      $('setup-connect-button').disabled = Boolean(setupSession?.credentialId) || Boolean(oauthProvider && !oauthProvider.configured);
       $('setup-preview-button').disabled = !selection.principalId || !selection.credentialId || !selection.routeId || (Boolean(template?.jit) && !selection.approvers);
-      $('setup-stage-button').disabled = !candidateReady;
-      $('setup-activate-button').disabled = !staged;
-      $('setup-enroll-button').disabled = !active;
+      $('setup-stage-button').disabled = !candidateReady || setupSession?.phase !== 'credential_activated';
+      $('setup-activate-button').disabled = !staged || setupSession?.phase !== 'policy_staged';
+      $('setup-enroll-button').disabled = !active || setupSession?.phase !== 'policy_activated';
       $('setup-command-button').disabled = !packetMatches;
-      $('setup-verify-button').disabled = !selection.principalId || !selection.credentialId || !selection.routeId;
+      $('setup-verify-button').disabled = !setupSession || !['enrollment_issued', 'ca_installed', 'canaries_verified', 'runtime_verified', 'hardware_verified'].includes(setupSession.phase);
 
       setupStatusPill('setup-configuration-status', verification?.configurationReady === true, 'Configuration ready', active ? 'Evidence pending' : 'Configuration pending');
       setupStatusPill('setup-runtime-status', verification?.runtimeVerified === true, 'Path exercised', 'Path not exercised');
@@ -7461,11 +10052,20 @@ UI_HTML = r"""
       const summary = $('setup-summary');
       const checks = $('setup-checks');
       if (!verification) {
-        summary.innerHTML = `<span class="pill ${active ? 'good' : 'warn'}">${active ? 'Active assignment' : 'Assignment not active'}</span><span class="muted">${candidateReady ? 'Candidate validated' : staged ? 'Candidate staged' : 'Server evidence has not been checked for this selection.'}</span>`;
+        summary.innerHTML = `<span class="pill ${setupSession ? 'warn' : 'bad'}">${esc(setupSession?.phase || 'No setup run')}</span><span class="muted">${setupSession ? `Revision ${setupSession.revision}; assigned to ${esc(setupSession.currentAssigneeId || setupSession.ownerId)}` : 'Create a durable setup run before connecting a credential.'}</span>`;
         checks.replaceChildren();
         return;
       }
-      summary.innerHTML = `<span class="pill ${verification.fullyVerified ? 'good' : verification.configurationReady ? 'warn' : 'bad'}">${esc(verification.nextAction)}</span><code>${esc(verification.assignmentDigest)}</code>`;
+      const actionLabels = {
+        repair_active_assignment: 'Repair active assignment',
+        verify_enrollment_and_install_ca: 'Install the verified CA',
+        enroll_agent_and_exercise_route: 'Exercise the enrolled route',
+        approve_and_retry_exact_request: 'Approve and retry the request',
+        wait_for_validated_response_evidence: 'Waiting for validated response',
+        verify_on_hardware_backed_deployment: 'Independent hardware proof required',
+        verified: 'Verified'
+      };
+      summary.innerHTML = `<span class="pill ${verification.fullyVerified ? 'good' : verification.configurationReady ? 'warn' : 'bad'}">${esc(actionLabels[verification.nextAction] || 'Review verification checks')}</span><code>${esc(verification.assignmentDigest)}</code>`;
       checks.innerHTML = (verification.checks || []).map((item) => `
         <div class="setup-check">
           <span class="pill ${item.status === 'pass' ? 'good' : item.status === 'pending' ? 'warn' : 'bad'}">${esc(item.status)}</span>
@@ -7653,11 +10253,11 @@ UI_HTML = r"""
         return;
       }
       const assurance = document.assurance || {};
-      const hardwareBacked = assurance.hardware_proof === true
+      const hardwareClaimed = assurance.hardware_proof === true
         && assurance.workload_custody_proven === true
         && assurance.tls_peer_binding_proven === true;
-      $('attestation-summary').innerHTML = hardwareBacked
-        ? `<span class="pill good">hardware verified</span><strong>${esc(assurance.class || 'hardware-backed')}</strong>`
+      $('attestation-summary').innerHTML = hardwareClaimed
+        ? `<span class="pill warn">server claims hardware</span><strong>${esc(assurance.class || 'hardware-backed')}</strong><span class="muted">Independent verifier receipt required.</span>`
         : `<span class="pill bad">not hardware verified</span><strong>${esc(assurance.class || 'unclassified')}</strong><span class="muted">${esc(assurance.reason || 'External verification is required.')}</span>`;
       const fields = [
         ['TEE platform', document.tee_platform],
@@ -8116,6 +10716,14 @@ UI_HTML = r"""
         if (!provider || !provider.configured) throw new Error('The selected OAuth provider is not configured');
         const scopes = parseOAuthScopes(form.get('scopes'));
         const body = {provider: form.get('provider'), credentialName: form.get('credentialName') || null, scopes, metadata: JSON.parse(form.get('metadata') || '{}')};
+        if (state.oauthSetupSessionId) {
+          const setupSession = state.setupSession?.id === state.oauthSetupSessionId
+            ? state.setupSession
+            : (await api(`/api/setup/sessions/${encodeURIComponent(state.oauthSetupSessionId)}`)).session;
+          if (setupSession.phase !== 'created') throw new Error(`Setup run cannot start OAuth from ${setupSession.phase}`);
+          body.setupSessionId = setupSession.id;
+          body.setupRevision = setupSession.revision;
+        }
         saveOAuthDraft();
         const mutation = {kind: 'oauth-start', label: `Connect ${provider.displayName}`, persist: true, path: '/api/oauth/start', method: 'POST', body};
         const completed = await runControlPlaneMutation(mutation);
@@ -8137,6 +10745,7 @@ UI_HTML = r"""
       const selection = currentSetupSelection();
       const template = policyTemplates[selection.template];
       if (!template) throw new Error('Select a restriction template');
+      const setupSession = await ensureSetupSession();
       const provider = (state.oauthProviders || []).find((item) => item.id === template.provider);
       if (!provider) {
         $('credential-name').value = `${template.label} credential`;
@@ -8151,6 +10760,7 @@ UI_HTML = r"""
       $('oauth-scopes').value = scopes.join('\n');
       if (!$('oauth-credential-name').value.trim()) $('oauth-credential-name').value = `${template.label} credential`;
       renderOAuthDefaults(false);
+      state.oauthSetupSessionId = setupSession.id;
       saveOAuthDraft();
       focusPortalForm('oauth-form');
       return {mode: 'oauth', provider: provider.id, scopes};
@@ -8160,6 +10770,7 @@ UI_HTML = r"""
       const selection = currentSetupSelection();
       const template = policyTemplates[selection.template];
       if (!template) throw new Error('Select a restriction template');
+      await bindSetupCredential();
       $('policy-template').value = selection.template;
       syncPolicyTemplateEditor(true);
       $('policy-route-id').value = selection.routeId;
@@ -8191,29 +10802,46 @@ UI_HTML = r"""
     async function generateSetupEnrollment() {
       const selection = currentSetupSelection();
       if (!setupAssignmentIsActive(selection)) throw new Error('Activate the exact principal, route, and credential assignment first');
+      if (state.setupSession?.phase !== 'policy_activated') throw new Error('The durable setup run has not recorded policy activation');
       $('enrollment-principal').value = selection.principalId;
-      return generateEnrollmentFromForm();
+      const packet = await generateEnrollmentFromForm();
+      const enrollmentSessionId = packet?.ca?.installSession?.id;
+      if (!enrollmentSessionId || !packet?.nonce) throw new Error('Enrollment packet is missing its setup bindings');
+      const bound = await api(`/api/setup/sessions/${encodeURIComponent(state.setupSession.id)}/enrollment`, {
+        method: 'POST',
+        body: JSON.stringify({
+          expectedRevision: state.setupSession.revision,
+          enrollmentSessionId,
+          verifierNonce: packet.nonce
+        })
+      });
+      rememberSetupSession(bound.session);
+      renderSetupWorkflow();
+      return packet;
     }
 
     async function verifySetupEvidence() {
-      const selection = currentSetupSelection();
-      state.setupVerification = await api('/api/setup/verify', {
+      const session = state.setupSession;
+      if (!session) throw new Error('Select a durable setup run');
+      const result = await api(`/api/setup/sessions/${encodeURIComponent(session.id)}/verify`, {
         method: 'POST',
         body: JSON.stringify({
-          principalId: selection.principalId,
-          routeId: selection.routeId,
-          credentialId: selection.credentialId,
-          nonce: generateEnrollmentNonce(),
-          enrollmentSessionId: state.enrollmentPacket?.ca?.installSession?.id || null
+          expectedRevision: session.revision,
+          nonce: generateEnrollmentNonce()
         })
       });
+      rememberSetupSession(result.session);
+      state.setupVerification = result.verification;
       renderSetupWorkflow();
-      return state.setupVerification;
+      return result;
     }
 
     $('setup-form').addEventListener('submit', (event) => {
       event.preventDefault();
       runUiAction('Verify setup evidence', verifySetupEvidence);
+    });
+    $('setup-session').addEventListener('change', (event) => {
+      runUiAction('Load setup run', () => loadSetupSession(event.target.value));
     });
     $('setup-template').addEventListener('change', () => {
       state.setupVerification = null;
@@ -8402,13 +11030,15 @@ UI_HTML = r"""
       if (!item) throw new Error('Pending OAuth credential is no longer available');
       if (item.requester_id !== state.currentUserId) throw new Error('Only the OAuth requester can activate this account');
       const account = item.review?.provider_account || id;
+      const setupSession = (state.setupSessions || []).find((session) => session.oauthPendingCredentialId === id)
+        || (state.setupSession?.oauthPendingCredentialId === id ? state.setupSession : null);
       const mutation = {
         kind: 'oauth-activate',
         label: `Activate verified OAuth account ${account}`,
         persist: true,
         path: `/api/oauth/pending/${id}/activate`,
         method: 'POST',
-        body: {}
+        body: setupSession ? {setupSessionId: setupSession.id, setupRevision: setupSession.revision} : {}
       };
       const completed = await runControlPlaneMutation(mutation);
       if (!completed.pending) await finishMutation(completed.mutation, completed.result);

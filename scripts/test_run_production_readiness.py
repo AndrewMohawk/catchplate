@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_production_readiness as production_readiness_test  # noqa: E402
+import test_nitro_kms_evidence as nitro_evidence_test  # noqa: E402
 
 
 def canonical_json(value: object) -> str:
@@ -42,7 +43,7 @@ def detail(result: subprocess.CompletedProcess[bytes]) -> str:
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
-        security_args = (
+        artifact_args = (
             "--policy-bundle",
             str(tmp / "policy-bundle.json"),
             "--policy-trusted-public-key",
@@ -62,11 +63,65 @@ def main() -> None:
             "--reproducible-build-trusted-public-key",
             str(tmp / "reproducible-build.pub.pem"),
         )
+        trust_paths = {
+            "release_provenance_trusted_public_key": tmp / "release-provenance.pub.pem",
+            "sigstore_trusted_public_key": tmp / "sigstore.pub.pem",
+            "rekor_trusted_public_key": tmp / "rekor.pub.pem",
+            "external_checkpoint_trusted_public_key": tmp / "external-checkpoint.pub.pem",
+        }
+        for path in trust_paths.values():
+            path.write_bytes(production_readiness_test.trusted_public_key_file(path.name).read_bytes())
+        trust_args = (
+            "--release-provenance-trusted-public-key",
+            str(trust_paths["release_provenance_trusted_public_key"]),
+            "--sigstore-trusted-public-key",
+            str(trust_paths["sigstore_trusted_public_key"]),
+            "--rekor-trusted-public-key",
+            str(trust_paths["rekor_trusted_public_key"]),
+            "--external-checkpoint-provider",
+            "managed-prod-log",
+            "--external-checkpoint-trusted-public-key",
+            str(trust_paths["external_checkpoint_trusted_public_key"]),
+        )
+        security_args = (*artifact_args, *trust_args)
+        final_challenge_receipt = tmp / "final-challenge-receipt.json"
+        final_challenge_receipt.write_bytes(
+            production_readiness_test.final_challenge_receipt_file().read_bytes()
+        )
+        final_challenge_authority_key = tmp / "final-challenge-authority.pub.pem"
+        final_challenge_authority_key.write_bytes(
+            production_readiness_test.trusted_public_key_file(final_challenge_authority_key.name).read_bytes()
+        )
+        final_challenge_args = (
+            "--final-challenge-receipt",
+            str(final_challenge_receipt),
+            "--final-challenge-authority-public-key",
+            str(final_challenge_authority_key),
+            "--final-challenge-authority-provider",
+            "production-final-challenge-authority",
+        )
+        hardware_assurance = tmp / "hardware-assurance.json"
+        hardware_assurance.write_bytes(
+            production_readiness_test.hardware_assurance_file().read_bytes()
+        )
+        hardware_assurance_key = tmp / "hardware-assurance-verifier.pub.pem"
+        hardware_assurance_key.write_bytes(
+            production_readiness_test.trusted_public_key_file(
+                hardware_assurance_key.name
+            ).read_bytes()
+        )
+        expected_hardware_challenge = "a" * 43
+        hardware_assurance_args = (
+            "--hardware-assurance",
+            str(hardware_assurance),
+            "--hardware-assurance-trusted-public-key",
+            str(hardware_assurance_key),
+            "--hardware-assurance-expected-challenge-nonce",
+            expected_hardware_challenge,
+        )
 
         minimal_env = tmp / "minimal.env"
-        write_env(
-            minimal_env,
-            {
+        minimal_values = {
                 "SERVERWARE_RELEASE_CHANNEL": "prod",
                 "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
                 "SERVERWARE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kid": "prod key"}]}),
@@ -81,9 +136,24 @@ def main() -> None:
                 "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.serverware.internal/decision-gate/instance-01",
                 "SERVERWARE_PROXY_PROOF_AGENT_ID": "production-proof-agent",
                 "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS": "240",
-            },
+        }
+        write_env(minimal_env, minimal_values)
+        runner_claims = tmp / "runner-claims.json"
+        runner_claims.write_text(
+            canonical_json(nitro_evidence_test.claims()) + "\n",
+            encoding="utf-8",
         )
-        dry_run = run_runner("--env-file", str(minimal_env), "--dry-run", *security_args)
+        runner_nitro_evidence = tmp / "runner-nitro-evidence.json"
+        dry_run = run_runner(
+            "--env-file",
+            str(minimal_env),
+            "--claims-file",
+            str(runner_claims),
+            "--nitro-evidence-out",
+            str(runner_nitro_evidence),
+            "--dry-run",
+            *security_args,
+        )
         if dry_run.returncode != 0:
             raise AssertionError(f"runner dry-run failed: {detail(dry_run)}")
         plan = json.loads(dry_run.stdout.decode("utf-8"))
@@ -96,6 +166,32 @@ def main() -> None:
             "verify-release-completion",
         ]:
             raise AssertionError(f"runner does not collect the response proof after live readiness: {labels}")
+        nitro_collector_argv = plan["commands"][2]["argv"]
+        live_readiness_argv = plan["commands"][3]["argv"]
+        if "--nitro-evidence-file" in nitro_collector_argv:
+            raise AssertionError(f"runner passed a verifier-only option to the Nitro collector: {nitro_collector_argv}")
+        if (
+            live_readiness_argv[live_readiness_argv.index("--nitro-evidence-file") + 1]
+            != str(runner_nitro_evidence)
+        ):
+            raise AssertionError(f"runner did not reuse pre-collected Nitro evidence: {live_readiness_argv}")
+        collector_execution = subprocess.run(
+            [*nitro_collector_argv, "--allow-fixtures-for-test"],
+            cwd=ROOT,
+            env=nitro_evidence_test.fixture_env(tmp),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        collector_detail = detail(collector_execution)
+        if (
+            collector_execution.returncode == 2
+            or "unrecognized arguments" in collector_detail
+            or not runner_nitro_evidence.is_file()
+        ):
+            raise AssertionError(
+                "runner's real Nitro collector command failed argument parsing: " + collector_detail
+            )
         collector_argv = plan["commands"][-2]["argv"]
         completion_argv = plan["commands"][-1]["argv"]
         collector_nonce = collector_argv[collector_argv.index("--nonce") + 1]
@@ -109,6 +205,20 @@ def main() -> None:
             or "--production-readiness-config" not in completion_argv
             or "--production-readiness-env" not in completion_argv
             or "--production-images-env" not in completion_argv
+            or completion_argv[completion_argv.index("--verification-mode") + 1] != "readiness"
+            or "--final-challenge-receipt" in completion_argv
+            or "--final-challenge-authority-public-key" in completion_argv
+            or "--final-challenge-authority-provider" in completion_argv
+            or completion_argv[completion_argv.index("--release-provenance-trusted-public-key") + 1]
+            != str(trust_paths["release_provenance_trusted_public_key"])
+            or completion_argv[completion_argv.index("--sigstore-trusted-public-key") + 1]
+            != str(trust_paths["sigstore_trusted_public_key"])
+            or completion_argv[completion_argv.index("--rekor-trusted-public-key") + 1]
+            != str(trust_paths["rekor_trusted_public_key"])
+            or completion_argv[completion_argv.index("--external-checkpoint-provider") + 1]
+            != "managed-prod-log"
+            or completion_argv[completion_argv.index("--external-checkpoint-trusted-public-key") + 1]
+            != str(trust_paths["external_checkpoint_trusted_public_key"])
             or "--policy-bundle" not in completion_argv
             or "--policy-identity-verification" not in completion_argv
             or "--policy-activation-verification" not in completion_argv
@@ -139,6 +249,215 @@ def main() -> None:
             raise AssertionError(f"runner still accepts a static response-proof nonce: {plan['env_keys']}")
         if "prod-admin-token-32-bytes-minimum-value" in dry_run.stdout.decode("utf-8"):
             raise AssertionError(f"runner dry-run leaked environment values: {plan}")
+        key_material = trust_paths["sigstore_trusted_public_key"].read_text(encoding="ascii").strip()
+        if key_material in dry_run.stdout.decode("utf-8"):
+            raise AssertionError(f"runner dry-run leaked trusted public-key material: {plan}")
+
+        env_trust_file = tmp / "env-trust.env"
+        env_trust_values = {
+            **minimal_values,
+            "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY": str(
+                trust_paths["release_provenance_trusted_public_key"]
+            ),
+            "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY": str(trust_paths["sigstore_trusted_public_key"]),
+            "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY": str(trust_paths["rekor_trusted_public_key"]),
+            "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
+            "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(
+                trust_paths["external_checkpoint_trusted_public_key"]
+            ),
+        }
+        write_env(env_trust_file, env_trust_values)
+        env_trust_run = run_runner("--env-file", str(env_trust_file), "--dry-run", *artifact_args)
+        if env_trust_run.returncode != 0:
+            raise AssertionError(f"runner rejected env-provided trust settings: {detail(env_trust_run)}")
+        env_completion_argv = json.loads(env_trust_run.stdout.decode("utf-8"))["commands"][-1]["argv"]
+        if (
+            env_completion_argv[env_completion_argv.index("--release-provenance-trusted-public-key") + 1]
+            != str(trust_paths["release_provenance_trusted_public_key"])
+            or env_completion_argv[env_completion_argv.index("--external-checkpoint-provider") + 1]
+            != "managed-prod-log"
+        ):
+            raise AssertionError(f"runner did not propagate env-provided trust settings: {env_completion_argv}")
+
+        missing_trust = run_runner("--env-file", str(minimal_env), "--dry-run", *artifact_args)
+        if missing_trust.returncode == 0 or "missing release completion trust settings" not in detail(missing_trust):
+            raise AssertionError(f"runner accepted missing release completion trust settings: {detail(missing_trust)}")
+
+        missing_final_mode = run_runner(
+            "--env-file", str(env_trust_file), "--dry-run", "--verification-mode", "final", *security_args
+        )
+        if missing_final_mode.returncode == 0 or "must be pinned" not in detail(missing_final_mode):
+            raise AssertionError(f"runner accepted final mode absent from the hashed env: {detail(missing_final_mode)}")
+
+        final_mode_trust_values = {
+            **env_trust_values,
+            "SERVERWARE_COMPLETION_VERIFICATION_MODE": "final",
+        }
+        final_mode_trust_file = tmp / "final-mode-trust.env"
+        write_env(final_mode_trust_file, final_mode_trust_values)
+        final_without_authority = run_runner(
+            "--env-file", str(final_mode_trust_file), "--dry-run", "--verification-mode", "final", *security_args
+        )
+        if final_without_authority.returncode == 0 or "requires off-host challenge authority inputs" not in detail(
+            final_without_authority
+        ):
+            raise AssertionError(
+                f"runner accepted final mode without off-host challenge authority inputs: {detail(final_without_authority)}"
+            )
+
+        oversized_provider_env = tmp / "oversized-provider.env"
+        write_env(
+            oversized_provider_env,
+            {
+                **final_mode_trust_values,
+                "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
+                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
+                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "x" * 257,
+            },
+        )
+        oversized_provider = run_runner(
+            "--env-file",
+            str(oversized_provider_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *artifact_args,
+        )
+        if oversized_provider.returncode == 0 or "must not exceed 256 characters" not in detail(oversized_provider):
+            raise AssertionError(f"runner accepted an oversized final authority provider: {detail(oversized_provider)}")
+
+        authority_only_env = tmp / "authority-only.env"
+        write_env(
+            authority_only_env,
+            {
+                **final_mode_trust_values,
+                "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
+                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
+                "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "production-final-challenge-authority",
+            },
+        )
+        final_without_hardware = run_runner(
+            "--env-file",
+            str(authority_only_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if (
+            final_without_hardware.returncode == 0
+            or "requires hardware assurance inputs" not in detail(final_without_hardware)
+        ):
+            raise AssertionError(
+                f"runner accepted final mode without hardware assurance: {detail(final_without_hardware)}"
+            )
+
+        readiness_with_final_input = run_runner(
+            "--env-file",
+            str(minimal_env),
+            "--dry-run",
+            "--final-challenge-receipt",
+            str(final_challenge_receipt),
+            *security_args,
+        )
+        if readiness_with_final_input.returncode == 0 or "only valid with --verification-mode final" not in detail(
+            readiness_with_final_input
+        ):
+            raise AssertionError(
+                f"runner accepted a final challenge authority input in readiness mode: {detail(readiness_with_final_input)}"
+            )
+
+        final_env_file = tmp / "final-authority.env"
+        final_env_values = {
+            **final_mode_trust_values,
+            "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt),
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(final_challenge_authority_key),
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "production-final-challenge-authority",
+            "SERVERWARE_HARDWARE_ASSURANCE": str(hardware_assurance),
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY": str(
+                hardware_assurance_key
+            ),
+            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE": expected_hardware_challenge,
+        }
+        write_env(final_env_file, final_env_values)
+        final_run = run_runner(
+            "--env-file",
+            str(final_env_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *final_challenge_args,
+            *hardware_assurance_args,
+            *security_args,
+        )
+        if final_run.returncode != 0:
+            raise AssertionError(f"runner rejected env-pinned final authority inputs: {detail(final_run)}")
+        final_argv = json.loads(final_run.stdout.decode("utf-8"))["commands"][-1]["argv"]
+        if (
+            final_argv[final_argv.index("--verification-mode") + 1] != "final"
+            or final_argv[final_argv.index("--final-challenge-receipt") + 1] != str(final_challenge_receipt)
+            or final_argv[final_argv.index("--final-challenge-authority-public-key") + 1]
+            != str(final_challenge_authority_key)
+            or final_argv[final_argv.index("--final-challenge-authority-provider") + 1]
+            != "production-final-challenge-authority"
+            or final_argv[final_argv.index("--hardware-assurance") + 1] != str(hardware_assurance)
+            or final_argv[final_argv.index("--hardware-assurance-expected-challenge-nonce") + 1]
+            != expected_hardware_challenge
+        ):
+            raise AssertionError(f"runner did not propagate env-pinned final inputs: {final_argv}")
+
+        mismatched_mode = run_runner(
+            "--env-file",
+            str(final_env_file),
+            "--dry-run",
+            *security_args,
+        )
+        if mismatched_mode.returncode == 0 or "must match" not in detail(mismatched_mode):
+            raise AssertionError(f"runner accepted a command/env verification-mode mismatch: {detail(mismatched_mode)}")
+
+        substituted_authority = run_runner(
+            "--env-file",
+            str(final_env_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            "--final-challenge-authority-provider",
+            "caller-selected-authority",
+            *security_args,
+        )
+        if substituted_authority.returncode == 0 or "must match" not in detail(substituted_authority):
+            raise AssertionError(
+                "runner accepted a caller-selected final authority over the pinned env value: "
+                + detail(substituted_authority)
+            )
+
+        cli_only_final = run_runner(
+            "--env-file",
+            str(final_mode_trust_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *final_challenge_args,
+            *hardware_assurance_args,
+            *security_args,
+        )
+        if cli_only_final.returncode == 0 or "must be pinned" not in detail(cli_only_final):
+            raise AssertionError(f"runner accepted CLI-only final trust inputs: {detail(cli_only_final)}")
+
+        removed_ledger = run_runner(
+            "--env-file",
+            str(minimal_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            "--final-challenge-ledger",
+            str(tmp / "ledger.json"),
+            *security_args,
+        )
+        if removed_ledger.returncode == 0 or "unrecognized arguments: --final-challenge-ledger" not in detail(
+            removed_ledger
+        ):
+            raise AssertionError(f"runner still accepts a local final challenge ledger: {detail(removed_ledger)}")
 
         missing_proof_env = tmp / "missing-proof.env"
         write_env(missing_proof_env, {"SERVERWARE_RELEASE_CHANNEL": "prod"})

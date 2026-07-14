@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -10,6 +11,7 @@ import threading
 import time
 import types
 import urllib.parse
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from http.cookies import SimpleCookie
 from dataclasses import replace
@@ -171,10 +173,508 @@ def compose_manifests_available() -> bool:
     return (ROOT / "docker-compose.yml").is_file() and (ROOT / "docker-compose.production.yml").is_file()
 
 
-def main() -> None:
+def run_oauth_setup_session_state_tests(oauth, db, data_dir: Path) -> None:
+    state_path = data_dir / "oauth-states.json"
+
+    def state_records() -> dict[str, object]:
+        if not state_path.exists():
+            return {}
+        payload = json.loads(state_path.read_text(encoding="utf-8"))
+        return payload.get("states", {})
+
+    def start_flow(*, label: str, browser_nonce: str, setup_session_id=None):
+        return oauth.create_authorization_url(
+            provider_id="google",
+            credential_name=label,
+            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            metadata={"test": "setup-session-continuity"},
+            actor_id="user:setup-session-test",
+            browser_nonce=browser_nonce,
+            setup_session_id=setup_session_id,
+        )
+
+    malformed_values = (
+        "",
+        "not-a-uuid",
+        "550E8400-E29B-41D4-A716-446655440000",
+        "{550e8400-e29b-41d4-a716-446655440000}",
+        "550e8400e29b41d4a716446655440000",
+        "550e8400-e29b-41d4-a716-446655440000 ",
+        123,
+    )
+    for index, malformed in enumerate(malformed_values):
+        states_before = set(state_records())
+        try:
+            start_flow(
+                label=f"Malformed setup session {index}",
+                browser_nonce=f"{index + 100:043d}",
+                setup_session_id=malformed,
+            )
+        except oauth.OAuthError as exc:
+            if "canonical UUID" not in str(exc):
+                raise AssertionError(f"malformed setup session failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError(f"malformed setup session was accepted: {malformed!r}")
+        if set(state_records()) != states_before:
+            raise AssertionError("malformed setup session created OAuth state")
+
+    original_post_token_request = oauth._post_token_request
+    original_fetch_provider_identity = oauth._fetch_provider_identity
+    token_exchange_calls = 0
+
+    def fake_post_token_request(provider, body, headers):
+        nonlocal token_exchange_calls
+        token_exchange_calls += 1
+        return {
+            "access_token": "setup-session-access-token",
+            "refresh_token": "setup-session-refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        }
+
+    oauth._post_token_request = fake_post_token_request
+    oauth._fetch_provider_identity = lambda provider, token: {
+        "provider_subject": "setup-session-subject",
+        "provider_account": "setup-session@example.test",
+        "provider_identity_verified": True,
+        "provider_email_verified": True,
+    }
+
+    def exchange_flow(started, browser_nonce: str, code: str):
+        exchanged = oauth.exchange_authorization_code(
+            provider_id="google",
+            code=code,
+            state=str(started["state"]),
+            browser_nonce=browser_nonce,
+        )
+        if not db.complete_oauth_revocation_work(str(exchanged["revocationWorkId"])):
+            raise AssertionError("OAuth setup-session test did not release revocation work")
+        return exchanged
+
+    try:
+        legacy_nonce = "l" * 43
+        legacy_start = start_flow(label="Legacy OAuth state", browser_nonce=legacy_nonce)
+        legacy_record = state_records().get(str(legacy_start["state"]))
+        if "setupSessionId" in legacy_start or "setup_session_id" in legacy_start:
+            raise AssertionError("legacy OAuth start changed its output shape")
+        if not isinstance(legacy_record, dict) or "setup_session_id" in legacy_record:
+            raise AssertionError("legacy OAuth state unexpectedly gained a setup binding")
+        legacy_exchange = exchange_flow(legacy_start, legacy_nonce, "legacy-setup-session-code")
+        if "setupSessionId" in legacy_exchange or "setup_session_id" in legacy_exchange:
+            raise AssertionError("legacy OAuth exchange changed its output shape")
+
+        setup_session_id = "550e8400-e29b-41d4-a716-446655440000"
+        setup_nonce = "s" * 43
+        setup_start = start_flow(
+            label="Setup-bound OAuth state",
+            browser_nonce=setup_nonce,
+            setup_session_id=setup_session_id,
+        )
+        if setup_start.get("setupSessionId") != setup_session_id:
+            raise AssertionError(f"OAuth start lost setup session: {setup_start}")
+        if "setup_session_id" in setup_start:
+            raise AssertionError("OAuth start exposed the internal setup-session field name")
+        if setup_session_id in str(setup_start["authorizationUrl"]):
+            raise AssertionError("OAuth authorization URL leaked its setup-session binding")
+        setup_record = state_records().get(str(setup_start["state"]))
+        if not isinstance(setup_record, dict) or setup_record.get("setup_session_id") != setup_session_id:
+            raise AssertionError(f"OAuth state lost setup session: {setup_record}")
+        setup_keys = {key for key in setup_record if "setup" in str(key).lower()}
+        if setup_keys != {"setup_session_id"}:
+            raise AssertionError(f"OAuth state persisted unexpected setup material: {setup_keys}")
+        setup_exchange = exchange_flow(setup_start, setup_nonce, "setup-session-code")
+        if setup_exchange.get("setupSessionId") != setup_session_id:
+            raise AssertionError(f"OAuth exchange lost setup session: {setup_exchange}")
+        if "setup_session_id" in setup_exchange:
+            raise AssertionError("OAuth exchange exposed the internal setup-session field name")
+        if setup_session_id in str(setup_exchange.get("secret")) or setup_session_id in json.dumps(
+            setup_exchange.get("metadata", {}), sort_keys=True
+        ):
+            raise AssertionError("OAuth setup-session binding leaked into credential material")
+
+        denied_setup_id = "c56a4180-65aa-42ec-a945-5fd21dec0538"
+        denied_nonce = "d" * 43
+        denied_start = start_flow(
+            label="Denied setup-bound OAuth state",
+            browser_nonce=denied_nonce,
+            setup_session_id=denied_setup_id,
+        )
+        denied_record = oauth.consume_state(
+            provider_id="google",
+            state=str(denied_start["state"]),
+            browser_nonce=denied_nonce,
+        )
+        if denied_record.get("setup_session_id") != denied_setup_id:
+            raise AssertionError("OAuth denial consume path lost its setup-session binding")
+        try:
+            oauth.consume_state(
+                provider_id="google",
+                state=str(denied_start["state"]),
+                browser_nonce=denied_nonce,
+            )
+        except oauth.OAuthError as exc:
+            if "unknown or expired" not in str(exc):
+                raise AssertionError(f"OAuth denial replay failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("OAuth denial consume path accepted a state replay")
+
+        tampered_nonce = "t" * 43
+        tampered_start = start_flow(
+            label="Tampered setup-bound OAuth state",
+            browser_nonce=tampered_nonce,
+            setup_session_id=setup_session_id,
+        )
+        with oauth._oauth_state_lock():
+            payload = oauth._read_states()
+            payload["states"][str(tampered_start["state"])]["setup_session_id"] = setup_session_id.upper()
+            oauth._write_states(payload)
+        calls_before_tamper = token_exchange_calls
+        try:
+            oauth.exchange_authorization_code(
+                provider_id="google",
+                code="tampered-setup-session-code",
+                state=str(tampered_start["state"]),
+                browser_nonce=tampered_nonce,
+            )
+        except oauth.OAuthError as exc:
+            if "setup session binding is malformed" not in str(exc):
+                raise AssertionError(f"tampered OAuth state failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("tampered OAuth setup-session binding was accepted")
+        if token_exchange_calls != calls_before_tamper:
+            raise AssertionError("tampered OAuth state reached the provider token exchange")
+        if str(tampered_start["state"]) in state_records():
+            raise AssertionError("tampered OAuth setup-session state remained replayable")
+        try:
+            oauth.consume_state(
+                provider_id="google",
+                state=str(tampered_start["state"]),
+                browser_nonce=tampered_nonce,
+            )
+        except oauth.OAuthError as exc:
+            if "unknown or expired" not in str(exc):
+                raise AssertionError(f"tampered OAuth state replay failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("tampered OAuth setup-session state replay was accepted")
+
+        concurrent_setup_ids = [str(uuid.UUID(int=index + 1_000)) for index in range(12)]
+
+        def create_concurrent_setup_flow(index: int):
+            browser_nonce = f"{index + 500:043d}"
+            started = start_flow(
+                label=f"Concurrent setup OAuth {index}",
+                browser_nonce=browser_nonce,
+                setup_session_id=concurrent_setup_ids[index],
+            )
+            return started, browser_nonce, concurrent_setup_ids[index]
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            concurrent_flows = list(executor.map(create_concurrent_setup_flow, range(12)))
+        persisted = state_records()
+        for started, _browser_nonce, expected_setup_id in concurrent_flows:
+            record = persisted.get(str(started["state"]))
+            if not isinstance(record, dict) or record.get("setup_session_id") != expected_setup_id:
+                raise AssertionError("concurrent OAuth starts crossed setup-session bindings")
+        for index, (started, browser_nonce, expected_setup_id) in reversed(
+            list(enumerate(concurrent_flows))
+        ):
+            exchanged = exchange_flow(started, browser_nonce, f"out-of-order-code-{index}")
+            if exchanged.get("setupSessionId") != expected_setup_id:
+                raise AssertionError("out-of-order OAuth exchange crossed setup-session bindings")
+        if any(str(started["state"]) in state_records() for started, _, _ in concurrent_flows):
+            raise AssertionError("out-of-order OAuth exchanges left consumed states replayable")
+    finally:
+        oauth._post_token_request = original_post_token_request
+        oauth._fetch_provider_identity = original_fetch_provider_identity
+
+
+def run_oauth_setup_callback_persistence_failure_tests(
+    app_module, oauth, db, data_dir: Path
+) -> None:
+    state_path = data_dir / "oauth-states.json"
+    actor_id = "user:setup-callback-persistence"
+    scope = "https://www.googleapis.com/auth/gmail.readonly"
+    original_post_token_request = oauth._post_token_request
+    original_fetch_provider_identity = oauth._fetch_provider_identity
+    original_revoke_oauth_token = app_module.revoke_oauth_token
+    original_reserve_revocation_work = db.reserve_oauth_revocation_work
+    original_create_pending = db.create_pending_oauth_credential
+    original_create_credential = db.create_credential
+    original_two_person_required = app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED
+    original_two_person_actions = app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS
+    revocation_work_ids: list[str] = []
+    revocation_attempts: list[tuple[str, dict[str, object]]] = []
+
+    def fake_post_token_request(provider, body, headers):
+        code = str(body.get("code") or "setup-callback")
+        return {
+            "access_token": f"{code}-access-token",
+            "refresh_token": f"{code}-refresh-token",
+            "token_type": "Bearer",
+            "expires_in": 3600,
+        }
+
+    def capture_revocation_work(**kwargs):
+        work_id = original_reserve_revocation_work(**kwargs)
+        revocation_work_ids.append(work_id)
+        return work_id
+
+    def fail_provider_revocation(
+        *, provider_id: str, token_secret: dict[str, object]
+    ):
+        revocation_attempts.append((provider_id, dict(token_secret)))
+        raise oauth.OAuthError("injected provider revocation outage")
+
+    def callback_request(state: str, browser_nonce: str):
+        return app_module.Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/oauth/callback/google",
+                "headers": [
+                    (
+                        b"cookie",
+                        f"{oauth.browser_cookie_name(state)}={browser_nonce}".encode(
+                            "ascii"
+                        ),
+                    )
+                ],
+            }
+        )
+
+    def start_bound_flow(case: str):
+        browser_nonce = case[0] * 43
+        session = db.create_setup_session(
+            owner_id=actor_id,
+            current_assignee_id=actor_id,
+            template_id=f"template:{case}",
+            principal_id=f"agent:{case}",
+            route_id=f"route:{case}",
+            route_policy_digest="sha256:"
+            + hashlib.sha256(case.encode("ascii")).hexdigest(),
+        )
+        started = oauth.create_authorization_url(
+            provider_id="google",
+            credential_name=f"Setup callback {case}",
+            scopes=[scope],
+            metadata={"test": case},
+            actor_id=actor_id,
+            browser_nonce=browser_nonce,
+            setup_session_id=session["id"],
+        )
+        state_digest = (
+            "sha256:"
+            + hashlib.sha256(str(started["state"]).encode("ascii")).hexdigest()
+        )
+        session = db.transition_setup_session(
+            session["id"],
+            expected_revision=session["revision"],
+            transition="bind_oauth_flow",
+            actor_id=actor_id,
+            updates={
+                "oauth_provider": "google",
+                "oauth_state_digest": state_digest,
+            },
+        )
+        return session, started, browser_nonce
+
+    def assert_cookie_deleted(response, state: str, case: str) -> None:
+        cookies = SimpleCookie()
+        cookies.load(response.headers.get("set-cookie", ""))
+        morsel = cookies.get(oauth.browser_cookie_name(state))
+        if morsel is None or morsel["max-age"] != "0":
+            raise AssertionError(
+                f"{case} persistence failure did not delete its OAuth cookie: "
+                f"{response.headers}"
+            )
+        if (
+            not morsel["secure"]
+            or not morsel["httponly"]
+            or morsel["samesite"].lower() != "lax"
+        ):
+            raise AssertionError(
+                f"{case} persistence failure weakened OAuth cookie attributes: {morsel}"
+            )
+
+    oauth._post_token_request = fake_post_token_request
+    oauth._fetch_provider_identity = lambda provider, token: {
+        "provider_subject": f"subject:{token}",
+        "provider_account": f"{token}@example.test",
+        "provider_identity_verified": True,
+        "provider_email_verified": True,
+    }
+    app_module.revoke_oauth_token = fail_provider_revocation
+    db.reserve_oauth_revocation_work = capture_revocation_work
+    try:
+        cases = (
+            (
+                "pending-persistence",
+                True,
+                "create_pending_oauth_credential",
+                db.ManagedOAuthCredentialError,
+                503,
+            ),
+            (
+                "immediate-persistence",
+                False,
+                "create_credential",
+                db.MetadataStoreError,
+                409,
+            ),
+        )
+        for case, two_person, persistence_name, error_type, expected_status in cases:
+            session, started, browser_nonce = start_bound_flow(case)
+            state = str(started["state"])
+            credential_ids_before = {
+                item["id"] for item in db.list_credentials()
+            }
+            pending_ids_before = {
+                item["id"] for item in db.list_pending_oauth_credentials()
+            }
+            work_count_before = len(revocation_work_ids)
+            revocation_count_before = len(revocation_attempts)
+            original_persistence = getattr(db, persistence_name)
+
+            def fail_persistence(*args, **kwargs):
+                raise error_type(f"injected {case} failure")
+
+            app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED = two_person
+            app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS = (
+                ("credential.oauth.activate",) if two_person else ()
+            )
+            setattr(db, persistence_name, fail_persistence)
+            try:
+                response = app_module.oauth_callback(
+                    "google",
+                    callback_request(state, browser_nonce),
+                    code=f"{case}-code",
+                    state=state,
+                )
+            finally:
+                setattr(db, persistence_name, original_persistence)
+
+            if response.status_code != expected_status:
+                raise AssertionError(
+                    f"{case} persistence failure returned {response.status_code}: "
+                    f"{response.body!r}"
+                )
+            if (
+                response.headers.get("cache-control") != "no-store"
+                or "location" in response.headers
+                or b"window.location" in response.body
+            ):
+                raise AssertionError(
+                    f"{case} persistence failure returned redirectable OAuth content"
+                )
+            assert_cookie_deleted(response, state, case)
+
+            persisted_states = json.loads(state_path.read_text(encoding="utf-8"))[
+                "states"
+            ]
+            if state in persisted_states:
+                raise AssertionError(
+                    f"{case} persistence failure left OAuth state replayable"
+                )
+            failed_session = db.get_setup_session(
+                session["id"], include_events=True
+            )
+            if not failed_session or not (
+                failed_session["status"] == "failed"
+                and failed_session["phase"] == "failed"
+                and failed_session["terminal_at"] is not None
+            ):
+                raise AssertionError(
+                    f"{case} persistence failure did not terminate Setup: "
+                    f"{failed_session}"
+                )
+            failure_event = failed_session["events"][-1]
+            if not (
+                failure_event["transition"] == "fail"
+                and failure_event["event"].get("details", {}).get("reason")
+                == "oauth_credential_persistence_failed"
+            ):
+                raise AssertionError(
+                    f"{case} persistence failure recorded the wrong Setup event: "
+                    f"{failure_event}"
+                )
+            if {item["id"] for item in db.list_credentials()} != credential_ids_before:
+                raise AssertionError(
+                    f"{case} persistence failure created an active credential"
+                )
+            if {
+                item["id"] for item in db.list_pending_oauth_credentials()
+            } != pending_ids_before:
+                raise AssertionError(
+                    f"{case} persistence failure created a pending credential"
+                )
+
+            if len(revocation_work_ids) != work_count_before + 1:
+                raise AssertionError(
+                    f"{case} persistence failure did not retain one exchanged grant"
+                )
+            if len(revocation_attempts) != revocation_count_before + 1:
+                raise AssertionError(
+                    f"{case} persistence failure did not invoke provider revocation"
+                )
+            provider, revoked_secret = revocation_attempts[-1]
+            if provider != "google" or revoked_secret.get("access_token") != (
+                f"{case}-code-access-token"
+            ):
+                raise AssertionError(
+                    f"{case} persistence failure revoked the wrong material: "
+                    f"{revocation_attempts[-1]}"
+                )
+            work_id = revocation_work_ids[-1]
+            revocation_status = db.get_oauth_revocation_work_status(work_id)
+            if not revocation_status or not (
+                revocation_status["status"] == "pending"
+                and revocation_status["attempts"] == 1
+                and "injected provider revocation outage"
+                in str(revocation_status["last_error"])
+            ):
+                raise AssertionError(
+                    f"{case} failed revocation was not durable: {revocation_status}"
+                )
+
+            replay = app_module.oauth_callback(
+                "google",
+                callback_request(state, browser_nonce),
+                code=f"{case}-replay-code",
+                state=state,
+            )
+            if replay.status_code != 400 or b"unknown or expired" not in replay.body:
+                raise AssertionError(
+                    f"{case} persistence failure accepted an OAuth replay: "
+                    f"{replay.body!r}"
+                )
+            if "location" in replay.headers or b"window.location" in replay.body:
+                raise AssertionError(
+                    f"{case} OAuth replay returned redirectable content"
+                )
+            assert_cookie_deleted(replay, state, case + " replay")
+            if not db.complete_oauth_revocation_work(work_id):
+                raise AssertionError(
+                    f"{case} test could not release retained revocation work"
+                )
+    finally:
+        oauth._post_token_request = original_post_token_request
+        oauth._fetch_provider_identity = original_fetch_provider_identity
+        app_module.revoke_oauth_token = original_revoke_oauth_token
+        db.reserve_oauth_revocation_work = original_reserve_revocation_work
+        db.create_pending_oauth_credential = original_create_pending
+        db.create_credential = original_create_credential
+        app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED = original_two_person_required
+        app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS = original_two_person_actions
+        for work_id in revocation_work_ids:
+            if db.get_oauth_revocation_work_status(work_id) is not None:
+                db.complete_oauth_revocation_work(work_id)
+
+
+def main(*, setup_session_only: bool = False) -> None:
     with tempfile.TemporaryDirectory() as tmp:
-        run_config_secret_file_tests(Path(tmp))
-        if compose_manifests_available():
+        if not setup_session_only:
+            run_config_secret_file_tests(Path(tmp))
+        if not setup_session_only and compose_manifests_available():
             verify_compose_oauth_contract()
         os.environ["SERVERWARE_DATA_DIR"] = tmp
         os.environ["SERVERWARE_RELEASE_CHANNEL"] = "dev"
@@ -196,7 +696,11 @@ def main() -> None:
         os.environ["SERVERWARE_X_OAUTH_CLIENT_SECRET"] = "x-secret"
         os.environ["SERVERWARE_X_OAUTH_REDIRECT_URI"] = "https://serverware.test/api/oauth/callback/x"
 
-        from serverware import db, oauth, runtime
+        from serverware import db, oauth
+
+        db.init_db()
+        run_oauth_setup_session_state_tests(oauth, db, Path(tmp))
+        from serverware import runtime
         from serverware import app as app_module
         from serverware.auth import AdminIdentity
         from serverware.policy_bundle import (
@@ -213,7 +717,6 @@ def main() -> None:
             sys.modules["mitmproxy.http"] = http_module
         from serverware.policy_engine import _inject_credential
 
-        db.init_db()
         identity = AdminIdentity("user:operator", frozenset({"admin", "credential_owner", "policy_author"}), "test")
 
         def oauth_request(state: str, browser_nonce: str):
@@ -242,6 +745,13 @@ def main() -> None:
             if not morsel["secure"] or not morsel["httponly"] or morsel["samesite"].lower() != "lax":
                 raise AssertionError(f"OAuth browser-binding cookie attributes are unsafe: {morsel}")
             return started, morsel.value
+
+        run_oauth_setup_callback_persistence_failure_tests(
+            app_module, oauth, db, Path(tmp)
+        )
+        if setup_session_only:
+            print(json.dumps({"oauth_setup_session_state": "pass", "ok": True}, sort_keys=True))
+            return
 
         providers = app_module.oauth_providers(identity)["providers"]
         google = next(item for item in providers if item["id"] == "google")
@@ -1258,6 +1768,38 @@ def main() -> None:
                 item["id"] == pending["id"] for item in bootstrap.get("pendingOAuthCredentials", [])
             ):
                 raise AssertionError(f"portal bootstrap did not expose the exact-account activation task: {bootstrap}")
+
+            owner_only_identity = AdminIdentity(
+                "user:operator",
+                frozenset({"credential_owner"}),
+                "test",
+            )
+            inventory_outsider = AdminIdentity(
+                "user:inventory-outsider",
+                frozenset({"credential_owner"}),
+                "test",
+            )
+            owner_inventory = app_module.oauth_pending_credentials(owner_only_identity)[
+                "pendingCredentials"
+            ]
+            outsider_inventory = app_module.oauth_pending_credentials(
+                inventory_outsider
+            )["pendingCredentials"]
+            admin_inventory = app_module.oauth_pending_credentials(identity)[
+                "pendingCredentials"
+            ]
+            if pending["id"] not in {item["id"] for item in owner_inventory}:
+                raise AssertionError("pending OAuth inventory omitted its non-admin owner")
+            if outsider_inventory:
+                raise AssertionError(
+                    "pending OAuth inventory disclosed another owner's grants"
+                )
+            if pending["id"] not in {item["id"] for item in admin_inventory}:
+                raise AssertionError("admin pending OAuth review lost cross-owner inventory")
+            if app_module.bootstrap(inventory_outsider).get("pendingOAuthCredentials"):
+                raise AssertionError(
+                    "portal bootstrap disclosed another owner's pending OAuth grants"
+                )
 
             other_requester = AdminIdentity(
                 "user:other",
@@ -2701,5 +3243,7 @@ if __name__ == "__main__":
     if sys.argv[1:] == ["--compose-contract-only"]:
         verify_compose_oauth_contract()
         print(json.dumps({"oauth_compose_contract": "pass", "ok": True}, sort_keys=True))
+    elif sys.argv[1:] == ["--setup-session-only"]:
+        main(setup_session_only=True)
     else:
         main()

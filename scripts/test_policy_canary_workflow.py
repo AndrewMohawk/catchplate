@@ -142,7 +142,7 @@ def main() -> None:
             raise AssertionError("active policy changed during canary start")
 
         db.record_audit_event(
-            "request.completed",
+            "data_plane.response.released",
             {
                 "route_id": "demo.echo",
                 "decision": "allow",
@@ -151,8 +151,27 @@ def main() -> None:
             },
             actor_id="decision-gate-rs",
         )
+        db.record_audit_event(
+            "data_plane.response.released",
+            {
+                "route_id": "demo.echo",
+                "decision": "allow",
+                "latency_ms": 1,
+                "policy_hash": active_before.hash,
+            },
+            actor_id="decision-gate-rs",
+        )
+        db.record_audit_event(
+            "data_plane.response.released",
+            {
+                "decision": "allow",
+                "latency_ms": 2,
+                "policy_hash": candidate_hash,
+            },
+            actor_id="decision-gate-rs",
+        )
         status = app_module.policy_canary_status(_=identity)
-        if status["monitoring"]["auditEvents"] < 1 or status["monitoring"]["denials"] != 0:
+        if status["monitoring"]["auditEvents"] != 1 or status["monitoring"]["denials"] != 0:
             raise AssertionError(f"canary monitoring did not include audit evidence: {status}")
         if status["monitoring"]["latencyMsP95"] != 12.5:
             raise AssertionError(f"canary monitoring did not report latency evidence: {status}")

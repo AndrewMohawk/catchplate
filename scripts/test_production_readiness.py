@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
 import subprocess
@@ -8,6 +10,10 @@ import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -23,6 +29,90 @@ def oauth_secret_file(name: str, value: str, mode: int = 0o600) -> Path:
     path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
     path.write_text(value + "\n", encoding="utf-8")
     path.chmod(mode)
+    return path
+
+
+def trusted_public_key_file(name: str) -> Path:
+    path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
+    if path.exists():
+        return path
+    if name == "sigstore.pub.pem":
+        private_key = generate_private_key(public_exponent=65537, key_size=2048)
+    else:
+        private_key = Ed25519PrivateKey.from_private_bytes(
+            hashlib.sha256(
+                f"serverware-production-readiness:{name}".encode("utf-8")
+            ).digest()
+        )
+    path.write_bytes(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    path.chmod(0o644)
+    return path
+
+
+def trusted_public_key_id(name: str) -> str:
+    public_key = serialization.load_pem_public_key(trusted_public_key_file(name).read_bytes())
+    public_key_der = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return "sha256:" + hashlib.sha256(public_key_der).hexdigest()
+
+
+def final_challenge_receipt_file(name: str = "final-challenge-receipt.json") -> Path:
+    path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
+    path.write_text(
+        canonical_json(
+            {
+                "apiVersion": "serverware.finalChallengeReceipt/v1",
+                "kind": "FinalChallengeConsumption",
+                "statement": {
+                    "authority_provider": "production-final-challenge-authority",
+                },
+                "signing_key_id": trusted_public_key_id("final-challenge-authority.pub.pem"),
+                "signature": "test-signature",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    return path
+
+
+def hardware_assurance_file(name: str = "hardware-assurance.json") -> Path:
+    path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
+    path.write_text(
+        canonical_json(
+            {
+                "apiVersion": "serverware.hardwareAssurance/v1",
+                "kind": "ServerwareHardwareAssurance",
+                "statement": {},
+                "signing_key_id": trusted_public_key_id(
+                    "hardware-assurance-verifier.pub.pem"
+                ),
+                "signature": "ed25519:test-signature",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o600)
+    return path
+
+
+def rsa_public_key_file(name: str) -> Path:
+    path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
+    path.write_bytes(
+        generate_private_key(public_exponent=65537, key_size=2048).public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
     return path
 
 
@@ -155,12 +245,31 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_ATTESTATION_HELPER_DIR": "/opt/serverware/attestation-helpers",
             "SERVERWARE_RELEASE_PROVENANCE_FILE": "/opt/serverware/release/release-provenance.json",
             "SERVERWARE_IMAGE_SIGNATURES_FILE": "/opt/serverware/release/image-signatures.json",
+            "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY": str(
+                trusted_public_key_file("release-provenance.pub.pem")
+            ),
+            "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY": str(trusted_public_key_file("sigstore.pub.pem")),
+            "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY": str(trusted_public_key_file("rekor.pub.pem")),
+            "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
+            "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(
+                trusted_public_key_file("external-checkpoint.pub.pem")
+            ),
             "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
             "SERVERWARE_AUDIT_ANCHOR_TOKEN": "prod-anchor-token-32-bytes-minimum-value",
             "SERVERWARE_ADMIN_ROLES": "admin,approver,auditor,policy_author,policy_publisher,credential_owner",
             "SERVERWARE_OAUTH_STATE_TTL_SECONDS": "600",
             "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS": "900",
             "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT": "1000",
+            "SERVERWARE_SETUP_SESSION_TTL_SECONDS": "86400",
+            "SERVERWARE_SETUP_SESSION_MAX_ACTIVE": "1000",
+            "SERVERWARE_SETUP_SESSION_MAX_RETAINED": "10000",
+            "SERVERWARE_SETUP_SESSION_RETENTION_SECONDS": "604800",
+            "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES": "32768",
+            "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_COUNT": "64",
+            "SERVERWARE_SETUP_SESSION_EVENT_MAX_BYTES": "16384",
+            "SERVERWARE_SETUP_SESSION_EVENT_MAX_COUNT": "128",
+            "SERVERWARE_SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING": "10000",
+            "SERVERWARE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS": "60",
             "SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES": "1000000",
             "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "test-google-client-id",
             "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(
@@ -247,8 +356,8 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_IMAGE_VERIFY_COMMAND": "python3 scripts/cosign_sigstore.py verify",
             "SERVERWARE_COSIGN_BINARY": "cosign",
             "SERVERWARE_COSIGN_KEY": "awskms://arn:aws:kms:us-east-1:111122223333:key/serverware-signing",
-            "SERVERWARE_COSIGN_KEY_ID": "sha256:" + "c" * 64,
-            "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID": "sha256:" + "5" * 64,
+            "SERVERWARE_COSIGN_KEY_ID": trusted_public_key_id("sigstore.pub.pem"),
+            "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID": trusted_public_key_id("rekor.pub.pem"),
             "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY": "1",
             "SERVERWARE_RELEASE_ANCHOR_BASE": "https://release-anchor.prod.acme-corp.net",
             "SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED": "1",
@@ -256,7 +365,9 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE": "http",
             "SERVERWARE_TRANSPARENCY_LOG_URL": "https://transparency.prod.acme-corp.net/checkpoints",
             "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER": "managed-prod-log",
-            "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID": "sha256:" + "d" * 64,
+            "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID": trusted_public_key_id(
+                "external-checkpoint.pub.pem"
+            ),
             "SERVERWARE_APPARMOR_EXPECTED_PROFILE": "serverware-docker",
             "SERVERWARE_METADATA_STORE_BACKEND": "postgres",
             "SERVERWARE_METADATA_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@metadata-store/serverware",
@@ -300,8 +411,40 @@ def good_env() -> dict[str, str]:
         "SERVERWARE_TWITTER_OAUTH_CLIENT_ID",
         "SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET",
         "SERVERWARE_TWITTER_OAUTH_REDIRECT_URI",
+        "SERVERWARE_COMPLETION_VERIFICATION_MODE",
+        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
+        "SERVERWARE_HARDWARE_ASSURANCE",
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
     ):
         env.pop(name, None)
+    return env
+
+
+def final_challenge_env() -> dict[str, str]:
+    env = good_env()
+    env.update(
+        {
+            "SERVERWARE_COMPLETION_VERIFICATION_MODE": "final",
+            "SERVERWARE_FINAL_CHALLENGE_RECEIPT": str(final_challenge_receipt_file()),
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY": str(
+                trusted_public_key_file("final-challenge-authority.pub.pem")
+            ),
+            "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER": "production-final-challenge-authority",
+            "SERVERWARE_HARDWARE_ASSURANCE": str(hardware_assurance_file()),
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY": str(
+                trusted_public_key_file("hardware-assurance-verifier.pub.pem")
+            ),
+            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE": base64.urlsafe_b64encode(
+                b"h" * 32
+            )
+            .decode("ascii")
+            .rstrip("="),
+        }
+    )
     return env
 
 
@@ -413,9 +556,153 @@ def main() -> None:
     passed = run_readiness(good_env())
     if passed.get("mode") != "config":
         raise AssertionError(f"unexpected readiness mode: {passed}")
+    public_key_cosign_env = good_env()
+    run_readiness(public_key_cosign_env)
+
+    keyless_only_cosign_env = good_env()
+    keyless_only_cosign_env.pop("SERVERWARE_COSIGN_KEY", None)
+    keyless_only_cosign_env["SERVERWARE_COSIGN_CERT_IDENTITY"] = (
+        "https://github.com/acme/serverware/.github/workflows/release.yml@refs/heads/main"
+    )
+    keyless_only_cosign_env["SERVERWARE_COSIGN_CERT_OIDC_ISSUER"] = (
+        "https://token.actions.githubusercontent.com"
+    )
+    expect_failure(
+        keyless_only_cosign_env,
+        "Cosign keyless/Fulcio mode is not supported by release completion",
+    )
+
+    mixed_cosign_identity_env = good_env()
+    mixed_cosign_identity_env["SERVERWARE_COSIGN_CERT_IDENTITY"] = (
+        "https://github.com/acme/serverware/.github/workflows/release.yml@refs/heads/main"
+    )
+    mixed_cosign_identity_env["SERVERWARE_COSIGN_CERT_OIDC_ISSUER"] = (
+        "https://token.actions.githubusercontent.com"
+    )
+    expect_failure(
+        mixed_cosign_identity_env,
+        "Cosign keyless/Fulcio mode is not supported by release completion",
+    )
     run_readiness_output(good_env())
     run_live_probe_helpers()
     run_shared_store_probe_helper()
+
+    for trust_setting in (
+        "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER",
+    ):
+        missing_trust_env = good_env()
+        missing_trust_env.pop(trust_setting, None)
+        expect_failure(missing_trust_env, trust_setting)
+
+    mismatched_checkpoint_provider_env = good_env()
+    mismatched_checkpoint_provider_env["SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER"] = "different-provider"
+    expect_failure(mismatched_checkpoint_provider_env, "must match SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER")
+
+    symlink_trust_env = good_env()
+    symlink_trust_path = Path(OAUTH_SECRET_TEMP_DIR.name) / "release-provenance-link.pub.pem"
+    symlink_trust_path.unlink(missing_ok=True)
+    symlink_trust_path.symlink_to(trusted_public_key_file("release-provenance-link-target.pub.pem"))
+    symlink_trust_env["SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY"] = str(symlink_trust_path)
+    expect_failure(symlink_trust_env, "regular, non-symlink public-key file")
+
+    oversized_trust_env = good_env()
+    oversized_trust_path = Path(OAUTH_SECRET_TEMP_DIR.name) / "oversized-rekor.pub.pem"
+    oversized_trust_path.write_bytes(b"A" * (readiness.MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES + 1))
+    oversized_trust_env["SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY"] = str(oversized_trust_path)
+    expect_failure(
+        oversized_trust_env,
+        f"between 1 and {readiness.MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES} bytes",
+    )
+
+    invalid_pem_trust_env = good_env()
+    invalid_pem_trust_path = Path(OAUTH_SECRET_TEMP_DIR.name) / "invalid-sigstore.pub.pem"
+    invalid_pem_trust_path.write_text("not a PEM public key\n", encoding="ascii")
+    invalid_pem_trust_env["SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY"] = str(invalid_pem_trust_path)
+    expect_failure(invalid_pem_trust_env, "must contain a valid PEM public key")
+
+    mismatched_sigstore_key_id_env = good_env()
+    mismatched_sigstore_key_id_env["SERVERWARE_COSIGN_KEY_ID"] = "sha256:" + "0" * 64
+    expect_failure(
+        mismatched_sigstore_key_id_env,
+        "SPKI public-key digest must match SERVERWARE_COSIGN_KEY_ID",
+    )
+
+    unsupported_sigstore_key_env = good_env()
+    unsupported_sigstore_key_env["SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY"] = str(
+        trusted_public_key_file("sigstore-ed25519.pub.pem")
+    )
+    unsupported_sigstore_key_env["SERVERWARE_COSIGN_KEY_ID"] = trusted_public_key_id(
+        "sigstore-ed25519.pub.pem"
+    )
+    expect_failure(
+        unsupported_sigstore_key_env,
+        "must contain an ECDSA or RSA public key",
+    )
+
+    run_readiness(final_challenge_env())
+
+    readiness_with_final_input_env = good_env()
+    readiness_with_final_input_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(final_challenge_receipt_file())
+    expect_failure(readiness_with_final_input_env, "forbidden in readiness mode")
+
+    incomplete_final_challenge_env = final_challenge_env()
+    incomplete_final_challenge_env.pop("SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER")
+    expect_failure(
+        incomplete_final_challenge_env,
+        "final verification mode requires SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
+    )
+
+    incomplete_hardware_assurance_env = final_challenge_env()
+    incomplete_hardware_assurance_env.pop(
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY"
+    )
+    expect_failure(
+        incomplete_hardware_assurance_env,
+        "final verification mode requires SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+    )
+
+    conflicting_hardware_challenge_env = final_challenge_env()
+    conflicting_hardware_challenge_env[
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256"
+    ] = "sha256:" + "a" * 64
+    expect_failure(
+        conflicting_hardware_challenge_env,
+        "requires exactly one hardware assurance expected challenge nonce or digest",
+    )
+
+    mismatched_final_authority_provider_env = final_challenge_env()
+    mismatched_final_authority_provider_env["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"] = "other-authority"
+    expect_failure(
+        mismatched_final_authority_provider_env,
+        "authority provider must match the configured provider",
+    )
+
+    oversized_final_authority_provider_env = final_challenge_env()
+    oversized_final_authority_provider_env["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"] = "x" * 257
+    expect_failure(oversized_final_authority_provider_env, "must not exceed 256 characters")
+
+    symlink_final_receipt_env = final_challenge_env()
+    symlink_final_receipt_path = Path(OAUTH_SECRET_TEMP_DIR.name) / "final-challenge-receipt-link.json"
+    symlink_final_receipt_path.unlink(missing_ok=True)
+    symlink_final_receipt_path.symlink_to(final_challenge_receipt_file("final-challenge-receipt-target.json"))
+    symlink_final_receipt_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(symlink_final_receipt_path)
+    expect_failure(symlink_final_receipt_env, "regular, non-symlink final challenge receipt file")
+
+    wrong_final_authority_algorithm_env = final_challenge_env()
+    wrong_final_authority_algorithm_env["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY"] = str(
+        rsa_public_key_file("final-challenge-authority-rsa.pub.pem")
+    )
+    expect_failure(wrong_final_authority_algorithm_env, "must contain an Ed25519 public key")
+
+    invalid_final_receipt_env = final_challenge_env()
+    invalid_final_receipt_path = final_challenge_receipt_file("invalid-final-challenge-receipt.json")
+    invalid_final_receipt_path.write_text(canonical_json({"apiVersion": "wrong/v1"}) + "\n", encoding="utf-8")
+    invalid_final_receipt_env["SERVERWARE_FINAL_CHALLENGE_RECEIPT"] = str(invalid_final_receipt_path)
+    expect_failure(invalid_final_receipt_env, "serverware.finalChallengeReceipt/v1 document")
 
     missing_google_env = good_env()
     for name in (
@@ -459,6 +746,20 @@ def main() -> None:
     unbounded_pending_oauth_count_env = good_env()
     unbounded_pending_oauth_count_env["SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT"] = "10001"
     expect_failure(unbounded_pending_oauth_count_env, "between 1 and 10000")
+
+    unbounded_setup_session_env = good_env()
+    unbounded_setup_session_env["SERVERWARE_SETUP_SESSION_EVENT_MAX_COUNT"] = "4097"
+    expect_failure(
+        unbounded_setup_session_env,
+        "SERVERWARE_SETUP_SESSION_EVENT_MAX_COUNT must be between 4 and 4096",
+    )
+
+    inconsistent_setup_capacity_env = good_env()
+    inconsistent_setup_capacity_env["SERVERWARE_SETUP_SESSION_MAX_RETAINED"] = "999"
+    expect_failure(
+        inconsistent_setup_capacity_env,
+        "SERVERWARE_SETUP_SESSION_MAX_RETAINED must not be below SERVERWARE_SETUP_SESSION_MAX_ACTIVE",
+    )
 
     undersized_lease_replay_env = good_env()
     undersized_lease_replay_env["SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES"] = "9999"
@@ -522,7 +823,7 @@ def main() -> None:
     missing_cosign_env.pop("SERVERWARE_COSIGN_KEY", None)
     missing_cosign_env.pop("SERVERWARE_COSIGN_CERT_IDENTITY", None)
     missing_cosign_env.pop("SERVERWARE_COSIGN_CERT_OIDC_ISSUER", None)
-    expect_failure(missing_cosign_env, "KMS/HSM key ref or keyless certificate identity")
+    expect_failure(missing_cosign_env, "SERVERWARE_COSIGN_KEY with a KMS/HSM-backed URI")
 
     dev_admin_token_env = good_env()
     dev_admin_token_env["SERVERWARE_ADMIN_TOKEN"] = "dev-admin-token"

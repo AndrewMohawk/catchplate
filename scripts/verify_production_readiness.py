@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import hmac
 import ipaddress
@@ -19,6 +20,10 @@ from pathlib import Path
 from typing import Any
 
 import collect_nitro_kms_evidence
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -29,6 +34,8 @@ READINESS_CHECKS = [
     "oauth-providers",
     "nitro",
     "attested-credential-delivery",
+    "release-completion-trust",
+    "final-challenge-authority",
     "cosign-sigstore",
     "external-transparency",
     "apparmor",
@@ -71,6 +78,9 @@ INTERNAL_SERVICE_TOKEN_NAMES = (
     "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
 )
 MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
+MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES = 65536
+MAX_FINAL_CHALLENGE_RECEIPT_FILE_BYTES = 1048576
+MAX_HARDWARE_ASSURANCE_FILE_BYTES = 1048576
 
 
 def canonical_json(value: Any) -> str:
@@ -405,6 +415,111 @@ def check_oauth_secret_file(env: dict[str, str], *, provider: str, setting_name:
     )
 
 
+def read_bounded_regular_file(
+    env: dict[str, str],
+    setting_name: str,
+    failures: list[str],
+    *,
+    file_label: str,
+    max_bytes: int,
+) -> bytes | None:
+    raw_path = env.get(setting_name, "").strip()
+    add(failures, bool(raw_path), f"{setting_name} must be configured")
+    if not raw_path:
+        return None
+    path = Path(raw_path)
+    add(failures, path.is_absolute(), f"{setting_name} must be an absolute path")
+    if not path.is_absolute():
+        return None
+    try:
+        file_stat = path.lstat()
+    except OSError:
+        failures.append(f"{setting_name} must reference a readable {file_label} file")
+        return None
+    regular_file = stat.S_ISREG(file_stat.st_mode)
+    add(failures, regular_file, f"{setting_name} must reference a regular, non-symlink {file_label} file")
+    bounded_file = 1 <= file_stat.st_size <= max_bytes
+    add(
+        failures,
+        bounded_file,
+        f"{setting_name} must contain between 1 and {max_bytes} bytes",
+    )
+    if not regular_file or not bounded_file:
+        return None
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError:
+        failures.append(f"{setting_name} must reference a readable, non-symlink {file_label} file")
+        return None
+    try:
+        opened_stat = os.fstat(descriptor)
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+    except OSError:
+        failures.append(f"{setting_name} must reference a readable {file_label} file")
+        return None
+    finally:
+        os.close(descriptor)
+    stable_file = (
+        stat.S_ISREG(opened_stat.st_mode)
+        and opened_stat.st_dev == file_stat.st_dev
+        and opened_stat.st_ino == file_stat.st_ino
+        and opened_stat.st_size == file_stat.st_size
+        and len(payload) == opened_stat.st_size
+    )
+    add(failures, stable_file, f"{setting_name} changed while its {file_label} file was being validated")
+    if not stable_file:
+        return None
+    return payload
+
+
+def check_trusted_public_key_file(
+    env: dict[str, str],
+    setting_name: str,
+    failures: list[str],
+    *,
+    require_ed25519: bool = False,
+    require_ecdsa_or_rsa: bool = False,
+) -> str | None:
+    payload = read_bounded_regular_file(
+        env,
+        setting_name,
+        failures,
+        file_label="public-key",
+        max_bytes=MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES,
+    )
+    if payload is None:
+        return None
+    try:
+        public_key = serialization.load_pem_public_key(payload)
+        public_key_der = public_key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    except (TypeError, ValueError):
+        failures.append(f"{setting_name} must contain a valid PEM public key")
+        return None
+    if require_ed25519 and not isinstance(public_key, Ed25519PublicKey):
+        failures.append(f"{setting_name} must contain an Ed25519 public key")
+        return None
+    if require_ecdsa_or_rsa and not isinstance(
+        public_key, (EllipticCurvePublicKey, RSAPublicKey)
+    ):
+        failures.append(f"{setting_name} must contain an ECDSA or RSA public key")
+        return None
+    return sha256_prefixed_bytes(public_key_der)
+
+
 def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
     public_url = env.get("SERVERWARE_PUBLIC_URL", "").strip()
     parsed_public_url = urllib.parse.urlparse(public_url)
@@ -439,6 +554,35 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
         failures,
         1 <= pending_credential_max_count <= 10_000,
         "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT must be between 1 and 10000",
+    )
+    setup_bounds = {
+        "SERVERWARE_SETUP_SESSION_TTL_SECONDS": (300, 604_800),
+        "SERVERWARE_SETUP_SESSION_MAX_ACTIVE": (1, 100_000),
+        "SERVERWARE_SETUP_SESSION_MAX_RETAINED": (1, 1_000_000),
+        "SERVERWARE_SETUP_SESSION_RETENTION_SECONDS": (300, 7_776_000),
+        "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_BYTES": (1024, 1_048_576),
+        "SERVERWARE_SETUP_SESSION_EVIDENCE_MAX_COUNT": (1, 1024),
+        "SERVERWARE_SETUP_SESSION_EVENT_MAX_BYTES": (1024, 262_144),
+        "SERVERWARE_SETUP_SESSION_EVENT_MAX_COUNT": (4, 4096),
+        "SERVERWARE_SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING": (100, 1_000_000),
+        "SERVERWARE_SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS": (5, 3600),
+    }
+    setup_values: dict[str, int] = {}
+    for setting_name, (minimum, maximum) in setup_bounds.items():
+        try:
+            setup_values[setting_name] = int(env.get(setting_name, ""))
+        except ValueError:
+            setup_values[setting_name] = minimum - 1
+        add(
+            failures,
+            minimum <= setup_values[setting_name] <= maximum,
+            f"{setting_name} must be between {minimum} and {maximum}",
+        )
+    add(
+        failures,
+        setup_values["SERVERWARE_SETUP_SESSION_MAX_ACTIVE"]
+        <= setup_values["SERVERWARE_SETUP_SESSION_MAX_RETAINED"],
+        "SERVERWARE_SETUP_SESSION_MAX_RETAINED must not be below SERVERWARE_SETUP_SESSION_MAX_ACTIVE",
     )
     try:
         replay_capacity = int(env.get("SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES", ""))
@@ -809,6 +953,216 @@ def check_attested_credential_delivery(env: dict[str, str], failures: list[str])
     )
 
 
+def check_release_completion_trust(env: dict[str, str], failures: list[str]) -> None:
+    provider = env.get("SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER", "").strip()
+    expected_provider = env.get("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER", "").strip()
+    add(failures, bool(provider), "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER must be configured")
+    add(
+        failures,
+        bool(provider) and provider == expected_provider,
+        "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER must match SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER",
+    )
+    key_ids = {}
+    for setting_name in (
+        "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+    ):
+        key_ids[setting_name] = check_trusted_public_key_file(
+            env,
+            setting_name,
+            failures,
+            require_ecdsa_or_rsa=(
+                setting_name == "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY"
+            ),
+        )
+    for setting_name, expected_id_name in (
+        ("SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY", "SERVERWARE_COSIGN_KEY_ID"),
+        ("SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY", "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"),
+        ("SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID"),
+    ):
+        expected_key_id = env.get(expected_id_name, "").strip()
+        add(
+            failures,
+            SHA256_RE.fullmatch(expected_key_id) is not None,
+            f"{expected_id_name} must be a sha256: SPKI public-key digest",
+        )
+        key_id = key_ids.get(setting_name)
+        add(
+            failures,
+            key_id is not None and key_id == expected_key_id,
+            f"{setting_name} SPKI public-key digest must match {expected_id_name}",
+        )
+
+
+def check_final_challenge_authority(env: dict[str, str], failures: list[str]) -> None:
+    mode = env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE", "readiness").strip()
+    add(
+        failures,
+        mode in {"readiness", "final"},
+        "SERVERWARE_COMPLETION_VERIFICATION_MODE must be readiness or final",
+    )
+    receipt_settings = (
+        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
+    )
+    hardware_settings = (
+        "SERVERWARE_HARDWARE_ASSURANCE",
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256",
+    )
+    configured = {
+        name: env.get(name, "").strip()
+        for name in (*receipt_settings, *hardware_settings)
+    }
+    if mode != "final":
+        add(
+            failures,
+            not any(configured.values()),
+            "final hardware and challenge authority inputs are forbidden in readiness mode",
+        )
+        return
+    for name in (
+        *receipt_settings,
+        "SERVERWARE_HARDWARE_ASSURANCE",
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+    ):
+        value = configured[name]
+        add(failures, bool(value), f"final verification mode requires {name}")
+    expected_nonce = configured["SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE"]
+    expected_nonce_digest = configured[
+        "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256"
+    ]
+    add(
+        failures,
+        bool(expected_nonce) != bool(expected_nonce_digest),
+        "final verification mode requires exactly one hardware assurance expected challenge nonce or digest",
+    )
+    if expected_nonce:
+        try:
+            decoded_nonce = base64.urlsafe_b64decode(
+                expected_nonce + "=" * (-len(expected_nonce) % 4)
+            )
+        except Exception:
+            decoded_nonce = b""
+        add(
+            failures,
+            re.fullmatch(r"[A-Za-z0-9_-]+", expected_nonce) is not None
+            and len(decoded_nonce) >= 32,
+            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE must be unpadded base64url for at least 32 bytes",
+        )
+    if expected_nonce_digest:
+        add(
+            failures,
+            SHA256_RE.fullmatch(expected_nonce_digest) is not None,
+            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256 must be a sha256 digest",
+        )
+    required_values = [
+        configured[name]
+        for name in (
+            *receipt_settings,
+            "SERVERWARE_HARDWARE_ASSURANCE",
+            "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        )
+    ]
+    if not all(required_values) or bool(expected_nonce) == bool(expected_nonce_digest):
+        return
+    add(
+        failures,
+        len(configured["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"]) <= 256,
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER must not exceed 256 characters",
+    )
+    receipt_payload = read_bounded_regular_file(
+        env,
+        "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
+        failures,
+        file_label="final challenge receipt",
+        max_bytes=MAX_FINAL_CHALLENGE_RECEIPT_FILE_BYTES,
+    )
+    receipt = None
+    if receipt_payload is not None:
+        try:
+            receipt = json.loads(receipt_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            receipt = None
+        add(
+            failures,
+            isinstance(receipt, dict)
+            and receipt.get("apiVersion") == "serverware.finalChallengeReceipt/v1",
+            "SERVERWARE_FINAL_CHALLENGE_RECEIPT must contain a serverware.finalChallengeReceipt/v1 document",
+        )
+    authority_key_id = check_trusted_public_key_file(
+        env,
+        "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        failures,
+        require_ed25519=True,
+    )
+    if isinstance(receipt, dict):
+        statement = receipt.get("statement") if isinstance(receipt.get("statement"), dict) else {}
+        add(
+            failures,
+            receipt.get("kind") == "FinalChallengeConsumption",
+            "SERVERWARE_FINAL_CHALLENGE_RECEIPT kind must be FinalChallengeConsumption",
+        )
+        add(
+            failures,
+            statement.get("authority_provider") == configured["SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"],
+            "SERVERWARE_FINAL_CHALLENGE_RECEIPT authority provider must match the configured provider",
+        )
+        add(
+            failures,
+            authority_key_id is not None and receipt.get("signing_key_id") == authority_key_id,
+            "SERVERWARE_FINAL_CHALLENGE_RECEIPT signing key must match the configured Ed25519 authority key",
+        )
+        add(
+            failures,
+            isinstance(receipt.get("signature"), str) and bool(receipt.get("signature")),
+            "SERVERWARE_FINAL_CHALLENGE_RECEIPT must contain an authority signature",
+        )
+    hardware_payload = read_bounded_regular_file(
+        env,
+        "SERVERWARE_HARDWARE_ASSURANCE",
+        failures,
+        file_label="hardware assurance",
+        max_bytes=MAX_HARDWARE_ASSURANCE_FILE_BYTES,
+    )
+    hardware_assurance = None
+    if hardware_payload is not None:
+        try:
+            hardware_assurance = json.loads(hardware_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            hardware_assurance = None
+        add(
+            failures,
+            isinstance(hardware_assurance, dict)
+            and hardware_assurance.get("apiVersion") == "serverware.hardwareAssurance/v1"
+            and hardware_assurance.get("kind") == "ServerwareHardwareAssurance",
+            "SERVERWARE_HARDWARE_ASSURANCE must contain a serverware.hardwareAssurance/v1 document",
+        )
+    hardware_key_id = check_trusted_public_key_file(
+        env,
+        "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        failures,
+        require_ed25519=True,
+    )
+    if isinstance(hardware_assurance, dict):
+        add(
+            failures,
+            hardware_key_id is not None
+            and hardware_assurance.get("signing_key_id") == hardware_key_id,
+            "SERVERWARE_HARDWARE_ASSURANCE signing key must match the configured Ed25519 verifier key",
+        )
+        add(
+            failures,
+            isinstance(hardware_assurance.get("signature"), str)
+            and bool(hardware_assurance.get("signature")),
+            "SERVERWARE_HARDWARE_ASSURANCE must contain a verifier signature",
+        )
+
+
 def check_cosign(env: dict[str, str], failures: list[str]) -> None:
     add(failures, env.get("SERVERWARE_IMAGE_SIGNATURE_PROVIDER") == "sigstore-command", "image signature provider must be sigstore-command")
     sign_command = env.get("SERVERWARE_IMAGE_SIGN_COMMAND", "").strip()
@@ -836,31 +1190,30 @@ def check_cosign(env: dict[str, str], failures: list[str]) -> None:
     key_ref = env.get("SERVERWARE_COSIGN_KEY", "").strip()
     cert_identity = env.get("SERVERWARE_COSIGN_CERT_IDENTITY", "").strip()
     cert_issuer = env.get("SERVERWARE_COSIGN_CERT_OIDC_ISSUER", "").strip()
-    keyless_ok = bool(cert_identity and cert_issuer)
     kms_key_ok = key_ref.startswith(KMS_KEY_PREFIXES)
     add(
         failures,
-        keyless_ok or kms_key_ok,
-        "cosign must use a KMS/HSM key ref or keyless certificate identity plus OIDC issuer",
+        kms_key_ok,
+        "cosign must use SERVERWARE_COSIGN_KEY with a KMS/HSM-backed URI",
     )
     if key_ref:
         add(failures, kms_key_ok, f"SERVERWARE_COSIGN_KEY must use a KMS/HSM-backed URI prefix: {', '.join(KMS_KEY_PREFIXES)}")
-    add(failures, bool(env.get("SERVERWARE_COSIGN_KEY_ID", "").strip() or keyless_ok), "cosign key provider identity must be stable")
+    add(
+        failures,
+        not cert_identity and not cert_issuer,
+        "Cosign keyless/Fulcio mode is not supported by release completion; certificate identity and issuer settings must be unset",
+    )
+    add(
+        failures,
+        bool(env.get("SERVERWARE_COSIGN_KEY_ID", "").strip()),
+        "SERVERWARE_COSIGN_KEY_ID must pin the stable signing public-key identity",
+    )
     add(failures, bool(env.get("SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()), "Sigstore/Rekor log ID must be pinned")
 
 
 def expected_sigstore_key_id(env: dict[str, str]) -> str | None:
     explicit = env.get("SERVERWARE_COSIGN_KEY_ID", "").strip()
-    if explicit:
-        return explicit
-    key_ref = env.get("SERVERWARE_COSIGN_KEY", "").strip()
-    if key_ref:
-        return sha256_prefixed_bytes(key_ref.encode("utf-8"))
-    cert_identity = env.get("SERVERWARE_COSIGN_CERT_IDENTITY", "").strip()
-    cert_issuer = env.get("SERVERWARE_COSIGN_CERT_OIDC_ISSUER", "").strip()
-    if cert_identity or cert_issuer:
-        return sha256_prefixed_bytes(f"{cert_identity}|{cert_issuer}".encode("utf-8"))
-    return None
+    return explicit or None
 
 
 def check_transparency(env: dict[str, str], failures: list[str]) -> None:
@@ -1363,6 +1716,8 @@ def main() -> None:
         check_oauth_providers,
         check_nitro,
         check_attested_credential_delivery,
+        check_release_completion_trust,
+        check_final_challenge_authority,
         check_cosign,
         check_transparency,
         check_apparmor,

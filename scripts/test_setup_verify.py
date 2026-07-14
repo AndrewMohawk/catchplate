@@ -252,10 +252,25 @@ def main() -> None:
             credential_id: str = exact_credential["id"],
             nonce: str = NONCE,
         ) -> dict[str, Any]:
+            current_snapshot = app_module.get_policy_snapshot()
+            raw_route = next(
+                (
+                    item
+                    for item in ((current_snapshot.raw.get("routes") or []) if current_snapshot else [])
+                    if isinstance(item, dict) and item.get("id") == route_id
+                ),
+                None,
+            )
+            route_policy_digest = (
+                "sha256:" + hashlib.sha256(canonical_json(raw_route).encode("utf-8")).hexdigest()
+                if raw_route is not None
+                else "sha256:" + "0" * 64
+            )
             body = {
                 "principalId": principal_id,
                 "routeId": route_id,
                 "credentialId": credential_id,
+                "routePolicyDigest": route_policy_digest,
                 "nonce": nonce,
             }
             if current_enrollment_session_id is not None:
@@ -302,6 +317,7 @@ def main() -> None:
                 "credentialId": exact_credential["id"],
                 "credentialVersion": exact_credential["credential_version"],
                 "policyHash": baseline_snapshot.hash,
+                "routePolicyDigest": request_body()["routePolicyDigest"],
             }
             if exact["assignment"] != expected_assignment:
                 raise AssertionError(f"exact assignment changed: {exact['assignment']}")
@@ -320,7 +336,15 @@ def main() -> None:
             if exact["nextAction"] != "verify_enrollment_and_install_ca":
                 raise AssertionError(f"missing runtime evidence returned wrong next action: {exact}")
             assert_check(exact, "runtime.credentialRelease", "pending")
+            assert_check(exact, "runtime.responseReleased", "pending")
             assert_check(exact, "runtime.jitConsumption", "pending")
+
+            assert_configuration_failure(
+                "mismatched reviewed route policy",
+                {**request_body(), "routePolicyDigest": "sha256:" + "f" * 64},
+                "route.policyBinding",
+                passing_checks=("route.active", "route.principalBinding"),
+            )
 
             activate_policy(exact_credential["id"], provider="google.oauth2")
             provider_alias = verify(request_body())
@@ -497,7 +521,11 @@ def main() -> None:
                     "consumed_by": "user:setup-verifier",
                     "enrollment_packet_sha256": "sha256:" + "8" * 64,
                     "allowed_assignments": [
-                        {"route_id": ROUTE_ID, "credential_id": exact_credential["id"]}
+                        {
+                            "route_id": ROUTE_ID,
+                            "credential_id": exact_credential["id"],
+                            "credential_version": credential_version,
+                        }
                     ],
                 }
             )
@@ -540,6 +568,7 @@ def main() -> None:
             if released["runtimeVerified"] or released["nextAction"] != "approve_and_retry_exact_request":
                 raise AssertionError(f"exact release did not transition to pending JIT: {released}")
             assert_check(released, "runtime.credentialRelease", "pass")
+            assert_check(released, "runtime.responseReleased", "pending")
             assert_check(released, "runtime.jitConsumption", "pending")
 
             db.record_audit_event(
@@ -605,6 +634,22 @@ def main() -> None:
                 actor_type="proxy",
                 actor_id=ROUTE_ID,
             )
+            no_response = verify(request_body())
+            if no_response["runtimeVerified"] or no_response["nextAction"] != "wait_for_validated_response_evidence":
+                raise AssertionError(f"pre-send and JIT evidence were accepted without a response: {no_response}")
+            assert_check(no_response, "runtime.responseReleased", "pending")
+
+            db.record_audit_event(
+                "data_plane.response.released",
+                runtime_event(
+                    outcome="released",
+                    upstream_status=200,
+                    response_body_sha256="sha256:" + "e" * 64,
+                    response_validation={"mode": "buffered", "validated": True},
+                ),
+                actor_type="data-plane",
+                actor_id="spiffe://test/exact-response",
+            )
             runtime_verified = verify(request_body())
             if not runtime_verified["runtimeVerified"] or runtime_verified["hardwareVerified"]:
                 raise AssertionError(
@@ -616,6 +661,7 @@ def main() -> None:
             ):
                 raise AssertionError(f"software runtime proof overclaimed full verification: {runtime_verified}")
             assert_check(runtime_verified, "runtime.credentialRelease", "pass")
+            assert_check(runtime_verified, "runtime.responseReleased", "pass")
             assert_check(runtime_verified, "runtime.jitConsumption", "pass")
 
             db.record_audit_event(
@@ -653,6 +699,11 @@ def main() -> None:
                 ("missing nonce", {key: value for key, value in valid_body.items() if key != "nonce"}),
                 ("short nonce", {**valid_body, "nonce": "too-short"}),
                 ("invalid nonce alphabet", {**valid_body, "nonce": "!" * 32}),
+                (
+                    "missing route policy digest",
+                    {key: value for key, value in valid_body.items() if key != "routePolicyDigest"},
+                ),
+                ("invalid route policy digest", {**valid_body, "routePolicyDigest": "sha256:short"}),
                 ("empty route", {**valid_body, "routeId": ""}),
                 ("oversized principal", {**valid_body, "principalId": "p" * 257}),
                 ("non-string credential", {**valid_body, "credentialId": {"id": exact_credential["id"]}}),

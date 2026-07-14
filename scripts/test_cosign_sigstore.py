@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import base64
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+import cosign_sigstore
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -81,6 +84,16 @@ def verify_request(sign_payload: dict[str, Any], signature_response: dict[str, A
 
 
 def main() -> None:
+    raw_log_id = bytes(range(32))
+    expected_log_id = "sha256:" + raw_log_id.hex()
+    for encoded_log_id in (
+        expected_log_id,
+        raw_log_id.hex(),
+        base64.b64encode(raw_log_id).decode("ascii"),
+        base64.urlsafe_b64encode(raw_log_id).decode("ascii").rstrip("="),
+    ):
+        if cosign_sigstore.normalize_log_id(encoded_log_id) != expected_log_id:
+            raise AssertionError(f"failed to normalize Rekor log ID {encoded_log_id!r}")
     env = os.environ.copy()
     env.update(
         {
@@ -102,7 +115,16 @@ def main() -> None:
     if signature_response.get("statement_digest") != sign_payload["statement_digest"]:
         raise AssertionError(f"signature response digest mismatch: {signature_response}")
     bundle_digest = (((signature_response.get("bundle") or {}).get("messageSignature") or {}).get("messageDigest") or {}).get("digest")
-    if bundle_digest != sign_payload["statement_digest"].split(":", 1)[1]:
+    expected_digest = bytes.fromhex(sign_payload["statement_digest"].split(":", 1)[1])
+    try:
+        decoded_bundle_digest = (
+            bytes.fromhex(bundle_digest)
+            if isinstance(bundle_digest, str) and len(bundle_digest) == 64
+            else base64.b64decode(str(bundle_digest))
+        )
+    except Exception as exc:
+        raise AssertionError(f"cosign bundle digest encoding is invalid: {signature_response}") from exc
+    if decoded_bundle_digest != expected_digest:
         raise AssertionError(f"cosign bundle did not sign the canonical statement digest: {signature_response}")
     if (signature_response.get("key_provider") or {}).get("key_id") != env["SERVERWARE_COSIGN_KEY_ID"]:
         raise AssertionError(f"signature response did not bind configured key ID: {signature_response}")

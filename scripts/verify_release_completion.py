@@ -3,18 +3,24 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import hashlib
+import hmac
 import json
 import os
 import platform
 import re
+import stat
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
-from cryptography.hazmat.primitives import serialization
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 import build_production_images
@@ -48,6 +54,35 @@ PROXY_PROOF_FUTURE_SKEW_SECONDS = 30
 HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
 HARDWARE_PROOF_MAX_AGE_SECONDS = 900
 HARDWARE_PROOF_FUTURE_SKEW_SECONDS = 30
+EIF_BUILD_MANIFEST_API_VERSION = "serverware.eifBuildManifest/v1"
+FINAL_CHALLENGE_LEDGER_API_VERSION = "serverware.finalChallengeLedger/v1"
+FINAL_CHALLENGE_LEDGER_MAX_ENTRIES = 4096
+FINAL_CHALLENGE_RECEIPT_API_VERSION = "serverware.finalChallengeReceipt/v1"
+FINAL_CHALLENGE_RECEIPT_MAX_AGE_SECONDS = 900
+FINAL_MODE_ENV_KEY = "SERVERWARE_COMPLETION_VERIFICATION_MODE"
+FINAL_HARDWARE_ASSURANCE_ENV_KEY = "SERVERWARE_HARDWARE_ASSURANCE"
+FINAL_HARDWARE_TRUST_ROOT_ENV_KEY = "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY"
+FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY = "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE"
+FINAL_HARDWARE_CHALLENGE_DIGEST_ENV_KEY = "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256"
+FINAL_CHALLENGE_RECEIPT_ENV_KEY = "SERVERWARE_FINAL_CHALLENGE_RECEIPT"
+FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY = "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY"
+FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY = "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER"
+RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY = "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY"
+SIGSTORE_TRUST_ROOT_ENV_KEY = "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY"
+REKOR_TRUST_ROOT_ENV_KEY = "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY"
+EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY = "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY"
+EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY = "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER"
+RELEASE_IDENTITY_FIELDS = {
+    "source_tree_digest",
+    "provenance_digest",
+    "runtime_manifest_digest",
+    "data_plane_binary_digest",
+    "production_image_digests",
+    "production_image_refs",
+    "production_images_build_sha256",
+    "production_images_published_sha256",
+    "image_signature_bundle_digest",
+}
 CURRENT_HOST_IDENTITY_SCHEME = "serverware.currentCompletionHostIdentity/v1"
 CURRENT_HOST_IDENTITY_MAX_OBSERVATION_AGE_SECONDS = 60
 CURRENT_HOST_MACHINE_ID_PATH = Path("/etc/machine-id")
@@ -135,6 +170,60 @@ def b64d(value: str) -> bytes:
     return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
 
 
+def decode_signature(value: Any, label: str) -> bytes:
+    require(isinstance(value, str) and value, f"{label} is missing")
+    encoded = value.split(":", 1)[1] if value.startswith("ed25519:") else value
+    try:
+        return base64.b64decode(encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True)
+    except Exception as exc:
+        raise ValueError(f"{label} is invalid base64") from exc
+
+
+def decode_sha256_value(value: Any, label: str) -> bytes:
+    require(isinstance(value, str) and value, f"{label} is missing")
+    candidate = value.split(":", 1)[1] if value.startswith("sha256:") else value
+    if re.fullmatch(r"[0-9a-fA-F]{64}", candidate):
+        return bytes.fromhex(candidate)
+    try:
+        decoded = base64.b64decode(candidate + "=" * (-len(candidate) % 4), altchars=b"-_", validate=True)
+    except Exception as exc:
+        raise ValueError(f"{label} is not a SHA-256 value") from exc
+    require(len(decoded) == hashlib.sha256().digest_size, f"{label} is not 32 bytes")
+    return decoded
+
+
+def normalized_sha256_value(value: Any, label: str) -> str:
+    return "sha256:" + decode_sha256_value(value, label).hex()
+
+
+def verify_public_key_signature(public_key_pem: str, signature: str, payload: bytes, label: str) -> None:
+    try:
+        public_key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+        signature_bytes = decode_signature(signature, f"{label} signature")
+        if isinstance(public_key, Ed25519PublicKey):
+            public_key.verify(signature_bytes, payload)
+        elif isinstance(public_key, ec.EllipticCurvePublicKey):
+            if isinstance(public_key.curve, ec.SECP256R1):
+                digest_algorithm = hashes.SHA256()
+            elif isinstance(public_key.curve, ec.SECP384R1):
+                digest_algorithm = hashes.SHA384()
+            elif isinstance(public_key.curve, ec.SECP521R1):
+                digest_algorithm = hashes.SHA512()
+            else:
+                raise ValueError(f"{label} uses an unsupported elliptic curve")
+            public_key.verify(signature_bytes, payload, ec.ECDSA(digest_algorithm))
+        elif isinstance(public_key, rsa.RSAPublicKey):
+            public_key.verify(signature_bytes, payload, padding.PKCS1v15(), hashes.SHA256())
+        else:
+            raise ValueError(f"{label} uses an unsupported public key type")
+    except InvalidSignature as exc:
+        raise ValueError(f"{label} signature verification failed") from exc
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"{label} signature verification failed") from exc
+
+
 def release_public_key_id(public_key_pem: str) -> str:
     try:
         public_key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
@@ -157,9 +246,20 @@ def verify_ed25519(public_key_pem: str, signature: str, payload: bytes, label: s
         raise ValueError(f"{label} signature verification failed") from exc
 
 
+def decode_base64(value: Any, label: str) -> bytes:
+    require(isinstance(value, str) and value, f"{label} is missing")
+    try:
+        return base64.b64decode(value + "=" * (-len(value) % 4), validate=True)
+    except Exception as exc:
+        raise ValueError(f"{label} is invalid base64") from exc
+
+
 def verify_external_checkpoint_receipt(
     checkpoint: dict[str, Any],
     *,
+    expected_provider: str,
+    expected_log_id: str,
+    trusted_public_key_pem: str,
     expected_fields: dict[str, Any],
     label: str,
 ) -> dict[str, Any]:
@@ -175,16 +275,31 @@ def verify_external_checkpoint_receipt(
     signature = receipt.get("signature")
     require(isinstance(public_key_pem, str) and public_key_pem, f"{label} external transparency receipt is missing public key")
     require(isinstance(signature, str) and signature, f"{label} external transparency receipt is missing signature")
+    trusted_log_id = release_public_key_id(trusted_public_key_pem)
+    require(trusted_log_id == expected_log_id, f"{label} trusted external transparency key id mismatch")
     require(
-        release_public_key_id(public_key_pem) == log_id,
-        f"{label} external transparency receipt public key does not match log id",
+        release_public_key_id(public_key_pem) == trusted_log_id,
+        f"{label} external transparency receipt public key is not the independently trusted log key",
     )
+    require(provider == expected_provider, f"{label} external transparency provider is not the trusted provider")
+    require(log_id == expected_log_id, f"{label} external transparency log is not the trusted log")
     require(payload.get("provider") == provider, f"{label} external transparency receipt provider mismatch")
     require(payload.get("log_id") == log_id, f"{label} external transparency receipt log mismatch")
     for field, expected in expected_fields.items():
         require(payload.get(field) == expected, f"{label} external transparency receipt {field} mismatch")
-    verify_ed25519(public_key_pem, signature, canonical_json(payload).encode("utf-8"), f"{label} external transparency receipt")
-    return {"provider": provider, "log_id": log_id, "external_sequence": checkpoint.get("external_sequence")}
+    verify_ed25519(
+        trusted_public_key_pem,
+        signature,
+        canonical_json(payload).encode("utf-8"),
+        f"{label} external transparency receipt",
+    )
+    return {
+        "provider": provider,
+        "log_id": log_id,
+        "external_sequence": checkpoint.get("external_sequence"),
+        "checkpoint_sha256": sha256_prefixed_json(checkpoint),
+        "receipt_payload_sha256": sha256_prefixed_json(payload),
+    }
 
 
 def verify_signed_tree_head(sth: dict[str, Any], *, root: str, tree_size: int, label: str) -> None:
@@ -313,14 +428,134 @@ def sigstore_log_id(entry: dict[str, Any]) -> Any:
     return value
 
 
+def parse_nonnegative_int64(value: Any, label: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} is invalid")
+    if isinstance(value, int):
+        parsed = value
+    elif isinstance(value, str) and re.fullmatch(r"0|[1-9][0-9]*", value):
+        parsed = int(value)
+    else:
+        raise ValueError(f"{label} is invalid")
+    require(0 <= parsed <= 2**63 - 1, f"{label} is outside int64 range")
+    return parsed
+
+
+def verify_sigstore_checkpoint(
+    *,
+    proof: dict[str, Any],
+    expected_tree_size: int,
+    expected_root_hash: bytes,
+    trusted_rekor_public_key_pem: str,
+    label: str,
+) -> None:
+    checkpoint = proof.get("checkpoint") if isinstance(proof.get("checkpoint"), dict) else {}
+    envelope = checkpoint.get("envelope")
+    require(isinstance(envelope, str) and envelope, f"{label} Sigstore checkpoint envelope is missing")
+    try:
+        signed_text, signature_block = envelope.split("\n\n", 1)
+    except ValueError as exc:
+        raise ValueError(f"{label} Sigstore checkpoint envelope is malformed") from exc
+    checkpoint_lines = signed_text.splitlines()
+    require(len(checkpoint_lines) == 3, f"{label} Sigstore checkpoint body is malformed")
+    origin, tree_size_value, root_hash_value = checkpoint_lines
+    checkpoint_tree_size = parse_nonnegative_int64(tree_size_value, f"{label} checkpoint tree size")
+    checkpoint_root_hash = decode_sha256_value(root_hash_value, f"{label} checkpoint root hash")
+    require(checkpoint_tree_size == expected_tree_size, f"{label} checkpoint tree size mismatch")
+    require(checkpoint_root_hash == expected_root_hash, f"{label} checkpoint root hash mismatch")
+    signature_lines = [line for line in signature_block.splitlines() if line]
+    require(len(signature_lines) == 1, f"{label} Sigstore checkpoint signature block is invalid")
+    prefix = "\u2014 "
+    require(signature_lines[0].startswith(prefix), f"{label} Sigstore checkpoint signature marker is invalid")
+    try:
+        signer_name, encoded_signature = signature_lines[0][len(prefix) :].rsplit(" ", 1)
+    except ValueError as exc:
+        raise ValueError(f"{label} Sigstore checkpoint signature line is malformed") from exc
+    require(origin.startswith(signer_name + " "), f"{label} Sigstore checkpoint signer name mismatch")
+    signature_with_key_hint = decode_signature(encoded_signature, f"{label} checkpoint note signature")
+    require(
+        len(signature_with_key_hint) > 4,
+        f"{label} Sigstore checkpoint note signature is too short",
+    )
+    verify_public_key_signature(
+        trusted_rekor_public_key_pem,
+        base64.b64encode(signature_with_key_hint[4:]).decode("ascii"),
+        (signed_text + "\n").encode("utf-8"),
+        f"{label} Sigstore checkpoint",
+    )
+
+
+def verify_sigstore_merkle_inclusion(
+    *,
+    leaf_hash: bytes,
+    proof: dict[str, Any],
+    label: str,
+) -> None:
+    tree_size_value = proof.get("treeSize") if proof.get("treeSize") is not None else proof.get("tree_size")
+    log_index_value = proof.get("logIndex") if proof.get("logIndex") is not None else proof.get("log_index")
+    root_hash = proof.get("rootHash") if proof.get("rootHash") is not None else proof.get("root_hash")
+    hashes = proof.get("hashes")
+    tree_size = parse_nonnegative_int64(tree_size_value, f"{label} Sigstore inclusion tree size")
+    log_index = parse_nonnegative_int64(log_index_value, f"{label} Sigstore inclusion log index")
+    require(tree_size >= 1, f"{label} Sigstore inclusion tree size is invalid")
+    require(
+        0 <= log_index < tree_size,
+        f"{label} Sigstore inclusion log index is invalid",
+    )
+    root = decode_sha256_value(root_hash, f"{label} Sigstore inclusion root")
+    require(isinstance(hashes, list), f"{label} Sigstore inclusion hashes must be a list")
+    cursor = leaf_hash
+    index = log_index
+    last = tree_size - 1
+    for position, sibling_value in enumerate(hashes):
+        require(last != 0, f"{label} Sigstore inclusion proof has extra hashes")
+        sibling = decode_sha256_value(sibling_value, f"{label} Sigstore inclusion hash {position}")
+        if index & 1 or index == last:
+            cursor = hashlib.sha256(b"\x01" + sibling + cursor).digest()
+            while index and not index & 1:
+                index >>= 1
+                last >>= 1
+        else:
+            cursor = hashlib.sha256(b"\x01" + cursor + sibling).digest()
+        index >>= 1
+        last >>= 1
+    require(last == 0 and cursor == root, f"{label} Sigstore Merkle inclusion proof did not verify")
+
+
 def verify_sigstore_bundle_binding(
     sigstore: dict[str, Any],
     *,
+    expected_statement: dict[str, Any],
     expected_statement_digest: str,
     expected_signature: str,
+    trusted_signing_public_key_pem: str,
+    expected_signing_key_id: str,
     expected_rekor_log_id: str,
+    trusted_rekor_public_key_pem: str,
     label: str,
 ) -> None:
+    trusted_signing_key_id = release_public_key_id(trusted_signing_public_key_pem)
+    trusted_rekor_log_id = release_public_key_id(trusted_rekor_public_key_pem)
+    require(
+        trusted_signing_key_id == expected_signing_key_id,
+        f"{label} independently trusted Sigstore key id mismatch",
+    )
+    require(
+        trusted_rekor_log_id == expected_rekor_log_id,
+        f"{label} independently trusted Rekor key id mismatch",
+    )
+    require(
+        sha256_prefixed_json(expected_statement) == expected_statement_digest,
+        f"{label} expected statement digest mismatch",
+    )
+    signing_public_key = serialization.load_pem_public_key(
+        trusted_signing_public_key_pem.encode("ascii")
+    )
+    require(
+        not isinstance(signing_public_key, Ed25519PublicKey),
+        f"{label} transparent Ed25519/Ed25519ph signatures are not supported by this verifier",
+    )
+    statement_bytes = canonical_json(expected_statement).encode("utf-8")
     bundle = sigstore.get("bundle") if isinstance(sigstore.get("bundle"), dict) else {}
     require(bundle, f"{label} Sigstore proof is missing bundle")
     message_signature = bundle.get("messageSignature") if isinstance(bundle.get("messageSignature"), dict) else {}
@@ -330,29 +565,146 @@ def verify_sigstore_bundle_binding(
     message_digest = message_signature.get("messageDigest") if isinstance(message_signature.get("messageDigest"), dict) else {}
     if not message_digest:
         message_digest = message_signature.get("message_digest") if isinstance(message_signature.get("message_digest"), dict) else {}
-    require(str(message_digest.get("algorithm", "")).lower() == "sha256", f"{label} Sigstore bundle digest algorithm mismatch")
+    digest_algorithm = str(message_digest.get("algorithm", "")).lower().replace("-", "_")
+    require(digest_algorithm in {"sha256", "sha2_256"}, f"{label} Sigstore bundle digest algorithm mismatch")
     require(
-        message_digest.get("digest") == expected_statement_digest.split(":", 1)[1],
+        decode_sha256_value(message_digest.get("digest"), f"{label} Sigstore bundle digest")
+        == hash_to_bytes(expected_statement_digest),
         f"{label} Sigstore bundle digest mismatch",
     )
     require(message_signature.get("signature") == expected_signature, f"{label} Sigstore bundle signature mismatch")
+    verify_public_key_signature(
+        trusted_signing_public_key_pem,
+        expected_signature,
+        statement_bytes,
+        f"{label} Sigstore message",
+    )
+
+    verification_material = (
+        bundle.get("verificationMaterial")
+        if isinstance(bundle.get("verificationMaterial"), dict)
+        else bundle.get("verification_material")
+        if isinstance(bundle.get("verification_material"), dict)
+        else {}
+    )
+    public_key = verification_material.get("publicKey") if isinstance(verification_material.get("publicKey"), dict) else {}
+    if not public_key:
+        public_key = verification_material.get("public_key") if isinstance(verification_material.get("public_key"), dict) else {}
+    public_key_hint = public_key.get("hint")
+    require(
+        normalized_sha256_value(public_key_hint, f"{label} Sigstore bundle public-key hint")
+        == expected_signing_key_id,
+        f"{label} Sigstore bundle public-key hint mismatch",
+    )
 
     transparency = sigstore.get("transparency") if isinstance(sigstore.get("transparency"), dict) else {}
     entries = sigstore_tlog_entries(bundle)
     require(entries, f"{label} Sigstore bundle is missing transparency log entry")
     entry = entries[0]
-    require(sigstore_log_id(entry) == expected_rekor_log_id, f"{label} Sigstore bundle Rekor log mismatch")
-    require(sigstore_log_id(entry) == transparency.get("log_id"), f"{label} Sigstore bundle/top-level log mismatch")
+    entry_log_id = sigstore_log_id(entry)
+    normalized_entry_log_id = normalized_sha256_value(entry_log_id, f"{label} Sigstore bundle Rekor log id")
+    require(normalized_entry_log_id == expected_rekor_log_id, f"{label} Sigstore bundle Rekor log mismatch")
+    require(
+        normalized_entry_log_id
+        == normalized_sha256_value(transparency.get("log_id"), f"{label} top-level Rekor log id"),
+        f"{label} Sigstore bundle/top-level log mismatch",
+    )
+    require(
+        isinstance(transparency.get("entry_uuid"), str) and transparency.get("entry_uuid"),
+        f"{label} top-level transparency entry correlation id is missing",
+    )
     for top_key, entry_keys in (
-        ("entry_uuid", ("entry_uuid", "entryUUID", "uuid")),
         ("integrated_time", ("integrated_time", "integratedTime")),
         ("log_index", ("log_index", "logIndex")),
     ):
-        top_value = transparency.get(top_key)
-        entry_value = next((entry.get(key) for key in entry_keys if entry.get(key) is not None), None)
+        top_value = parse_nonnegative_int64(transparency.get(top_key), f"{label} top-level {top_key}")
+        entry_raw = next((entry.get(key) for key in entry_keys if entry.get(key) is not None), None)
+        entry_value = parse_nonnegative_int64(entry_raw, f"{label} bundle {top_key}")
         require(entry_value == top_value, f"{label} Sigstore bundle/top-level {top_key} mismatch")
     entry_inclusion = entry.get("inclusion_proof") or entry.get("inclusionProof")
     require(entry_inclusion == transparency.get("inclusion_proof"), f"{label} Sigstore bundle/top-level inclusion proof mismatch")
+    require(isinstance(entry_inclusion, dict), f"{label} Sigstore bundle inclusion proof is missing")
+
+    canonicalized_body_value = entry.get("canonicalizedBody") or entry.get("canonicalized_body")
+    canonicalized_body = decode_base64(canonicalized_body_value, f"{label} Sigstore canonicalized body")
+    try:
+        body = json.loads(canonicalized_body, object_pairs_hook=reject_duplicate_json_object_keys)
+    except Exception as exc:
+        raise ValueError(f"{label} Sigstore canonicalized body is invalid JSON") from exc
+    require(isinstance(body, dict), f"{label} Sigstore canonicalized body must be an object")
+    spec = body.get("spec") if isinstance(body.get("spec"), dict) else {}
+    data = spec.get("data") if isinstance(spec.get("data"), dict) else {}
+    body_hash = data.get("hash") if isinstance(data.get("hash"), dict) else {}
+    body_signature = spec.get("signature") if isinstance(spec.get("signature"), dict) else {}
+    require(str(body_hash.get("algorithm", "")).lower() == "sha256", f"{label} Rekor body digest algorithm mismatch")
+    require(
+        body_hash.get("value") == expected_statement_digest.split(":", 1)[1],
+        f"{label} Rekor body statement digest mismatch",
+    )
+    require(body_signature.get("content") == expected_signature, f"{label} Rekor body signature mismatch")
+    body_public_key = body_signature.get("publicKey") if isinstance(body_signature.get("publicKey"), dict) else {}
+    encoded_body_public_key = body_public_key.get("content")
+    decoded_body_public_key = decode_base64(encoded_body_public_key, f"{label} Rekor body public key")
+    try:
+        body_public_key_pem = decoded_body_public_key.decode("ascii")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"{label} Rekor body public key is not ASCII PEM") from exc
+    require(
+        release_public_key_id(body_public_key_pem) == expected_signing_key_id,
+        f"{label} Rekor body key is not the independently trusted Sigstore key",
+    )
+
+    integrated_time = parse_nonnegative_int64(
+        entry.get("integratedTime") if entry.get("integratedTime") is not None else entry.get("integrated_time"),
+        f"{label} Rekor integrated time",
+    )
+    log_index = parse_nonnegative_int64(
+        entry.get("logIndex") if entry.get("logIndex") is not None else entry.get("log_index"),
+        f"{label} Rekor log index",
+    )
+    inclusion_promise = entry.get("inclusionPromise") if isinstance(entry.get("inclusionPromise"), dict) else {}
+    if not inclusion_promise:
+        inclusion_promise = entry.get("inclusion_promise") if isinstance(entry.get("inclusion_promise"), dict) else {}
+    signed_entry_timestamp = inclusion_promise.get("signedEntryTimestamp") or inclusion_promise.get(
+        "signed_entry_timestamp"
+    )
+    set_payload = {
+        "body": canonicalized_body_value,
+        "integratedTime": integrated_time,
+        "logID": decode_sha256_value(entry_log_id, f"{label} Rekor log id").hex(),
+        "logIndex": log_index,
+    }
+    require(isinstance(signed_entry_timestamp, str) and signed_entry_timestamp, f"{label} Rekor signed entry timestamp is missing")
+    verify_public_key_signature(
+        trusted_rekor_public_key_pem,
+        signed_entry_timestamp,
+        canonical_json(set_payload).encode("utf-8"),
+        f"{label} Rekor signed entry timestamp",
+    )
+    verify_sigstore_merkle_inclusion(
+        leaf_hash=hashlib.sha256(b"\x00" + canonicalized_body).digest(),
+        proof=entry_inclusion,
+        label=label,
+    )
+    proof_tree_size = parse_nonnegative_int64(
+        entry_inclusion.get("treeSize")
+        if entry_inclusion.get("treeSize") is not None
+        else entry_inclusion.get("tree_size"),
+        f"{label} Sigstore checkpoint tree size",
+    )
+    proof_root_hash = decode_sha256_value(
+        entry_inclusion.get("rootHash")
+        if entry_inclusion.get("rootHash") is not None
+        else entry_inclusion.get("root_hash"),
+        f"{label} Sigstore checkpoint root hash",
+    )
+    verify_sigstore_checkpoint(
+        proof=entry_inclusion,
+        expected_tree_size=proof_tree_size,
+        expected_root_hash=proof_root_hash,
+        trusted_rekor_public_key_pem=trusted_rekor_public_key_pem,
+        label=label,
+    )
 
 
 def assert_no_secret_fields(value: Any, path: str = "$") -> None:
@@ -376,6 +728,54 @@ def require_exact_keys(value: dict[str, Any], expected: set[str], label: str) ->
 def require_sha384(value: Any, label: str) -> str:
     require(isinstance(value, str) and SHA384_RE.fullmatch(value) is not None, f"{label} must be sha384-prefixed")
     return value
+
+
+def validate_release_identity(value: Any, label: str) -> dict[str, Any]:
+    require(isinstance(value, dict), f"{label} must be an object")
+    require_exact_keys(value, RELEASE_IDENTITY_FIELDS, label)
+    normalized = {
+        "source_tree_digest": require_sha256(value.get("source_tree_digest"), f"{label} source tree digest"),
+        "provenance_digest": require_sha256(value.get("provenance_digest"), f"{label} provenance digest"),
+        "runtime_manifest_digest": require_sha256(
+            value.get("runtime_manifest_digest"),
+            f"{label} runtime manifest digest",
+        ),
+        "data_plane_binary_digest": require_sha256(
+            value.get("data_plane_binary_digest"),
+            f"{label} data-plane binary digest",
+        ),
+        "production_images_build_sha256": require_sha256(
+            value.get("production_images_build_sha256"),
+            f"{label} production image build artifact digest",
+        ),
+        "production_images_published_sha256": require_sha256(
+            value.get("production_images_published_sha256"),
+            f"{label} published image artifact digest",
+        ),
+        "image_signature_bundle_digest": require_sha256(
+            value.get("image_signature_bundle_digest"),
+            f"{label} image signature bundle digest",
+        ),
+    }
+    image_digests = value.get("production_image_digests")
+    image_refs = value.get("production_image_refs")
+    require(isinstance(image_digests, list) and image_digests, f"{label} production image digests are missing")
+    require(isinstance(image_refs, list) and image_refs, f"{label} production image refs are missing")
+    normalized["production_image_digests"] = sorted(
+        require_sha256(item, f"{label} production image digest") for item in image_digests
+    )
+    normalized["production_image_refs"] = sorted(
+        require_image_ref(item, f"{label} production image ref")[0] for item in image_refs
+    )
+    require(
+        len(set(normalized["production_image_digests"])) == len(normalized["production_image_digests"]),
+        f"{label} contains duplicate production image digests",
+    )
+    require(
+        len(set(normalized["production_image_refs"])) == len(normalized["production_image_refs"]),
+        f"{label} contains duplicate production image refs",
+    )
+    return normalized
 
 
 def current_host_identity_from_values(*, machine_id: str, product_uuid: str, boot_id: str) -> dict[str, str]:
@@ -441,9 +841,16 @@ def verify_hardware_assurance(
     nitro_evidence_sha256: str,
     production_host_preflight_sha256: str,
     current_host: dict[str, Any],
+    expected_release_identity: dict[str, Any],
+    expected_challenge_nonce: str | None = None,
+    expected_challenge_nonce_sha256: str | None = None,
     now_unix: int | None = None,
 ) -> dict[str, Any]:
     assert_no_secret_fields(document)
+    verified_expected_release_identity = validate_release_identity(
+        expected_release_identity,
+        "independently verified release identity",
+    )
     require_exact_keys(
         document,
         {"apiVersion", "kind", "statement", "signing_key_id", "signature"},
@@ -598,6 +1005,43 @@ def verify_hardware_assurance(
     except Exception as exc:
         raise ValueError("hardware assurance challenge nonce is invalid") from exc
     require(len(challenge_nonce_bytes) >= 32, "hardware assurance challenge nonce is too short")
+    supplied_expected_challenges = sum(
+        value is not None
+        for value in (expected_challenge_nonce, expected_challenge_nonce_sha256)
+    )
+    require(
+        supplied_expected_challenges == 1,
+        "hardware assurance verification requires exactly one caller-expected challenge nonce or nonce SHA-256",
+    )
+    challenge_nonce_sha256 = sha256_prefixed_bytes(challenge_nonce_bytes)
+    if expected_challenge_nonce is not None:
+        require(
+            isinstance(expected_challenge_nonce, str)
+            and BASE64URL_RE.fullmatch(expected_challenge_nonce) is not None,
+            "expected hardware assurance challenge nonce is invalid",
+        )
+        try:
+            expected_challenge_nonce_bytes = b64d(expected_challenge_nonce)
+        except Exception as exc:
+            raise ValueError("expected hardware assurance challenge nonce is invalid") from exc
+        require(
+            len(expected_challenge_nonce_bytes) >= 32,
+            "expected hardware assurance challenge nonce is too short",
+        )
+        challenge_matches = hmac.compare_digest(
+            challenge_nonce_bytes,
+            expected_challenge_nonce_bytes,
+        )
+    else:
+        expected_digest = require_sha256(
+            expected_challenge_nonce_sha256,
+            "expected hardware assurance challenge nonce digest",
+        )
+        challenge_matches = hmac.compare_digest(challenge_nonce_sha256, expected_digest)
+    require(
+        challenge_matches,
+        "hardware assurance challenge nonce does not match the caller-expected challenge",
+    )
 
     attestation_document_sha256 = require_sha256(
         statement.get("attestation_document_sha256"),
@@ -611,11 +1055,14 @@ def verify_hardware_assurance(
     eif = statement.get("eif") if isinstance(statement.get("eif"), dict) else {}
     require_exact_keys(
         eif,
-        {"image_sha384", "build_manifest_sha256", "signature_verified", "evidence_sha256"},
+        {"image_sha384", "build_manifest", "build_manifest_sha256", "signature_verified", "evidence_sha256"},
         "hardware assurance EIF evidence",
     )
     eif_image_sha384 = require_sha384(eif.get("image_sha384"), "hardware assurance EIF image digest")
-    require_sha256(eif.get("build_manifest_sha256"), "hardware assurance EIF build manifest digest")
+    build_manifest_sha256 = require_sha256(
+        eif.get("build_manifest_sha256"),
+        "hardware assurance EIF build manifest digest",
+    )
     require_sha256(eif.get("evidence_sha256"), "hardware assurance EIF evidence digest")
     require(eif.get("signature_verified") is True, "hardware assurance did not verify the EIF signature")
 
@@ -623,6 +1070,40 @@ def verify_hardware_assurance(
     require_exact_keys(pcrs, {"PCR0", "PCR1", "PCR2"}, "hardware assurance PCR measurements")
     verified_pcrs = {name: require_sha384(pcrs.get(name), f"hardware assurance {name}") for name in ("PCR0", "PCR1", "PCR2")}
     require(verified_pcrs["PCR0"] == eif_image_sha384, "hardware assurance EIF image digest does not match PCR0")
+    build_manifest = eif.get("build_manifest") if isinstance(eif.get("build_manifest"), dict) else {}
+    require_exact_keys(
+        build_manifest,
+        {"apiVersion", "release_identity", "release_identity_sha256", "eif_image_sha384", "pcrs"},
+        "hardware assurance EIF build manifest",
+    )
+    require(
+        build_manifest.get("apiVersion") == EIF_BUILD_MANIFEST_API_VERSION,
+        "hardware assurance EIF build manifest apiVersion mismatch",
+    )
+    manifest_release_identity = validate_release_identity(
+        build_manifest.get("release_identity"),
+        "hardware assurance EIF build manifest release identity",
+    )
+    require(
+        manifest_release_identity == verified_expected_release_identity,
+        "hardware assurance EIF build manifest does not match the independently verified source/build/release identity",
+    )
+    require(
+        build_manifest.get("release_identity_sha256") == sha256_prefixed_json(verified_expected_release_identity),
+        "hardware assurance EIF build manifest release identity digest mismatch",
+    )
+    require(
+        build_manifest.get("eif_image_sha384") == eif_image_sha384,
+        "hardware assurance EIF build manifest image measurement mismatch",
+    )
+    require(
+        build_manifest.get("pcrs") == verified_pcrs,
+        "hardware assurance EIF build manifest PCR measurements mismatch",
+    )
+    require(
+        sha256_prefixed_json(build_manifest) == build_manifest_sha256,
+        "hardware assurance EIF build manifest digest mismatch",
+    )
 
     enclave = statement.get("enclave") if isinstance(statement.get("enclave"), dict) else {}
     require_exact_keys(
@@ -698,6 +1179,15 @@ def verify_hardware_assurance(
         release_bindings == nitro_summary["attested_runtime"],
         "hardware assurance release bindings do not exactly match the Nitro-attested runtime",
     )
+    require(
+        release_bindings.get("source_tree_digest") == verified_expected_release_identity["source_tree_digest"]
+        and release_bindings.get("provenance_digest") == verified_expected_release_identity["provenance_digest"]
+        and release_bindings.get("runtime_manifest_digest")
+        == verified_expected_release_identity["runtime_manifest_digest"]
+        and release_bindings.get("data_plane_binary_digest")
+        == verified_expected_release_identity["data_plane_binary_digest"],
+        "hardware assurance Nitro release bindings do not match the independently verified release identity",
+    )
     artifact_bindings = statement.get("artifact_bindings") if isinstance(statement.get("artifact_bindings"), dict) else {}
     require_exact_keys(
         artifact_bindings,
@@ -730,12 +1220,16 @@ def verify_hardware_assurance(
         "verifier": verifier,
         "issued_at_unix": issued_at,
         "expires_at_unix": expires_at,
-        "challenge_nonce_sha256": sha256_prefixed_bytes(challenge_nonce_bytes),
+        "challenge_nonce_sha256": challenge_nonce_sha256,
+        "expected_challenge_bound": True,
         "current_host_identity": host_identity,
         "current_host_identity_bound": current_host_identity_bound,
         "attestation_document_sha256": attestation_document_sha256,
         "eif": eif,
         "pcrs": verified_pcrs,
+        "release_identity": verified_expected_release_identity,
+        "release_identity_sha256": sha256_prefixed_json(verified_expected_release_identity),
+        "release_measurements_bound": True,
         "enclave": enclave,
         "key_custody": key_custody,
         "no_parent_key": no_parent_key,
@@ -766,6 +1260,14 @@ def completion_assurance(
             "required_final_evidence": list(FINAL_HARDWARE_EVIDENCE),
         }
     require(hardware_assurance.get("verified") is True, "hardware assurance summary is not verified")
+    require(
+        hardware_assurance.get("expected_challenge_bound") is True,
+        "hardware assurance summary is not bound to an externally supplied expected challenge",
+    )
+    require(
+        hardware_assurance.get("release_measurements_bound") is True,
+        "hardware assurance summary is not bound to independently verified release measurements",
+    )
     if not host_bound:
         return {
             "level": "pre-enclave-readiness",
@@ -1081,6 +1583,8 @@ def external_checkpoint_binding(
     anchor_key: str,
     expected_provider: str,
     expected_log_id: str,
+    trusted_public_key_pem: str,
+    expected_checkpoint_sha256: str,
     label: str,
 ) -> dict[str, Any]:
     anchor_response = transparency.get(anchor_key) if isinstance(transparency.get(anchor_key), dict) else {}
@@ -1097,11 +1601,19 @@ def external_checkpoint_binding(
     log_id = require_sha256(checkpoint.get("log_id"), f"{label} external transparency log id")
     require(provider == expected_provider, f"{label} external transparency provider does not match live readiness")
     require(log_id == expected_log_id, f"{label} external transparency log does not match live readiness")
-    return verify_external_checkpoint_receipt(
+    verified = verify_external_checkpoint_receipt(
         checkpoint,
-        expected_fields={"provider": provider, "log_id": log_id},
+        expected_provider=expected_provider,
+        expected_log_id=expected_log_id,
+        trusted_public_key_pem=trusted_public_key_pem,
+        expected_fields={},
         label=label,
     )
+    require(
+        verified["checkpoint_sha256"] == expected_checkpoint_sha256,
+        f"{label} used a different external checkpoint than the receipt binding its release record",
+    )
+    return verified
 
 
 def transparency_record_binding(
@@ -1111,6 +1623,9 @@ def transparency_record_binding(
     inclusion_key: str,
     expected_type: str,
     expected_fields: dict[str, Any],
+    expected_external_provider: str,
+    expected_external_log_id: str,
+    trusted_external_public_key_pem: str,
     label: str,
 ) -> dict[str, Any]:
     record = transparency.get("record") if isinstance(transparency.get("record"), dict) else {}
@@ -1151,8 +1666,17 @@ def transparency_record_binding(
     anchor_sth = matching_anchor.get("signed_tree_head") if isinstance(matching_anchor.get("signed_tree_head"), dict) else {}
     require(anchor_sth == signed_tree_head, f"{label} transparency anchor signed tree head mismatch")
     checkpoint = matching_anchor.get("external_checkpoint") if isinstance(matching_anchor.get("external_checkpoint"), dict) else {}
-    verify_external_checkpoint_receipt(
+    item_checkpoint = item.get("external_checkpoint") if isinstance(item.get("external_checkpoint"), dict) else {}
+    require(item_checkpoint, f"{label} transparency inclusion item is missing its external checkpoint")
+    require(
+        item_checkpoint == checkpoint,
+        f"{label} transparency inclusion and anchor response used different external checkpoints",
+    )
+    verified_checkpoint = verify_external_checkpoint_receipt(
         checkpoint,
+        expected_provider=expected_external_provider,
+        expected_log_id=expected_external_log_id,
+        trusted_public_key_pem=trusted_external_public_key_pem,
         expected_fields={
             "record_digest": record_digest,
             "leaf_hash": expected_leaf_hash,
@@ -1161,7 +1685,12 @@ def transparency_record_binding(
         },
         label=label,
     )
-    return {"record_digest": record_digest, "leaf_hash": expected_leaf_hash, "tree_head_hash": tree_head_hash}
+    return {
+        "record_digest": record_digest,
+        "leaf_hash": expected_leaf_hash,
+        "tree_head_hash": tree_head_hash,
+        "external_checkpoint": verified_checkpoint,
+    }
 
 
 def verify_release_provenance(
@@ -1169,6 +1698,8 @@ def verify_release_provenance(
     document: dict[str, Any],
     expected_external_provider: str,
     expected_external_log_id: str,
+    trusted_release_public_key_pem: str,
+    trusted_external_public_key_pem: str,
 ) -> dict[str, Any]:
     require(summary.get("ok") is True and summary.get("release_provenance") == "pass", "release provenance summary did not pass")
     require(summary.get("anchored") is True, "release provenance was not anchored")
@@ -1188,11 +1719,21 @@ def verify_release_provenance(
     require(isinstance(public_key_pem, str) and public_key_pem, "release provenance document is missing signing public key")
     release_signing_key_id = require_sha256(document.get("release_signing_key_id"), "release signing key id")
     require(summary.get("release_signing_key_id") == release_signing_key_id, "release provenance summary signing key mismatch")
+    trusted_release_signing_key_id = release_public_key_id(trusted_release_public_key_pem)
     require(
-        release_public_key_id(public_key_pem) == release_signing_key_id,
-        "release provenance signing key id does not match public key",
+        release_signing_key_id == trusted_release_signing_key_id,
+        "release provenance signer does not match the independently trusted release key",
     )
-    verify_ed25519(public_key_pem, signature, canonical_json(provenance).encode("utf-8"), "release provenance")
+    require(
+        release_public_key_id(public_key_pem) == trusted_release_signing_key_id,
+        "release provenance embedded signing key is not the independently trusted release key",
+    )
+    verify_ed25519(
+        trusted_release_public_key_pem,
+        signature,
+        canonical_json(provenance).encode("utf-8"),
+        "release provenance",
+    )
     transparency = document.get("transparency") if isinstance(document.get("transparency"), dict) else {}
     inclusion_proof = transparency.get("inclusion_proof") if isinstance(transparency.get("inclusion_proof"), dict) else {}
     anchor_response = transparency.get("anchor_response") if isinstance(transparency.get("anchor_response"), dict) else {}
@@ -1210,6 +1751,9 @@ def verify_release_provenance(
             "signature": signature,
             "release_signing_key_id": release_signing_key_id,
         },
+        expected_external_provider=expected_external_provider,
+        expected_external_log_id=expected_external_log_id,
+        trusted_external_public_key_pem=trusted_external_public_key_pem,
         label="release provenance",
     )
     external_transparency = external_checkpoint_binding(
@@ -1217,6 +1761,8 @@ def verify_release_provenance(
         anchor_key="anchor_response",
         expected_provider=expected_external_provider,
         expected_log_id=expected_external_log_id,
+        trusted_public_key_pem=trusted_external_public_key_pem,
+        expected_checkpoint_sha256=release_record["external_checkpoint"]["checkpoint_sha256"],
         label="release provenance",
     )
     source_tree = provenance.get("source_tree") if isinstance(provenance.get("source_tree"), dict) else {}
@@ -1379,6 +1925,9 @@ def verify_image_signatures(
     expected_rekor_log_id: str,
     expected_external_provider: str,
     expected_external_log_id: str,
+    trusted_sigstore_public_key_pem: str,
+    trusted_rekor_public_key_pem: str,
+    trusted_external_public_key_pem: str,
 ) -> dict[str, Any]:
     provenance_digest = str(provenance["provenance_digest"])
     require(summary.get("ok") is True and summary.get("image_signatures") == "pass", "image signatures summary did not pass")
@@ -1389,6 +1938,14 @@ def verify_image_signatures(
     require(summary.get("release_signing_key_id") == release_signing_key_id, "image signatures summary release signing key mismatch")
     image_signing_key_id = require_sha256(summary.get("image_signing_key_id"), "image signing key id")
     require(image_signing_key_id == expected_sigstore_key_id, "image signing key does not match live Sigstore key")
+    require(
+        release_public_key_id(trusted_sigstore_public_key_pem) == image_signing_key_id,
+        "image signing key does not match the independently trusted Sigstore key",
+    )
+    require(
+        release_public_key_id(trusted_rekor_public_key_pem) == expected_rekor_log_id,
+        "live Rekor log does not match the independently trusted Rekor key",
+    )
     digest = require_sha256(document.get("image_signature_bundle_digest"), "image signature bundle digest")
     require(summary.get("image_signature_bundle_digest") == digest, "image signature summary digest mismatch")
     normalized_payload = normalized_image_signature_payload(document)
@@ -1424,20 +1981,17 @@ def verify_image_signatures(
     require(bool(bundle_sigstore_transparency.get("inclusion_proof")), "image signature bundle has no transparency inclusion proof")
     verify_sigstore_bundle_binding(
         bundle_sigstore,
+        expected_statement=normalized_payload,
         expected_statement_digest=digest,
         expected_signature=str(bundle_sigstore.get("signature")),
+        trusted_signing_public_key_pem=trusted_sigstore_public_key_pem,
+        expected_signing_key_id=image_signing_key_id,
         expected_rekor_log_id=expected_rekor_log_id,
+        trusted_rekor_public_key_pem=trusted_rekor_public_key_pem,
         label="image signature bundle",
     )
     transparency_log_ids.append(bundle_rekor_log_id)
     metadata_transparency = metadata.get("transparency") if isinstance(metadata.get("transparency"), dict) else {}
-    external_transparency = external_checkpoint_binding(
-        metadata_transparency,
-        anchor_key="anchorResponse",
-        expected_provider=expected_external_provider,
-        expected_log_id=expected_external_log_id,
-        label="image signature bundle",
-    )
     for image in images:
         require(isinstance(image, dict), "image signature entry must be an object")
         service = image.get("service")
@@ -1460,9 +2014,13 @@ def verify_image_signatures(
         require(sigstore.get("statement_digest") == statement_digest, f"image {image.get('service')} Sigstore statement digest mismatch")
         verify_sigstore_bundle_binding(
             sigstore,
+            expected_statement=statement,
             expected_statement_digest=statement_digest,
             expected_signature=str(sigstore.get("signature")),
+            trusted_signing_public_key_pem=trusted_sigstore_public_key_pem,
+            expected_signing_key_id=image_signing_key_id,
             expected_rekor_log_id=expected_rekor_log_id,
+            trusted_rekor_public_key_pem=trusted_rekor_public_key_pem,
             label=f"image {image.get('service')}",
         )
         key_provider = sigstore.get("key_provider") if isinstance(sigstore.get("key_provider"), dict) else {}
@@ -1494,6 +2052,18 @@ def verify_image_signatures(
             "signature": metadata.get("signature"),
             "images": signed_image_map,
         },
+        expected_external_provider=expected_external_provider,
+        expected_external_log_id=expected_external_log_id,
+        trusted_external_public_key_pem=trusted_external_public_key_pem,
+        label="image signature bundle",
+    )
+    external_transparency = external_checkpoint_binding(
+        metadata_transparency,
+        anchor_key="anchorResponse",
+        expected_provider=expected_external_provider,
+        expected_log_id=expected_external_log_id,
+        trusted_public_key_pem=trusted_external_public_key_pem,
+        expected_checkpoint_sha256=image_record["external_checkpoint"]["checkpoint_sha256"],
         label="image signature bundle",
     )
     require(
@@ -1911,6 +2481,10 @@ def verify_current_production_env_binding(
     readiness_summary: dict[str, Any],
     preflight_summary: dict[str, Any],
     config_summary: dict[str, Any],
+    *,
+    verification_mode: str = "readiness",
+    release_trust_inputs: dict[str, str | None] | None = None,
+    final_inputs: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
     try:
         production_env = run_production_readiness.load_env_file(paths["production_readiness_env"])
@@ -1999,7 +2573,113 @@ def verify_current_production_env_binding(
             environment["production_images_env_sha256"] == production_images_env_sha256,
             f"{summary_label} image env digest does not match current production images env",
         )
+
+    require(release_trust_inputs is not None, "release completion is missing production env trust bindings")
+    for env_name, label in (
+        (RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY, "release provenance trust root"),
+        (SIGSTORE_TRUST_ROOT_ENV_KEY, "Sigstore trust root"),
+        (REKOR_TRUST_ROOT_ENV_KEY, "Rekor trust root"),
+        (EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY, "external checkpoint trust root"),
+        (EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY, "external checkpoint provider"),
+    ):
+        selected = release_trust_inputs.get(env_name)
+        require(isinstance(selected, str) and bool(selected), f"release completion is missing the selected {label}")
+        require(
+            production_env.get(env_name) == selected,
+            f"selected {label} does not exactly match the hashed production readiness env",
+        )
+    try:
+        release_provenance_trust_root_id = release_public_key_id(
+            Path(production_env[RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY]).read_text(encoding="ascii")
+        )
+        sigstore_trust_root_id = release_public_key_id(
+            Path(production_env[SIGSTORE_TRUST_ROOT_ENV_KEY]).read_text(encoding="ascii")
+        )
+        rekor_trust_root_id = release_public_key_id(
+            Path(production_env[REKOR_TRUST_ROOT_ENV_KEY]).read_text(encoding="ascii")
+        )
+        external_checkpoint_trust_root_id = release_public_key_id(
+            Path(production_env[EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY]).read_text(encoding="ascii")
+        )
+    except Exception as exc:
+        raise ValueError(f"production readiness env release trust root is unreadable or invalid: {exc}") from exc
+    release_trust_binding = {
+        "release_trust_roots_env_bound": True,
+        "release_provenance_trusted_public_key_id": release_provenance_trust_root_id,
+        "sigstore_trusted_public_key_id": sigstore_trust_root_id,
+        "rekor_trusted_public_key_id": rekor_trust_root_id,
+        "external_checkpoint_trusted_public_key_id": external_checkpoint_trust_root_id,
+        "external_checkpoint_provider": production_env[EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY],
+    }
+
+    final_trust_binding: dict[str, Any] = {
+        "verification_mode": verification_mode,
+        "final_trust_roots_env_bound": False,
+    }
+    if verification_mode == "final":
+        require(final_inputs is not None, "final verification mode is missing final input bindings")
+        require(
+            production_env.get(FINAL_MODE_ENV_KEY) == "final",
+            f"production readiness env must set {FINAL_MODE_ENV_KEY}=final for final verification",
+        )
+        for env_name, label in (
+            (FINAL_HARDWARE_ASSURANCE_ENV_KEY, "hardware assurance evidence"),
+            (FINAL_HARDWARE_TRUST_ROOT_ENV_KEY, "hardware assurance trust root"),
+            (FINAL_CHALLENGE_RECEIPT_ENV_KEY, "final challenge receipt"),
+            (FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY, "final challenge authority trust root"),
+            (FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY, "final challenge authority provider"),
+        ):
+            selected = final_inputs.get(env_name)
+            require(
+                isinstance(selected, str) and bool(selected),
+                f"final verification is missing the selected {label}",
+            )
+            require(
+                production_env.get(env_name) == selected,
+                f"selected {label} does not exactly match the hashed production readiness env",
+            )
+        env_challenge_nonce = production_env.get(FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY)
+        env_challenge_digest = production_env.get(FINAL_HARDWARE_CHALLENGE_DIGEST_ENV_KEY)
+        require(
+            bool(env_challenge_nonce) != bool(env_challenge_digest),
+            "hashed production readiness env must pin exactly one hardware assurance expected challenge nonce or digest",
+        )
+        selected_challenge_nonce = final_inputs.get(FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY)
+        selected_challenge_digest = final_inputs.get(FINAL_HARDWARE_CHALLENGE_DIGEST_ENV_KEY)
+        require(
+            bool(selected_challenge_nonce) != bool(selected_challenge_digest),
+            "final verification must select exactly one hardware assurance expected challenge nonce or digest",
+        )
+        require(
+            env_challenge_nonce == selected_challenge_nonce
+            and env_challenge_digest == selected_challenge_digest,
+            "selected hardware assurance expected challenge does not exactly match the hashed production readiness env",
+        )
+        try:
+            hardware_trust_root_pem = Path(production_env[FINAL_HARDWARE_TRUST_ROOT_ENV_KEY]).read_text(
+                encoding="ascii"
+            )
+        except Exception as exc:
+            raise ValueError(f"production readiness env hardware assurance trust root is unreadable: {exc}") from exc
+        try:
+            authority_trust_root_pem = Path(
+                production_env[FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY]
+            ).read_text(encoding="ascii")
+        except Exception as exc:
+            raise ValueError(f"production readiness env final challenge authority trust root is unreadable: {exc}") from exc
+        final_trust_binding = {
+            "verification_mode": verification_mode,
+            "final_trust_roots_env_bound": True,
+            "hardware_assurance_trusted_public_key_id": release_public_key_id(hardware_trust_root_pem),
+            "final_challenge_authority_public_key_id": release_public_key_id(authority_trust_root_pem),
+            "final_challenge_authority_provider": production_env[FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY],
+            "hardware_assurance_expected_challenge_selector": (
+                "nonce" if env_challenge_nonce is not None else "nonce_sha256"
+            ),
+        }
     return {
+        **release_trust_binding,
+        **final_trust_binding,
         "production_readiness_env_sha256": production_readiness_env_sha256,
         "production_images_env_sha256": production_images_env_sha256,
         "production_env_keys": sorted(production_env),
@@ -2879,10 +3559,298 @@ def verify_production_proxy_response_proof(
 
 
 def write_output(path: Path, proof: dict[str, Any]) -> str:
-    path.parent.mkdir(parents=True, exist_ok=True)
     payload = (json.dumps(proof, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode("utf-8")
-    path.write_bytes(payload)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    require(not path.is_symlink(), "completion proof output must not be a symlink")
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            os.fchmod(temporary.fileno(), 0o600)
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+        directory_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
     return sha256_prefixed_bytes(payload)
+
+
+def consume_final_challenge_once(
+    ledger_path: Path,
+    *,
+    challenge_nonce_sha256: str,
+    completion_identity_sha256: str,
+    consumed_at_unix: int | None = None,
+) -> dict[str, Any]:
+    challenge_digest = require_sha256(challenge_nonce_sha256, "final completion challenge digest")
+    completion_digest = require_sha256(completion_identity_sha256, "final completion identity digest")
+    require(ledger_path.parent.is_dir(), "final challenge ledger parent directory does not exist")
+    parent_stat = ledger_path.parent.stat()
+    require(parent_stat.st_uid == os.geteuid(), "final challenge ledger directory must be owned by the verifier user")
+    require(
+        parent_stat.st_mode & (stat.S_IWGRP | stat.S_IWOTH) == 0,
+        "final challenge ledger directory must not be group- or world-writable",
+    )
+    require(not ledger_path.is_symlink(), "final challenge ledger must not be a symlink")
+    lock_path = ledger_path.with_name(ledger_path.name + ".lock")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    lock_fd = os.open(lock_path, flags, 0o600)
+    temporary_path: Path | None = None
+    try:
+        with os.fdopen(lock_fd, "r+b", closefd=True) as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            if ledger_path.exists():
+                ledger_fd = os.open(ledger_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+                try:
+                    ledger_stat = os.fstat(ledger_fd)
+                    require(stat.S_ISREG(ledger_stat.st_mode), "final challenge consumption ledger must be a regular file")
+                    require(
+                        ledger_stat.st_uid == os.geteuid(),
+                        "final challenge consumption ledger must be owned by the verifier user",
+                    )
+                    require(
+                        ledger_stat.st_mode & (stat.S_IRWXG | stat.S_IRWXO) == 0,
+                        "final challenge consumption ledger must not grant group or world access",
+                    )
+                    with os.fdopen(ledger_fd, "r", encoding="utf-8", closefd=False) as ledger_file:
+                        ledger = json.load(ledger_file, object_pairs_hook=reject_duplicate_json_object_keys)
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise ValueError("final challenge consumption ledger is invalid JSON") from exc
+                finally:
+                    os.close(ledger_fd)
+                require(isinstance(ledger, dict), "final challenge consumption ledger must be an object")
+                require_exact_keys(
+                    ledger,
+                    {"apiVersion", "max_entries", "entries"},
+                    "final challenge consumption ledger",
+                )
+                require(
+                    ledger.get("apiVersion") == FINAL_CHALLENGE_LEDGER_API_VERSION,
+                    "final challenge consumption ledger apiVersion mismatch",
+                )
+                require(
+                    ledger.get("max_entries") == FINAL_CHALLENGE_LEDGER_MAX_ENTRIES,
+                    "final challenge consumption ledger bound mismatch",
+                )
+                entries = ledger.get("entries")
+                require(isinstance(entries, list), "final challenge consumption ledger entries must be a list")
+            else:
+                entries = []
+            require(
+                len(entries) <= FINAL_CHALLENGE_LEDGER_MAX_ENTRIES,
+                "final challenge consumption ledger exceeds its configured bound",
+            )
+            for index, entry in enumerate(entries):
+                require(isinstance(entry, dict), f"final challenge consumption ledger entry {index} must be an object")
+                require_exact_keys(
+                    entry,
+                    {"challenge_nonce_sha256", "completion_identity_sha256", "consumed_at_unix"},
+                    f"final challenge consumption ledger entry {index}",
+                )
+                existing_challenge = require_sha256(
+                    entry.get("challenge_nonce_sha256"),
+                    f"final challenge consumption ledger entry {index} challenge digest",
+                )
+                require(
+                    not hmac.compare_digest(existing_challenge, challenge_digest),
+                    "final completion challenge was already consumed",
+                )
+                require_sha256(
+                    entry.get("completion_identity_sha256"),
+                    f"final challenge consumption ledger entry {index} completion identity digest",
+                )
+                require(
+                    isinstance(entry.get("consumed_at_unix"), int)
+                    and not isinstance(entry.get("consumed_at_unix"), bool),
+                    f"final challenge consumption ledger entry {index} timestamp is invalid",
+                )
+            require(
+                len(entries) < FINAL_CHALLENGE_LEDGER_MAX_ENTRIES,
+                "final challenge consumption ledger is full; rotate it explicitly before issuing another challenge",
+            )
+            consumed_at = int(time.time()) if consumed_at_unix is None else consumed_at_unix
+            require(
+                isinstance(consumed_at, int) and not isinstance(consumed_at, bool),
+                "final challenge consumption time is invalid",
+            )
+            updated_entries = [
+                *entries,
+                {
+                    "challenge_nonce_sha256": challenge_digest,
+                    "completion_identity_sha256": completion_digest,
+                    "consumed_at_unix": consumed_at,
+                },
+            ]
+            updated_ledger = {
+                "apiVersion": FINAL_CHALLENGE_LEDGER_API_VERSION,
+                "max_entries": FINAL_CHALLENGE_LEDGER_MAX_ENTRIES,
+                "entries": updated_entries,
+            }
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=ledger_path.parent,
+                prefix=f".{ledger_path.name}.",
+                delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+                os.fchmod(temporary.fileno(), 0o600)
+                temporary.write(canonical_json(updated_ledger) + "\n")
+                temporary.flush()
+                os.fsync(temporary.fileno())
+            os.replace(temporary_path, ledger_path)
+            temporary_path = None
+            directory_fd = os.open(ledger_path.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            return {
+                "consumed": True,
+                "challenge_nonce_sha256": challenge_digest,
+                "completion_identity_sha256": completion_digest,
+                "ledger_path": str(ledger_path),
+                "ledger_entries": len(updated_entries),
+                "ledger_max_entries": FINAL_CHALLENGE_LEDGER_MAX_ENTRIES,
+                "ledger_trust": "verifier-owned external durable storage; host rollback resistance is supplied by that storage",
+            }
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+
+
+def verify_final_challenge_receipt(
+    document: dict[str, Any],
+    *,
+    trusted_public_key_pem: str,
+    expected_provider: str,
+    expected_challenge_nonce_sha256: str,
+    expected_completion_identity_sha256: str,
+    expected_release_identity_sha256: str,
+    expected_hardware_verifier_key_id: str,
+    expected_current_host_identity_sha256: str,
+    expected_proxy_server_statement_sha256: str,
+    hardware_assurance_issued_at_unix: int,
+    now_unix: int | None = None,
+) -> dict[str, Any]:
+    require_exact_keys(
+        document,
+        {"apiVersion", "kind", "statement", "signing_key_id", "signature"},
+        "final challenge receipt",
+    )
+    require(
+        document.get("apiVersion") == FINAL_CHALLENGE_RECEIPT_API_VERSION,
+        "final challenge receipt apiVersion mismatch",
+    )
+    require(document.get("kind") == "FinalChallengeConsumption", "final challenge receipt kind mismatch")
+    statement = document.get("statement") if isinstance(document.get("statement"), dict) else {}
+    require_exact_keys(
+        statement,
+        {
+            "authority_provider",
+            "consumption_id",
+            "status",
+            "issued_at_unix",
+            "expires_at_unix",
+            "challenge_nonce_sha256",
+            "completion_identity_sha256",
+            "release_identity_sha256",
+            "hardware_verifier_key_id",
+            "current_host_identity_sha256",
+            "proxy_server_statement_sha256",
+        },
+        "final challenge receipt statement",
+    )
+    provider = statement.get("authority_provider")
+    consumption_id = statement.get("consumption_id")
+    require(isinstance(provider, str) and 1 <= len(provider) <= 256, "final challenge authority provider is invalid")
+    require(provider == expected_provider, "final challenge receipt authority provider mismatch")
+    require(
+        isinstance(consumption_id, str) and 1 <= len(consumption_id) <= 128,
+        "final challenge receipt consumption id is invalid",
+    )
+    require(statement.get("status") == "consumed", "final challenge receipt did not consume the challenge")
+    issued_at = statement.get("issued_at_unix")
+    expires_at = statement.get("expires_at_unix")
+    require(
+        isinstance(issued_at, int) and not isinstance(issued_at, bool),
+        "final challenge receipt issued_at_unix is invalid",
+    )
+    require(
+        isinstance(expires_at, int) and not isinstance(expires_at, bool),
+        "final challenge receipt expires_at_unix is invalid",
+    )
+    now = int(time.time()) if now_unix is None else now_unix
+    require(issued_at <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS, "final challenge receipt is issued in the future")
+    require(expires_at > now, "final challenge receipt is expired")
+    require(expires_at > issued_at, "final challenge receipt validity interval is invalid")
+    require(
+        expires_at - issued_at <= FINAL_CHALLENGE_RECEIPT_MAX_AGE_SECONDS,
+        "final challenge receipt validity interval is too long",
+    )
+    require(
+        issued_at >= hardware_assurance_issued_at_unix,
+        "final challenge receipt predates the hardware assurance",
+    )
+    expected_fields = {
+        "challenge_nonce_sha256": require_sha256(
+            expected_challenge_nonce_sha256, "expected final challenge digest"
+        ),
+        "completion_identity_sha256": require_sha256(
+            expected_completion_identity_sha256, "expected final completion identity digest"
+        ),
+        "release_identity_sha256": require_sha256(
+            expected_release_identity_sha256, "expected final release identity digest"
+        ),
+        "hardware_verifier_key_id": require_sha256(
+            expected_hardware_verifier_key_id, "expected hardware verifier key id"
+        ),
+        "current_host_identity_sha256": require_sha256(
+            expected_current_host_identity_sha256, "expected current host identity digest"
+        ),
+        "proxy_server_statement_sha256": require_sha256(
+            expected_proxy_server_statement_sha256, "expected proxy server statement digest"
+        ),
+    }
+    for field, expected in expected_fields.items():
+        actual = require_sha256(statement.get(field), f"final challenge receipt {field}")
+        require(hmac.compare_digest(actual, expected), f"final challenge receipt {field} mismatch")
+    trusted_key_id = release_public_key_id(trusted_public_key_pem)
+    require(
+        document.get("signing_key_id") == trusted_key_id,
+        "final challenge receipt is not signed by the independently trusted authority key",
+    )
+    verify_ed25519(
+        trusted_public_key_pem,
+        str(document.get("signature") or ""),
+        canonical_json(statement).encode("utf-8"),
+        "final challenge receipt",
+    )
+    return {
+        "consumed": True,
+        "authority_provider": provider,
+        "authority_key_id": trusted_key_id,
+        "consumption_id": consumption_id,
+        "issued_at_unix": issued_at,
+        "expires_at_unix": expires_at,
+        "challenge_nonce_sha256": expected_fields["challenge_nonce_sha256"],
+        "completion_identity_sha256": expected_fields["completion_identity_sha256"],
+        "receipt_sha256": sha256_prefixed_json(document),
+        "trust_boundary": "off-host authority atomically consumes challenges and signs receipts",
+    }
 
 
 def verify_release_security_evidence(
@@ -2986,6 +3954,15 @@ def verify_release_security_evidence(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify Serverware release readiness and independently proven final completion.")
+    parser.add_argument(
+        "--verification-mode",
+        choices=("readiness", "final"),
+        default="readiness",
+        help="Readiness never claims final completion; final fails closed unless all final evidence and one-use state pass.",
+    )
+    parser.add_argument("--final-challenge-receipt", default=None)
+    parser.add_argument("--final-challenge-authority-public-key", default=None)
+    parser.add_argument("--final-challenge-authority-provider", default=None)
     parser.add_argument("--production-readiness", default=".tmp/production-readiness.json")
     parser.add_argument("--production-readiness-config", default=".tmp/production-readiness-config.json")
     parser.add_argument("--production-readiness-env", default="ops/production-readiness.env")
@@ -2994,13 +3971,28 @@ def main() -> None:
     parser.add_argument("--nitro-evidence", default=".tmp/nitro-kms-evidence.json")
     parser.add_argument("--hardware-assurance", default=None)
     parser.add_argument("--hardware-assurance-trusted-public-key", default=None)
+    parser.add_argument(
+        "--hardware-assurance-expected-challenge-nonce",
+        default=None,
+        help="Expected hardware-verifier challenge as unpadded base64url.",
+    )
+    parser.add_argument(
+        "--hardware-assurance-expected-challenge-nonce-sha256",
+        default=None,
+        help="Expected hardware-verifier challenge digest as sha256:<64 lowercase hex>.",
+    )
     parser.add_argument("--production-images-build", default=".tmp/production-images-build.json")
     parser.add_argument("--production-images-env", default=".tmp/production-images.env")
     parser.add_argument("--production-images-published", default=".tmp/production-images-published.json")
     parser.add_argument("--release-provenance-summary", default=".tmp/release-provenance-summary.json")
     parser.add_argument("--release-provenance", default=".tmp/release-provenance.json")
+    parser.add_argument("--release-provenance-trusted-public-key", required=True)
     parser.add_argument("--image-signatures-summary", default=".tmp/image-signatures-summary.json")
     parser.add_argument("--image-signatures", default=".tmp/image-signatures.json")
+    parser.add_argument("--sigstore-trusted-public-key", required=True)
+    parser.add_argument("--rekor-trusted-public-key", required=True)
+    parser.add_argument("--external-checkpoint-provider", required=True)
+    parser.add_argument("--external-checkpoint-trusted-public-key", required=True)
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
     parser.add_argument("--policy-bundle", required=True)
     parser.add_argument("--policy-trusted-public-key", required=True)
@@ -3030,6 +4022,47 @@ def main() -> None:
         bool(args.hardware_assurance) == bool(args.hardware_assurance_trusted_public_key),
         "hardware-backed completion requires both --hardware-assurance and --hardware-assurance-trusted-public-key",
     )
+    supplied_hardware_challenges = sum(
+        value is not None
+        for value in (
+            args.hardware_assurance_expected_challenge_nonce,
+            args.hardware_assurance_expected_challenge_nonce_sha256,
+        )
+    )
+    if args.hardware_assurance:
+        require(
+            supplied_hardware_challenges == 1,
+            "hardware-backed completion requires exactly one --hardware-assurance-expected-challenge-nonce "
+            "or --hardware-assurance-expected-challenge-nonce-sha256",
+        )
+    else:
+        require(
+            supplied_hardware_challenges == 0,
+            "hardware assurance expected challenge options require --hardware-assurance",
+        )
+    if args.verification_mode == "final":
+        require(bool(args.hardware_assurance), "final verification mode requires hardware assurance evidence")
+        require(bool(args.final_challenge_receipt), "final verification mode requires --final-challenge-receipt")
+        require(
+            bool(args.final_challenge_authority_public_key),
+            "final verification mode requires --final-challenge-authority-public-key",
+        )
+        require(
+            bool(args.final_challenge_authority_provider),
+            "final verification mode requires --final-challenge-authority-provider",
+        )
+        require(not args.skip_current_host_check, "final verification mode forbids --skip-current-host-check")
+    else:
+        require(
+            not any(
+                (
+                    args.final_challenge_receipt,
+                    args.final_challenge_authority_public_key,
+                    args.final_challenge_authority_provider,
+                )
+            ),
+            "final challenge receipt options are only valid with --verification-mode final",
+        )
     require(bool(args.proxy_response_proof), "production completion requires --proxy-response-proof")
     require(
         bool(args.proxy_proof_verifier_public_key),
@@ -3056,8 +4089,12 @@ def main() -> None:
         "production_images_published": Path(args.production_images_published),
         "release_provenance_summary": Path(args.release_provenance_summary),
         "release_provenance": Path(args.release_provenance),
+        "release_provenance_trusted_public_key": Path(args.release_provenance_trusted_public_key),
         "image_signatures_summary": Path(args.image_signatures_summary),
         "image_signatures": Path(args.image_signatures),
+        "sigstore_trusted_public_key": Path(args.sigstore_trusted_public_key),
+        "rekor_trusted_public_key": Path(args.rekor_trusted_public_key),
+        "external_checkpoint_trusted_public_key": Path(args.external_checkpoint_trusted_public_key),
         "bench": Path(args.bench),
         "policy_bundle": Path(args.policy_bundle),
         "policy_trusted_public_key": Path(args.policy_trusted_public_key),
@@ -3076,6 +4113,9 @@ def main() -> None:
     if args.hardware_assurance:
         paths["hardware_assurance"] = Path(args.hardware_assurance)
         paths["hardware_assurance_trusted_public_key"] = Path(args.hardware_assurance_trusted_public_key)
+    if args.verification_mode == "final":
+        paths["final_challenge_receipt"] = Path(args.final_challenge_receipt)
+        paths["final_challenge_authority_public_key"] = Path(args.final_challenge_authority_public_key)
 
     readiness = load_json(paths["production_readiness"], "production readiness")
     production_readiness_config = load_json(paths["production_readiness_config"], "production readiness config")
@@ -3104,28 +4144,88 @@ def main() -> None:
         readiness_summary,
         preflight_summary,
         production_config_summary,
+        verification_mode=args.verification_mode,
+        release_trust_inputs={
+            RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY: args.release_provenance_trusted_public_key,
+            SIGSTORE_TRUST_ROOT_ENV_KEY: args.sigstore_trusted_public_key,
+            REKOR_TRUST_ROOT_ENV_KEY: args.rekor_trusted_public_key,
+            EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY: args.external_checkpoint_trusted_public_key,
+            EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY: args.external_checkpoint_provider,
+        },
+        final_inputs={
+            FINAL_HARDWARE_ASSURANCE_ENV_KEY: args.hardware_assurance,
+            FINAL_HARDWARE_TRUST_ROOT_ENV_KEY: args.hardware_assurance_trusted_public_key,
+            FINAL_HARDWARE_CHALLENGE_NONCE_ENV_KEY: args.hardware_assurance_expected_challenge_nonce,
+            FINAL_HARDWARE_CHALLENGE_DIGEST_ENV_KEY: args.hardware_assurance_expected_challenge_nonce_sha256,
+            FINAL_CHALLENGE_RECEIPT_ENV_KEY: args.final_challenge_receipt,
+            FINAL_CHALLENGE_AUTHORITY_TRUST_ROOT_ENV_KEY: args.final_challenge_authority_public_key,
+            FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY: args.final_challenge_authority_provider,
+        },
     )
+    trusted_release_public_key_pem = paths["release_provenance_trusted_public_key"].read_text(encoding="ascii")
+    trusted_sigstore_public_key_pem = paths["sigstore_trusted_public_key"].read_text(encoding="ascii")
+    trusted_rekor_public_key_pem = paths["rekor_trusted_public_key"].read_text(encoding="ascii")
+    trusted_external_public_key_pem = paths["external_checkpoint_trusted_public_key"].read_text(encoding="ascii")
+    trusted_external_log_id = release_public_key_id(trusted_external_public_key_pem)
+    require(
+        readiness_summary["external_transparency_provider"] == args.external_checkpoint_provider,
+        "live readiness external transparency provider does not match the independently expected provider",
+    )
+    require(
+        readiness_summary["external_transparency_log_id"] == trusted_external_log_id,
+        "live readiness external transparency log does not match the independently trusted key",
+    )
+    for loaded_key_pem, binding_key, label in (
+        (
+            trusted_release_public_key_pem,
+            "release_provenance_trusted_public_key_id",
+            "release provenance trust root",
+        ),
+        (trusted_sigstore_public_key_pem, "sigstore_trusted_public_key_id", "Sigstore trust root"),
+        (trusted_rekor_public_key_pem, "rekor_trusted_public_key_id", "Rekor trust root"),
+        (
+            trusted_external_public_key_pem,
+            "external_checkpoint_trusted_public_key_id",
+            "external checkpoint trust root",
+        ),
+    ):
+        require(
+            release_public_key_id(loaded_key_pem) == production_env_binding[binding_key],
+            f"loaded {label} identity differs from the hashed production readiness env binding",
+        )
     nitro_summary = verify_nitro_evidence(nitro_evidence, "standalone Nitro/KMS evidence")
     nitro_binding = verify_nitro_binding(readiness_summary, nitro_summary, preflight_summary)
     hardware_assurance_summary = None
+    hardware_assurance_document = None
+    trusted_hardware_verifier_public_key_pem = None
+    trusted_final_challenge_authority_public_key_pem = None
     if args.hardware_assurance:
         hardware_assurance_document = load_json(paths["hardware_assurance"], "hardware assurance")
         trusted_hardware_verifier_public_key_pem = paths["hardware_assurance_trusted_public_key"].read_text(
             encoding="ascii"
         )
-        hardware_assurance_summary = verify_hardware_assurance(
-            hardware_assurance_document,
-            trusted_public_key_pem=trusted_hardware_verifier_public_key_pem,
-            nitro_summary=nitro_summary,
-            nitro_evidence_sha256=file_digest(paths["nitro_evidence"]),
-            production_host_preflight_sha256=file_digest(paths["production_host_preflight"]),
-            current_host=current_host_summary,
+        if args.verification_mode == "final":
+            require(
+                release_public_key_id(trusted_hardware_verifier_public_key_pem)
+                == production_env_binding["hardware_assurance_trusted_public_key_id"],
+                "loaded hardware assurance trust root identity differs from the hashed production readiness env binding",
+            )
+    if args.verification_mode == "final":
+        trusted_final_challenge_authority_public_key_pem = paths[
+            "final_challenge_authority_public_key"
+        ].read_text(encoding="ascii")
+        require(
+            release_public_key_id(trusted_final_challenge_authority_public_key_pem)
+            == production_env_binding["final_challenge_authority_public_key_id"],
+            "loaded final challenge authority trust root identity differs from the hashed production readiness env binding",
         )
     provenance_summary_out = verify_release_provenance(
         provenance_summary,
         provenance_document,
         str(readiness_summary["external_transparency_provider"]),
         str(readiness_summary["external_transparency_log_id"]),
+        trusted_release_public_key_pem,
+        trusted_external_public_key_pem,
     )
     require(
         preflight_summary["production_compose_sha256"] == provenance_summary_out["compose_config_sha256"],
@@ -3165,6 +4265,9 @@ def main() -> None:
         str(readiness_summary["rekor_log_id"]),
         str(readiness_summary["external_transparency_provider"]),
         str(readiness_summary["external_transparency_log_id"]),
+        trusted_sigstore_public_key_pem,
+        trusted_rekor_public_key_pem,
+        trusted_external_public_key_pem,
     )
     benchmark_summary = verify_benchmark(
         bench,
@@ -3201,6 +4304,36 @@ def main() -> None:
         attested_runtime["source_tree_digest"] == provenance_summary_out["source_tree_digest"],
         "fresh Nitro-attested source tree digest does not match signed release provenance",
     )
+    verified_release_identity = validate_release_identity(
+        {
+            "source_tree_digest": provenance_summary_out["source_tree_digest"],
+            "provenance_digest": provenance_summary_out["provenance_digest"],
+            "runtime_manifest_digest": attested_runtime["runtime_manifest_digest"],
+            "data_plane_binary_digest": attested_runtime["data_plane_binary_digest"],
+            "production_image_digests": readiness_summary["production_image_digests"],
+            "production_image_refs": readiness_summary["production_images"],
+            "production_images_build_sha256": file_digest(paths["production_images_build"]),
+            "production_images_published_sha256": file_digest(paths["production_images_published"]),
+            "image_signature_bundle_digest": image_summary_out["image_signature_bundle_digest"],
+        },
+        "independently verified release identity",
+    )
+    if hardware_assurance_document is not None:
+        require(
+            trusted_hardware_verifier_public_key_pem is not None,
+            "hardware assurance trusted verifier key was not loaded",
+        )
+        hardware_assurance_summary = verify_hardware_assurance(
+            hardware_assurance_document,
+            trusted_public_key_pem=trusted_hardware_verifier_public_key_pem,
+            nitro_summary=nitro_summary,
+            nitro_evidence_sha256=file_digest(paths["nitro_evidence"]),
+            production_host_preflight_sha256=file_digest(paths["production_host_preflight"]),
+            current_host=current_host_summary,
+            expected_release_identity=verified_release_identity,
+            expected_challenge_nonce=args.hardware_assurance_expected_challenge_nonce,
+            expected_challenge_nonce_sha256=args.hardware_assurance_expected_challenge_nonce_sha256,
+        )
     release_security_summary = verify_release_security_evidence(
         paths=paths,
         production_build=production_images_build_summary,
@@ -3236,12 +4369,58 @@ def main() -> None:
         == production_env_binding["expected_proxy_verifier_key_id"],
         "proxy response vendor verifier key does not match the signed production environment pin",
     )
-    assurance = completion_assurance(hardware_assurance_summary, current_host_summary)
+    candidate_assurance = completion_assurance(hardware_assurance_summary, current_host_summary)
+    final_challenge_consumption: dict[str, Any] | None = None
+    if args.verification_mode == "final":
+        require(
+            candidate_assurance.get("final_completion") is True,
+            "final verification mode did not satisfy hardware-backed final completion requirements",
+        )
+        require(hardware_assurance_summary is not None, "final verification mode is missing hardware assurance summary")
+        completion_identity_sha256 = sha256_prefixed_json(
+            {
+                "release_identity_sha256": hardware_assurance_summary["release_identity_sha256"],
+                "current_host_identity_sha256": current_host_summary["identity"]["identity_sha256"],
+                "hardware_verifier_key_id": hardware_assurance_summary["trusted_verifier_key_id"],
+                "challenge_nonce_sha256": hardware_assurance_summary["challenge_nonce_sha256"],
+                "proxy_server_statement_sha256": proxy_response_summary["server_statement_sha256"],
+            }
+        )
+        final_challenge_consumption = verify_final_challenge_receipt(
+            load_json(paths["final_challenge_receipt"], "final challenge receipt"),
+            trusted_public_key_pem=str(trusted_final_challenge_authority_public_key_pem),
+            expected_provider=str(args.final_challenge_authority_provider),
+            expected_challenge_nonce_sha256=hardware_assurance_summary["challenge_nonce_sha256"],
+            expected_completion_identity_sha256=completion_identity_sha256,
+            expected_release_identity_sha256=hardware_assurance_summary["release_identity_sha256"],
+            expected_hardware_verifier_key_id=hardware_assurance_summary["trusted_verifier_key_id"],
+            expected_current_host_identity_sha256=current_host_summary["identity"]["identity_sha256"],
+            expected_proxy_server_statement_sha256=proxy_response_summary["server_statement_sha256"],
+            hardware_assurance_issued_at_unix=hardware_assurance_summary["issued_at_unix"],
+        )
+        assurance = candidate_assurance
+    else:
+        assurance = candidate_assurance
+        if candidate_assurance.get("final_completion") is True:
+            assurance = {
+                "level": "pre-enclave-readiness",
+                "final_completion": False,
+                "hardware_proof": False,
+                "hardware_evidence_verified": True,
+                "reason": "readiness verification mode never claims or consumes final completion",
+                "required_final_evidence": [
+                    "rerun with --verification-mode final and an off-host challenge-authority consumption receipt"
+                ],
+            }
 
     proof = {
         "apiVersion": "serverware.completionProof/v3",
         "kind": "ServerwareCompletionProof" if assurance["final_completion"] else "ServerwarePreEnclaveReadiness",
         "ok": True,
+        "verification_passed": True,
+        "verification_mode": args.verification_mode,
+        "result_scope": "final-completion" if assurance["final_completion"] else "readiness-only",
+        "readiness_only": not assurance["final_completion"],
         "readiness_ok": True,
         "completion_status": assurance["level"],
         "release_completion": "pass" if assurance["final_completion"] else "not-final",
@@ -3261,6 +4440,9 @@ def main() -> None:
         "hardware_assurance_evidence": hardware_assurance_summary
         if hardware_assurance_summary is not None
         else {"provided": False, "verified": False},
+        "final_challenge_consumption": final_challenge_consumption
+        if final_challenge_consumption is not None
+        else {"required": args.verification_mode == "final", "consumed": False},
         "production_images_build": production_images_build_summary,
         "production_images_published": production_images_published_summary,
         "release_provenance": provenance_summary_out,

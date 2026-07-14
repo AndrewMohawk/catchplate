@@ -114,11 +114,13 @@ def collector_command(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def completion_command(args: argparse.Namespace) -> dict[str, Any]:
-    return {
+    command = {
         "label": "verify-release-completion",
         "argv": [
             args.python,
             "scripts/verify_release_completion.py",
+            "--verification-mode",
+            args.verification_mode,
             "--production-readiness",
             str(Path(args.readiness_out)),
             "--production-readiness-config",
@@ -141,10 +143,20 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
             args.release_provenance_summary,
             "--release-provenance",
             args.release_provenance,
+            "--release-provenance-trusted-public-key",
+            args.release_provenance_trusted_public_key,
             "--image-signatures-summary",
             args.image_signatures_summary,
             "--image-signatures",
             args.image_signatures,
+            "--sigstore-trusted-public-key",
+            args.sigstore_trusted_public_key,
+            "--rekor-trusted-public-key",
+            args.rekor_trusted_public_key,
+            "--external-checkpoint-provider",
+            args.external_checkpoint_provider,
+            "--external-checkpoint-trusted-public-key",
+            args.external_checkpoint_trusted_public_key,
             "--bench",
             args.bench,
             "--policy-bundle",
@@ -189,6 +201,36 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
             str(Path(args.completion_proof_out)),
         ],
     }
+    if args.verification_mode == "final":
+        command["argv"].extend(
+            [
+                "--hardware-assurance",
+                args.hardware_assurance,
+                "--hardware-assurance-trusted-public-key",
+                args.hardware_assurance_trusted_public_key,
+                "--final-challenge-receipt",
+                args.final_challenge_receipt,
+                "--final-challenge-authority-public-key",
+                args.final_challenge_authority_public_key,
+                "--final-challenge-authority-provider",
+                args.final_challenge_authority_provider,
+            ]
+        )
+        if args.hardware_assurance_expected_challenge_nonce:
+            command["argv"].extend(
+                [
+                    "--hardware-assurance-expected-challenge-nonce",
+                    args.hardware_assurance_expected_challenge_nonce,
+                ]
+            )
+        else:
+            command["argv"].extend(
+                [
+                    "--hardware-assurance-expected-challenge-nonce-sha256",
+                    args.hardware_assurance_expected_challenge_nonce_sha256,
+                ]
+            )
+    return command
 
 
 def command_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
@@ -235,8 +277,6 @@ def command_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "scripts/collect_nitro_kms_evidence.py",
                     "--claims-file",
                     claims_file,
-                    "--nitro-evidence-file",
-                    nitro_evidence_out,
                     "--out",
                     nitro_evidence_out,
                 ],
@@ -250,6 +290,8 @@ def command_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "live",
                     "--claims-file",
                     claims_file,
+                    "--nitro-evidence-file",
+                    nitro_evidence_out,
                     "--out",
                     readiness_out,
                 ],
@@ -348,8 +390,21 @@ def main() -> None:
     parser.add_argument("--production-images-published", default=".tmp/production-images-published.json")
     parser.add_argument("--release-provenance-summary", default=".tmp/release-provenance-summary.json")
     parser.add_argument("--release-provenance", default=".tmp/release-provenance.json")
+    parser.add_argument("--release-provenance-trusted-public-key", default=None)
     parser.add_argument("--image-signatures-summary", default=".tmp/image-signatures-summary.json")
     parser.add_argument("--image-signatures", default=".tmp/image-signatures.json")
+    parser.add_argument("--sigstore-trusted-public-key", default=None)
+    parser.add_argument("--rekor-trusted-public-key", default=None)
+    parser.add_argument("--external-checkpoint-provider", default=None)
+    parser.add_argument("--external-checkpoint-trusted-public-key", default=None)
+    parser.add_argument("--verification-mode", choices=("readiness", "final"), default="readiness")
+    parser.add_argument("--hardware-assurance", default=None)
+    parser.add_argument("--hardware-assurance-trusted-public-key", default=None)
+    parser.add_argument("--hardware-assurance-expected-challenge-nonce", default=None)
+    parser.add_argument("--hardware-assurance-expected-challenge-nonce-sha256", default=None)
+    parser.add_argument("--final-challenge-receipt", default=None)
+    parser.add_argument("--final-challenge-authority-public-key", default=None)
+    parser.add_argument("--final-challenge-authority-provider", default=None)
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
     parser.add_argument("--policy-bundle", required=True)
     parser.add_argument("--policy-trusted-public-key", required=True)
@@ -393,8 +448,189 @@ def main() -> None:
         print(f"production readiness env error: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc
 
+    env_verification_mode = loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE")
+    if env_verification_mode and env_verification_mode not in {"readiness", "final"}:
+        print(
+            "production readiness env error: SERVERWARE_COMPLETION_VERIFICATION_MODE must be readiness or final",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if args.verification_mode == "final" and env_verification_mode is None:
+        print(
+            "production readiness env error: final verification mode must be pinned as "
+            "SERVERWARE_COMPLETION_VERIFICATION_MODE=final in the production readiness env file",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if env_verification_mode and env_verification_mode != args.verification_mode:
+        print(
+            "production readiness env error: --verification-mode must match "
+            "SERVERWARE_COMPLETION_VERIFICATION_MODE in the production readiness env file",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     env = os.environ.copy()
     env.update(loaded)
+    trust_settings = {
+        "release_provenance_trusted_public_key": "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+        "sigstore_trusted_public_key": "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY",
+        "rekor_trusted_public_key": "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
+        "external_checkpoint_provider": "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER",
+        "external_checkpoint_trusted_public_key": "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+    }
+    missing_trust = []
+    for attribute, env_name in trust_settings.items():
+        argument_value = getattr(args, attribute)
+        env_value = loaded.get(env_name)
+        if args.verification_mode == "final":
+            if argument_value and env_value and argument_value != env_value:
+                print(
+                    f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
+                    "in final verification mode",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            value = env_value
+        else:
+            value = argument_value or env_value
+        if not value:
+            if args.verification_mode == "final":
+                missing_trust.append(f"{env_name} (must be pinned in the production readiness env file)")
+            else:
+                missing_trust.append(f"--{attribute.replace('_', '-')} or {env_name}")
+            continue
+        if PLACEHOLDER_RE.search(value) or EXAMPLE_DOMAIN_RE.search(value):
+            print(f"production readiness env error: {env_name} contains a placeholder value", file=sys.stderr)
+            raise SystemExit(1)
+        setattr(args, attribute, value)
+        env[env_name] = value
+    if missing_trust:
+        print(
+            "production readiness env error: missing release completion trust settings: "
+            + ", ".join(missing_trust),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    final_challenge_settings = {
+        "final_challenge_receipt": "SERVERWARE_FINAL_CHALLENGE_RECEIPT",
+        "final_challenge_authority_public_key": "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+        "final_challenge_authority_provider": "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PROVIDER",
+    }
+    hardware_assurance_settings = {
+        "hardware_assurance": "SERVERWARE_HARDWARE_ASSURANCE",
+        "hardware_assurance_trusted_public_key": "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
+        "hardware_assurance_expected_challenge_nonce": "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE",
+        "hardware_assurance_expected_challenge_nonce_sha256": (
+            "SERVERWARE_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256"
+        ),
+    }
+    for env_name in final_challenge_settings.values():
+        env.pop(env_name, None)
+    for env_name in hardware_assurance_settings.values():
+        env.pop(env_name, None)
+    resolved_final_challenge = {
+        attribute: loaded.get(env_name) for attribute, env_name in final_challenge_settings.items()
+    }
+    resolved_hardware_assurance = {
+        attribute: loaded.get(env_name) for attribute, env_name in hardware_assurance_settings.items()
+    }
+    supplied_final_challenge = {
+        attribute: getattr(args, attribute) for attribute in final_challenge_settings
+    }
+    supplied_hardware_assurance = {
+        attribute: getattr(args, attribute) for attribute in hardware_assurance_settings
+    }
+    if args.verification_mode == "readiness" and (
+        any(resolved_final_challenge.values())
+        or any(resolved_hardware_assurance.values())
+        or any(supplied_final_challenge.values())
+        or any(supplied_hardware_assurance.values())
+    ):
+        print(
+            "production readiness env error: final hardware and challenge-authority inputs are only valid with "
+            "--verification-mode final",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if args.verification_mode == "final":
+        missing_final_challenge = []
+        for attribute, env_name in final_challenge_settings.items():
+            value = resolved_final_challenge[attribute]
+            argument_value = supplied_final_challenge[attribute]
+            if argument_value and value and argument_value != value:
+                print(
+                    f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
+                    "in final verification mode",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            if not value:
+                missing_final_challenge.append(
+                    f"{env_name} (must be pinned in the production readiness env file)"
+                )
+                continue
+            if PLACEHOLDER_RE.search(value) or EXAMPLE_DOMAIN_RE.search(value):
+                print(f"production readiness env error: {env_name} contains a placeholder value", file=sys.stderr)
+                raise SystemExit(1)
+            setattr(args, attribute, value)
+            env[env_name] = value
+        if missing_final_challenge:
+            print(
+                "production readiness env error: final verification mode requires off-host challenge authority "
+                "inputs: " + ", ".join(missing_final_challenge),
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        if len(args.final_challenge_authority_provider) > 256:
+            print(
+                "production readiness env error: final challenge authority provider must not exceed 256 characters",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        missing_hardware_assurance = []
+        for attribute, env_name in hardware_assurance_settings.items():
+            value = resolved_hardware_assurance[attribute]
+            argument_value = supplied_hardware_assurance[attribute]
+            if argument_value and value and argument_value != value:
+                print(
+                    f"production readiness env error: --{attribute.replace('_', '-')} must match {env_name} "
+                    "in final verification mode",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            if value:
+                if PLACEHOLDER_RE.search(value) or EXAMPLE_DOMAIN_RE.search(value):
+                    print(f"production readiness env error: {env_name} contains a placeholder value", file=sys.stderr)
+                    raise SystemExit(1)
+                setattr(args, attribute, value)
+                env[env_name] = value
+            elif attribute in {"hardware_assurance", "hardware_assurance_trusted_public_key"}:
+                missing_hardware_assurance.append(
+                    f"{env_name} (must be pinned in the production readiness env file)"
+                )
+        if missing_hardware_assurance:
+            print(
+                "production readiness env error: final verification mode requires hardware assurance inputs: "
+                + ", ".join(missing_hardware_assurance),
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        expected_challenges = sum(
+            bool(resolved_hardware_assurance[name])
+            for name in (
+                "hardware_assurance_expected_challenge_nonce",
+                "hardware_assurance_expected_challenge_nonce_sha256",
+            )
+        )
+        if expected_challenges != 1:
+            print(
+                "production readiness env error: final verification mode requires exactly one hardware assurance "
+                "expected challenge nonce or digest",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+    env["SERVERWARE_COMPLETION_VERIFICATION_MODE"] = args.verification_mode
     if not args.config_only:
         proof_settings = {
             "proxy_response_proof": "SERVERWARE_PROXY_RESPONSE_PROOF_FILE",

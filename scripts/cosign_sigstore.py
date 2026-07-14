@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -27,6 +28,21 @@ def sha256_prefixed_bytes(value: bytes) -> str:
 
 def sha256_prefixed_json(value: Any) -> str:
     return sha256_prefixed_bytes(canonical_json(value).encode("utf-8"))
+
+
+def normalize_log_id(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise SystemExit("cosign transparency entry is missing log ID")
+    candidate = value.split(":", 1)[1] if value.startswith("sha256:") else value
+    if len(candidate) == 64 and all(character in "0123456789abcdefABCDEF" for character in candidate):
+        return "sha256:" + candidate.lower()
+    try:
+        decoded = base64.b64decode(candidate + "=" * (-len(candidate) % 4), altchars=b"-_", validate=True)
+    except Exception as exc:
+        raise SystemExit("cosign transparency log ID is not a SHA-256 value") from exc
+    if len(decoded) != hashlib.sha256().digest_size:
+        raise SystemExit("cosign transparency log ID is not 32 bytes")
+    return "sha256:" + decoded.hex()
 
 
 def read_stdin() -> dict[str, Any]:
@@ -68,6 +84,14 @@ def run(command: list[str], *, input_bytes: bytes | None = None) -> subprocess.C
         detail = result.stderr.decode("utf-8", errors="replace") or result.stdout.decode("utf-8", errors="replace")
         raise SystemExit(f"cosign command failed with exit {result.returncode}: {detail.strip()}")
     return result
+
+
+def require_cosign_v3() -> None:
+    result = run([*cosign_binary(), "version", "--json"])
+    version_output = result.stdout.decode("utf-8", errors="replace")
+    match = re.search(r"(?:^|[^0-9])v?(\d+)\.\d+\.\d+", version_output)
+    if not match or int(match.group(1)) != 3:
+        raise SystemExit("SERVERWARE_COSIGN_BINARY must be pinned to Cosign major version 3")
 
 
 def validate_statement_request(request: dict[str, Any]) -> None:
@@ -132,8 +156,7 @@ def transparency_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
         log_id = log_id_value.get("keyId") or log_id_value.get("key_id")
     else:
         log_id = log_id_value
-    if not log_id:
-        raise SystemExit("cosign transparency entry is missing log ID")
+    normalized_log_id = normalize_log_id(log_id)
     integrated_time = entry.get("integrated_time", entry.get("integratedTime"))
     if integrated_time is None:
         raise SystemExit("cosign transparency entry is missing integrated time")
@@ -157,10 +180,10 @@ def transparency_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
             )
         )
     expected_log_id = os.getenv("SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID", "").strip()
-    if expected_log_id and log_id != expected_log_id:
+    if expected_log_id and normalized_log_id != normalize_log_id(expected_log_id):
         raise SystemExit("cosign transparency log ID does not match SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID")
     return {
-        "log_id": log_id,
+        "log_id": normalized_log_id,
         "entry_uuid": entry_uuid,
         "integrated_time": integrated_time,
         "log_index": log_index,
@@ -201,6 +224,7 @@ def cosign_common_args() -> list[str]:
 def sign() -> None:
     request = read_stdin()
     validate_statement_request(request)
+    require_cosign_v3()
     tmp_root = ROOT / ".tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="serverware-cosign-", dir=str(tmp_root.resolve())) as tmp:
@@ -211,9 +235,9 @@ def sign() -> None:
             "sign-blob",
             "--bundle",
             str(paths["bundle"]),
-            "--output-signature",
-            str(paths["signature"]),
         ]
+        if env_bool("SERVERWARE_COSIGN_NEW_BUNDLE_FORMAT", True):
+            command.append("--new-bundle-format")
         key_ref = os.getenv("SERVERWARE_COSIGN_KEY", "").strip()
         if key_ref:
             command.extend(["--key", key_ref])
@@ -228,9 +252,10 @@ def sign() -> None:
         run(command)
         bundle = load_bundle(paths["bundle"])
         transparency = transparency_from_bundle(bundle)
-        signature = paths["signature"].read_text(encoding="utf-8").strip()
-        if not signature:
-            raise SystemExit("cosign did not write a signature")
+        message_signature = bundle.get("messageSignature") or bundle.get("message_signature") or {}
+        signature = message_signature.get("signature") if isinstance(message_signature, dict) else None
+        if not isinstance(signature, str) or not signature:
+            raise SystemExit("cosign bundle did not contain a message signature")
         response = {
             "ok": True,
             "provider": "cosign",
@@ -246,6 +271,7 @@ def sign() -> None:
 def verify() -> None:
     request = read_stdin()
     validate_statement_request(request)
+    require_cosign_v3()
     signature_response = request.get("signature_response")
     if not isinstance(signature_response, dict):
         raise SystemExit("verify request missing signature_response")
@@ -260,15 +286,12 @@ def verify() -> None:
     with tempfile.TemporaryDirectory(prefix="serverware-cosign-", dir=str(tmp_root.resolve())) as tmp:
         paths = artifact_paths(Path(tmp), request)
         write_statement(paths["statement"], request["statement"])
-        paths["signature"].write_text(str(signature_response.get("signature") or "") + "\n", encoding="utf-8")
         paths["bundle"].write_text(json.dumps(bundle, sort_keys=True) + "\n", encoding="utf-8")
         command = [
             *cosign_binary(),
             "verify-blob",
             "--bundle",
             str(paths["bundle"]),
-            "--signature",
-            str(paths["signature"]),
         ]
         key_ref = os.getenv("SERVERWARE_COSIGN_KEY", "").strip()
         if key_ref:

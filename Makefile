@@ -1,4 +1,4 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-credential-policy-contracts verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-credential-policy-contracts verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
@@ -7,6 +7,16 @@ PRODUCTION_READINESS_CONFIG_OUT ?= .tmp/production-readiness-config.json
 PRODUCTION_READINESS_ENV ?= ops/production-readiness.env
 PRODUCTION_READINESS_PREFLIGHT ?= 1
 PRODUCTION_COMPLETION_PROOF_OUT ?= .tmp/serverware-completion-proof.json
+PRODUCTION_COMPLETION_VERIFICATION_MODE ?= readiness
+PRODUCTION_HARDWARE_ASSURANCE ?=
+PRODUCTION_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY ?=
+PRODUCTION_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE ?=
+PRODUCTION_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256 ?=
+PRODUCTION_HARDWARE_ASSURANCE_ARGS = $(strip $(if $(strip $(PRODUCTION_HARDWARE_ASSURANCE)),--hardware-assurance "$(PRODUCTION_HARDWARE_ASSURANCE)") $(if $(strip $(PRODUCTION_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY)),--hardware-assurance-trusted-public-key "$(PRODUCTION_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY)") $(if $(strip $(PRODUCTION_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE)),--hardware-assurance-expected-challenge-nonce "$(PRODUCTION_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE)") $(if $(strip $(PRODUCTION_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256)),--hardware-assurance-expected-challenge-nonce-sha256 "$(PRODUCTION_HARDWARE_ASSURANCE_EXPECTED_CHALLENGE_NONCE_SHA256)"))
+PRODUCTION_FINAL_CHALLENGE_RECEIPT ?=
+PRODUCTION_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY ?=
+PRODUCTION_FINAL_CHALLENGE_AUTHORITY_PROVIDER ?=
+PRODUCTION_FINAL_CHALLENGE_ARGS = $(strip $(if $(strip $(PRODUCTION_FINAL_CHALLENGE_RECEIPT)),--final-challenge-receipt "$(PRODUCTION_FINAL_CHALLENGE_RECEIPT)") $(if $(strip $(PRODUCTION_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY)),--final-challenge-authority-public-key "$(PRODUCTION_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY)") $(if $(strip $(PRODUCTION_FINAL_CHALLENGE_AUTHORITY_PROVIDER)),--final-challenge-authority-provider "$(PRODUCTION_FINAL_CHALLENGE_AUTHORITY_PROVIDER)"))
 NITRO_KMS_EVIDENCE_OUT ?= .tmp/nitro-kms-evidence.json
 PRODUCTION_IMAGES_BUILD_FILE ?= .tmp/production-images-build.json
 PRODUCTION_IMAGES_PUBLISHED_FILE ?= .tmp/production-images-published.json
@@ -40,8 +50,13 @@ AWS_KMS_MATERIALS_SPEC ?= ops/aws-kms-materials.spec.json
 AWS_KMS_MATERIALS_OUT ?= /etc/serverware/kms-materials.json
 RELEASE_PROVENANCE_SUMMARY_FILE ?= .tmp/release-provenance-summary.json
 RELEASE_PROVENANCE_FILE ?= .tmp/release-provenance.json
+RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY ?=
 IMAGE_SIGNATURES_SUMMARY_FILE ?= .tmp/image-signatures-summary.json
 IMAGE_SIGNATURES_FILE ?= .tmp/image-signatures.json
+SIGSTORE_TRUSTED_PUBLIC_KEY ?=
+REKOR_TRUSTED_PUBLIC_KEY ?=
+EXTERNAL_CHECKPOINT_PROVIDER ?=
+EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY ?=
 DECISION_GATE_BENCH_FILE ?= .tmp/decision-gate-rs-bench.json
 PRODUCTION_DEPLOY_COMMAND ?=
 
@@ -467,6 +482,11 @@ verify-agent-enrollment:
 	docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
 	docker compose exec -T serverware python scripts/test_setup_verify.py
 
+verify-setup-session-api:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_setup_session_api.py
+	docker compose exec -T serverware python scripts/test_setup_sessions.py
+
 verify-production-images-no-shell:
 	python3 scripts/test_production_images_no_shell.py
 
@@ -501,14 +521,20 @@ run-production-readiness:
 		--nitro-evidence-out "$(NITRO_KMS_EVIDENCE_OUT)" \
 		--readiness-out "$(PRODUCTION_READINESS_OUT)" \
 		--completion-proof-out "$(PRODUCTION_COMPLETION_PROOF_OUT)" \
+		--verification-mode "$(PRODUCTION_COMPLETION_VERIFICATION_MODE)" \
 		--production-host-preflight "$(PRODUCTION_HOST_PREFLIGHT_OUT)" \
 		--production-images-build "$(PRODUCTION_IMAGES_BUILD_FILE)" \
 		--production-images-env "$(PRODUCTION_IMAGES_ENV_OUT)" \
 		--production-images-published "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" \
 		--release-provenance-summary "$(RELEASE_PROVENANCE_SUMMARY_FILE)" \
 		--release-provenance "$(RELEASE_PROVENANCE_FILE)" \
+		--release-provenance-trusted-public-key "$(RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY)" \
 		--image-signatures-summary "$(IMAGE_SIGNATURES_SUMMARY_FILE)" \
 		--image-signatures "$(IMAGE_SIGNATURES_FILE)" \
+		--sigstore-trusted-public-key "$(SIGSTORE_TRUSTED_PUBLIC_KEY)" \
+		--rekor-trusted-public-key "$(REKOR_TRUSTED_PUBLIC_KEY)" \
+		--external-checkpoint-provider "$(EXTERNAL_CHECKPOINT_PROVIDER)" \
+		--external-checkpoint-trusted-public-key "$(EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY)" \
 		--bench "$(DECISION_GATE_BENCH_FILE)" \
 		--policy-bundle "$(PRODUCTION_POLICY_BUNDLE)" \
 		--policy-trusted-public-key "$(PRODUCTION_POLICY_TRUSTED_PUBLIC_KEY)" \
@@ -519,7 +545,7 @@ run-production-readiness:
 		--reproducible-build-verification "$(REPRODUCIBLE_BUILD_VERIFICATION_OUT)" \
 		--reproducible-build-signature "$(REPRODUCIBLE_BUILD_VERIFICATION_SIGNATURE)" \
 		--reproducible-build-trusted-public-key "$(REPRODUCIBLE_BUILD_VERIFICATION_TRUSTED_PUBLIC_KEY)" \
-		--kms-materials "$(AWS_KMS_MATERIALS_OUT)"
+		$(PRODUCTION_HARDWARE_ASSURANCE_ARGS) $(PRODUCTION_FINAL_CHALLENGE_ARGS) --kms-materials "$(AWS_KMS_MATERIALS_OUT)"
 
 verify-production-readiness:
 	if [ -f "$(PRODUCTION_READINESS_CLAIMS_FILE)" ]; then \

@@ -67,6 +67,7 @@ class OAuthProvider:
     client_secret: str
     redirect_uri: str
     default_scopes: tuple[str, ...]
+    token_response_scope_optional: bool
     token_auth: str
     auth_params: dict[str, str]
     metadata_provider: str
@@ -88,6 +89,7 @@ def _providers() -> dict[str, OAuthProvider]:
         client_secret=X_OAUTH_CLIENT_SECRET,
         redirect_uri=X_OAUTH_REDIRECT_URI,
         default_scopes=("tweet.read", "users.read", "offline.access"),
+        token_response_scope_optional=True,
         token_auth="basic" if X_OAUTH_CLIENT_SECRET else "none",
         auth_params={},
         metadata_provider="x.oauth2",
@@ -104,6 +106,7 @@ def _providers() -> dict[str, OAuthProvider]:
             client_secret=GOOGLE_OAUTH_CLIENT_SECRET,
             redirect_uri=GOOGLE_OAUTH_REDIRECT_URI,
             default_scopes=("openid", "email", "https://www.googleapis.com/auth/gmail.readonly"),
+            token_response_scope_optional=True,
             token_auth="client_secret_post",
             auth_params={
                 "access_type": "offline",
@@ -595,7 +598,9 @@ def exchange_authorization_code(
             raise OAuthError("OAuth token endpoint did not return a refresh token; reconnect with offline access")
         if len(refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
             raise OAuthError("OAuth token endpoint returned an oversized refresh token")
-        token_type = token_response.get("token_type") or "Bearer"
+        if "token_type" not in token_response:
+            raise OAuthError("OAuth token endpoint did not return a token type")
+        token_type = token_response["token_type"]
         if not isinstance(token_type, str) or token_type.lower() != "bearer":
             raise OAuthError("OAuth token endpoint returned an unsupported token type")
         provider_identity = _fetch_provider_identity(provider, access_token)
@@ -620,7 +625,15 @@ def exchange_authorization_code(
             raise OAuthError("OAuth token endpoint returned an invalid refresh-token lifetime")
         if refresh_token_expires_in is not None:
             refresh_token_expires_at_epoch_ms = int((now + int(refresh_token_expires_in)) * 1000)
-        scope_string = str(token_response.get("scope") or " ".join(record.get("scopes") or []))
+        if "scope" in token_response:
+            response_scope = token_response["scope"]
+            if not isinstance(response_scope, str) or not response_scope:
+                raise OAuthError("OAuth token endpoint returned an invalid scope")
+            scope_string = response_scope
+        else:
+            if not provider.token_response_scope_optional:
+                raise OAuthError("OAuth token endpoint omitted its required scope")
+            scope_string = " ".join(record.get("scopes") or [])
         scopes = [scope for scope in scope_string.split(" ") if scope]
         requested_scopes = {
             scope for scope in record.get("scopes") or [] if isinstance(scope, str) and scope
@@ -710,6 +723,9 @@ def refresh_access_token(
         raise OAuthError("OAuth credential has no refresh token; reconnect the account")
     if len(refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
         raise OAuthError("OAuth refresh token is too large")
+    existing_token_type = token_secret.get("token_type")
+    if not isinstance(existing_token_type, str) or existing_token_type.lower() != "bearer":
+        raise OAuthError("OAuth credential has an unsupported token type")
 
     now = _now() if now_epoch is None else int(now_epoch)
     refresh_expires_at = token_secret.get("refresh_token_expires_at_epoch_ms")
@@ -791,7 +807,10 @@ def refresh_access_token(
         access_token = token_response.get("access_token")
         if not isinstance(access_token, str) or not access_token:
             raise OAuthError("OAuth refresh response did not return access_token")
-        token_type = token_response.get("token_type") or token_secret.get("token_type") or "Bearer"
+        if "token_type" in token_response:
+            token_type = token_response["token_type"]
+        else:
+            token_type = existing_token_type
         if not isinstance(token_type, str) or token_type.lower() != "bearer":
             raise OAuthError("OAuth refresh response returned an unsupported token type")
         expires_in = token_response.get("expires_in")
@@ -804,8 +823,13 @@ def refresh_access_token(
             raise OAuthError("OAuth refresh response returned an invalid access-token lifetime")
         expires_at_epoch_ms = int((now + int(expires_in)) * 1000)
 
-        response_scope = token_response.get("scope")
-        scope_string = str(response_scope or existing_scope or " ".join(sorted(existing_scopes)))
+        if "scope" in token_response:
+            response_scope = token_response["scope"]
+            if not isinstance(response_scope, str) or not response_scope:
+                raise OAuthError("OAuth refresh response returned an invalid scope")
+            scope_string = response_scope
+        else:
+            scope_string = existing_scope or " ".join(sorted(existing_scopes))
         refreshed_scopes = {scope for scope in scope_string.split(" ") if scope}
         if refreshed_scopes != existing_scopes:
             raise OAuthError("OAuth refresh response changed the credential scope binding")
@@ -882,36 +906,56 @@ def revoke_oauth_token(*, provider_id: str, token_secret: dict[str, Any]) -> dic
         raise OAuthError(f"{provider.display_name} OAuth is not configured")
     if not isinstance(token_secret, dict):
         raise OAuthError("OAuth credential is malformed")
-    token = token_secret.get("refresh_token") or token_secret.get("access_token")
-    token_type_hint = "refresh_token" if token_secret.get("refresh_token") else "access_token"
-    if not isinstance(token, str) or not token:
+    if provider.id == "x":
+        token_requests: list[tuple[str, str]] = []
+        for token_type_hint in ("access_token", "refresh_token"):
+            if token_type_hint not in token_secret:
+                continue
+            token = token_secret[token_type_hint]
+            if not isinstance(token, str) or not token:
+                raise OAuthError(f"OAuth credential has an invalid {token_type_hint}")
+            if len(token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+                raise OAuthError("OAuth revocation token is too large")
+            token_requests.append((token_type_hint, token))
+    else:
+        token = token_secret.get("refresh_token") or token_secret.get("access_token")
+        token_type_hint = "refresh_token" if token_secret.get("refresh_token") else "access_token"
+        if not isinstance(token, str) or not token:
+            raise OAuthError("OAuth credential has no revocable token")
+        if len(token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+            raise OAuthError("OAuth revocation token is too large")
+        token_requests = [(token_type_hint, token)]
+    if not token_requests:
         raise OAuthError("OAuth credential has no revocable token")
-    if len(token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
-        raise OAuthError("OAuth revocation token is too large")
-    body = {"token": token, "token_type_hint": token_type_hint}
-    if provider.id == "x" and provider.token_auth != "basic":
-        body["client_id"] = provider.client_id
-    request = urllib.request.Request(
-        provider.revocation_url,
-        data=urllib.parse.urlencode(body).encode("utf-8"),
-        headers=_token_request_headers(provider),
-        method="POST",
-    )
-    try:
-        response = request_bytes(
-            request,
-            timeout=20,
-            max_bytes=64 * 1024,
-            require_https=True,
+
+    for token_type_hint, token in token_requests:
+        body = {"token": token, "token_type_hint": token_type_hint}
+        if provider.id == "x" and provider.token_auth != "basic":
+            body["client_id"] = provider.client_id
+        request = urllib.request.Request(
+            provider.revocation_url,
+            data=urllib.parse.urlencode(body).encode("utf-8"),
+            headers=_token_request_headers(provider),
+            method="POST",
         )
-    except urllib.error.HTTPError as exc:
-        raise OAuthError(f"OAuth token revocation failed: HTTP {exc.code}") from exc
-    except (HttpClientError, urllib.error.URLError, TimeoutError, OSError) as exc:
-        raise OAuthError(f"OAuth token revocation failed: {exc}") from exc
-    if response.status < 200 or response.status >= 300:
-        raise OAuthError(f"OAuth token revocation failed: HTTP {response.status}")
+        try:
+            response = request_bytes(
+                request,
+                timeout=20,
+                max_bytes=64 * 1024,
+                require_https=True,
+            )
+        except urllib.error.HTTPError as exc:
+            raise OAuthError(f"OAuth token revocation failed: HTTP {exc.code}") from exc
+        except (HttpClientError, urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise OAuthError(f"OAuth token revocation failed: {exc}") from exc
+        if response.status < 200 or response.status >= 300:
+            raise OAuthError(f"OAuth token revocation failed: HTTP {response.status}")
+
+    token_type_hints = [token_type_hint for token_type_hint, _ in token_requests]
     return {
         "provider": provider.id,
         "revoked": True,
-        "token_type_hint": token_type_hint,
+        "token_type_hint": token_type_hints[-1],
+        "token_type_hints": token_type_hints,
     }

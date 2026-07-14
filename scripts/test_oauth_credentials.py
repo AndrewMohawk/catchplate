@@ -249,10 +249,10 @@ def main() -> None:
             raise AssertionError("OAuth provider with an incomplete client secret was marked configured")
 
         original_revocation_request_bytes = oauth.request_bytes
-        revocation_requests: list[object] = []
+        revocation_requests: list[tuple[object, dict[str, object]]] = []
 
         def fake_revocation_request(request, **kwargs):
-            revocation_requests.append(request)
+            revocation_requests.append((request, dict(kwargs)))
             return SimpleNamespace(status=200, body=b"", headers={})
 
         oauth.request_bytes = fake_revocation_request
@@ -269,19 +269,71 @@ def main() -> None:
             oauth.request_bytes = original_revocation_request_bytes
         if not google_revocation.get("revoked") or not x_revocation.get("revoked"):
             raise AssertionError("OAuth provider revocation did not report success")
-        if len(revocation_requests) != 2:
+        if len(revocation_requests) != 3:
             raise AssertionError(f"OAuth provider revocation request count is wrong: {revocation_requests}")
-        google_request, x_request = revocation_requests
+        google_request, x_access_request, x_refresh_request = [item[0] for item in revocation_requests]
+        for _, request_options in revocation_requests:
+            if request_options != {
+                "timeout": 20,
+                "max_bytes": 64 * 1024,
+                "require_https": True,
+            }:
+                raise AssertionError(f"OAuth revocation request was not bounded: {request_options}")
         google_body = urllib.parse.parse_qs(bytes(google_request.data).decode("utf-8"))
-        x_body = urllib.parse.parse_qs(bytes(x_request.data).decode("utf-8"))
-        if google_request.full_url != "https://oauth2.googleapis.com/revoke" or google_body.get("token") != ["google-refresh"]:
+        x_access_body = urllib.parse.parse_qs(bytes(x_access_request.data).decode("utf-8"))
+        x_refresh_body = urllib.parse.parse_qs(bytes(x_refresh_request.data).decode("utf-8"))
+        if (
+            google_request.full_url != "https://oauth2.googleapis.com/revoke"
+            or google_body.get("token") != ["google-refresh"]
+            or google_body.get("token_type_hint") != ["refresh_token"]
+        ):
             raise AssertionError("Google revocation did not use the bounded refresh-token endpoint")
         if google_request.headers.get("Authorization"):
             raise AssertionError("Google revocation unexpectedly disclosed client credentials in a header")
-        if x_request.full_url != "https://api.twitter.com/2/oauth2/revoke" or x_body.get("token") != ["x-refresh"]:
-            raise AssertionError("X revocation did not use the bounded refresh-token endpoint")
-        if not str(x_request.headers.get("Authorization") or "").startswith("Basic "):
-            raise AssertionError("X confidential-client revocation did not authenticate the OAuth app")
+        if (
+            x_access_request.full_url != "https://api.twitter.com/2/oauth2/revoke"
+            or x_access_body.get("token") != ["x-access"]
+            or x_access_body.get("token_type_hint") != ["access_token"]
+            or x_refresh_request.full_url != "https://api.twitter.com/2/oauth2/revoke"
+            or x_refresh_body.get("token") != ["x-refresh"]
+            or x_refresh_body.get("token_type_hint") != ["refresh_token"]
+        ):
+            raise AssertionError("X revocation did not submit both distinct token-local grants")
+        for x_request in (x_access_request, x_refresh_request):
+            if not str(x_request.headers.get("Authorization") or "").startswith("Basic "):
+                raise AssertionError("X confidential-client revocation did not authenticate the OAuth app")
+        if x_revocation.get("token_type_hints") != ["access_token", "refresh_token"]:
+            raise AssertionError(f"X revocation did not report both completed requests: {x_revocation}")
+
+        partial_x_requests: list[object] = []
+
+        def fail_second_x_revocation(request, **kwargs):
+            partial_x_requests.append(request)
+            status = 503 if len(partial_x_requests) == 2 else 200
+            return SimpleNamespace(status=status, body=b"", headers={})
+
+        oauth.request_bytes = fail_second_x_revocation
+        try:
+            oauth.revoke_oauth_token(
+                provider_id="x",
+                token_secret={"access_token": "x-partial-access", "refresh_token": "x-partial-refresh"},
+            )
+        except oauth.OAuthError as exc:
+            if "HTTP 503" not in str(exc):
+                raise AssertionError(f"partial X revocation failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("X revocation reported success before both token requests succeeded")
+        finally:
+            oauth.request_bytes = original_revocation_request_bytes
+        partial_x_bodies = [
+            urllib.parse.parse_qs(bytes(request.data).decode("utf-8"))
+            for request in partial_x_requests
+        ]
+        if partial_x_bodies != [
+            {"token": ["x-partial-access"], "token_type_hint": ["access_token"]},
+            {"token": ["x-partial-refresh"], "token_type_hint": ["refresh_token"]},
+        ]:
+            raise AssertionError(f"partial X revocation sent the wrong requests: {partial_x_bodies}")
 
         if app_module._canonical_oauth_granted_scopes(["scope.z", "scope.a"]) != ("scope.a", "scope.z"):
             raise AssertionError("OAuth granted scopes were not canonicalized")
@@ -451,7 +503,6 @@ def main() -> None:
                 "access_token": "access-token-value",
                 "refresh_token": "refresh-token-value",
                 "token_type": "Bearer",
-                "scope": "https://www.googleapis.com/auth/gmail.readonly",
                 "expires_in": 3600,
             }
 
@@ -502,7 +553,12 @@ def main() -> None:
 
         stored = db.get_credential(listed["id"], include_secret=True)
         secret = json.loads(stored["secret"])
-        if secret["access_token"] != "access-token-value" or secret["refresh_token"] != "refresh-token-value":
+        if (
+            secret["access_token"] != "access-token-value"
+            or secret["refresh_token"] != "refresh-token-value"
+            or secret.get("token_type") != "Bearer"
+            or secret.get("scope") != "https://www.googleapis.com/auth/gmail.readonly"
+        ):
             raise AssertionError("encrypted OAuth credential did not preserve token response")
 
         exhausted_start, exhausted_nonce = start_oauth(
@@ -690,6 +746,110 @@ def main() -> None:
                 (retained_work_id,),
             ).fetchone() is not None:
                 raise AssertionError("successfully reconciled OAuth revocation work remained queued")
+
+        missing_claim = object()
+
+        def assert_initial_token_response_rejected(
+            *,
+            case: str,
+            claim: str,
+            value: object = missing_claim,
+            required_scope: bool = False,
+        ) -> None:
+            rejected_start, rejected_nonce = start_oauth(
+                app_module.OAuthStartRequest(
+                    provider="google",
+                    credentialName=f"Rejected initial token response: {case}",
+                    scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+                )
+            )
+            access_token = f"rejected-initial-access-{case}"
+            refresh_token = f"rejected-initial-refresh-{case}"
+            token_response: dict[str, object] = {
+                "access_token": access_token,
+                "refresh_token": refresh_token,
+                "token_type": "Bearer",
+                "scope": "https://www.googleapis.com/auth/gmail.readonly",
+                "expires_in": 3600,
+            }
+            if value is missing_claim:
+                token_response.pop(claim)
+            else:
+                token_response[claim] = value
+
+            original_providers = oauth._providers
+            original_post_token_request = oauth._post_token_request
+            if required_scope:
+                provider = replace(
+                    oauth.provider_for("google"),
+                    token_response_scope_optional=False,
+                )
+                oauth._providers = lambda: {"google": provider}
+            oauth._post_token_request = lambda provider, body, headers: token_response
+            try:
+                oauth.exchange_authorization_code(
+                    provider_id="google",
+                    code=f"rejected-code-{case}",
+                    state=rejected_start["state"],
+                    browser_nonce=rejected_nonce,
+                )
+            except oauth.OAuthError as exc:
+                if claim.replace("_", " ") not in str(exc):
+                    raise AssertionError(
+                        f"{case} failed for the wrong reason: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError(f"{case} was accepted in an initial OAuth token response")
+            finally:
+                oauth._providers = original_providers
+                oauth._post_token_request = original_post_token_request
+
+            with db.connect() as conn:
+                rejected_work = conn.execute(
+                    "SELECT * FROM oauth_revocation_work WHERE source = ?",
+                    ("authorization_code_exchange",),
+                ).fetchall()
+            if len(rejected_work) != 1 or rejected_work[0]["status"] != "pending":
+                raise AssertionError(f"{case} did not retain issued token material: {rejected_work}")
+
+            revoked: list[dict[str, object]] = []
+            original_reconcile_revoke = app_module.revoke_oauth_token
+
+            def revoke_rejected_initial(*, provider_id: str, token_secret: dict[str, object]):
+                revoked.append(dict(token_secret))
+                return {"provider": provider_id, "revoked": True}
+
+            app_module.revoke_oauth_token = revoke_rejected_initial
+            try:
+                reconciled = app_module._reconcile_oauth_revocations(limit=1)
+            finally:
+                app_module.revoke_oauth_token = original_reconcile_revoke
+            if reconciled != {"claimed": 1, "revoked": 1, "failed": 0}:
+                raise AssertionError(f"{case} revocation work did not reconcile: {reconciled}")
+            if (
+                len(revoked) != 1
+                or revoked[0].get("access_token") != access_token
+                or revoked[0].get("refresh_token") != refresh_token
+            ):
+                raise AssertionError(f"{case} changed rejected-token revocation behavior: {revoked}")
+
+        for rejected_case, rejected_claim, rejected_value in (
+            ("missing-token-type", "token_type", missing_claim),
+            ("empty-token-type", "token_type", ""),
+            ("non-string-token-type", "token_type", []),
+            ("empty-scope", "scope", ""),
+            ("non-string-scope", "scope", []),
+        ):
+            assert_initial_token_response_rejected(
+                case=rejected_case,
+                claim=rejected_claim,
+                value=rejected_value,
+            )
+        assert_initial_token_response_rejected(
+            case="contract-required-missing-scope",
+            claim="scope",
+            required_scope=True,
+        )
 
         renamed = db.update_credential(stored["id"], {"name": "Gmail OAuth - Renamed"})
         if renamed is None or renamed["name"] != "Gmail OAuth - Renamed":
@@ -1059,13 +1219,38 @@ def main() -> None:
             else:
                 raise AssertionError("OAuth activation approval was replayed")
 
+            try:
+                start_oauth(
+                    app_module.OAuthStartRequest(
+                        provider="google",
+                        credentialId=active_exact["id"],
+                    )
+                )
+            except app_module.HTTPException as exc:
+                if exc.status_code != 409 or "Disconnect" not in str(exc.detail):
+                    raise AssertionError(f"Google reconnect failed incorrectly: {exc.detail}") from exc
+            else:
+                raise AssertionError("Google OAuth reconnect was accepted in place")
+
+            reconnect_source = db.get_credential(x_credentials[0]["id"], include_secret=True)
+            if reconnect_source is None:
+                raise AssertionError("X reconnect fixture credential disappeared")
+            reconnect_created = db.create_credential(
+                "X OAuth reconnect fixture",
+                "oauth2",
+                reconnect_source["secret"],
+                reconnect_source["metadata"],
+            )
+            reconnect_target = db.get_credential(reconnect_created["id"], include_secret=True)
+            if reconnect_target is None:
+                raise AssertionError("X reconnect fixture could not be reloaded")
             reconnect_route = db.create_route(
                 {
                     "name": "OAuth reconnect identity route",
                     "enabled": True,
                     "match_host": "reconnect.example.test",
                     "match_path_prefix": "/",
-                    "credential_id": active_exact["id"],
+                    "credential_id": reconnect_target["id"],
                     "injection": {"type": "bearer", "field": "access_token"},
                     "policies": [],
                 }
@@ -1073,8 +1258,8 @@ def main() -> None:
             try:
                 start_oauth(
                     app_module.OAuthStartRequest(
-                        provider="x",
-                        credentialId=active_exact["id"],
+                        provider="google",
+                        credentialId=reconnect_target["id"],
                     )
                 )
             except app_module.HTTPException as exc:
@@ -1094,10 +1279,10 @@ def main() -> None:
                 binding: dict[str, object],
                 suffix: str,
                 *,
-                provider_subject: str = "google-exact-subject-789",
-                provider_account: str = "exact-account@example.test",
+                provider_subject: str = "x-user-456",
+                provider_account: str = "@andrew",
             ) -> dict[str, object]:
-                current = db.get_credential(active_exact["id"], include_secret=True)
+                current = db.get_credential(reconnect_target["id"], include_secret=True)
                 if current is None:
                     raise AssertionError("reconnect fixture credential disappeared")
                 next_secret = {
@@ -1117,7 +1302,7 @@ def main() -> None:
                     "kind": "oauth2",
                     "secret": json.dumps(next_secret, separators=(",", ":"), sort_keys=True),
                     "metadata": next_metadata,
-                    "provider": "google",
+                    "provider": "x",
                     "scopes": list(next_metadata["scopes"]),
                     "expiresAtEpochMs": 4_102_444_800_000,
                     "createdBy": "user:operator",
@@ -1128,8 +1313,8 @@ def main() -> None:
 
             app_module.revoke_oauth_token = revoke_rejected_reconnect
             try:
-                baseline_version = int(active_exact["credential_version"])
-                baseline_secret = active_exact["secret"]
+                baseline_version = int(reconnect_target["credential_version"])
+                baseline_secret = reconnect_target["secret"]
                 pending_before_mismatch = {
                     item["id"] for item in db.list_pending_oauth_credentials()
                 }
@@ -1138,23 +1323,23 @@ def main() -> None:
                         "wrong-subject",
                         {
                             "provider_subject": "different-provider-subject",
-                            "provider_account": "exact-account@example.test",
+                            "provider_account": "@andrew",
                         },
                     ),
                     (
                         "wrong-account",
                         {
-                            "provider_subject": "google-exact-subject-789",
-                            "provider_account": "different-account@example.test",
+                            "provider_subject": "x-user-456",
+                            "provider_account": "@different-account",
                         },
                     ),
                 ):
                     reconnect_start, reconnect_nonce = start_oauth(
                         app_module.OAuthStartRequest(
-                            provider="google",
-                            credentialId=active_exact["id"],
-                            credentialName=active_exact["name"],
-                            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+                            provider="x",
+                            credentialId=reconnect_target["id"],
+                            credentialName=reconnect_target["name"],
+                            scopes=["tweet.read", "users.read", "offline.access"],
                         )
                     )
                     reconnect_record = json.loads((Path(tmp) / "oauth-states.json").read_text())[
@@ -1163,10 +1348,10 @@ def main() -> None:
                     binding = reconnect_record.get("reconnect")
                     if (
                         not isinstance(binding, dict)
-                        or binding.get("credential_id") != active_exact["id"]
+                        or binding.get("credential_id") != reconnect_target["id"]
                         or binding.get("credential_version") != baseline_version
-                        or binding.get("provider_subject") != "google-exact-subject-789"
-                        or binding.get("provider_account") != "exact-account@example.test"
+                        or binding.get("provider_subject") != "x-user-456"
+                        or binding.get("provider_account") != "@andrew"
                     ):
                         raise AssertionError(f"OAuth reconnect state lost its exact credential binding: {binding}")
                     app_module.exchange_authorization_code = lambda **kwargs: reconnect_exchange(
@@ -1175,14 +1360,14 @@ def main() -> None:
                         **changed_identity,
                     )
                     rejected = app_module.oauth_callback(
-                        "google",
+                        "x",
                         oauth_request(str(reconnect_start["state"]), reconnect_nonce),
                         code=f"{suffix}-code",
                         state=reconnect_start["state"],
                     )
                     if rejected.status_code != 409 or b"exact existing provider subject and account" not in rejected.body:
                         raise AssertionError(f"OAuth reconnect identity drift was accepted: {rejected.body!r}")
-                    unchanged = db.get_credential(active_exact["id"], include_secret=True)
+                    unchanged = db.get_credential(reconnect_target["id"], include_secret=True)
                     if (
                         unchanged is None
                         or int(unchanged["credential_version"]) != baseline_version
@@ -1201,52 +1386,69 @@ def main() -> None:
 
                 stale_start, stale_nonce = start_oauth(
                     app_module.OAuthStartRequest(
-                        provider="google",
-                        credentialId=active_exact["id"],
+                        provider="x",
+                        credentialId=reconnect_target["id"],
                     )
                 )
                 stale_binding = json.loads((Path(tmp) / "oauth-states.json").read_text())["states"][
                     stale_start["state"]
                 ]["reconnect"]
                 concurrently_refreshed_secret = {
-                    **json.loads(active_exact["secret"]),
+                    **json.loads(reconnect_target["secret"]),
                     "access_token": "concurrent-refresh-before-reconnect",
                 }
                 concurrently_refreshed, rotated = db.update_credential_secret_if_version(
-                    active_exact["id"],
+                    reconnect_target["id"],
                     expected_version=baseline_version,
                     secret=json.dumps(concurrently_refreshed_secret, separators=(",", ":"), sort_keys=True),
-                    metadata=active_exact["metadata"],
+                    metadata=reconnect_target["metadata"],
                 )
                 if concurrently_refreshed is None or not rotated:
                     raise AssertionError("stale reconnect fixture did not rotate the active credential")
-                app_module.runtime.invalidate_secret_leases(active_exact["id"])
+                app_module.runtime.invalidate_secret_leases(reconnect_target["id"])
+                with db.connect() as conn:
+                    refresh_superseded_work = conn.execute(
+                        "SELECT * FROM oauth_revocation_work WHERE source = ?",
+                        ("refresh_superseded",),
+                    ).fetchall()
+                if len(refresh_superseded_work) != 1:
+                    raise AssertionError("X refresh did not queue its superseded token material")
+                refresh_superseded_reconcile = app_module._reconcile_oauth_revocations(limit=1)
+                if refresh_superseded_reconcile != {"claimed": 1, "revoked": 1, "failed": 0}:
+                    raise AssertionError(
+                        f"X refresh superseded-token reconciliation failed: {refresh_superseded_reconcile}"
+                    )
+                if (
+                    len(rejected_reconnect_tokens) != 3
+                    or rejected_reconnect_tokens[-1][1].get("access_token") != "x-access-token-value"
+                ):
+                    raise AssertionError("X refresh did not retain the exact superseded token set")
                 app_module.exchange_authorization_code = lambda **kwargs: reconnect_exchange(
                     stale_binding,
                     "stale-version",
                 )
                 stale_response = app_module.oauth_callback(
-                    "google",
+                    "x",
                     oauth_request(str(stale_start["state"]), stale_nonce),
                     code="stale-reconnect-code",
                     state=stale_start["state"],
                 )
                 if stale_response.status_code != 409 or b"changed during authorization" not in stale_response.body:
                     raise AssertionError(f"stale OAuth reconnect binding was accepted: {stale_response.body!r}")
-                after_stale = db.get_credential(active_exact["id"], include_secret=True)
+                after_stale = db.get_credential(reconnect_target["id"], include_secret=True)
                 if (
                     after_stale is None
                     or json.loads(after_stale["secret"]).get("access_token")
                     != "concurrent-refresh-before-reconnect"
                 ):
                     raise AssertionError("stale OAuth reconnect overwrote a concurrent credential rotation")
-                if len(rejected_reconnect_tokens) != 3:
+                if len(rejected_reconnect_tokens) != 4:
                     raise AssertionError("stale OAuth reconnect token was not revoked")
 
                 successful_start, successful_nonce = start_oauth(
                     app_module.OAuthStartRequest(
-                        provider="google",
-                        credentialId=active_exact["id"],
+                        provider="x",
+                        credentialId=reconnect_target["id"],
                     )
                 )
                 successful_binding = json.loads((Path(tmp) / "oauth-states.json").read_text())[
@@ -1257,7 +1459,7 @@ def main() -> None:
                     "accepted",
                 )
                 successful_callback = app_module.oauth_callback(
-                    "google",
+                    "x",
                     oauth_request(str(successful_start["state"]), successful_nonce),
                     code="accepted-reconnect-code",
                     state=successful_start["state"],
@@ -1268,7 +1470,7 @@ def main() -> None:
                     (
                         item
                         for item in db.list_pending_oauth_credentials()
-                        if item.get("target_credential_id") == active_exact["id"]
+                        if item.get("target_credential_id") == reconnect_target["id"]
                     ),
                     None,
                 )
@@ -1277,13 +1479,13 @@ def main() -> None:
                     or reconnect_pending.get("target_credential_version")
                     != successful_binding["credential_version"]
                     or reconnect_pending["review"].get("reconnect_credential_id")
-                    != active_exact["id"]
+                    != reconnect_target["id"]
                 ):
                     raise AssertionError(f"valid OAuth reconnect lost its target binding: {reconnect_pending}")
-                still_active = db.get_credential(active_exact["id"], include_secret=True)
+                still_active = db.get_credential(reconnect_target["id"], include_secret=True)
                 if still_active is None or json.loads(still_active["secret"]).get("access_token") != "concurrent-refresh-before-reconnect":
                     raise AssertionError("pending OAuth reconnect replaced the active credential before approval")
-                if db.get_route(reconnect_route["id"])["credential_id"] != active_exact["id"]:
+                if db.get_route(reconnect_route["id"])["credential_id"] != reconnect_target["id"]:
                     raise AssertionError("pending OAuth reconnect changed the route credential identity")
 
                 try:
@@ -1305,6 +1507,44 @@ def main() -> None:
                 )
                 if reconnect_approval is None or reconnect_approval["status"] != "approved":
                     raise AssertionError("OAuth reconnect approval could not be approved")
+                original_revocation_capacity = db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT
+                db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT = 0
+                try:
+                    app_module.oauth_pending_credential_activate(
+                        reconnect_pending["id"],
+                        app_module.OAuthPendingActivateRequest(
+                            mfa={"approvalId": reconnect_approval_id}
+                        ),
+                        identity,
+                    )
+                except app_module.HTTPException as exc:
+                    if (
+                        exc.status_code != 503
+                        or not isinstance(exc.detail, dict)
+                        or exc.detail.get("reason") != "revocation_capacity_exhausted"
+                    ):
+                        raise AssertionError(
+                            f"full reconnect retirement queue failed incorrectly: {exc.detail}"
+                        ) from exc
+                else:
+                    raise AssertionError("OAuth reconnect bypassed a full token-retirement queue")
+                finally:
+                    db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT = original_revocation_capacity
+                unchanged_after_capacity = db.get_credential(
+                    reconnect_target["id"], include_secret=True
+                )
+                retained_approval = db.get_control_plane_approval(reconnect_approval_id)
+                if (
+                    unchanged_after_capacity is None
+                    or json.loads(unchanged_after_capacity["secret"]).get("access_token")
+                    != "concurrent-refresh-before-reconnect"
+                    or db.get_pending_oauth_credential(reconnect_pending["id"]) is None
+                    or retained_approval is None
+                    or retained_approval.get("status") != "approved"
+                ):
+                    raise AssertionError(
+                        "full token-retirement queue did not roll back reconnect activation atomically"
+                    )
                 reconnected = app_module.oauth_pending_credential_activate(
                     reconnect_pending["id"],
                     app_module.OAuthPendingActivateRequest(
@@ -1312,18 +1552,43 @@ def main() -> None:
                     ),
                     identity,
                 )
-                if reconnected["credential"]["id"] != active_exact["id"]:
+                if reconnected["credential"]["id"] != reconnect_target["id"]:
                     raise AssertionError("OAuth reconnect allocated a new credential identity")
-                active_exact = db.get_credential(active_exact["id"], include_secret=True)
+                reconnect_target = db.get_credential(reconnect_target["id"], include_secret=True)
                 if (
-                    active_exact is None
-                    or json.loads(active_exact["secret"]).get("access_token") != "reconnect-access-accepted"
-                    or int(active_exact["credential_version"])
+                    reconnect_target is None
+                    or json.loads(reconnect_target["secret"]).get("access_token") != "reconnect-access-accepted"
+                    or int(reconnect_target["credential_version"])
                     <= int(successful_binding["credential_version"])
                 ):
                     raise AssertionError("OAuth reconnect did not rotate the existing encrypted credential")
-                if db.get_route(reconnect_route["id"])["credential_id"] != active_exact["id"]:
+                if db.get_route(reconnect_route["id"])["credential_id"] != reconnect_target["id"]:
                     raise AssertionError("OAuth reconnect did not preserve the route policy reference")
+                with db.connect() as conn:
+                    superseded_work = conn.execute(
+                        "SELECT * FROM oauth_revocation_work WHERE source = ?",
+                        ("reconnect_superseded",),
+                    ).fetchall()
+                if len(superseded_work) != 1 or superseded_work[0]["status"] != "pending":
+                    raise AssertionError(
+                        f"X reconnect did not atomically queue superseded token revocation: {superseded_work}"
+                    )
+                superseded_reconcile = app_module._reconcile_oauth_revocations(limit=1)
+                if superseded_reconcile != {"claimed": 1, "revoked": 1, "failed": 0}:
+                    raise AssertionError(
+                        f"superseded X token revocation did not reconcile: {superseded_reconcile}"
+                    )
+                if (
+                    len(rejected_reconnect_tokens) != 5
+                    or rejected_reconnect_tokens[-1][0] != "x"
+                    or rejected_reconnect_tokens[-1][1].get("access_token")
+                    != "concurrent-refresh-before-reconnect"
+                    or rejected_reconnect_tokens[-1][1].get("refresh_token")
+                    != "x-refresh-token-value"
+                ):
+                    raise AssertionError(
+                        f"X reconnect did not retain the exact superseded tokens: {rejected_reconnect_tokens}"
+                    )
             finally:
                 app_module.revoke_oauth_token = original_reconnect_revoke
                 app_module.exchange_authorization_code = original_exchange_for_pending
@@ -1903,8 +2168,6 @@ def main() -> None:
             time.sleep(0.03)
             return {
                 "access_token": "refreshed-access-token",
-                "token_type": "Bearer",
-                "scope": "https://www.googleapis.com/auth/gmail.readonly",
                 "expires_in": 3600,
             }
 
@@ -1921,8 +2184,10 @@ def main() -> None:
         if (
             refreshed_secret.get("access_token") != "refreshed-access-token"
             or refreshed_secret.get("refresh_token") != "refresh-token-value"
+            or refreshed_secret.get("token_type") != "Bearer"
+            or refreshed_secret.get("scope") != "https://www.googleapis.com/auth/gmail.readonly"
         ):
-            raise AssertionError("OAuth refresh did not atomically preserve and rotate token material")
+            raise AssertionError("OAuth refresh did not preserve omitted token bindings while rotating material")
 
         stale_result, stale_updated = db.update_credential_secret_if_version(
             listed["id"],
@@ -1998,6 +2263,43 @@ def main() -> None:
             expected_access_token="expanded-scope-token",
             expected_refresh_token="rotated-refresh-token",
         )
+
+        for malformed_claim, malformed_value in (
+            ("token_type", ""),
+            ("token_type", []),
+            ("scope", ""),
+            ("scope", []),
+        ):
+            malformed_kind = "empty" if malformed_value == "" else "non-string"
+            malformed_access_token = f"malformed-refresh-{malformed_claim}-{malformed_kind}"
+            malformed_response: dict[str, object] = {
+                "access_token": malformed_access_token,
+                "token_type": "Bearer",
+                "scope": "https://www.googleapis.com/auth/gmail.readonly",
+                "expires_in": 3600,
+            }
+            malformed_response[malformed_claim] = malformed_value
+            oauth._post_token_request = lambda provider, body, headers, response=malformed_response: response
+            try:
+                oauth.refresh_access_token(
+                    provider_id="google",
+                    token_secret=refreshed_secret,
+                    metadata=refreshed_stored["metadata"],
+                    now_epoch=int(time.time()),
+                )
+            except oauth.OAuthError as exc:
+                if malformed_claim.replace("_", " ") not in str(exc):
+                    raise AssertionError(
+                        f"{malformed_kind} OAuth refresh {malformed_claim} failed for the wrong reason: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError(
+                    f"{malformed_kind} OAuth refresh {malformed_claim} was silently replaced"
+                )
+            reconcile_failed_refresh(
+                expected_access_token=malformed_access_token,
+                expected_refresh_token=None,
+            )
 
         oauth._post_token_request = lambda provider, body, headers: {
             "access_token": "reduced-scope-token",

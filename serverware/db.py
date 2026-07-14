@@ -2288,6 +2288,92 @@ def _consume_oauth_revocation_work(conn: Any, work_id: str) -> None:
         raise ManagedOAuthCredentialError("OAuth revocation work binding is unavailable")
 
 
+def _queue_superseded_oauth_secret(
+    conn: Any,
+    *,
+    credential_row: Any,
+    actor_id: str,
+    source: str,
+    replacing_work_id: str | None = None,
+) -> str:
+    metadata = loads(credential_row["metadata"], {})
+    provider_id, _, _ = validate_managed_oauth_account_identity(metadata)
+    if provider_id == "google":
+        raise ManagedOAuthCredentialError(
+            "Google OAuth grants cannot be safely reconnected in place; disconnect and connect again"
+        )
+    if provider_id != "x":
+        raise ManagedOAuthCredentialError(
+            "OAuth provider does not declare token-local retirement semantics"
+        )
+    _validate_oauth_revocation_work_identity(
+        provider_id=provider_id,
+        actor_id=actor_id,
+        source=source,
+    )
+    _lock_oauth_revocation_work(conn)
+    if replacing_work_id is None:
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM oauth_revocation_work"
+        ).fetchone()
+    else:
+        if not isinstance(replacing_work_id, str) or not replacing_work_id:
+            raise ManagedOAuthCredentialError("OAuth revocation work replacement is invalid")
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM oauth_revocation_work WHERE id <> ?",
+            (replacing_work_id,),
+        ).fetchone()
+    if int(count_row["count"] if count_row else 0) >= _OAUTH_REVOCATION_BACKLOG_MAX_COUNT:
+        raise ManagedOAuthCredentialError("OAuth revocation work capacity has been reached")
+
+    work_id = str(uuid.uuid4())
+    now_s = iso_now()
+    encrypted = _envelope_values(
+        work_id,
+        decrypt_secret_envelope(credential_row),
+        1,
+    )
+    conn.execute(
+        """
+        INSERT INTO oauth_revocation_work (
+            id, provider_id, actor_id, source, encrypted_secret, encrypted_dek,
+            secret_nonce, secret_ciphertext, secret_kek_id, credential_version,
+            secret_updated_at, status, attempts, next_attempt_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?, ?)
+        """,
+        (
+            work_id,
+            provider_id,
+            actor_id,
+            source,
+            encrypted["encrypted_secret"],
+            encrypted["encrypted_dek"],
+            encrypted["secret_nonce"],
+            encrypted["secret_ciphertext"],
+            encrypted["secret_kek_id"],
+            encrypted["credential_version"],
+            encrypted["secret_updated_at"],
+            now_s,
+            now_s,
+            now_s,
+        ),
+    )
+    append_audit_event(
+        conn,
+        event_type="credential.oauth_token_retirement_queued",
+        actor_type="system" if source == "refresh_superseded" else "admin",
+        actor_id=actor_id,
+        event={
+            "credential_id": str(credential_row["id"]),
+            "credential_version": int(credential_row["credential_version"] or 1),
+            "provider": provider_id,
+            "source": source,
+            "revocation_work_id": work_id,
+        },
+    )
+    return work_id
+
+
 def claim_oauth_revocations(
     *,
     worker_id: str,
@@ -2478,6 +2564,8 @@ def activate_pending_oauth_credential(
                 )
             except ManagedOAuthCredentialError:
                 return {"ok": False, "reason": "reconnect_identity_invalid"}
+            if current_identity[0] == "google":
+                return {"ok": False, "reason": "google_reconnect_requires_disconnect"}
             if current_identity != pending_identity:
                 return {"ok": False, "reason": "reconnect_identity_mismatch"}
             if str(reconnect_target["name"]) != str(pending["name"]):
@@ -2519,7 +2607,14 @@ def activate_pending_oauth_credential(
         if consumed.rowcount != 1:
             return {"ok": False, "reason": "approval_state_changed"}
 
+        superseded_revocation_work_id = None
         if reconnect_target is not None:
+            superseded_revocation_work_id = _queue_superseded_oauth_secret(
+                conn,
+                credential_row=reconnect_target,
+                actor_id=actor_id,
+                source="reconnect_superseded",
+            )
             next_version = _next_credential_generation(conn, target_credential_id)
             encrypted = _envelope_values(
                 target_credential_id,
@@ -2589,6 +2684,7 @@ def activate_pending_oauth_credential(
                 "resource_id": item_id,
                 "credential_id": credential_id,
                 "reconnect": reconnect_target is not None,
+                "superseded_revocation_work_id": superseded_revocation_work_id,
                 "payload_digest": pending["payload_digest"],
                 "requester_id": actor_id,
                 "approved_by": approval["approved_by"],
@@ -2637,6 +2733,13 @@ def reconnect_oauth_credential(
             raise ManagedOAuthCredentialError(
                 "OAuth reconnect must verify the exact existing provider subject and account"
             )
+        _queue_superseded_oauth_secret(
+            conn,
+            credential_row=current,
+            actor_id=str(metadata.get("created_by") or "oauth-reconnect"),
+            source="reconnect_superseded",
+            replacing_work_id=revocation_work_id,
+        )
         next_version = _next_credential_generation(conn, item_id)
         encrypted = _envelope_values(item_id, secret, next_version)
         now_s = iso_now()
@@ -2862,6 +2965,7 @@ def update_credential_secret_if_version(
             return row_to_credential(current, include_secret=True), False
         current_secret = decrypt_secret_envelope(current)
         current_metadata = loads(current["metadata"], {})
+        managed_oauth_provider = None
         if current["kind"] == "oauth2" or current_metadata.get("oauth") is True:
             current_identity = validate_managed_oauth_identity(current_metadata)
             next_identity = validate_managed_oauth_identity(metadata)
@@ -2869,10 +2973,20 @@ def update_credential_secret_if_version(
                 raise ManagedOAuthCredentialError(
                     "OAuth refresh cannot change the verified provider account identity"
                 )
+            managed_oauth_provider = current_identity[0]
         if current_secret == secret and current_metadata == metadata:
             if revocation_work_id is not None:
                 _consume_oauth_revocation_work(conn, revocation_work_id)
             return row_to_credential(current, include_secret=True), False
+
+        if managed_oauth_provider == "x" and current_secret != secret:
+            _queue_superseded_oauth_secret(
+                conn,
+                credential_row=current,
+                actor_id=str(metadata.get("created_by") or "oauth-refresh"),
+                source="refresh_superseded",
+                replacing_work_id=revocation_work_id,
+            )
 
         next_version = current_version + 1
         encrypted = _envelope_values(item_id, secret, next_version)

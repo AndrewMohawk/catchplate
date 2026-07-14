@@ -2898,10 +2898,19 @@ def oauth_start(
             reconnect_binding = _oauth_reconnect_binding_from_credential(existing)
         except OAuthError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        if normalize_provider_id(payload.provider) != reconnect_binding["provider"]:
+        normalized_provider = normalize_provider_id(payload.provider)
+        if normalized_provider != reconnect_binding["provider"]:
             raise HTTPException(
                 status_code=409,
                 detail="OAuth reconnect provider does not match the existing credential",
+            )
+        if normalized_provider == "google":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Google revocation invalidates the account/project grant rather than one token. "
+                    "Disconnect this credential, then connect the Google account again."
+                ),
             )
         if payload.credential_name is not None and payload.credential_name.strip() != existing["name"]:
             raise HTTPException(
@@ -3288,11 +3297,25 @@ def oauth_pending_credential_activate(
                 "retry": {"mfa.approvalId": approval["id"]},
             },
         )
-    result = db.activate_pending_oauth_credential(
-        pending_credential_id,
-        approval_id=approval_id,
-        actor_id=identity.user_id,
-    )
+    try:
+        result = db.activate_pending_oauth_credential(
+            pending_credential_id,
+            approval_id=approval_id,
+            actor_id=identity.user_id,
+        )
+    except db.ManagedOAuthCredentialError as exc:
+        detail = str(exc)
+        if "revocation work capacity" in detail:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": "oauth_reconnect_retirement_unavailable",
+                    "reason": "revocation_capacity_exhausted",
+                    "pendingCredentialId": pending_credential_id,
+                    "approvalId": approval_id,
+                },
+            ) from exc
+        raise HTTPException(status_code=409, detail=detail) from exc
     if not result.get("ok"):
         reason = str(result.get("reason") or "activation_failed")
         status_code = 404 if reason == "pending_credential_not_found" else 410 if reason == "pending_credential_expired" else 409
@@ -6224,6 +6247,9 @@ UI_HTML = r"""
       if ((item.lifecycle_status || 'active') !== 'active') {
         return `<button class="danger" type="button" onclick="runUiAction('Retry OAuth disconnect', () => deleteCredential('${item.id}'))">Retry disconnect</button>`;
       }
+      if (item.metadata?.provider_id === 'google') {
+        return `<button class="danger" type="button" title="Google grants must be revoked before connecting again" onclick="runUiAction('Disconnect OAuth credential', () => deleteCredential('${item.id}'))">Disconnect</button>`;
+      }
       return `<div class="toolbar"><button type="button" onclick="runUiAction('Reconnect OAuth credential', () => reconnectOAuthCredential('${item.id}'))">Reconnect</button><button class="danger" type="button" onclick="runUiAction('Disconnect OAuth credential', () => deleteCredential('${item.id}'))">Disconnect</button></div>`;
     }
 
@@ -7124,6 +7150,7 @@ UI_HTML = r"""
       const item = state.credentials.find((candidate) => candidate.id === id);
       if (!item || item.kind !== 'oauth2' || item.metadata?.oauth !== true) throw new Error('Managed OAuth credential is unavailable');
       if ((item.lifecycle_status || 'active') !== 'active') throw new Error('Complete provider revocation before reconnecting this credential');
+      if (item.metadata?.provider_id === 'google') throw new Error('Disconnect the Google credential before connecting the account again');
       const body = {
         provider: item.metadata.provider_id,
         credentialId: item.id,

@@ -117,6 +117,7 @@ bench-gate-rs:
 			python3 scripts/test_http_client.py
 			python3 scripts/test_oauth_credentials.py --compose-contract-only
 			docker compose exec -T serverware python scripts/test_oauth_credentials.py
+			docker compose exec -T serverware python scripts/test_oauth_http_flow.py
 		docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
 		docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
 		docker compose exec -T serverware python scripts/test_control_plane_two_person.py
@@ -413,6 +414,7 @@ verify-oauth-credentials:
 	python3 scripts/test_http_client.py
 	python3 scripts/test_oauth_credentials.py --compose-contract-only
 	docker compose exec -T serverware python scripts/test_oauth_credentials.py
+	docker compose exec -T serverware python scripts/test_oauth_http_flow.py
 
 verify-credential-lease-delivery:
 	docker compose up -d --build serverware

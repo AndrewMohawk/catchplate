@@ -491,12 +491,33 @@ def _append_sqlite_audit_event(
     actor_type: str,
     actor_id: str | None,
     event: dict[str, Any],
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
-    event_id = str(uuid.uuid4())
-    created_at = iso_now()
     event_json = dumps(event)
+    event_id = idempotency_key or str(uuid.uuid4())
+    if idempotency_key is not None:
+        existing = conn.execute("SELECT * FROM audit_events WHERE id = ?", (event_id,)).fetchone()
+        if existing is not None:
+            if (
+                existing["event_type"] != event_type
+                or existing["actor_type"] != actor_type
+                or existing["actor_id"] != actor_id
+                or existing["event_json"] != event_json
+            ):
+                raise AuditStoreError("audit idempotency key was reused with different event data")
+            return {
+                "id": existing["id"],
+                "event_type": existing["event_type"],
+                "actor_type": existing["actor_type"],
+                "actor_id": existing["actor_id"],
+                "event": loads(existing["event_json"], {}),
+                "prev_event_hash": existing["prev_event_hash"],
+                "event_hash": existing["event_hash"],
+                "created_at": existing["created_at"],
+            }
+    created_at = iso_now()
     previous = conn.execute(
         "SELECT event_hash FROM audit_events ORDER BY rowid DESC LIMIT 1"
     ).fetchone()
@@ -538,13 +559,37 @@ def _append_postgres_audit_event(
     actor_type: str,
     actor_id: str | None,
     event: dict[str, Any],
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
-    event_id = str(uuid.uuid4())
+    event_id = idempotency_key or str(uuid.uuid4())
     event_json = dumps(event)
     with _audit_pg_connect() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
                 cur.execute("SELECT pg_advisory_xact_lock(%(lock_key)s)", {"lock_key": _AUDIT_CHAIN_LOCK_KEY})
+                if idempotency_key is not None:
+                    existing = cur.execute(
+                        "SELECT * FROM serverware_audit_events WHERE id = %(id)s",
+                        {"id": event_id},
+                    ).fetchone()
+                    if existing is not None:
+                        if (
+                            existing["event_type"] != event_type
+                            or existing["actor_type"] != actor_type
+                            or existing["actor_id"] != actor_id
+                            or existing["event_json"] != event_json
+                        ):
+                            raise AuditStoreError("audit idempotency key was reused with different event data")
+                        return {
+                            "id": existing["id"],
+                            "event_type": existing["event_type"],
+                            "actor_type": existing["actor_type"],
+                            "actor_id": existing["actor_id"],
+                            "event": loads(existing["event_json"], {}),
+                            "prev_event_hash": existing["prev_event_hash"],
+                            "event_hash": existing["event_hash"],
+                            "created_at": existing["created_at"],
+                        }
                 previous = cur.execute(
                     "SELECT event_hash FROM serverware_audit_events ORDER BY sequence DESC LIMIT 1"
                 ).fetchone()
@@ -600,13 +645,17 @@ def append_audit_event(
     actor_type: str,
     actor_id: str | None,
     event: dict[str, Any],
+    idempotency_key: str | None = None,
 ) -> dict[str, Any]:
+    if idempotency_key is not None and (not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 256):
+        raise AuditStoreError("audit idempotency key must contain 1-256 characters")
     if audit_uses_postgres():
         return _append_postgres_audit_event(
             event_type=event_type,
             actor_type=actor_type,
             actor_id=actor_id,
             event=event,
+            idempotency_key=idempotency_key,
         )
     return _append_sqlite_audit_event(
         conn,
@@ -614,16 +663,27 @@ def append_audit_event(
         actor_type=actor_type,
         actor_id=actor_id,
         event=event,
+        idempotency_key=idempotency_key,
     )
 
 
-def record_audit_event(event_type: str, event: dict[str, Any], actor_type: str = "admin", actor_id: str = "admin") -> dict[str, Any]:
+def record_audit_event(
+    event_type: str,
+    event: dict[str, Any],
+    actor_type: str = "admin",
+    actor_id: str = "admin",
+    *,
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    if idempotency_key is not None and (not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 256):
+        raise AuditStoreError("audit idempotency key must contain 1-256 characters")
     if audit_uses_postgres():
         return _append_postgres_audit_event(
             event_type=event_type,
             actor_type=actor_type,
             actor_id=actor_id,
             event=event,
+            idempotency_key=idempotency_key,
         )
     with connect() as conn:
         return append_audit_event(
@@ -632,6 +692,7 @@ def record_audit_event(event_type: str, event: dict[str, Any], actor_type: str =
             actor_type=actor_type,
             actor_id=actor_id,
             event=event,
+            idempotency_key=idempotency_key,
         )
 
 
@@ -2288,6 +2349,41 @@ def _consume_oauth_revocation_work(conn: Any, work_id: str) -> None:
         raise ManagedOAuthCredentialError("OAuth revocation work binding is unavailable")
 
 
+def _x_oauth_retirement_secret(
+    current_secret: str,
+    replacement_secret: str | None,
+) -> str | None:
+    try:
+        current = json.loads(current_secret)
+        replacement = json.loads(replacement_secret) if replacement_secret is not None else None
+    except (json.JSONDecodeError, TypeError):
+        raise ManagedOAuthCredentialError("OAuth token retirement material is malformed") from None
+    if not isinstance(current, dict) or (replacement is not None and not isinstance(replacement, dict)):
+        raise ManagedOAuthCredentialError("OAuth token retirement material is malformed")
+
+    token_sets = (current,) if replacement is None else (current, replacement)
+    for token_set in token_sets:
+        for field in ("access_token", "refresh_token"):
+            value = token_set.get(field)
+            if not isinstance(value, str) or not value:
+                raise ManagedOAuthCredentialError("OAuth token retirement material is malformed")
+
+    if replacement is None:
+        retirement = {
+            "access_token": current["access_token"],
+            "refresh_token": current["refresh_token"],
+        }
+    else:
+        retirement = {
+            field: current[field]
+            for field in ("access_token", "refresh_token")
+            if current[field] != replacement[field]
+        }
+    if not retirement:
+        return None
+    return dumps(retirement)
+
+
 def _queue_superseded_oauth_secret(
     conn: Any,
     *,
@@ -2295,7 +2391,8 @@ def _queue_superseded_oauth_secret(
     actor_id: str,
     source: str,
     replacing_work_id: str | None = None,
-) -> str:
+    replacement_secret: str | None = None,
+) -> str | None:
     metadata = loads(credential_row["metadata"], {})
     provider_id, _, _ = validate_managed_oauth_account_identity(metadata)
     if provider_id == "google":
@@ -2311,6 +2408,12 @@ def _queue_superseded_oauth_secret(
         actor_id=actor_id,
         source=source,
     )
+    retirement_secret = _x_oauth_retirement_secret(
+        decrypt_secret_envelope(credential_row),
+        replacement_secret,
+    )
+    if retirement_secret is None:
+        return None
     _lock_oauth_revocation_work(conn)
     if replacing_work_id is None:
         count_row = conn.execute(
@@ -2330,7 +2433,7 @@ def _queue_superseded_oauth_secret(
     now_s = iso_now()
     encrypted = _envelope_values(
         work_id,
-        decrypt_secret_envelope(credential_row),
+        retirement_secret,
         1,
     )
     conn.execute(
@@ -2986,6 +3089,7 @@ def update_credential_secret_if_version(
                 actor_id=str(metadata.get("created_by") or "oauth-refresh"),
                 source="refresh_superseded",
                 replacing_work_id=revocation_work_id,
+                replacement_secret=secret,
             )
 
         next_version = current_version + 1

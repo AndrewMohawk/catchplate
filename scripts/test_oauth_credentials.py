@@ -196,9 +196,14 @@ def main() -> None:
         os.environ["SERVERWARE_X_OAUTH_CLIENT_SECRET"] = "x-secret"
         os.environ["SERVERWARE_X_OAUTH_REDIRECT_URI"] = "https://serverware.test/api/oauth/callback/x"
 
-        from serverware import db, oauth
+        from serverware import db, oauth, runtime
         from serverware import app as app_module
         from serverware.auth import AdminIdentity
+        from serverware.policy_bundle import (
+            PolicyBundleError,
+            compile_policy_bundle,
+            demo_policy_bundle,
+        )
 
         if "mitmproxy" not in sys.modules:
             mitmproxy_module = types.ModuleType("mitmproxy")
@@ -946,6 +951,146 @@ def main() -> None:
             else:
                 raise AssertionError("unverified or non-OAuth credential satisfied a signed provider account binding")
 
+        canonical_oauth_injection = {
+            "type": "bearer",
+            "header": "Authorization",
+            "field": "access_token",
+            "prefix": "Bearer ",
+        }
+        canonical_lease_policy = SimpleNamespace(injection=canonical_oauth_injection)
+        for provider_id in ("google", "x"):
+            access_token = f"{provider_id}-lease-access-token-distinctive"
+            refresh_token = f"{provider_id}-lease-refresh-token-distinctive"
+            full_secret = json.dumps(
+                {
+                    "refresh_token": refresh_token,
+                    "token_type": "Bearer",
+                    "access_token": access_token,
+                },
+                separators=(",", ":"),
+                sort_keys=False,
+            )
+            credential = {
+                "id": f"{provider_id}-lease-custody",
+                "kind": "oauth2",
+                "secret": full_secret,
+                "metadata": {"provider_id": provider_id},
+            }
+            expected_projection = json.dumps(
+                {"access_token": access_token},
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            lease_secret = app_module._credential_secret_for_lease(
+                credential,
+                canonical_lease_policy,
+            )
+            projected = runtime._project_credential_for_data_plane(credential)
+            if lease_secret != expected_projection:
+                raise AssertionError(
+                    f"{provider_id} lease secret was not canonical access-token-only JSON: "
+                    f"{lease_secret}"
+                )
+            if projected is None or projected.get("secret") != expected_projection:
+                raise AssertionError(
+                    f"{provider_id} runtime projection was not access-token-only: {projected}"
+                )
+            if refresh_token in lease_secret or refresh_token in str(projected.get("secret")):
+                raise AssertionError(f"{provider_id} refresh token crossed the data-plane boundary")
+            if credential["secret"] != full_secret:
+                raise AssertionError(f"{provider_id} runtime projection mutated credential custody material")
+
+        malformed_custody_secrets = (
+            ("malformed", '{"access_token":'),
+            (
+                "duplicate",
+                '{"access_token":"duplicate-first","access_token":"duplicate-second",'
+                '"refresh_token":"duplicate-refresh"}',
+            ),
+            ("missing", '{"refresh_token":"missing-access-refresh"}'),
+        )
+        for malformed_kind, malformed_secret in malformed_custody_secrets:
+            malformed_credential = {
+                "id": f"oauth-custody-{malformed_kind}",
+                "kind": "oauth2",
+                "secret": malformed_secret,
+                "metadata": {"provider_id": "x"},
+            }
+            try:
+                app_module._credential_secret_for_lease(
+                    malformed_credential,
+                    canonical_lease_policy,
+                )
+            except app_module.HTTPException as exc:
+                if exc.status_code != 503 or malformed_secret in str(exc.detail):
+                    raise AssertionError(
+                        f"{malformed_kind} OAuth lease material failed unsafely: {exc.detail}"
+                    ) from exc
+            else:
+                raise AssertionError(f"{malformed_kind} OAuth lease material crossed custody")
+            if runtime._project_credential_for_data_plane(malformed_credential) is not None:
+                raise AssertionError(
+                    f"runtime accepted {malformed_kind} OAuth lease material"
+                )
+
+        for provider in ("google.oauth2", "x.oauth2"):
+            canonical_policy = demo_policy_bundle("cred-oauth-custody")
+            canonical_policy["credentials"][0].update(
+                {
+                    "provider": provider,
+                    "providerSubject": f"{provider}-subject",
+                    "injection": dict(canonical_oauth_injection),
+                }
+            )
+            compile_policy_bundle(canonical_policy)
+            invalid_injections = (
+                ("fieldless", {"type": "bearer", "header": "Authorization"}),
+                (
+                    "refresh-token",
+                    {
+                        "type": "bearer",
+                        "header": "Authorization",
+                        "field": "refresh_token",
+                    },
+                ),
+                (
+                    "alternate-header",
+                    {
+                        "type": "bearer",
+                        "header": "X-OAuth-Token",
+                        "field": "access_token",
+                    },
+                ),
+                (
+                    "alternate-type",
+                    {
+                        "type": "header",
+                        "name": "Authorization",
+                        "field": "access_token",
+                    },
+                ),
+                (
+                    "alternate-prefix",
+                    {
+                        "type": "bearer",
+                        "header": "Authorization",
+                        "field": "access_token",
+                        "prefix": "Token ",
+                    },
+                ),
+            )
+            for case, invalid_injection in invalid_injections:
+                invalid_policy = json.loads(json.dumps(canonical_policy))
+                invalid_policy["credentials"][0]["injection"] = invalid_injection
+                try:
+                    compile_policy_bundle(invalid_policy)
+                except PolicyBundleError:
+                    pass
+                else:
+                    raise AssertionError(
+                        f"{provider} policy accepted {case} OAuth injection"
+                    )
+
         try:
             oauth.exchange_authorization_code(
                 provider_id="google",
@@ -1393,26 +1538,99 @@ def main() -> None:
                 stale_binding = json.loads((Path(tmp) / "oauth-states.json").read_text())["states"][
                     stale_start["state"]
                 ]["reconnect"]
-                concurrently_refreshed_secret = {
-                    **json.loads(reconnect_target["secret"]),
-                    "access_token": "concurrent-refresh-before-reconnect",
-                }
+
+                def assert_x_refresh_retirement_work(
+                    expected_material: dict[str, str],
+                    *plaintext_tokens: str,
+                ) -> None:
+                    with db.connect() as conn:
+                        work_rows = conn.execute(
+                            "SELECT * FROM oauth_revocation_work WHERE source = ?",
+                            ("refresh_superseded",),
+                        ).fetchall()
+                    if len(work_rows) != 1 or work_rows[0]["status"] != "pending":
+                        raise AssertionError(
+                            f"X refresh did not queue one pending retirement item: {work_rows}"
+                        )
+                    serialized_work = json.dumps(dict(work_rows[0]), sort_keys=True)
+                    if any(token in serialized_work for token in plaintext_tokens):
+                        raise AssertionError("X refresh retirement work stored plaintext token material")
+                    material = json.loads(db.decrypt_secret_envelope(work_rows[0]))
+                    if material != expected_material:
+                        raise AssertionError(
+                            f"X refresh queued the wrong retirement material: {material}"
+                        )
+
+                def assert_oauth_secrets_absent_from_api_and_audit(*secrets: str) -> None:
+                    api_text = json.dumps(app_module.bootstrap(identity), sort_keys=True)
+                    audit_text = json.dumps(db.list_audit_events(limit=1000), sort_keys=True)
+                    for secret_value in secrets:
+                        if secret_value in api_text:
+                            raise AssertionError("control-plane API disclosed OAuth token material")
+                        if secret_value in audit_text:
+                            raise AssertionError("OAuth audit events disclosed token material")
+
+                def issue_x_refresh(
+                    credential: dict[str, object],
+                    response: dict[str, object],
+                ) -> dict[str, object]:
+                    current_token_secret = json.loads(str(credential["secret"]))
+                    expected_refresh_token = current_token_secret["refresh_token"]
+
+                    def x_refresh_request(provider, body, headers):
+                        if provider.id != "x":
+                            raise AssertionError(f"unexpected X refresh provider: {provider.id}")
+                        if body.get("refresh_token") != expected_refresh_token:
+                            raise AssertionError(f"X refresh used the wrong current token: {body}")
+                        if not str(headers.get("Authorization", "")).startswith("Basic "):
+                            raise AssertionError("X refresh did not authenticate the confidential client")
+                        return response
+
+                    oauth._post_token_request = x_refresh_request
+                    return oauth.refresh_access_token(
+                        provider_id="x",
+                        token_secret=current_token_secret,
+                        metadata=credential["metadata"],
+                        now_epoch=int(time.time()),
+                    )
+
+                nonrotating_refresh = issue_x_refresh(
+                    reconnect_target,
+                    {
+                        "access_token": "concurrent-refresh-before-reconnect",
+                        "token_type": "Bearer",
+                        "expires_in": 7200,
+                    },
+                )
+                nonrotating_secret = json.loads(str(nonrotating_refresh["secret"]))
+                if (
+                    nonrotating_refresh.get("refreshTokenRotated") is not False
+                    or nonrotating_secret.get("refresh_token") != "x-refresh-token-value"
+                ):
+                    raise AssertionError(
+                        "X refresh did not preserve an omitted replacement refresh token"
+                    )
                 concurrently_refreshed, rotated = db.update_credential_secret_if_version(
                     reconnect_target["id"],
                     expected_version=baseline_version,
-                    secret=json.dumps(concurrently_refreshed_secret, separators=(",", ":"), sort_keys=True),
-                    metadata=reconnect_target["metadata"],
+                    secret=str(nonrotating_refresh["secret"]),
+                    metadata=nonrotating_refresh["metadata"],
+                    revocation_work_id=str(nonrotating_refresh["revocationWorkId"]),
                 )
                 if concurrently_refreshed is None or not rotated:
                     raise AssertionError("stale reconnect fixture did not rotate the active credential")
                 app_module.runtime.invalidate_secret_leases(reconnect_target["id"])
-                with db.connect() as conn:
-                    refresh_superseded_work = conn.execute(
-                        "SELECT * FROM oauth_revocation_work WHERE source = ?",
-                        ("refresh_superseded",),
-                    ).fetchall()
-                if len(refresh_superseded_work) != 1:
-                    raise AssertionError("X refresh did not queue its superseded token material")
+                assert_x_refresh_retirement_work(
+                    {"access_token": "x-access-token-value"},
+                    "x-access-token-value",
+                    "x-refresh-token-value",
+                    "concurrent-refresh-before-reconnect",
+                )
+                assert_oauth_secrets_absent_from_api_and_audit(
+                    "x-access-token-value",
+                    "x-refresh-token-value",
+                    "concurrent-refresh-before-reconnect",
+                )
                 refresh_superseded_reconcile = app_module._reconcile_oauth_revocations(limit=1)
                 if refresh_superseded_reconcile != {"claimed": 1, "revoked": 1, "failed": 0}:
                     raise AssertionError(
@@ -1420,9 +1638,61 @@ def main() -> None:
                     )
                 if (
                     len(rejected_reconnect_tokens) != 3
-                    or rejected_reconnect_tokens[-1][1].get("access_token") != "x-access-token-value"
+                    or rejected_reconnect_tokens[-1]
+                    != ("x", {"access_token": "x-access-token-value"})
                 ):
-                    raise AssertionError("X refresh did not retain the exact superseded token set")
+                    raise AssertionError(
+                        "X refresh without refresh-token rotation retired the current refresh token"
+                    )
+
+                malformed_access_token = "malformed-x-access-token-must-not-leak"
+                malformed_refresh_token = "malformed-x-refresh-token-must-not-leak"
+                before_malformed = db.get_credential(reconnect_target["id"], include_secret=True)
+                if before_malformed is None:
+                    raise AssertionError("X malformed-refresh fixture credential disappeared")
+                malformed_secret = {
+                    **json.loads(before_malformed["secret"]),
+                    "access_token": malformed_access_token,
+                    "refresh_token": [malformed_refresh_token],
+                }
+                try:
+                    db.update_credential_secret_if_version(
+                        reconnect_target["id"],
+                        expected_version=int(before_malformed["credential_version"]),
+                        secret=json.dumps(malformed_secret, separators=(",", ":"), sort_keys=True),
+                        metadata=before_malformed["metadata"],
+                    )
+                except db.ManagedOAuthCredentialError as exc:
+                    if (
+                        malformed_access_token in str(exc)
+                        or malformed_refresh_token in str(exc)
+                        or str(exc) != "OAuth token retirement material is malformed"
+                    ):
+                        raise AssertionError(
+                            f"malformed X retirement material failed unsafely: {exc}"
+                        ) from exc
+                else:
+                    raise AssertionError("malformed X retirement material was persisted")
+                after_malformed = db.get_credential(reconnect_target["id"], include_secret=True)
+                if (
+                    after_malformed is None
+                    or after_malformed["credential_version"] != before_malformed["credential_version"]
+                    or after_malformed["secret"] != before_malformed["secret"]
+                ):
+                    raise AssertionError("malformed X retirement material changed the credential")
+                with db.connect() as conn:
+                    malformed_work_count = conn.execute(
+                        "SELECT COUNT(*) AS count FROM oauth_revocation_work "
+                        "WHERE source = ?",
+                        ("refresh_superseded",),
+                    ).fetchone()
+                if int(malformed_work_count["count"] if malformed_work_count else -1) != 0:
+                    raise AssertionError("malformed X retirement material left revocation work behind")
+                assert_oauth_secrets_absent_from_api_and_audit(
+                    malformed_access_token,
+                    malformed_refresh_token,
+                )
+
                 app_module.exchange_authorization_code = lambda **kwargs: reconnect_exchange(
                     stale_binding,
                     "stale-version",
@@ -1444,6 +1714,64 @@ def main() -> None:
                     raise AssertionError("stale OAuth reconnect overwrote a concurrent credential rotation")
                 if len(rejected_reconnect_tokens) != 4:
                     raise AssertionError("stale OAuth reconnect token was not revoked")
+
+                rotating_refresh = issue_x_refresh(
+                    after_stale,
+                    {
+                        "access_token": "concurrent-refresh-after-rotation",
+                        "refresh_token": "x-refresh-token-rotated",
+                        "token_type": "Bearer",
+                        "expires_in": 7200,
+                    },
+                )
+                rotating_secret = json.loads(str(rotating_refresh["secret"]))
+                if (
+                    rotating_refresh.get("refreshTokenRotated") is not True
+                    or rotating_secret.get("refresh_token") != "x-refresh-token-rotated"
+                ):
+                    raise AssertionError("X refresh did not preserve a rotated refresh token")
+                rotated_credential, refresh_token_rotated = db.update_credential_secret_if_version(
+                    reconnect_target["id"],
+                    expected_version=int(after_stale["credential_version"]),
+                    secret=str(rotating_refresh["secret"]),
+                    metadata=rotating_refresh["metadata"],
+                    revocation_work_id=str(rotating_refresh["revocationWorkId"]),
+                )
+                if rotated_credential is None or not refresh_token_rotated:
+                    raise AssertionError("X rotated-refresh fixture did not rotate the credential")
+                assert_x_refresh_retirement_work(
+                    {
+                        "access_token": "concurrent-refresh-before-reconnect",
+                        "refresh_token": "x-refresh-token-value",
+                    },
+                    "concurrent-refresh-before-reconnect",
+                    "x-refresh-token-value",
+                    "concurrent-refresh-after-rotation",
+                    "x-refresh-token-rotated",
+                )
+                assert_oauth_secrets_absent_from_api_and_audit(
+                    "concurrent-refresh-before-reconnect",
+                    "x-refresh-token-value",
+                    "concurrent-refresh-after-rotation",
+                    "x-refresh-token-rotated",
+                )
+                rotated_refresh_reconcile = app_module._reconcile_oauth_revocations(limit=1)
+                if rotated_refresh_reconcile != {"claimed": 1, "revoked": 1, "failed": 0}:
+                    raise AssertionError(
+                        f"rotated X refresh retirement did not reconcile: {rotated_refresh_reconcile}"
+                    )
+                if (
+                    len(rejected_reconnect_tokens) != 5
+                    or rejected_reconnect_tokens[-1]
+                    != (
+                        "x",
+                        {
+                            "access_token": "concurrent-refresh-before-reconnect",
+                            "refresh_token": "x-refresh-token-value",
+                        },
+                    )
+                ):
+                    raise AssertionError("rotated X refresh did not retire both superseded tokens")
 
                 successful_start, successful_nonce = start_oauth(
                     app_module.OAuthStartRequest(
@@ -1483,7 +1811,13 @@ def main() -> None:
                 ):
                     raise AssertionError(f"valid OAuth reconnect lost its target binding: {reconnect_pending}")
                 still_active = db.get_credential(reconnect_target["id"], include_secret=True)
-                if still_active is None or json.loads(still_active["secret"]).get("access_token") != "concurrent-refresh-before-reconnect":
+                if (
+                    still_active is None
+                    or json.loads(still_active["secret"]).get("access_token")
+                    != "concurrent-refresh-after-rotation"
+                    or json.loads(still_active["secret"]).get("refresh_token")
+                    != "x-refresh-token-rotated"
+                ):
                     raise AssertionError("pending OAuth reconnect replaced the active credential before approval")
                 if db.get_route(reconnect_route["id"])["credential_id"] != reconnect_target["id"]:
                     raise AssertionError("pending OAuth reconnect changed the route credential identity")
@@ -1537,7 +1871,7 @@ def main() -> None:
                 if (
                     unchanged_after_capacity is None
                     or json.loads(unchanged_after_capacity["secret"]).get("access_token")
-                    != "concurrent-refresh-before-reconnect"
+                    != "concurrent-refresh-after-rotation"
                     or db.get_pending_oauth_credential(reconnect_pending["id"]) is None
                     or retained_approval is None
                     or retained_approval.get("status") != "approved"
@@ -1573,18 +1907,26 @@ def main() -> None:
                     raise AssertionError(
                         f"X reconnect did not atomically queue superseded token revocation: {superseded_work}"
                     )
+                superseded_material = json.loads(db.decrypt_secret_envelope(superseded_work[0]))
+                if superseded_material != {
+                    "access_token": "concurrent-refresh-after-rotation",
+                    "refresh_token": "x-refresh-token-rotated",
+                }:
+                    raise AssertionError(
+                        f"X reconnect did not retain both superseded tokens: {superseded_material}"
+                    )
                 superseded_reconcile = app_module._reconcile_oauth_revocations(limit=1)
                 if superseded_reconcile != {"claimed": 1, "revoked": 1, "failed": 0}:
                     raise AssertionError(
                         f"superseded X token revocation did not reconcile: {superseded_reconcile}"
                     )
                 if (
-                    len(rejected_reconnect_tokens) != 5
+                    len(rejected_reconnect_tokens) != 6
                     or rejected_reconnect_tokens[-1][0] != "x"
                     or rejected_reconnect_tokens[-1][1].get("access_token")
-                    != "concurrent-refresh-before-reconnect"
+                    != "concurrent-refresh-after-rotation"
                     or rejected_reconnect_tokens[-1][1].get("refresh_token")
-                    != "x-refresh-token-value"
+                    != "x-refresh-token-rotated"
                 ):
                     raise AssertionError(
                         f"X reconnect did not retain the exact superseded tokens: {rejected_reconnect_tokens}"
@@ -2074,7 +2416,7 @@ def main() -> None:
                 stored,
             )
         except ValueError as exc:
-            if "missing field" not in str(exc):
+            if "canonical access-token-only bearer" not in str(exc):
                 raise AssertionError(f"missing field failed with wrong error: {exc}") from exc
         else:
             raise AssertionError("missing OAuth token field did not fail closed")
@@ -2086,7 +2428,7 @@ def main() -> None:
                 stored,
             )
         except ValueError as exc:
-            if "dotted object path" not in str(exc):
+            if "canonical access-token-only bearer" not in str(exc):
                 raise AssertionError(f"wildcard field failed with wrong error: {exc}") from exc
         else:
             raise AssertionError("wildcard OAuth token field did not fail closed")

@@ -94,8 +94,10 @@ def main() -> None:
             "pinning.policySigningKeyId",
             "pinning.rollbackEpoch",
             "scripts/verify_attestation.py --base",
+            '--enrollment-packet "$VERIFIED_ENROLLMENT_PACKET"',
             "--expected-policy-key-hash",
             "--expected-rollback-epoch",
+            "if (control.id.startsWith('setup-')) return;",
         )
         for marker in required_markup:
             if marker not in ui_html:
@@ -116,8 +118,8 @@ def main() -> None:
         handoff_positions = [enrollment_verifier_fn.index(marker) for marker in ordered_enrollment_handoff]
         if handoff_positions != sorted(handoff_positions):
             raise AssertionError("portal must download and verify the exact enrollment packet before CA install")
-        if "dev-admin-token" in enrollment_verifier_fn:
-            raise AssertionError("portal enrollment handoff must not embed an admin secret")
+        if "dev-admin-token" in enrollment_verifier_fn or "SERVERWARE_ADMIN_TOKEN" in enrollment_verifier_fn:
+            raise AssertionError("portal enrollment handoff must not require or embed an admin secret")
         if "JSON.stringify(packet" in enrollment_verifier_fn:
             raise AssertionError("portal enrollment handoff must reference the downloaded packet instead of embedding it")
 
@@ -397,6 +399,46 @@ def main() -> None:
                 raise AssertionError(f"portal still implies unsupported candidate traffic routing: {misleading_canary_marker}")
         if "disabled title=" in ui_html:
             raise AssertionError("approval blocking reasons must not be hidden on disabled controls")
+        setup_markers = (
+            'class="setup-section"',
+            'id="setup-form"',
+            'id="setup-template"',
+            'id="setup-principal"',
+            'id="setup-credential"',
+            'id="setup-route-id"',
+            'id="setup-configuration-status"',
+            'id="setup-runtime-status"',
+            'id="setup-hardware-status"',
+            "function renderSetupWorkflow(controlState = {})",
+            "function setupVerificationForSelection",
+            "assignment.policyHash === state.activePolicy?.policy_hash",
+            "assignment.credentialVersion === credential?.credential_version",
+            "function prepareSetupProviderLogin()",
+            "function previewSetupAssignment()",
+            "function generateSetupEnrollment()",
+            "function verifySetupEvidence()",
+            "api('/api/setup/verify'",
+            "configurationReady",
+            "runtimeVerified",
+            "hardwareVerified",
+            "fullyVerified",
+            "assignmentDigest",
+            "data_plane.credential.release_started",
+            "data_plane.jit.grant_consumed",
+            "jit.grant.consumed",
+            '"apiVersion": "serverware.setupVerification/v1"',
+            '"setup.verification.checked"',
+        )
+        for marker in setup_markers:
+            source = (
+                app_source
+                if marker.startswith('"') or marker.startswith("data_plane.") or marker == "jit.grant.consumed"
+                else ui_html
+            )
+            if marker not in source:
+                raise AssertionError(f"portal Setup and Verify marker missing: {marker}")
+        if ui_html.index('class="setup-section"') > ui_html.index('class="jit-approvals-section"'):
+            raise AssertionError("portal Setup and Verify workflow must be the first operational section")
         ordered_sections = (
             'class="jit-approvals-section"',
             'class="control-plane-approvals-section"',

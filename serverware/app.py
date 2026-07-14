@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import hmac
 import html
 import hashlib
@@ -15,6 +16,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
@@ -41,6 +43,9 @@ from serverware.config import (
     CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION,
     CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
     CA_INSTALL_SESSIONS_PATH,
+    CA_INSTALL_SESSION_CLAIM_TTL_SECONDS,
+    CA_INSTALL_SESSION_MAX_ENTRIES,
+    CA_INSTALL_SESSION_RETENTION_SECONDS,
     CA_INSTALL_SESSION_TTL_SECONDS,
     DATA_PLANE_AUDIT_INGEST_TOKEN,
     DATA_PLANE_CREDENTIAL_LEASE_TOKEN,
@@ -63,6 +68,7 @@ from serverware.config import (
     POLICY_CANARY_REQUIRED,
     POLICY_CANARY_STATE_PATH,
     POLICY_PUBLISH_DRY_RUN_REQUIRED,
+    PUBLIC_URL,
     RBAC_BINDINGS_PATH,
     RELEASE_CHANNEL,
     SECRET_LEASE_TTL_SECONDS,
@@ -72,7 +78,12 @@ from serverware.config import (
 from serverware import db, grants, runtime
 from serverware.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, OIDC_SESSION_COOKIE_NAME, AdminIdentity, OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError, admin_status, issue_csrf_cookie, oidc_identity_from_token, require_admin, require_role, rotate_generated_admin_token, validate_csrf_request
 from serverware.crypto import encrypt_credential_lease_envelope
-from serverware.enrollment import AgentEnrollmentError, build_agent_enrollment, policy_principal_summaries
+from serverware.enrollment import (
+    AgentEnrollmentError,
+    build_agent_enrollment,
+    canonical_control_plane_url,
+    policy_principal_summaries,
+)
 from serverware.key_release import KeyReleaseError, release_material, status as key_release_status
 from serverware.oauth import (
     OAUTH_REFRESH_SKEW_SECONDS,
@@ -502,17 +513,33 @@ class DataPlaneRateLimitConsume(BaseModel):
 
 
 class AgentEnrollmentCreate(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     principal_id: str = Field(alias="principalId", min_length=1)
     proxy_url: str = Field(alias="proxyUrl", min_length=1)
-    control_plane_url: str = Field(alias="controlPlaneUrl", min_length=1)
+    control_plane_url: str | None = Field(default=None, alias="controlPlaneUrl", min_length=1, max_length=2048)
     proxy_egress_cidrs: list[str] = Field(alias="proxyEgressCidrs", min_length=1)
     namespace: str = "serverware-agents"
     pod_selector: dict[str, str] = Field(default_factory=dict, alias="podSelector")
     ca_mount_path: str = Field(default="/etc/serverware/serverware-ca.pem", alias="caMountPath")
     nonce: str = Field(min_length=32, max_length=256, pattern=r"^[A-Za-z0-9_-]+$")
     ttl_seconds: int = Field(default=300, alias="ttlSeconds", ge=30, le=900)
+
+
+class SetupVerificationRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
+    route_id: str = Field(alias="routeId", min_length=1, max_length=256)
+    credential_id: str = Field(alias="credentialId", min_length=1, max_length=256)
+    nonce: str = Field(min_length=32, max_length=256, pattern=r"^[A-Za-z0-9_-]+$")
+    enrollment_session_id: str | None = Field(
+        default=None,
+        alias="enrollmentSessionId",
+        min_length=18,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_-]+$",
+    )
 
 
 class KeyReleaseVerify(BaseModel):
@@ -1420,6 +1447,70 @@ def _write_ca_install_sessions(state: dict[str, Any]) -> None:
     temporary.replace(CA_INSTALL_SESSIONS_PATH)
 
 
+_CA_INSTALL_SESSION_THREAD_LOCK = threading.RLock()
+
+
+@contextmanager
+def _ca_install_sessions_lock():
+    lock_path = Path(str(CA_INSTALL_SESSIONS_PATH) + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _CA_INSTALL_SESSION_THREAD_LOCK, lock_path.open("a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _prune_ca_install_sessions(state: dict[str, Any], *, now: datetime | None = None) -> bool:
+    current = now or datetime.now(timezone.utc)
+    sessions = state.setdefault("sessions", {})
+    changed = False
+    for session_id, raw_session in list(sessions.items()):
+        if not isinstance(raw_session, dict):
+            del sessions[session_id]
+            changed = True
+            continue
+        session = raw_session
+        expires_at = _parse_iso_datetime(session.get("expires_at"))
+        status = session.get("status")
+        if status == "consuming":
+            claimed_at = _parse_iso_datetime(session.get("consume_claimed_at"))
+            claim_stale = (
+                claimed_at is None
+                or claimed_at + timedelta(seconds=max(1, CA_INSTALL_SESSION_CLAIM_TTL_SECONDS)) <= current
+            )
+            if claim_stale:
+                session["status"] = "expired" if expires_at is None or expires_at <= current else "active"
+                session.pop("consume_claim_id", None)
+                session.pop("consume_claimed_at", None)
+                if session["status"] == "expired":
+                    session["expired_at"] = (expires_at or current).isoformat()
+                changed = True
+                status = session["status"]
+        if status == "active" and (expires_at is None or expires_at <= current):
+            session["status"] = "expired"
+            session["expired_at"] = (expires_at or current).isoformat()
+            changed = True
+            status = "expired"
+        if status not in {"consumed", "expired"}:
+            continue
+        consume_outbox = session.get("consume_audit_outbox")
+        if status == "consumed" and isinstance(consume_outbox, dict) and consume_outbox.get("status") != "delivered":
+            continue
+        terminal_at = _parse_iso_datetime(
+            (session.get("expires_at") or session.get("expired_at"))
+            if status == "expired"
+            else (session.get("consumed_at") or session.get("expires_at"))
+        )
+        if terminal_at is not None and (
+            terminal_at + timedelta(seconds=max(0, CA_INSTALL_SESSION_RETENTION_SECONDS)) <= current
+        ):
+            del sessions[session_id]
+            changed = True
+    return changed
+
+
 def _ca_install_session_public(session: dict[str, Any], *, include_token: str | None = None) -> dict[str, Any]:
     result = {
         "id": session.get("id"),
@@ -1429,12 +1520,306 @@ def _ca_install_session_public(session: dict[str, Any], *, include_token: str | 
         "expiresAt": session.get("expires_at"),
         "consumedAt": session.get("consumed_at"),
         "downloadUrl": f"/api/ca/install-sessions/{session.get('id')}/ca.pem",
+        "policyUrl": f"/api/ca/install-sessions/{session.get('id')}/policy",
         "tokenHeader": "X-Serverware-CA-Install-Token",
         "installMethod": "verifier-mediated-attestation",
     }
     if include_token is not None:
         result["token"] = include_token
     return result
+
+
+def _create_ca_install_session(
+    *,
+    created_by: str,
+    nonce: str | None = None,
+    ttl_seconds: int | None = None,
+    policy_hash: str | None = None,
+    principal_id: str | None = None,
+    purpose: str = "ca-install",
+) -> tuple[dict[str, Any], str]:
+    _drain_ca_install_session_audit_outbox(max_entries=32)
+    now = datetime.now(timezone.utc)
+    bounded_ttl = min(CA_INSTALL_SESSION_TTL_SECONDS, ttl_seconds or CA_INSTALL_SESSION_TTL_SECONDS)
+    if bounded_ttl < 30 or bounded_ttl > 900:
+        raise HTTPException(status_code=503, detail="CA install session lifetime is invalid")
+    token = secrets.token_urlsafe(32)
+    session_id = secrets.token_urlsafe(18)
+    session = {
+        "id": session_id,
+        "nonce": nonce or secrets.token_urlsafe(24),
+        "status": "active",
+        "token_sha256": _sha256_text(token),
+        "created_at": now.isoformat(),
+        "created_by": created_by,
+        "expires_at": (now + timedelta(seconds=bounded_ttl)).isoformat(),
+        "consumed_at": None,
+        "consumed_by": None,
+        "policy_hash": policy_hash,
+        "principal_id": principal_id,
+        "purpose": purpose,
+    }
+    with _ca_install_sessions_lock():
+        state = _read_ca_install_sessions()
+        _prune_ca_install_sessions(state, now=now)
+        if CA_INSTALL_SESSION_MAX_ENTRIES < 1:
+            raise HTTPException(status_code=503, detail="CA install session capacity is invalid")
+        if len(state.setdefault("sessions", {})) >= CA_INSTALL_SESSION_MAX_ENTRIES:
+            _write_ca_install_sessions(state)
+            raise HTTPException(status_code=429, detail="CA install session capacity reached")
+        state.setdefault("sessions", {})[session_id] = session
+        _write_ca_install_sessions(state)
+    db.record_audit_event(
+        "ca.install_session.created",
+        {
+            "session_id": session_id,
+            "nonce": session["nonce"],
+            "expires_at": session["expires_at"],
+            "install_method": "verifier-mediated-attestation",
+            "token_sha256": session["token_sha256"],
+            "policy_hash": policy_hash,
+            "principal_id": principal_id,
+            "purpose": purpose,
+        },
+        actor_id=created_by,
+    )
+    return session, token
+
+
+def _active_ca_install_session_unlocked(session_id: str, token: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    if not token:
+        raise HTTPException(status_code=401, detail="CA install token required")
+    state = _read_ca_install_sessions()
+    if _prune_ca_install_sessions(state):
+        _write_ca_install_sessions(state)
+    session = state.setdefault("sessions", {}).get(session_id)
+    if not isinstance(session, dict):
+        raise HTTPException(status_code=404, detail="CA install session not found")
+    if session.get("status") == "expired":
+        raise HTTPException(status_code=410, detail="CA install session expired")
+    if session.get("status") != "active":
+        raise HTTPException(status_code=409, detail=f"CA install session is {session.get('status')}")
+    if not hmac.compare_digest(str(session.get("token_sha256") or ""), _sha256_text(token)):
+        raise HTTPException(status_code=403, detail="CA install token mismatch")
+    return state, session
+
+
+def _active_ca_install_session(session_id: str, token: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+    with _ca_install_sessions_lock():
+        return _active_ca_install_session_unlocked(session_id, token)
+
+
+def _prepare_ca_install_session_consumption(session_id: str, token: str | None) -> dict[str, Any]:
+    with _ca_install_sessions_lock():
+        if not token:
+            raise HTTPException(status_code=401, detail="CA install token required")
+        state = _read_ca_install_sessions()
+        if _prune_ca_install_sessions(state):
+            _write_ca_install_sessions(state)
+        session = state.setdefault("sessions", {}).get(session_id)
+        if not isinstance(session, dict):
+            raise HTTPException(status_code=404, detail="CA install session not found")
+        if not hmac.compare_digest(str(session.get("token_sha256") or ""), _sha256_text(token)):
+            raise HTTPException(status_code=403, detail="CA install token mismatch")
+        status = session.get("status")
+        if status == "expired":
+            raise HTTPException(status_code=410, detail="CA install session expired")
+        if status == "consumed":
+            outbox = session.get("consume_audit_outbox")
+            if isinstance(outbox, dict) and outbox.get("status") in {"pending", "delivering"}:
+                return dict(session)
+            raise HTTPException(status_code=409, detail="CA install session is consumed")
+        if status != "active":
+            raise HTTPException(status_code=409, detail=f"CA install session is {status}")
+        consumed_at = _now_iso()
+        outbox_id = f"ca-consume:{session_id}:{secrets.token_urlsafe(12)}"
+        session["status"] = "consumed"
+        session["consumed_at"] = consumed_at
+        session["consumed_by"] = f"capability:ca-install-session:{session_id}"
+        session["consume_audit_outbox"] = {
+            "id": outbox_id,
+            "status": "pending",
+            "created_at": consumed_at,
+        }
+        _write_ca_install_sessions(state)
+        return dict(session)
+
+
+def _claim_ca_install_session_audit_delivery(
+    session_id: str,
+    token: str | None,
+    *,
+    internal: bool = False,
+) -> tuple[dict[str, Any], str]:
+    with _ca_install_sessions_lock():
+        if not internal and not token:
+            raise HTTPException(status_code=401, detail="CA install token required")
+        state = _read_ca_install_sessions()
+        session = state.setdefault("sessions", {}).get(session_id)
+        if not isinstance(session, dict) or session.get("status") != "consumed":
+            raise HTTPException(status_code=409, detail="CA install session is not durably consumed")
+        if not internal and not hmac.compare_digest(
+            str(session.get("token_sha256") or ""),
+            _sha256_text(str(token)),
+        ):
+            raise HTTPException(status_code=403, detail="CA install token mismatch")
+        outbox = session.get("consume_audit_outbox")
+        if not isinstance(outbox, dict):
+            raise HTTPException(status_code=503, detail="CA install consumption audit outbox is unavailable")
+        if outbox.get("status") == "delivered":
+            raise HTTPException(status_code=409, detail="CA install session is consumed")
+        if outbox.get("status") == "delivering":
+            claimed_at = _parse_iso_datetime(outbox.get("claimed_at"))
+            if claimed_at is not None and claimed_at + timedelta(
+                seconds=max(1, CA_INSTALL_SESSION_CLAIM_TTL_SECONDS)
+            ) > datetime.now(timezone.utc):
+                raise HTTPException(status_code=409, detail="CA install consumption audit delivery is in progress")
+        delivery_claim_id = secrets.token_urlsafe(18)
+        outbox["status"] = "delivering"
+        outbox["claim_id"] = delivery_claim_id
+        outbox["claimed_at"] = _now_iso()
+        _write_ca_install_sessions(state)
+        return dict(session), delivery_claim_id
+
+
+def _finish_ca_install_session_audit_delivery(
+    session_id: str,
+    delivery_claim_id: str,
+    *,
+    event_hash: str,
+) -> None:
+    with _ca_install_sessions_lock():
+        state = _read_ca_install_sessions()
+        session = state.setdefault("sessions", {}).get(session_id)
+        outbox = session.get("consume_audit_outbox") if isinstance(session, dict) else None
+        if (
+            not isinstance(outbox, dict)
+            or outbox.get("status") != "delivering"
+            or outbox.get("claim_id") != delivery_claim_id
+        ):
+            raise HTTPException(status_code=409, detail="CA install consumption audit claim changed")
+        outbox["status"] = "delivered"
+        outbox["delivered_at"] = _now_iso()
+        outbox["event_hash"] = event_hash
+        outbox.pop("claim_id", None)
+        outbox.pop("claimed_at", None)
+        _write_ca_install_sessions(state)
+
+
+def _rollback_ca_install_session_audit_delivery(session_id: str, delivery_claim_id: str) -> None:
+    with _ca_install_sessions_lock():
+        state = _read_ca_install_sessions()
+        session = state.setdefault("sessions", {}).get(session_id)
+        outbox = session.get("consume_audit_outbox") if isinstance(session, dict) else None
+        if (
+            not isinstance(outbox, dict)
+            or outbox.get("status") != "delivering"
+            or outbox.get("claim_id") != delivery_claim_id
+        ):
+            return
+        outbox["status"] = "pending"
+        outbox.pop("claim_id", None)
+        outbox.pop("claimed_at", None)
+        _write_ca_install_sessions(state)
+
+
+def _deliver_ca_install_session_consumption_audit(
+    session_id: str,
+    token: str | None,
+    *,
+    internal: bool = False,
+) -> None:
+    session, delivery_claim_id = _claim_ca_install_session_audit_delivery(
+        session_id,
+        token,
+        internal=internal,
+    )
+    outbox = session["consume_audit_outbox"]
+    outbox_id = str(outbox["id"])
+    try:
+        audit = db.record_audit_event(
+            "ca.install_session.consumed",
+            {
+                "session_id": session_id,
+                "consume_outbox_id": outbox_id,
+                "nonce": session.get("nonce"),
+                "install_method": "verifier-mediated-attestation",
+                "token_sha256": session.get("token_sha256"),
+                "policy_hash": session.get("policy_hash"),
+                "principal_id": session.get("principal_id"),
+                "purpose": session.get("purpose"),
+            },
+            actor_type="capability",
+            actor_id=f"ca-install-session:{session_id}",
+            idempotency_key=outbox_id,
+        )
+        _finish_ca_install_session_audit_delivery(
+            session_id,
+            delivery_claim_id,
+            event_hash=str(audit["event_hash"]),
+        )
+    except Exception:
+        _rollback_ca_install_session_audit_delivery(session_id, delivery_claim_id)
+        raise
+
+
+def _drain_ca_install_session_audit_outbox(*, max_entries: int) -> int:
+    if max_entries < 1:
+        return 0
+    now = datetime.now(timezone.utc)
+    with _ca_install_sessions_lock():
+        state = _read_ca_install_sessions()
+        candidates: list[str] = []
+        for session_id, session in state.setdefault("sessions", {}).items():
+            if not isinstance(session, dict) or session.get("status") != "consumed":
+                continue
+            outbox = session.get("consume_audit_outbox")
+            if not isinstance(outbox, dict):
+                continue
+            status = outbox.get("status")
+            claimed_at = _parse_iso_datetime(outbox.get("claimed_at"))
+            if status == "pending" or (
+                status == "delivering"
+                and (
+                    claimed_at is None
+                    or claimed_at + timedelta(seconds=max(1, CA_INSTALL_SESSION_CLAIM_TTL_SECONDS)) <= now
+                )
+            ):
+                candidates.append(str(session_id))
+                if len(candidates) >= max_entries:
+                    break
+    delivered = 0
+    for session_id in candidates:
+        try:
+            _deliver_ca_install_session_consumption_audit(session_id, None, internal=True)
+        except Exception:
+            continue
+        delivered += 1
+    return delivered
+
+
+def _bind_enrollment_session_packet(session_id: str, packet: dict[str, Any]) -> None:
+    with _ca_install_sessions_lock():
+        state = _read_ca_install_sessions()
+        session = state.setdefault("sessions", {}).get(session_id)
+        if not isinstance(session, dict) or session.get("status") != "active" or session.get("purpose") != "agent-enrollment":
+            raise HTTPException(status_code=503, detail="agent enrollment capability state is unavailable")
+        authenticity = packet.get("authenticity") if isinstance(packet.get("authenticity"), dict) else {}
+        statement = authenticity.get("statement") if isinstance(authenticity.get("statement"), dict) else {}
+        packet_sha256 = statement.get("packetSha256")
+        if not isinstance(packet_sha256, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", packet_sha256) is None:
+            raise HTTPException(status_code=503, detail="agent enrollment packet digest is unavailable")
+        assignments = []
+        for route in packet.get("allowedRoutes") or []:
+            if not isinstance(route, dict):
+                continue
+            route_id = route.get("id")
+            credential_id = route.get("credentialRef")
+            if isinstance(route_id, str) and isinstance(credential_id, str):
+                assignments.append({"route_id": route_id, "credential_id": credential_id})
+        session["enrollment_packet_sha256"] = packet_sha256
+        session["allowed_assignments"] = assignments
+        _write_ca_install_sessions(state)
 
 
 def _read_policy_canary_state() -> dict[str, Any] | None:
@@ -1932,75 +2317,36 @@ def attestation(nonce: str | None = None) -> dict[str, Any]:
 
 @app.post("/api/ca/install-sessions")
 def ca_install_session_create(identity: AdminIdentity = Depends(require_role("admin"))) -> dict[str, Any]:
-    now = datetime.now(timezone.utc)
-    token = secrets.token_urlsafe(32)
-    session_id = secrets.token_urlsafe(18)
-    session = {
-        "id": session_id,
-        "nonce": secrets.token_urlsafe(24),
-        "status": "active",
-        "token_sha256": _sha256_text(token),
-        "created_at": now.isoformat(),
-        "created_by": identity.user_id,
-        "expires_at": (now + timedelta(seconds=CA_INSTALL_SESSION_TTL_SECONDS)).isoformat(),
-        "consumed_at": None,
-        "consumed_by": None,
-    }
-    state = _read_ca_install_sessions()
-    state.setdefault("sessions", {})[session_id] = session
-    _write_ca_install_sessions(state)
-    db.record_audit_event(
-        "ca.install_session.created",
-        {
-            "session_id": session_id,
-            "nonce": session["nonce"],
-            "expires_at": session["expires_at"],
-            "install_method": "verifier-mediated-attestation",
-            "token_sha256": session["token_sha256"],
-        },
-        actor_id=identity.user_id,
+    snapshot = get_policy_snapshot()
+    session, token = _create_ca_install_session(
+        created_by=identity.user_id,
+        policy_hash=snapshot.hash if snapshot is not None else None,
     )
     return {"ok": True, "session": _ca_install_session_public(session, include_token=token)}
+
+
+@app.get("/api/ca/install-sessions/{session_id}/policy")
+def ca_install_session_policy(
+    session_id: str,
+    x_serverware_ca_install_token: str | None = Header(default=None, alias="X-Serverware-CA-Install-Token"),
+) -> dict[str, Any]:
+    _, session = _active_ca_install_session(session_id, x_serverware_ca_install_token)
+    result = _policy_status_document()
+    expected_policy_hash = session.get("policy_hash")
+    if expected_policy_hash and result.get("policy_hash") != expected_policy_hash:
+        raise HTTPException(status_code=409, detail="CA install session policy changed")
+    return result
 
 
 @app.get("/api/ca/install-sessions/{session_id}/ca.pem")
 def ca_install_session_download(
     session_id: str,
     x_serverware_ca_install_token: str | None = Header(default=None, alias="X-Serverware-CA-Install-Token"),
-    identity: AdminIdentity = Depends(require_role("admin")),
 ) -> FileResponse:
-    if not x_serverware_ca_install_token:
-        raise HTTPException(status_code=401, detail="CA install token required")
-    state = _read_ca_install_sessions()
-    sessions = state.setdefault("sessions", {})
-    session = sessions.get(session_id)
-    if not isinstance(session, dict):
-        raise HTTPException(status_code=404, detail="CA install session not found")
-    if session.get("status") != "active":
-        raise HTTPException(status_code=409, detail=f"CA install session is {session.get('status')}")
-    expires_at = _parse_iso_datetime(session.get("expires_at"))
-    if not expires_at or expires_at <= datetime.now(timezone.utc):
-        session["status"] = "expired"
-        _write_ca_install_sessions(state)
-        raise HTTPException(status_code=410, detail="CA install session expired")
-    if not hmac.compare_digest(str(session.get("token_sha256") or ""), _sha256_text(x_serverware_ca_install_token)):
-        raise HTTPException(status_code=403, detail="CA install token mismatch")
     if not _ca_cert_path().exists():
         raise HTTPException(status_code=404, detail="mitmproxy CA has not been generated yet")
-    session["status"] = "consumed"
-    session["consumed_at"] = _now_iso()
-    session["consumed_by"] = identity.user_id
-    _write_ca_install_sessions(state)
-    db.record_audit_event(
-        "ca.install_session.consumed",
-        {
-            "session_id": session_id,
-            "nonce": session.get("nonce"),
-            "install_method": "verifier-mediated-attestation",
-            "token_sha256": session.get("token_sha256"),
-        },
-        actor_id=identity.user_id,
-    )
+    _prepare_ca_install_session_consumption(session_id, x_serverware_ca_install_token)
+    _deliver_ca_install_session_consumption_audit(session_id, x_serverware_ca_install_token)
     return _ca_file_response(headers={"X-Serverware-CA-Install-Session": session_id})
 
 
@@ -2097,6 +2443,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "policy_signature": metadata.get("signature") if isinstance(metadata, dict) else None,
         "policy_signing_key_id": metadata.get("signingKeyId") if isinstance(metadata, dict) else None,
         "policy_path": str(POLICY_BUNDLE_PATH),
+        "publicUrl": canonical_control_plane_url(PUBLIC_URL),
         "policyPrincipals": policy_principals,
         "oauthProviders": provider_status() if can_view_credentials else [],
         "currentUserId": identity.user_id,
@@ -2610,28 +2957,622 @@ def policy_canary_cancel(
     return {"ok": True, "canary": _policy_canary_public(state)}
 
 
+def _setup_check(
+    check_id: str,
+    *,
+    passed: bool,
+    summary: str,
+    required: bool = True,
+    evidence: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "id": check_id,
+        "status": "pass" if passed else ("fail" if required else "pending"),
+        "required": required,
+        "summary": summary,
+        **({"evidence": evidence} if evidence else {}),
+    }
+
+
+def _setup_audit_evidence_candidates(
+    event_type: str,
+    *,
+    principal_id: str,
+    route_id: str,
+    policy_hash: str,
+    credential_id: str,
+    credential_version: int,
+    start: str,
+    actor_type: str,
+    enrollment_session_id: str | None = None,
+) -> list[dict[str, Any]]:
+    result = db.search_audit_events(
+        limit=1000,
+        scan_limit=50000,
+        event_type=event_type,
+        actor_type=actor_type,
+        principal_id=principal_id,
+        route_id=route_id,
+        policy_hash=policy_hash,
+        credential_id=credential_id,
+        credential_version=credential_version,
+        start=start,
+        q=enrollment_session_id,
+    )
+    if not isinstance(result, dict) or result.get("complete") is not True:
+        return []
+    items = result.get("items") if isinstance(result, dict) else None
+    if not isinstance(items, list):
+        return []
+    evidence: list[dict[str, Any]] = []
+    for item in items:
+        event = item.get("event") if isinstance(item.get("event"), dict) else {}
+        event_enrollment_session_id = event.get("enrollment_session_id") or event.get("enrollmentSessionId")
+        if enrollment_session_id is not None and event_enrollment_session_id != enrollment_session_id:
+            continue
+        evidence.append(
+            {
+                "eventType": item.get("event_type"),
+                "createdAt": item.get("created_at"),
+                "eventHash": item.get("event_hash"),
+                "actorType": item.get("actor_type"),
+                "enrollmentSessionId": event_enrollment_session_id,
+                "requestDigest": event.get("request_digest") or event.get("requestDigest"),
+                "operationDigest": event.get("operation_digest") or event.get("operationDigest"),
+                "flowId": event.get("flow_id") or event.get("flowId"),
+                "grantId": event.get("grant_id") or event.get("grantId"),
+                "approvalId": (
+                    event.get("approval_id")
+                    or event.get("approvalId")
+                    or event.get("approval_request_id")
+                    or event.get("approvalRequestId")
+                ),
+                "consumptionId": event.get("consumption_id") or event.get("consumptionId"),
+            }
+        )
+    return evidence
+
+
+def _setup_enrollment_session_evidence(
+    payload: SetupVerificationRequest,
+    *,
+    policy_hash: str,
+) -> dict[str, Any] | None:
+    if not payload.enrollment_session_id:
+        return None
+    with _ca_install_sessions_lock():
+        state = _read_ca_install_sessions()
+        raw_session = state.get("sessions", {}).get(payload.enrollment_session_id)
+        session = dict(raw_session) if isinstance(raw_session, dict) else None
+    if not isinstance(session, dict):
+        return None
+    assignments = session.get("allowed_assignments")
+    assignment_matches = isinstance(assignments, list) and {
+        "route_id": payload.route_id,
+        "credential_id": payload.credential_id,
+    } in assignments
+    consumed_at = _parse_iso_datetime(session.get("consumed_at"))
+    if not (
+        session.get("purpose") == "agent-enrollment"
+        and session.get("status") == "consumed"
+        and session.get("principal_id") == payload.principal_id
+        and session.get("policy_hash") == policy_hash
+        and assignment_matches
+        and isinstance(session.get("enrollment_packet_sha256"), str)
+        and consumed_at is not None
+        and consumed_at <= datetime.now(timezone.utc)
+    ):
+        return None
+    return {
+        "sessionId": session.get("id"),
+        "enrollmentPacketSha256": session.get("enrollment_packet_sha256"),
+        "consumedAt": consumed_at.isoformat(),
+        "evidenceNotBefore": consumed_at.isoformat(),
+    }
+
+
+def _setup_credential_binding_checks(
+    *,
+    snapshot: Any,
+    route: Any | None,
+    credential: dict[str, Any] | None,
+    credential_id: str,
+) -> list[dict[str, Any]]:
+    policy_credential = snapshot.credentials.get(credential_id)
+    checks = [
+        _setup_check(
+            "credential.active",
+            passed=credential is not None and credential.get("lifecycle_status", "active") == "active",
+            summary="Credential exists in the active lifecycle state.",
+            evidence=(
+                {
+                    "credentialId": credential_id,
+                    "credentialVersion": credential.get("credential_version"),
+                    "kind": credential.get("kind"),
+                }
+                if credential is not None
+                else None
+            ),
+        ),
+        _setup_check(
+            "credential.policyDeclaration",
+            passed=policy_credential is not None,
+            summary="Credential is declared by the active signed policy.",
+        ),
+        _setup_check(
+            "credential.routeBinding",
+            passed=route is not None and route.credential_ref == credential_id,
+            summary="Route references the selected credential exactly.",
+        ),
+    ]
+    if credential is None or policy_credential is None:
+        checks.extend(
+            [
+                _setup_check(
+                    "credential.injectionBinding",
+                    passed=False,
+                    summary="Stored and signed-policy injection shapes must agree.",
+                ),
+                _setup_check(
+                    "credential.providerBinding",
+                    passed=False,
+                    summary="Managed OAuth identity and signed-policy provider bindings must agree.",
+                ),
+                _setup_check(
+                    "credential.scopeBinding",
+                    passed=False,
+                    summary="The active policy may use only scopes granted to the selected credential.",
+                ),
+            ]
+        )
+        return checks
+
+    metadata = credential.get("metadata") if isinstance(credential.get("metadata"), dict) else {}
+    stored_kind = str(credential.get("kind") or "")
+    injection = policy_credential.injection if isinstance(policy_credential.injection, dict) else {}
+    injection_type = str(injection.get("type") or "")
+    expected_type = "bearer" if stored_kind == "oauth2" else stored_kind
+    injection_matches = bool(injection_type) and injection_type == expected_type
+    if injection_matches and stored_kind == "oauth2":
+        injection_matches = (
+            str(injection.get("header") or "Authorization").lower() == "authorization"
+            and injection.get("field") == "access_token"
+        )
+    if injection_matches and injection_type in {"header", "query", "cookie"}:
+        injection_matches = injection.get("name") == metadata.get("injection_name")
+    if injection_matches and injection_type == "basic":
+        injection_matches = bool(metadata.get("username")) and injection.get("username") == metadata.get("username")
+    if injection_matches and metadata.get("injection_field") is not None:
+        injection_matches = injection.get("field") == metadata.get("injection_field")
+    if injection_matches and metadata.get("injection_prefix") is not None:
+        injection_matches = injection.get("prefix") == metadata.get("injection_prefix")
+    checks.append(
+        _setup_check(
+            "credential.injectionBinding",
+            passed=injection_matches,
+            summary="Stored and signed-policy injection shapes agree.",
+            evidence={"storedKind": stored_kind, "policyInjectionType": injection_type or None},
+        )
+    )
+
+    managed_oauth = stored_kind == "oauth2" or metadata.get("oauth") is True
+    if not managed_oauth:
+        checks.extend(
+            [
+                _setup_check(
+                    "credential.providerBinding",
+                    passed=True,
+                    summary="Static credential does not require an OAuth subject binding.",
+                    evidence={"provider": policy_credential.provider},
+                ),
+                _setup_check(
+                    "credential.scopeBinding",
+                    passed=True,
+                    summary="Static credential has no mutable OAuth grant scope set.",
+                ),
+            ]
+        )
+        return checks
+
+    provider_binding = False
+    provider_id = None
+    provider_subject = None
+    try:
+        provider_id, provider_subject, _ = db.validate_managed_oauth_account_identity(metadata)
+        normalized_provider_id = _normalized_credential_provider(provider_id)
+        policy_provider = _normalized_credential_provider(policy_credential.provider)
+        provider_binding = (
+            metadata.get("provider_identity_verified") is True
+            and normalized_provider_id == policy_provider
+            and policy_credential.provider_subject == provider_subject
+        )
+        if provider_binding and normalized_provider_id == "x":
+            app_id = metadata.get("x_app_id") or metadata.get("app_id")
+            configured_app_ids = route.adapter_config.get("appIds") if route is not None else None
+            provider_binding = (
+                isinstance(app_id, str)
+                and bool(app_id)
+                and isinstance(configured_app_ids, list)
+                and app_id in configured_app_ids
+            )
+    except db.ManagedOAuthCredentialError:
+        provider_binding = False
+    checks.append(
+        _setup_check(
+            "credential.providerBinding",
+            passed=provider_binding,
+            summary="Verified OAuth subject is bound to the same provider and signed policy subject.",
+            evidence={"provider": provider_id, "providerSubjectBound": bool(provider_subject)},
+        )
+    )
+    granted_scopes = metadata.get("scopes")
+    try:
+        stored_scope_set = frozenset(
+            _canonical_oauth_granted_scopes(
+                granted_scopes,
+                field_name="OAuth credential metadata scopes",
+            )
+        )
+        policy_scope_set = frozenset(
+            _canonical_oauth_granted_scopes(
+                list(policy_credential.scopes),
+                field_name="signed policy OAuth scopes",
+            )
+        )
+        scope_binding = stored_scope_set == policy_scope_set
+    except OAuthError:
+        scope_binding = False
+    checks.append(
+        _setup_check(
+            "credential.scopeBinding",
+            passed=scope_binding,
+            summary="Stored and signed-policy OAuth scope sets agree exactly and are non-empty.",
+            evidence={
+                "policyScopeCount": len(policy_credential.scopes),
+                "grantedScopeCount": len(granted_scopes) if isinstance(granted_scopes, list) else 0,
+            },
+        )
+    )
+    return checks
+
+
+def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, Any]:
+    snapshot = get_policy_snapshot()
+    if snapshot is None:
+        raise HTTPException(status_code=503, detail="active signed policy is unavailable")
+    route = next((item for item in snapshot.routes if item.id == payload.route_id), None)
+    credential = db.get_credential(payload.credential_id, include_inactive=True)
+    principal_exists = payload.principal_id in snapshot.principals
+    route_principal = route is not None and (
+        payload.principal_id in route.principals or "*" in route.principals
+    )
+    checks = [
+        _setup_check(
+            "policy.active",
+            passed=True,
+            summary="A signed policy snapshot is active.",
+            evidence={"policyHash": snapshot.hash},
+        ),
+        _setup_check(
+            "principal.active",
+            passed=principal_exists,
+            summary="Principal exists in the active signed policy.",
+            evidence={"principalId": payload.principal_id},
+        ),
+        _setup_check(
+            "route.active",
+            passed=route is not None,
+            summary="Route exists in the active signed policy.",
+            evidence={"routeId": payload.route_id},
+        ),
+        _setup_check(
+            "route.principalBinding",
+            passed=route_principal,
+            summary="Route is assigned to the selected principal.",
+        ),
+    ]
+    checks.extend(
+        _setup_credential_binding_checks(
+            snapshot=snapshot,
+            route=route,
+            credential=credential,
+            credential_id=payload.credential_id,
+        )
+    )
+
+    attestation = attestation_document(payload.nonce)
+    assurance = attestation.get("assurance") if isinstance(attestation.get("assurance"), dict) else {}
+    attestation_matches = (
+        attestation.get("nonce") == payload.nonce
+        and attestation.get("policy_bundle_digest") == snapshot.hash
+        and isinstance(attestation.get("runtime_manifest_digest"), str)
+        and isinstance(attestation.get("response_signing_key_id"), str)
+    )
+    checks.append(
+        _setup_check(
+            "attestation.serverClaims",
+            passed=attestation_matches,
+            summary="Server claims bind this nonce to the active policy and response key; client verification remains separate.",
+            evidence={
+                "policyHash": attestation.get("policy_bundle_digest"),
+                "runtimeManifestDigest": attestation.get("runtime_manifest_digest"),
+                "responseSigningKeyId": attestation.get("response_signing_key_id"),
+            },
+        )
+    )
+    hardware_claimed = (
+        assurance.get("hardware_proof") is True
+        and assurance.get("workload_custody_proven") is True
+        and assurance.get("tls_peer_binding_proven") is True
+    )
+    hardware_verified = False
+    checks.append(
+        _setup_check(
+            "attestation.independentHardwareVerification",
+            passed=False,
+            required=False,
+            summary="Independent client verification of hardware custody is not recorded by this server-side check.",
+            evidence={
+                "assuranceClass": assurance.get("class"),
+                "serverClaimsHardwareAssurance": hardware_claimed,
+            },
+        )
+    )
+
+    required_checks_pass = all(item["status"] == "pass" for item in checks if item["required"])
+    credential_version = int(credential.get("credential_version") or 0) if credential else 0
+    enrollment_evidence = _setup_enrollment_session_evidence(payload, policy_hash=snapshot.hash)
+    checks.append(
+        _setup_check(
+            "enrollment.caCapabilityConsumed",
+            passed=enrollment_evidence is not None,
+            required=False,
+            summary="The signed enrollment packet's exact one-use CA capability was consumed for this assignment.",
+            evidence=enrollment_evidence,
+        )
+    )
+    release_evidence = None
+    jit_evidence = None
+    authoritative_jit_evidence = None
+    if required_checks_pass and credential_version > 0 and enrollment_evidence is not None:
+        evidence_start = str(enrollment_evidence["evidenceNotBefore"])
+        enrollment_session_id = str(enrollment_evidence["sessionId"])
+        release_candidates = _setup_audit_evidence_candidates(
+            "data_plane.credential.release_started",
+            principal_id=payload.principal_id,
+            route_id=payload.route_id,
+            policy_hash=snapshot.hash,
+            credential_id=payload.credential_id,
+            credential_version=credential_version,
+            start=evidence_start,
+            actor_type="data-plane",
+            enrollment_session_id=enrollment_session_id,
+        )
+        release_evidence = next(
+            (
+                item
+                for item in release_candidates
+                if item.get("requestDigest") and item.get("operationDigest")
+            ),
+            None,
+        )
+        if route is not None and route.jit.get("required") is True:
+            jit_candidates = _setup_audit_evidence_candidates(
+                "data_plane.jit.grant_consumed",
+                principal_id=payload.principal_id,
+                route_id=payload.route_id,
+                policy_hash=snapshot.hash,
+                credential_id=payload.credential_id,
+                credential_version=credential_version,
+                start=evidence_start,
+                actor_type="data-plane",
+                enrollment_session_id=enrollment_session_id,
+            )
+            authoritative_jit_candidates = _setup_audit_evidence_candidates(
+                "jit.grant.consumed",
+                principal_id=payload.principal_id,
+                route_id=payload.route_id,
+                policy_hash=snapshot.hash,
+                credential_id=payload.credential_id,
+                credential_version=credential_version,
+                start=evidence_start,
+                actor_type="proxy",
+            )
+            authoritative_by_correlation = {
+                (
+                    item.get("requestDigest"),
+                    item.get("operationDigest"),
+                    item.get("flowId"),
+                    item.get("grantId"),
+                    item.get("approvalId"),
+                ): item
+                for item in authoritative_jit_candidates
+                if all(
+                    isinstance(item.get(field), str) and item.get(field)
+                    for field in ("requestDigest", "operationDigest", "flowId", "grantId", "approvalId")
+                )
+            }
+            data_plane_by_correlation = {
+                (
+                    item.get("requestDigest"),
+                    item.get("operationDigest"),
+                    item.get("flowId"),
+                    item.get("grantId"),
+                    item.get("approvalId"),
+                ): item
+                for item in jit_candidates
+                if all(
+                    isinstance(item.get(field), str) and item.get(field)
+                    for field in ("requestDigest", "operationDigest", "flowId", "grantId", "approvalId")
+                )
+            }
+            for candidate_release in release_candidates:
+                release_correlation = (
+                    candidate_release.get("requestDigest"),
+                    candidate_release.get("operationDigest"),
+                    candidate_release.get("flowId"),
+                    candidate_release.get("grantId"),
+                    candidate_release.get("approvalId"),
+                )
+                if not all(isinstance(value, str) and value for value in release_correlation):
+                    continue
+                candidate = data_plane_by_correlation.get(release_correlation)
+                authoritative_candidate = authoritative_by_correlation.get(release_correlation)
+                if candidate is not None and authoritative_candidate is not None:
+                    release_evidence = candidate_release
+                    jit_evidence = candidate
+                    authoritative_jit_evidence = authoritative_candidate
+                    break
+    jit_required = route is not None and route.jit.get("required") is True
+    checks.extend(
+        [
+            _setup_check(
+                "runtime.credentialRelease",
+                passed=release_evidence is not None,
+                required=False,
+                summary="A durable pre-release audit event proves this exact assignment was exercised.",
+                evidence=release_evidence,
+            ),
+            _setup_check(
+                "runtime.jitConsumption",
+                passed=not jit_required or jit_evidence is not None,
+                required=False,
+                summary=(
+                    "Authoritative grant consumption and data-plane evidence agree for this exact request."
+                    if jit_required
+                    else "This route does not require JIT approval."
+                ),
+                evidence=(
+                    {
+                        "dataPlane": jit_evidence,
+                        "grantStore": authoritative_jit_evidence,
+                    }
+                    if jit_evidence is not None and authoritative_jit_evidence is not None
+                    else None
+                ),
+            ),
+        ]
+    )
+    runtime_verified = required_checks_pass and enrollment_evidence is not None and release_evidence is not None and (
+        not jit_required or jit_evidence is not None
+    )
+    assignment = {
+        "principalId": payload.principal_id,
+        "routeId": payload.route_id,
+        "credentialId": payload.credential_id,
+        "credentialVersion": credential_version or None,
+        "policyHash": snapshot.hash,
+    }
+    assignment_digest = "sha256:" + hashlib.sha256(
+        json.dumps(assignment, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    ).hexdigest()
+    if not required_checks_pass:
+        next_action = "repair_active_assignment"
+    elif not enrollment_evidence:
+        next_action = "verify_enrollment_and_install_ca"
+    elif not release_evidence:
+        next_action = "enroll_agent_and_exercise_route"
+    elif jit_required and not jit_evidence:
+        next_action = "approve_and_retry_exact_request"
+    elif not hardware_verified:
+        next_action = "verify_on_hardware_backed_deployment"
+    else:
+        next_action = "verified"
+    return {
+        "apiVersion": "serverware.setupVerification/v1",
+        "checkedAt": _now_iso(),
+        "assignment": assignment,
+        "assignmentDigest": assignment_digest,
+        "configurationReady": required_checks_pass,
+        "runtimeVerified": runtime_verified,
+        "hardwareVerified": hardware_verified,
+        "fullyVerified": runtime_verified and hardware_verified,
+        "nextAction": next_action,
+        "checks": checks,
+        "attestation": {
+            "nonce": payload.nonce,
+            "teePlatform": attestation.get("tee_platform"),
+            "assuranceClass": assurance.get("class"),
+            "runtimeManifestDigest": attestation.get("runtime_manifest_digest"),
+            "sourceTreeDigest": attestation.get("source_tree_digest"),
+            "dataPlaneBinaryDigest": attestation.get("data_plane_binary_digest"),
+            "responseSigningKeyId": attestation.get("response_signing_key_id"),
+            "policyHighWaterDigest": attestation.get("policy_high_water_digest"),
+        },
+    }
+
+
+@app.post("/api/setup/verify")
+def setup_verification(
+    payload: SetupVerificationRequest,
+    identity: AdminIdentity = Depends(require_role("policy_author", "policy_publisher", "credential_owner", "auditor")),
+) -> dict[str, Any]:
+    result = _build_setup_verification(payload)
+    db.record_audit_event(
+        "setup.verification.checked",
+        {
+            "assignment": result["assignment"],
+            "assignment_digest": result["assignmentDigest"],
+            "configuration_ready": result["configurationReady"],
+            "runtime_verified": result["runtimeVerified"],
+            "hardware_verified": result["hardwareVerified"],
+            "next_action": result["nextAction"],
+        },
+        actor_id=identity.user_id,
+    )
+    return result
+
+
 @app.post("/api/agents/enrollment")
 def agent_enrollment(
     payload: AgentEnrollmentCreate,
-    _: AdminIdentity = Depends(require_role("policy_author")),
+    identity: AdminIdentity = Depends(require_role("policy_author")),
 ) -> dict[str, Any]:
     snapshot = get_policy_snapshot()
     if snapshot is None:
         raise HTTPException(status_code=503, detail="policy bundle missing")
     try:
-        return build_agent_enrollment(
-            snapshot=snapshot,
-            principal_id=payload.principal_id,
-            attestation=attestation_document(payload.nonce),
-            proxy_url=payload.proxy_url,
-            control_plane_url=payload.control_plane_url,
-            proxy_egress_cidrs=payload.proxy_egress_cidrs,
-            namespace=payload.namespace,
-            pod_selector=payload.pod_selector,
-            ca_mount_path=payload.ca_mount_path,
+        configured_control_plane_url = canonical_control_plane_url(PUBLIC_URL)
+        if (
+            payload.control_plane_url is not None
+            and canonical_control_plane_url(payload.control_plane_url) != configured_control_plane_url
+        ):
+            raise AgentEnrollmentError("control plane URL must match configured SERVERWARE_PUBLIC_URL")
+        attestation = attestation_document(payload.nonce)
+        enrollment_args = {
+            "snapshot": snapshot,
+            "principal_id": payload.principal_id,
+            "attestation": attestation,
+            "proxy_url": payload.proxy_url,
+            "control_plane_url": configured_control_plane_url,
+            "proxy_egress_cidrs": payload.proxy_egress_cidrs,
+            "namespace": payload.namespace,
+            "pod_selector": payload.pod_selector,
+            "ca_mount_path": payload.ca_mount_path,
+            "nonce": payload.nonce,
+            "ttl_seconds": payload.ttl_seconds,
+        }
+        # Validate every enrollment field before allocating the one-use capability.
+        build_agent_enrollment(**enrollment_args)
+        session, token = _create_ca_install_session(
+            created_by=identity.user_id,
             nonce=payload.nonce,
             ttl_seconds=payload.ttl_seconds,
+            policy_hash=snapshot.hash,
+            principal_id=payload.principal_id,
+            purpose="agent-enrollment",
         )
+        session_public = _ca_install_session_public(session, include_token=token)
+        install_session = {
+            field: session_public[field]
+            for field in ("id", "nonce", "token", "tokenHeader", "policyUrl", "downloadUrl", "expiresAt")
+        }
+        packet = build_agent_enrollment(
+            **enrollment_args,
+            ca_install_session=install_session,
+        )
+        _bind_enrollment_session_packet(str(session["id"]), packet)
+        return packet
     except AgentEnrollmentError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -4260,7 +5201,7 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
     refreshed: dict[str, Any] | None = None
     try:
         for _ in range(2):
-            credential = runtime.get_credential(credential_id)
+            credential = runtime.get_control_plane_credential(credential_id)
             if not credential or credential.get("kind") != "oauth2":
                 return credential
             metadata = credential.get("metadata")
@@ -4278,7 +5219,7 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
 
             with db.oauth_refresh_lock(credential_id):
                 runtime.invalidate_secret_leases(credential_id)
-                credential = runtime.get_credential(credential_id)
+                credential = runtime.get_control_plane_credential(credential_id)
                 if not credential:
                     return None
                 metadata = credential.get("metadata")
@@ -4399,7 +5340,9 @@ def _normalized_credential_provider(value: Any) -> str:
     provider = str(value or "").strip().lower()
     aliases = {
         "twitter": "x",
+        "x.oauth": "x",
         "x.oauth2": "x",
+        "google.oauth": "google",
         "google.oauth2": "google",
     }
     return aliases.get(provider, provider)
@@ -4486,6 +5429,40 @@ def _assert_credential_policy_binding(credential: dict[str, Any], credential_pol
             status_code=409,
             detail="stored credential scopes exceed the active signed policy",
         )
+
+
+def _credential_secret_for_lease(credential: dict[str, Any], credential_policy: Any) -> str:
+    secret = str(credential.get("secret") or "")
+    if credential.get("kind") != "oauth2":
+        return secret
+    injection = credential_policy.injection if isinstance(credential_policy.injection, dict) else {}
+    if (
+        injection.get("type") != "bearer"
+        or str(injection.get("header") or "Authorization").lower() != "authorization"
+        or injection.get("field") != "access_token"
+        or injection.get("prefix", "Bearer ") != "Bearer "
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="managed OAuth credentials require canonical access-token-only bearer injection",
+        )
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate OAuth token field")
+            result[key] = value
+        return result
+
+    try:
+        token = json.loads(secret, object_pairs_hook=reject_duplicate_keys)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=503, detail="managed OAuth credential token material is malformed") from exc
+    access_token = token.get("access_token") if isinstance(token, dict) else None
+    if not isinstance(access_token, str) or not access_token or len(access_token.encode("utf-8")) > 64 * 1024:
+        raise HTTPException(status_code=503, detail="managed OAuth access token is missing or oversized")
+    return _canonical_json({"access_token": access_token})
 
 
 def _assert_credential_lease_route_binding(payload: CredentialLeaseRequest, snapshot: Any) -> Any:
@@ -4584,7 +5561,7 @@ def data_plane_credential_leases(
                 {
                     "credentialId": payload.credential_id,
                     "credentialVersion": int(credential["credential_version"]),
-                    "secret": str(credential["secret"]),
+                    "secret": _credential_secret_for_lease(credential, current_credential_policy),
                     "metadata": metadata,
                 }
             ]
@@ -4910,8 +5887,7 @@ def runtime_metrics(_: AdminIdentity = Depends(require_role("auditor"))) -> dict
     return runtime.metrics()
 
 
-@app.get("/api/policy")
-def policy_status(_: AdminIdentity = Depends(require_role("auditor", "policy_author"))) -> dict[str, Any]:
+def _policy_status_document() -> dict[str, Any]:
     snapshot = get_policy_snapshot()
     if not snapshot:
         return {
@@ -4931,6 +5907,11 @@ def policy_status(_: AdminIdentity = Depends(require_role("auditor", "policy_aut
         "public_key_pem": policy_public_key_pem(),
         "high_water": db.get_policy_high_water(),
     }
+
+
+@app.get("/api/policy")
+def policy_status(_: AdminIdentity = Depends(require_role("auditor", "policy_author"))) -> dict[str, Any]:
+    return _policy_status_document()
 
 
 def _upsert_credential(name: str, kind: str, secret: str, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -5292,6 +6273,14 @@ UI_HTML = r"""
     .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
     .pending-oauth-list { display: grid; gap: 8px; margin-top: 12px; }
     .pending-oauth-item { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: var(--panel); min-width: 0; }
+    .setup-form-grid { display: grid; grid-template-columns: repeat(4, minmax(150px, 1fr)); gap: 10px; }
+    .setup-form-grid label { margin-top: 0; }
+    .setup-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    .setup-checks { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 8px; }
+    .setup-check { min-width: 0; border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: var(--panel); }
+    .setup-check strong { display: block; margin: 5px 0 3px; font-size: 13px; overflow-wrap: anywhere; }
+    .setup-check code { display: block; color: var(--muted); overflow-wrap: anywhere; }
+    .setup-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
     .filter-grid label { margin-top: 0; }
     .audit-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
     .attestation-summary { margin-bottom: 12px; }
@@ -5306,6 +6295,7 @@ UI_HTML = r"""
       aside { grid-column: 1; grid-row: auto; border-right: 0; border-bottom: 1px solid var(--line); }
       header { padding: 0 14px; }
       section { padding: 16px 14px; overflow-x: auto; }
+      .setup-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 620px) {
       header {
@@ -5330,6 +6320,10 @@ UI_HTML = r"""
         width: 100%;
       }
       .brand { min-height: 30px; }
+      .setup-section > .toolbar h2 { flex-basis: 100%; margin-bottom: 2px; }
+      .setup-section > .section-kicker { margin: 8px 0 10px; }
+      .setup-form-grid { grid-template-columns: minmax(0, 1fr); }
+      .setup-actions button { width: 100%; white-space: normal; }
       .approval-table,
       .approval-table tbody,
       .approval-table tr,
@@ -5435,6 +6429,35 @@ UI_HTML = r"""
   </dialog>
   <main id="main-content" tabindex="-1">
     <div class="main-grid">
+      <section class="setup-section">
+        <div class="toolbar">
+          <h2 style="margin-right:auto">Setup and Verify</h2>
+          <span id="setup-configuration-status" class="pill warn">Configuration pending</span>
+          <span id="setup-runtime-status" class="pill warn">Path not exercised</span>
+          <span id="setup-hardware-status" class="pill warn">Hardware unverified</span>
+        </div>
+        <p class="section-kicker">Active assignment and independently reported runtime evidence</p>
+        <form id="setup-form">
+          <div class="setup-form-grid">
+            <div><label for="setup-template">Restriction template</label><select id="setup-template" name="template"></select></div>
+            <div><label for="setup-principal">Principal</label><select id="setup-principal" name="principalId"></select></div>
+            <div><label for="setup-credential">Credential</label><select id="setup-credential" name="credentialId"></select></div>
+            <div><label for="setup-route-id">Route ID</label><input id="setup-route-id" name="routeId" required maxlength="256"></div>
+            <div id="setup-approvers-row" hidden><label for="setup-approvers">JIT approvers</label><input id="setup-approvers" name="approvers" maxlength="4096" placeholder="user:release-manager"></div>
+          </div>
+          <div class="setup-actions">
+            <button id="setup-connect-button" class="secondary" type="button" onclick="runUiAction('Prepare provider login', prepareSetupProviderLogin)">Connect credential</button>
+            <button id="setup-preview-button" class="secondary" type="button" onclick="runUiAction('Preview setup assignment', previewSetupAssignment)">Preview assignment</button>
+            <button id="setup-stage-button" type="button" onclick="runUiAction('Stage setup assignment', stagePolicyCanary)" disabled>Stage assignment</button>
+            <button id="setup-activate-button" type="button" onclick="runUiAction('Activate setup assignment', activatePolicyCanary)" disabled>Activate assignment</button>
+            <button id="setup-enroll-button" class="secondary" type="button" onclick="runUiAction('Generate setup enrollment', generateSetupEnrollment)">Generate enrollment</button>
+            <button id="setup-command-button" class="secondary" type="button" onclick="runUiAction('Download packet and copy verifier command', copyEnrollmentVerifier)" disabled>Copy verification command</button>
+            <button id="setup-verify-button" class="secondary" type="submit">Verify server evidence</button>
+          </div>
+        </form>
+        <div id="setup-summary" class="setup-summary" role="status" aria-live="polite"></div>
+        <div id="setup-checks" class="setup-checks"></div>
+      </section>
       <section class="jit-approvals-section">
         <h2>Approvals</h2>
         <div class="filter-grid">
@@ -5512,7 +6535,7 @@ UI_HTML = r"""
             <label for="enrollment-proxy-url">Proxy URL</label>
             <input id="enrollment-proxy-url" name="proxyUrl" value="http://localhost:8080">
             <label for="enrollment-control-plane-url">Control plane URL</label>
-            <input id="enrollment-control-plane-url" name="controlPlaneUrl" value="http://localhost:3000">
+            <input id="enrollment-control-plane-url" name="controlPlaneUrl" value="http://localhost:3000" readonly>
             <label for="enrollment-egress-cidrs">Proxy egress CIDRs</label>
             <textarea id="enrollment-egress-cidrs" name="proxyEgressCidrs">127.0.0.1/32</textarea>
             <label for="enrollment-namespace">Namespace</label>
@@ -5663,7 +6686,7 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], pendingOAuthCredentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
+    let state = {credentials: [], pendingOAuthCredentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, setupVerification: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
     let pendingMutation = null;
     let refreshInFlight = null;
     let hasRendered = false;
@@ -5927,6 +6950,7 @@ UI_HTML = r"""
       Object.entries(values || {}).forEach(([key, saved]) => {
         const control = key.startsWith('id:') ? $(key.slice(3)) : null;
         if (!control) return;
+        if (control.id.startsWith('setup-')) return;
         if (control.tagName === 'SELECT' && !Array.from(control.options).some((option) => option.value === saved.value)) return;
         control.value = saved.value;
         if ('checked' in control) control.checked = saved.checked;
@@ -6174,6 +7198,7 @@ UI_HTML = r"""
       refreshInFlight = (async () => {
         const retained = {
           enrollmentPacket: state.enrollmentPacket,
+          setupVerification: state.setupVerification,
           approvalReview: state.approvalReview,
           policyCandidate: state.policyCandidate,
           auditSearchResult: state.auditSearchResult,
@@ -6336,9 +7361,124 @@ UI_HTML = r"""
       $('policy-credential').disabled = !selected;
     }
 
+    function currentSetupSelection() {
+      return {
+        template: $('setup-template').value,
+        principalId: $('setup-principal').value,
+        credentialId: $('setup-credential').value,
+        routeId: $('setup-route-id').value.trim(),
+        approvers: $('setup-approvers').value.trim()
+      };
+    }
+
+    function setupAssignmentIsActive(selection = currentSetupSelection()) {
+      const route = (state.activePolicy?.bundle?.routes || []).find((item) => item.id === selection.routeId);
+      return Boolean(
+        route
+        && route.credentialRef === selection.credentialId
+        && Array.isArray(route.principals)
+        && (route.principals.includes(selection.principalId) || route.principals.includes('*'))
+      );
+    }
+
+    function setupVerificationForSelection(selection = currentSetupSelection()) {
+      const result = state.setupVerification;
+      const assignment = result?.assignment;
+      if (!assignment) return null;
+      const credential = (state.credentials || []).find((item) => item.id === selection.credentialId);
+      return assignment.principalId === selection.principalId
+        && assignment.routeId === selection.routeId
+        && assignment.credentialId === selection.credentialId
+        && assignment.policyHash === state.activePolicy?.policy_hash
+        && assignment.credentialVersion === credential?.credential_version
+        ? result
+        : null;
+    }
+
+    function setupStatusPill(targetId, passed, passLabel, pendingLabel) {
+      const target = $(targetId);
+      target.textContent = passed ? passLabel : pendingLabel;
+      target.className = passed ? 'pill good' : 'pill warn';
+    }
+
+    function renderSetupWorkflow(controlState = {}) {
+      const savedTemplate = controlState['id:setup-template']?.value || $('setup-template').value;
+      $('setup-template').innerHTML = Object.entries(policyTemplates).map(([key, item]) => `<option value="${esc(key)}">${esc(item.label)}</option>`).join('');
+      $('setup-template').value = policyTemplates[savedTemplate] ? savedTemplate : Object.keys(policyTemplates)[0] || '';
+      const template = policyTemplates[$('setup-template').value];
+
+      const savedPrincipal = controlState['id:setup-principal']?.value || $('setup-principal').value;
+      $('setup-principal').innerHTML = (state.policyPrincipals || []).map((item) => `<option value="${esc(item.id)}">${esc(item.id)}</option>`).join('');
+      if (Array.from($('setup-principal').options).some((item) => item.value === savedPrincipal)) $('setup-principal').value = savedPrincipal;
+
+      const savedCredential = controlState['id:setup-credential']?.value || $('setup-credential').value;
+      const credentials = template ? policyCredentialOptions(template) : [];
+      $('setup-credential').innerHTML = credentials.map((item) => `<option value="${esc(item.id)}" ${item.compatible ? '' : 'disabled'} title="${esc(item.reason)}">${esc(item.label)}${item.compatible ? '' : ' (not compatible)'}</option>`).join('');
+      const selectedCredential = credentials.find((item) => item.id === savedCredential && item.compatible) || credentials.find((item) => item.compatible);
+      $('setup-credential').value = selectedCredential?.id || '';
+      $('setup-credential').disabled = !selectedCredential;
+
+      const savedRoute = controlState['id:setup-route-id']?.value || $('setup-route-id').value.trim();
+      $('setup-route-id').value = savedRoute || template?.routeId || '';
+      const savedApprovers = controlState['id:setup-approvers']?.value;
+      if (savedApprovers != null) $('setup-approvers').value = savedApprovers;
+      $('setup-approvers-row').hidden = !template?.jit;
+      $('setup-approvers').required = Boolean(template?.jit);
+
+      const selection = currentSetupSelection();
+      const verification = setupVerificationForSelection(selection);
+      const candidateReady = Boolean(
+        state.policyCandidate?.report?.dryRun?.passed === true
+        && state.policyCandidate.routeId === selection.routeId
+        && state.policyCandidate.principalId === selection.principalId
+        && state.policyCandidate.credentialRef === selection.credentialId
+        && state.policyCandidate.templateId === selection.template
+      );
+      const staged = Boolean(
+        candidateReady
+        && state.policyCanary?.canary?.status === 'running'
+        && state.policyCanary.canary.candidatePolicyHash === state.policyCandidate?.report?.candidate?.policyHash
+      );
+      const active = setupAssignmentIsActive(selection);
+      const packetMatches = Boolean(
+        state.enrollmentPacket?.principalId === selection.principalId
+        && (state.enrollmentPacket?.allowedRoutes || []).some((item) => item.id === selection.routeId && item.credentialRef === selection.credentialId)
+      );
+      const oauthProvider = (state.oauthProviders || []).find((item) => item.id === template?.provider);
+      $('setup-connect-button').textContent = oauthProvider ? 'Connect credential' : 'Add credential';
+      $('setup-connect-button').disabled = Boolean(oauthProvider && !oauthProvider.configured);
+      $('setup-preview-button').disabled = !selection.principalId || !selection.credentialId || !selection.routeId || (Boolean(template?.jit) && !selection.approvers);
+      $('setup-stage-button').disabled = !candidateReady;
+      $('setup-activate-button').disabled = !staged;
+      $('setup-enroll-button').disabled = !active;
+      $('setup-command-button').disabled = !packetMatches;
+      $('setup-verify-button').disabled = !selection.principalId || !selection.credentialId || !selection.routeId;
+
+      setupStatusPill('setup-configuration-status', verification?.configurationReady === true, 'Configuration ready', active ? 'Evidence pending' : 'Configuration pending');
+      setupStatusPill('setup-runtime-status', verification?.runtimeVerified === true, 'Path exercised', 'Path not exercised');
+      setupStatusPill('setup-hardware-status', verification?.hardwareVerified === true, 'Hardware verified', 'Hardware unverified');
+
+      const summary = $('setup-summary');
+      const checks = $('setup-checks');
+      if (!verification) {
+        summary.innerHTML = `<span class="pill ${active ? 'good' : 'warn'}">${active ? 'Active assignment' : 'Assignment not active'}</span><span class="muted">${candidateReady ? 'Candidate validated' : staged ? 'Candidate staged' : 'Server evidence has not been checked for this selection.'}</span>`;
+        checks.replaceChildren();
+        return;
+      }
+      summary.innerHTML = `<span class="pill ${verification.fullyVerified ? 'good' : verification.configurationReady ? 'warn' : 'bad'}">${esc(verification.nextAction)}</span><code>${esc(verification.assignmentDigest)}</code>`;
+      checks.innerHTML = (verification.checks || []).map((item) => `
+        <div class="setup-check">
+          <span class="pill ${item.status === 'pass' ? 'good' : item.status === 'pending' ? 'warn' : 'bad'}">${esc(item.status)}</span>
+          <strong>${esc(item.id)}</strong>
+          <div>${esc(item.summary)}</div>
+          ${item.evidence?.createdAt ? `<code>${esc(item.evidence.createdAt)}</code>` : ''}
+        </div>`).join('');
+    }
+
     function renderPolicyPrincipalOptions() {
       const options = (state.policyPrincipals || []).map((item) => `<option value="${esc(item.id)}">${esc(item.id)}</option>`).join('');
       $('enrollment-principal').innerHTML = (state.policyPrincipals || []).map((item) => `<option value="${esc(item.id)}">${esc(item.id)} (${esc(item.routeCount)} routes)</option>`).join('');
+      $('enrollment-control-plane-url').value = state.publicUrl || '';
       $('policy-principal').innerHTML = options;
     }
 
@@ -6355,6 +7495,7 @@ UI_HTML = r"""
       syncPolicyTemplateEditor();
       renderPolicyPrincipalOptions();
       renderPolicyCredentialOptions(controlState['id:policy-credential']?.value || '');
+      renderSetupWorkflow(controlState);
       renderEnrollmentOutput();
       renderPendingOAuthCredentials();
       $('credentials').innerHTML = state.credentials.map((item) => `
@@ -6814,7 +7955,7 @@ UI_HTML = r"""
         {name: `${routeId} allows assigned operation`, principalId, scheme: 'https', host: route.match.host, port: route.match.port, method: route.match.methods[0], path: allowPath, expect: 'allow'},
         {name: `${routeId} keeps unknown host denied`, principalId, scheme: 'https', host: 'serverware-policy-deny.invalid', port: 443, method: route.match.methods[0], path: allowPath, expect: 'deny'}
       ];
-      return {bundle, dryRun, basePolicyHash: state.activePolicy.policy_hash, routeId};
+      return {bundle, dryRun, basePolicyHash: state.activePolicy.policy_hash, routeId, principalId, credentialRef, templateId: form.get('template')};
     }
 
     async function previewPolicyCandidate() {
@@ -6984,19 +8125,113 @@ UI_HTML = r"""
       });
     });
 
+    function focusPortalForm(formId) {
+      const form = $(formId);
+      const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+      form.scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block: 'start'});
+      const first = form.querySelector('input:not([disabled]), select:not([disabled]), textarea:not([disabled])');
+      if (first) first.focus({preventScroll: true});
+    }
+
+    async function prepareSetupProviderLogin() {
+      const selection = currentSetupSelection();
+      const template = policyTemplates[selection.template];
+      if (!template) throw new Error('Select a restriction template');
+      const provider = (state.oauthProviders || []).find((item) => item.id === template.provider);
+      if (!provider) {
+        $('credential-name').value = `${template.label} credential`;
+        $('credential-kind').value = 'bearer';
+        syncCredentialKindFields(true);
+        focusPortalForm('credential-form');
+        return {mode: 'static-credential'};
+      }
+      if (!provider.configured) throw new Error(`${provider.displayName} OAuth is not configured`);
+      $('oauth-provider').value = provider.id;
+      const scopes = Array.from(new Set([...(provider.defaultScopes || []), ...(template.requiredScopes || [])]));
+      $('oauth-scopes').value = scopes.join('\n');
+      if (!$('oauth-credential-name').value.trim()) $('oauth-credential-name').value = `${template.label} credential`;
+      renderOAuthDefaults(false);
+      saveOAuthDraft();
+      focusPortalForm('oauth-form');
+      return {mode: 'oauth', provider: provider.id, scopes};
+    }
+
+    async function previewSetupAssignment() {
+      const selection = currentSetupSelection();
+      const template = policyTemplates[selection.template];
+      if (!template) throw new Error('Select a restriction template');
+      $('policy-template').value = selection.template;
+      syncPolicyTemplateEditor(true);
+      $('policy-route-id').value = selection.routeId;
+      $('policy-principal').value = selection.principalId;
+      renderPolicyCredentialOptions(selection.credentialId);
+      if ($('policy-credential').value !== selection.credentialId) {
+        throw new Error('The selected credential is not compatible with this restriction template');
+      }
+      if (template.jit) $('policy-approvers').value = selection.approvers;
+      const result = await previewPolicyCandidate();
+      renderSetupWorkflow();
+      return result;
+    }
+
+    async function generateEnrollmentFromForm() {
+      const form = new FormData($('agent-enrollment-form'));
+      const proxyEgressCidrs = parseProxyEgressCidrs(form.get('proxyEgressCidrs'));
+      const enrollmentNonce = generateEnrollmentNonce();
+      state.enrollmentPacket = await api('/api/agents/enrollment', {method: 'POST', body: JSON.stringify({
+        principalId: form.get('principalId'), proxyUrl: form.get('proxyUrl'), proxyEgressCidrs,
+        namespace: form.get('namespace') || 'serverware-agents', caMountPath: form.get('caMountPath') || '/etc/serverware/serverware-ca.pem', podSelector: JSON.parse(form.get('podSelector') || '{}'),
+        nonce: enrollmentNonce, ttlSeconds: 300
+      })});
+      renderEnrollmentOutput();
+      renderSetupWorkflow();
+      return state.enrollmentPacket;
+    }
+
+    async function generateSetupEnrollment() {
+      const selection = currentSetupSelection();
+      if (!setupAssignmentIsActive(selection)) throw new Error('Activate the exact principal, route, and credential assignment first');
+      $('enrollment-principal').value = selection.principalId;
+      return generateEnrollmentFromForm();
+    }
+
+    async function verifySetupEvidence() {
+      const selection = currentSetupSelection();
+      state.setupVerification = await api('/api/setup/verify', {
+        method: 'POST',
+        body: JSON.stringify({
+          principalId: selection.principalId,
+          routeId: selection.routeId,
+          credentialId: selection.credentialId,
+          nonce: generateEnrollmentNonce(),
+          enrollmentSessionId: state.enrollmentPacket?.ca?.installSession?.id || null
+        })
+      });
+      renderSetupWorkflow();
+      return state.setupVerification;
+    }
+
+    $('setup-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      runUiAction('Verify setup evidence', verifySetupEvidence);
+    });
+    $('setup-template').addEventListener('change', () => {
+      state.setupVerification = null;
+      const template = policyTemplates[$('setup-template').value];
+      $('setup-route-id').value = template?.routeId || '';
+      $('setup-approvers').value = '';
+      renderSetupWorkflow();
+    });
+    for (const id of ['setup-principal', 'setup-credential', 'setup-route-id', 'setup-approvers']) {
+      $(id).addEventListener(id === 'setup-route-id' || id === 'setup-approvers' ? 'input' : 'change', () => {
+        state.setupVerification = null;
+        renderSetupWorkflow();
+      });
+    }
+
     $('agent-enrollment-form').addEventListener('submit', (event) => {
       event.preventDefault();
-      runUiAction('Generate enrollment', async () => {
-        const form = new FormData(event.target);
-        const proxyEgressCidrs = parseProxyEgressCidrs(form.get('proxyEgressCidrs'));
-        const enrollmentNonce = generateEnrollmentNonce();
-        state.enrollmentPacket = await api('/api/agents/enrollment', {method: 'POST', body: JSON.stringify({
-          principalId: form.get('principalId'), proxyUrl: form.get('proxyUrl'), controlPlaneUrl: form.get('controlPlaneUrl'), proxyEgressCidrs,
-          namespace: form.get('namespace') || 'serverware-agents', caMountPath: form.get('caMountPath') || '/etc/serverware/serverware-ca.pem', podSelector: JSON.parse(form.get('podSelector') || '{}'),
-          nonce: enrollmentNonce, ttlSeconds: 300
-        })});
-        renderEnrollmentOutput();
-      });
+      runUiAction('Generate enrollment', generateEnrollmentFromForm);
     });
 
     $('policy-route-form').addEventListener('submit', (event) => {
@@ -7402,8 +8637,7 @@ UI_HTML = r"""
         'ENROLLMENT_PACKET="${SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/' + packetFilename + '}"',
         'VERIFIED_ENROLLMENT_PACKET="${SERVERWARE_VERIFIED_ENROLLMENT_PACKET:-${ENROLLMENT_PACKET%.json}.verified.json}"',
         `python3 scripts/generate_agent_enrollment.py --verify-packet "$ENROLLMENT_PACKET" --expected-packet-sha256 ${shellQuote(packetSha256)} --expected-principal ${shellQuote(packet.principalId)} --expected-nonce ${shellQuote(packet.nonce)} --base ${shellQuote(serverware.controlPlaneUrl)} > "$VERIFIED_ENROLLMENT_PACKET"`,
-        ': "${SERVERWARE_ADMIN_TOKEN:?Set SERVERWARE_ADMIN_TOKEN for the enrolled operator}"',
-        `python3 scripts/verify_attestation.py --base ${shellQuote(serverware.controlPlaneUrl)} --admin-token "$SERVERWARE_ADMIN_TOKEN" --ca-out .tmp/serverware-ca.pem --expected-policy-key-hash ${shellQuote(pinning.policySigningKeyId)} --expected-rollback-epoch ${Number(pinning.rollbackEpoch)}`,
+        `python3 scripts/verify_attestation.py --base ${shellQuote(serverware.controlPlaneUrl)} --enrollment-packet "$VERIFIED_ENROLLMENT_PACKET" --ca-out .tmp/serverware-ca.pem --expected-policy-key-hash ${shellQuote(pinning.policySigningKeyId)} --expected-rollback-epoch ${Number(pinning.rollbackEpoch)}`,
         `install -D -m 0644 .tmp/serverware-ca.pem ${shellQuote(ca.installPath)}`,
         `export HTTPS_PROXY=${shellQuote(serverware.proxyUrl)}`,
         `export HTTP_PROXY=${shellQuote(serverware.proxyUrl)}`

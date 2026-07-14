@@ -415,6 +415,42 @@ def invalidate_secret_leases(credential_id: str | None = None) -> None:
             _credential_cache.clear()
 
 
+def _project_credential_for_data_plane(credential: dict[str, Any]) -> dict[str, Any] | None:
+    if credential.get("kind") != "oauth2":
+        return credential
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate OAuth token field")
+            result[key] = value
+        return result
+
+    try:
+        token = json.loads(str(credential.get("secret") or ""), object_pairs_hook=reject_duplicate_keys)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    access_token = token.get("access_token") if isinstance(token, dict) else None
+    if not isinstance(access_token, str) or not access_token or len(access_token.encode("utf-8")) > 64 * 1024:
+        return None
+    projected = copy.deepcopy(credential)
+    projected["secret"] = json.dumps(
+        {"access_token": access_token},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return projected
+
+
+def get_control_plane_credential(credential_id: str | None) -> dict[str, Any] | None:
+    """Load full secret material for the control-plane OAuth refresh path only."""
+    if not credential_id:
+        return None
+    return db.get_credential(credential_id, include_secret=True)
+
+
 def get_credential(credential_id: str | None) -> dict[str, Any] | None:
     if not credential_id:
         return None
@@ -443,6 +479,10 @@ def get_credential(credential_id: str | None) -> dict[str, Any] | None:
 
     _inc("credential_lease_misses")
     credential = db.get_credential(credential_id, include_secret=True)
+    if not credential:
+        invalidate_secret_leases(credential_id)
+        return None
+    credential = _project_credential_for_data_plane(credential)
     if not credential:
         invalidate_secret_leases(credential_id)
         return None

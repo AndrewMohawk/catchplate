@@ -720,7 +720,12 @@ def main() -> None:
                             provider="x",
                             provider_subject="x-subject-001",
                             scopes=tuple(X_SCOPES),
-                            injection={"type": "bearer"},
+                            injection={
+                                "type": "bearer",
+                                "header": "Authorization",
+                                "field": "access_token",
+                                "prefix": "Bearer ",
+                            },
                         )
                     },
                     routes=(route,),

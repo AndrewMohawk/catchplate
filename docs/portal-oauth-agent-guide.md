@@ -62,6 +62,24 @@ Provider-aware revocation also applies after activation. `DELETE /api/credential
 
 For X, the callback also stores the OAuth client ID as `x_app_id`. X route assignment requires that binding and replaces the template's `adapter.config.appIds` with the selected credential's stored app ID. Typed templates declare required OAuth scopes. The one-post-per-day template requires `tweet.write` in addition to its read/user/offline scopes, so a default read-only X credential is disabled in the selector until the operator reconnects with write consent. A credential from another provider, an X credential without an app ID, a scope-incomplete OAuth credential, or an incompatible injection shape is rejected before candidate creation.
 
+## Setup And Verify
+
+The first portal section consolidates the common operator path without weakening the underlying controls:
+
+1. Select a restriction template, principal, compatible credential, route ID, and any JIT approvers.
+2. Use **Connect credential** when the provider account is not connected. OAuth and exact-account activation still run through their dedicated, audited controls.
+3. **Preview assignment**, inspect every signed diff and allow/deny dry-run, then **Stage** and explicitly **Activate** the exact candidate.
+4. **Generate enrollment** only after the selected principal is assigned to the active route and that route references the selected credential. The packet pins the current active policy hash; **Verify server evidence** records the current credential version and requires matching post-enrollment runtime evidence.
+5. Download the signed packet, copy the verifier command, run it on the agent host, exercise the allowed route, complete JIT when required, and select **Verify server evidence**.
+
+The three status pills are intentionally independent:
+
+- **Configuration ready** means the active signed policy, principal, route, credential, verified OAuth subject/scopes, and access-token-only injection agree.
+- **Runtime exercised** additionally requires the signed enrollment packet's exact one-use CA capability to have been consumed and complete post-enrollment audit evidence for the exact policy/principal/route/credential/version. JIT routes require both the authoritative grant-store consumption record and the matching data-plane record to agree on request and operation digests.
+- **Hardware unverified** remains pending in the current workflow. Server self-claims are not independent attestation verification. A separately verified client/hardware receipt would be required to close this state, but receipt submission and storage are not implemented, and no production hardware receipt exists for this checkout.
+
+This is currently an exact-assignment evidence workflow, not yet a durable cross-operator setup-session state machine. OAuth redirects and pending activation still hand off to the dedicated controls, and the roadmap retains durable setup IDs, receipt submission, canary reconciliation, and independent attestation receipt storage as remaining work.
+
 ## Connect A Provider Credential
 
 1. Open `http://localhost:3000` for local Docker or the production control-plane URL.
@@ -72,13 +90,13 @@ For X, the callback also stores the OAuth client ID as `x_app_id`. X route assig
 6. When exact-account two-person controls are enabled, inspect the verified account in **Verified accounts awaiting activation**, request activation, have a different authorized operator approve the `credential.oauth.activate` item, then complete activation as the original requester.
 7. Confirm that the active credential appears as `kind: oauth2`, shows the expected provider account, and reports a verified identity. Treat `identity unverified` as unusable and reconnect it.
 
-OAuth credentials store token material as encrypted JSON. Policies should inject only the access token:
+OAuth credentials store token material as encrypted JSON in the control plane. Managed Google/X policies must use the canonical access-token injection:
 
 ```json
 {"type": "bearer", "header": "Authorization", "field": "access_token"}
 ```
 
-`field` must be a strict dotted object path. If that field is missing, empty, not a string, uses wildcard syntax, or the secret is not JSON, Serverware fails closed before forwarding the request.
+The broker and Python prototype project the secret to a new JSON object containing only `access_token` before any lease/cache handoff. The refresh token remains in the control-plane refresh path and cannot be selected by policy. Fieldless OAuth injection, `refresh_token`, another header/query target, a non-bearer type, malformed or duplicate JSON fields, an empty/non-string access token, and oversized token material all fail closed.
 
 ## Assign The Credential
 
@@ -153,7 +171,7 @@ Generate an enrollment packet from the portal:
 
 1. Open `http://localhost:3000` or the production control-plane URL.
 2. In **Agent Enrollment**, choose the policy principal that will run the agent.
-3. Enter the Serverware proxy URL, control-plane URL, proxy egress CIDR, namespace, CA mount path, and optional pod selector JSON.
+3. Enter the Serverware proxy URL, proxy egress CIDR, namespace, CA mount path, and optional pod selector JSON. The control-plane origin is read-only and derived from `SERVERWARE_PUBLIC_URL`; a submitted mismatch is rejected.
 4. Click **Generate enrollment**, then **Download + copy verifier command**. The portal downloads the exact signed packet and copies a fail-closed command that verifies that file before any CA installation step.
 
 The same packet can be generated from the CLI for automation:
@@ -187,18 +205,17 @@ python3 scripts/generate_agent_enrollment.py \
 
 Use the digest, principal, and nonce from the separately copied portal command; do not recompute the expected digest from a file you are trying to authenticate. This mode first checks the exact raw downloaded bytes against that precommit. The digest covers principal, proxy/control-plane URLs, egress CIDRs, selectors, CA location, and every attestation pin. It then reads the bounded JSON object with duplicate-key rejection, rejects any preexisting untrusted receipt, obtains `/attestation` using the expected packet nonce, verifies the nonce-bound quote and runtime digest, compares every measurement pin, checks packet validity and expiry, and verifies the Ed25519 packet signature. Only then does it emit the same packet fields with a new `verificationReceipt`. A substituted file, unexpected principal or nonce, failed check, stale packet, altered egress rule, duplicate key, oversized input, or existing receipt is a hard failure.
 
-After exact packet verification succeeds, install the CA through the independent CA verifier:
+After exact packet verification succeeds, install the CA through the scoped enrollment verifier:
 
 ```bash
-export SERVERWARE_ADMIN_TOKEN=...
 python3 scripts/verify_attestation.py \
   --base https://serverware.example.com \
-  --admin-token "$SERVERWARE_ADMIN_TOKEN" \
+  --enrollment-packet "$VERIFIED_ENROLLMENT_PACKET" \
   --ca-out .tmp/serverware-ca.pem
 install -D -m 0644 .tmp/serverware-ca.pem /etc/serverware/serverware-ca.pem
 ```
 
-The copied portal command performs these steps in this order with shell error handling, defaults to the downloaded packet under `$HOME/Downloads`, and reads the admin token only from `SERVERWARE_ADMIN_TOKEN`; it does not embed the token. Set `SERVERWARE_ENROLLMENT_PACKET` first when the browser saves downloads elsewhere. The verifier writes `.tmp/serverware-ca.pem`. The enrollment packet's `agentHandoff.caInstall.command` installs that verified file at the packet's configured `ca.installPath`; run it in the agent image or VM before starting the agent. The packet enumerates every allowed route URL, not just the first path, and exposes the exact proxy environment and required CONNECT/provider headers. Proxy-authorization secret material is deliberately absent and must be provisioned separately when `agentHandoff.proxyAuthorization.required` is true.
+The copied portal command performs these steps in this order with shell error handling and defaults to the downloaded packet under `$HOME/Downloads`. It never requests, embeds, or transmits the Serverware admin token. The signed packet carries a policy-hash-bound, principal-bound, short-lived, one-use verifier capability whose URLs are relative to the configured control-plane origin; it can read only the pinned policy and download the CA once. Set `SERVERWARE_ENROLLMENT_PACKET` first when the browser saves downloads elsewhere. The verifier writes `.tmp/serverware-ca.pem`. The enrollment packet's `agentHandoff.caInstall.command` installs that verified file at the packet's configured `ca.installPath`; run it in the agent image or VM before starting the agent. The packet enumerates every allowed route URL, not just the first path, and exposes the exact proxy environment and required CONNECT/provider headers. Proxy-authorization secret material is deliberately absent and must be provisioned separately when `agentHandoff.proxyAuthorization.required` is true.
 
 Run the agent with only proxy configuration:
 
@@ -209,7 +226,7 @@ export SSL_CERT_FILE=/etc/serverware/serverware-ca.pem
 export REQUESTS_CA_BUNDLE=/etc/serverware/serverware-ca.pem
 ```
 
-For a principal that uses top-level `principals[].requiredHeaders`, HTTPS clients must send those identity headers on the proxy `CONNECT` request as well as the provider request. For example, curl uses `--proxy-header 'X-Serverware-Agent: mail-reader'` for the tunnel and `-H 'X-Serverware-Agent: mail-reader'` inside it. The enrollment packet exposes the exact `identity.requiredHeaders` and any `identity.proxyAuthorization` requirements. Production deployments should prefer source-bound proxy authorization or isolated source CIDRs when the agent SDK cannot set custom proxy headers.
+For a principal that uses top-level `principals[].requiredHeaders`, HTTPS clients must send those identity headers on the proxy `CONNECT` request as well as the provider request. For example, curl uses `--proxy-header 'X-Serverware-Agent: mail-reader'` for the tunnel and `-H 'X-Serverware-Agent: mail-reader'` inside it. The enrollment packet exposes these as both `agentHandoff.requiredProxyHeaders` and `agentHandoff.requiredProviderHeaders`; the former also contains the per-enrollment `X-Serverware-Enrollment-Session` value, which is sent on `CONNECT` but not repeated inside that tunnel. The packet separately exposes any `identity.proxyAuthorization` requirements. Production deployments should prefer source-bound proxy authorization or isolated source CIDRs when the agent SDK cannot set custom proxy headers.
 
 Do not confuse principal identity headers with `generic.rest` `adapter.config.request.requiredHeaders`. Adapter-required headers are ordinary provider request fields that must also appear in `request.allowedHeaders`; they are checked after route/principal matching for bounded UTF-8 byte length and an optional safe anchored pattern, then forwarded upstream. They do not authenticate the `CONNECT` tunnel. The Stripe template uses this second mechanism for `Idempotency-Key`, so the agent must provide a fresh policy-conforming key on the provider request while separately satisfying its principal identity requirements.
 
@@ -233,7 +250,7 @@ An enrolled agent never calls the secret broker. The Rust data plane requests a 
 1. Rust creates an ephemeral X25519 recipient key and one-use 32-byte nonce, then sends `serverware.credentialLeaseRequest/v2` with the scoped IDs, measured binary digest, requested TTL, and recipient-attestation evidence.
 2. The control plane rechecks the active policy, principal-to-route assignment, route-to-credential assignment, provider/scopes, measured binary, nonce replay state, and recipient evidence.
 3. It refreshes a managed OAuth access token when it is near expiry under a cross-process single-flight lock. A successful refresh rotates the credential version; a failed or scope-changing refresh returns `503` and requires reconnection.
-4. It returns `serverware.credentialLeaseEnvelope/v2`, encrypted with X25519/HKDF-SHA256/AES-256-GCM and signed by the attested response key. The decrypted `serverware.credentialLeaseSet/v2` must contain exactly one credential matching the requested scope.
+4. It projects managed Google/X material to canonical JSON containing only `access_token`, then returns `serverware.credentialLeaseEnvelope/v2`, encrypted with X25519/HKDF-SHA256/AES-256-GCM and signed by the attested response key. The decrypted `serverware.credentialLeaseSet/v2` must contain exactly one credential matching the requested scope and can never contain the OAuth refresh token.
 5. Rust verifies every cleartext and encrypted binding, enforces the short lease expiry, and caches by exact scope, policy snapshot epoch/hash, trust generation, credential ID, and version. Rotation is monotonic: an older or same-version changed secret cannot replace a newer lease.
 6. Warm leases renew in the background. A cold or expired lease can synchronously wait for the broker; if no current lease is available, the request fails closed before forwarding.
 
@@ -269,13 +286,13 @@ For a safe, buffered `GET` or `HEAD`, `serverware-proof-client` can send a fresh
 
 ## Current Local Evidence
 
-The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:acd522af4b10b554fccd093a9b7d7abdcca14f2deda258f8eef8eaaaaf2f750d`. It records p50 `0.466 ms`, p95 `1.319 ms`, p99 `2.028 ms`, mean `0.580 ms`, and maximum `4.054 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
+The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:3ca63d68b5061a8b3e8af530bb197fff6ce4f1da77784c196fb74a5c786cd312`. It records p50 `0.460 ms`, p95 `0.628 ms`, p99 `0.772 ms`, mean `0.477 ms`, and maximum `1.025 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
 
 The local provenance and image-signature records are explicitly development fixtures, and no current hardware-bound production image/quote set exists for this checkout. They cannot be combined with this benchmark as production release evidence; rebuild every source-, image-, binary-, signature-, benchmark-, and quote-bound artifact from one exact checkout on the target host.
 
 ## Current Operational Limits
 
-- Managed OAuth credentials refresh on lease demand shortly before access-token expiry, with strict token-type parsing, scope non-expansion, refresh-token rotation handling, version rotation, audit, and cross-process single flight. A missing/expired refresh token or provider failure fails closed. X refresh retires the prior token pair, and X reconnect preserves the credential ID only after the superseded access and refresh tokens are atomically queued for revocation. Google credentials must be disconnected and revoked before the account is connected again because Google revocation applies to the account/project grant.
+- Managed OAuth credentials refresh on lease demand shortly before access-token expiry, with strict token-type parsing, scope non-expansion, refresh-token rotation handling, version rotation, audit, and cross-process single flight. A missing/expired refresh token or provider failure fails closed. X refresh always retires the superseded access token and retires the old refresh token only when the provider actually rotates it; a non-rotating refresh token remains usable. X reconnect replaces the grant and therefore queues both superseded tokens. Google credentials must be disconnected and revoked before the account is connected again because Google revocation applies to the account/project grant.
 - Exact-account two-person activation is implemented for OAuth callbacks when `credential.oauth.activate` is protected. Terminal pending connections and post-exchange failures retain encrypted provider-revocation work for bounded automatic retry. Active managed OAuth disconnect fails closed through `revocation_pending`/`revocation_failed`; exact-account in-place reconnect is available only for X after version and identity validation.
 - Do not create sibling logical credentials for the same Google account under one OAuth project until Serverware has a first-class grant-family model; Google can revoke all project grants for that account together.
 - A host/process failure in the narrow interval after provider issuance and before encrypted revocation material is attached cannot be made atomic with an external OAuth server. Production acceptance still needs measured exchange custody and explicit uncertain-issuance recovery.

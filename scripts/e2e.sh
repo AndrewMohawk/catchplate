@@ -3,6 +3,7 @@ set -euo pipefail
 
 BASE="${BASE:-http://localhost:3000}"
 PROXY="${PROXY:-http://localhost:8080}"
+DECISION_GATE_BASE="${DECISION_GATE_BASE:-http://localhost:9091}"
 TMP_DIR="${TMP_DIR:-.tmp}"
 CA_FILE="$TMP_DIR/serverware-ca.pem"
 AGENT_HEADER=(-H "X-Serverware-Agent: demo-agent")
@@ -441,8 +442,14 @@ curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/runtime/metrics" > "$TMP_DIR/runtime-m
 python3 - "$TMP_DIR/runtime-metrics.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
-assert data["credential_lease_count"] >= 1, data
 assert "credential_lease_replay_count" not in data, data
+PY
+curl -fsS "$DECISION_GATE_BASE/healthz" > "$TMP_DIR/decision-gate-health.json"
+python3 - "$TMP_DIR/decision-gate-health.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["credential_leases"] >= 1, data
+assert data["credential_lease_protocol"] == "scoped-recipient-bound-pull/v2", data
 PY
 
 curl -fsS "${ADMIN_HEADER[@]}" "$BASE/api/audit/verify" > "$TMP_DIR/audit-verify.json"

@@ -32,7 +32,11 @@ def main() -> None:
         os.environ["SERVERWARE_POLICY_SIGNING_PUBLIC_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pub.pem")
 
         from serverware.attestation import sign_quote
-        from serverware.enrollment import AgentEnrollmentError, build_agent_enrollment
+        from serverware.enrollment import (
+            AgentEnrollmentError,
+            build_agent_enrollment,
+            canonical_control_plane_url,
+        )
         from serverware.policy_bundle import compile_policy_bundle, demo_policy_bundle, sign_policy_bundle
         from serverware.response_identity import response_public_key_info
         from generate_agent_enrollment import (
@@ -103,6 +107,7 @@ def main() -> None:
         assert handoff["caInstall"]["destinationPath"] == "/etc/serverware/serverware-ca.pem", handoff
         assert handoff["caInstall"]["command"].endswith("/etc/serverware/serverware-ca.pem"), handoff
         assert handoff["requiredProxyHeaders"] == packet["identity"]["requiredHeaders"], handoff
+        assert handoff["requiredProviderHeaders"] == packet["identity"]["requiredHeaders"], handoff
         assert handoff["proxyAuthorization"] == {
             "required": True,
             "provisionSeparately": True,
@@ -210,7 +215,7 @@ def main() -> None:
         try:
             verify_attestation_for_packet(packet, quote_nonce_mismatch, NONCE, None)
         except ValueError as exc:
-            assert "quote nonce" in str(exc), exc
+            assert "quote claim nonce" in str(exc), exc
         else:
             raise AssertionError("enrollment verifier accepted a quote for a different nonce")
 
@@ -459,6 +464,91 @@ def main() -> None:
         assert hostname_packet["serverware"]["proxyHostMappings"] == expected_mapping, hostname_packet
         assert hostname_packet["egress"]["hostAliases"] == expected_mapping, hostname_packet
         assert hostname_packet["egress"]["etcHosts"] == ["10.42.0.10 serverware-proxy.internal"], hostname_packet
+
+        install_session = {
+            "id": "install-session-0123456789abcdef",
+            "nonce": NONCE,
+            "token": "install-token-0123456789abcdef0123456789",
+            "tokenHeader": "X-Serverware-CA-Install-Token",
+            "policyUrl": "/api/ca/install-sessions/install-session-0123456789abcdef/policy",
+            "downloadUrl": "/api/ca/install-sessions/install-session-0123456789abcdef/ca.pem",
+            "expiresAt": "2026-07-14T12:00:00+00:00",
+        }
+        capability_packet = build_agent_enrollment(
+            snapshot=snapshot,
+            principal_id="agent:demo-proxy-token",
+            attestation=attestation,
+            proxy_url="http://10.42.0.10:8080",
+            control_plane_url="https://SERVERWARE.EXAMPLE:443/",
+            proxy_egress_cidrs=["10.42.0.10/32"],
+            nonce=NONCE,
+            ca_install_session=install_session,
+        )
+        assert capability_packet["serverware"]["controlPlaneUrl"] == "https://serverware.example"
+        assert capability_packet["ca"]["installSession"] == install_session
+        assert capability_packet["identity"]["requiredHeaders"] == {
+            "X-Serverware-Agent": "demo-token-agent"
+        }
+        assert capability_packet["agentHandoff"]["requiredProxyHeaders"] == {
+            "X-Serverware-Agent": "demo-token-agent",
+            "X-Serverware-Enrollment-Session": install_session["id"],
+        }
+        assert capability_packet["agentHandoff"]["requiredProviderHeaders"] == {
+            "X-Serverware-Agent": "demo-token-agent"
+        }
+
+        for origin, expected in (
+            ("https://SERVERWARE.EXAMPLE:443/", "https://serverware.example"),
+            ("https://serverware.example:8443", "https://serverware.example:8443"),
+            ("https://[2001:0DB8:0:0:0:0:0:1]:443/", "https://[2001:db8::1]"),
+            ("https://[2001:db8::1]:8443", "https://[2001:db8::1]:8443"),
+            ("http://LOCALHOST:80/", "http://localhost"),
+            ("http://127.0.0.2:80", "http://127.0.0.2"),
+            ("http://[::1]:80/", "http://[::1]"),
+        ):
+            assert canonical_control_plane_url(origin) == expected, origin
+
+        for invalid_origin in (
+            "https://[::1",
+            "https://serverware.example:not-a-port",
+            "https://server ware.example",
+            " https://serverware.example",
+            "https://serverware.\u200bexample",
+            "https://serverware.example:0",
+            "https://bad_label.example",
+            "https://-bad.example",
+            "https://bad-.example",
+            "https://bad..example",
+            "https://\ud800.example",
+            "http://serverware.example",
+            "https://user@serverware.example",
+            "https://serverware.example/api",
+            "https://serverware.example?mode=enroll",
+            "https://serverware.example#enroll",
+        ):
+            try:
+                canonical_control_plane_url(invalid_origin)
+            except AgentEnrollmentError:
+                pass
+            else:
+                raise AssertionError(f"accepted invalid control plane origin: {invalid_origin!r}")
+
+        malformed_session = dict(install_session, policyUrl="https://attacker.example/policy")
+        try:
+            build_agent_enrollment(
+                snapshot=snapshot,
+                principal_id="agent:demo-proxy-token",
+                attestation=attestation,
+                proxy_url="http://10.42.0.10:8080",
+                control_plane_url="https://serverware.example",
+                proxy_egress_cidrs=["10.42.0.10/32"],
+                nonce=NONCE,
+                ca_install_session=malformed_session,
+            )
+        except AgentEnrollmentError as exc:
+            assert "relative URL" in str(exc), exc
+        else:
+            raise AssertionError("enrollment accepted an absolute verifier capability URL")
 
         for kwargs, expected in (
             (

@@ -5,6 +5,7 @@ import hashlib
 import re
 import shlex
 import time
+import unicodedata
 from datetime import datetime, timezone
 from typing import Any
 from urllib.parse import urlsplit
@@ -19,6 +20,8 @@ class AgentEnrollmentError(ValueError):
 
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 ENROLLMENT_NONCE_RE = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
+CAPABILITY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{32,256}$")
+DNS_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 def _canonical_name(value: str, *, prefix: str) -> str:
@@ -44,6 +47,89 @@ def _validate_cidrs(values: list[str] | tuple[str, ...]) -> list[str]:
     if not cidrs:
         raise AgentEnrollmentError("at least one Serverware proxy egress CIDR is required")
     return cidrs
+
+
+def canonical_control_plane_url(value: str) -> str:
+    text = str(value)
+    if any(char.isspace() or unicodedata.category(char).startswith("C") for char in text):
+        raise AgentEnrollmentError("control plane URL must not contain whitespace or control characters")
+    try:
+        parsed = urlsplit(text)
+        host = parsed.hostname
+    except ValueError as exc:
+        raise AgentEnrollmentError("control plane URL is malformed") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or "?" in text
+        or "#" in text
+        or parsed.path not in {"", "/"}
+    ):
+        raise AgentEnrollmentError("control plane URL must be a canonical HTTP(S) origin")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise AgentEnrollmentError("control plane URL has an invalid port") from exc
+    if port == 0:
+        raise AgentEnrollmentError("control plane URL port must be between 1 and 65535")
+
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            canonical_host = host.encode("idna").decode("ascii").lower()
+        except UnicodeError as exc:
+            raise AgentEnrollmentError("control plane URL hostname is not valid IDNA") from exc
+        labels = canonical_host.split(".")
+        if len(canonical_host) > 253 or any(DNS_LABEL_RE.fullmatch(label) is None for label in labels):
+            raise AgentEnrollmentError("control plane URL hostname contains an invalid DNS label")
+        is_loopback = canonical_host == "localhost"
+    else:
+        canonical_host = address.compressed
+        is_loopback = address.is_loopback
+        if isinstance(address, ipaddress.IPv6Address):
+            canonical_host = f"[{canonical_host}]"
+
+    if parsed.scheme == "http" and not is_loopback:
+        raise AgentEnrollmentError("control plane URL must use HTTPS outside loopback development")
+    default_port = 443 if parsed.scheme == "https" else 80
+    authority = canonical_host if port in {None, default_port} else f"{canonical_host}:{port}"
+    return f"{parsed.scheme}://{authority}"
+
+
+def _validated_ca_install_session(value: dict[str, Any], *, nonce: str) -> dict[str, Any]:
+    required = {"id", "nonce", "token", "tokenHeader", "policyUrl", "downloadUrl", "expiresAt"}
+    if set(value) != required:
+        raise AgentEnrollmentError("enrollment CA install session fields are invalid")
+    if value.get("nonce") != nonce:
+        raise AgentEnrollmentError("enrollment CA install session nonce mismatch")
+    if (
+        not isinstance(value.get("id"), str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{24,128}", value["id"]) is None
+    ):
+        raise AgentEnrollmentError("enrollment CA install session ID is invalid")
+    if not isinstance(value.get("token"), str) or not CAPABILITY_TOKEN_RE.fullmatch(value["token"]):
+        raise AgentEnrollmentError("enrollment CA install session token is invalid")
+    if value.get("tokenHeader") != "X-Serverware-CA-Install-Token":
+        raise AgentEnrollmentError("enrollment CA install session token header is invalid")
+    for field in ("policyUrl", "downloadUrl"):
+        relative = value.get(field)
+        parsed = urlsplit(relative) if isinstance(relative, str) else None
+        if (
+            parsed is None
+            or not relative.startswith("/")
+            or relative.startswith("//")
+            or parsed.scheme
+            or parsed.netloc
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise AgentEnrollmentError(f"enrollment CA install session {field} must be a relative URL")
+    if not isinstance(value.get("expiresAt"), str) or len(value["expiresAt"]) > 64:
+        raise AgentEnrollmentError("enrollment CA install session expiry is invalid")
+    return dict(value)
 
 
 def _proxy_endpoint(proxy_url: str) -> tuple[str, int, bool]:
@@ -268,6 +354,7 @@ def build_agent_enrollment(
     ca_mount_path: str = "/etc/serverware/serverware-ca.pem",
     nonce: str,
     ttl_seconds: int = 300,
+    ca_install_session: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if principal_id not in snapshot.principals:
         raise AgentEnrollmentError(f"principal not found: {principal_id}")
@@ -277,6 +364,7 @@ def build_agent_enrollment(
     if isinstance(ttl_seconds, bool) or not isinstance(ttl_seconds, int) or not 30 <= ttl_seconds <= 900:
         raise AgentEnrollmentError("enrollment ttlSeconds must be between 30 and 900")
     ca_mount_path = _validate_ca_mount_path(ca_mount_path)
+    control_plane_url = canonical_control_plane_url(control_plane_url)
     proxy_host, port, proxy_host_is_ip = _proxy_endpoint(proxy_url)
     host_mappings = _proxy_host_mappings(proxy_host, proxy_host_is_ip, proxy_cidrs)
     selector = dict(pod_selector or {"serverware-principal": _canonical_name(principal_id, prefix="principal")})
@@ -292,6 +380,14 @@ def build_agent_enrollment(
         "REQUESTS_CA_BUNDLE": ca_mount_path,
         "NODE_EXTRA_CA_CERTS": ca_mount_path,
     }
+    validated_install_session = (
+        _validated_ca_install_session(ca_install_session, nonce=nonce)
+        if ca_install_session is not None
+        else None
+    )
+    required_proxy_headers = dict(identity.get("requiredHeaders") or {})
+    if validated_install_session is not None:
+        required_proxy_headers["X-Serverware-Enrollment-Session"] = validated_install_session["id"]
     pinning = _required_enrollment_pins(snapshot, attestation)
     issued_at_epoch_ms = int(time.time() * 1000)
     packet = {
@@ -315,6 +411,11 @@ def build_agent_enrollment(
             "installPath": ca_mount_path,
             "installMethod": "verifier-mediated-attestation",
             "spkiSha256": attestation.get("ca_intermediate_spki_sha256"),
+            **(
+                {"installSession": validated_install_session}
+                if validated_install_session is not None
+                else {}
+            ),
         },
         "allowedRoutes": routes,
         "agentHandoff": {
@@ -324,7 +425,8 @@ def build_agent_enrollment(
                 "command": f"install -D -m 0644 .tmp/serverware-ca.pem {shlex.quote(ca_mount_path)}",
             },
             "proxyEnvironment": environment,
-            "requiredProxyHeaders": identity.get("requiredHeaders") or {},
+            "requiredProxyHeaders": required_proxy_headers,
+            "requiredProviderHeaders": identity.get("requiredHeaders") or {},
             "proxyAuthorization": {
                 "required": bool(identity.get("proxyAuthorization")),
                 "provisionSeparately": bool(identity.get("proxyAuthorization")),
@@ -335,7 +437,7 @@ def build_agent_enrollment(
                 "Verify attestation and install the returned CA at destinationPath.",
                 "Apply deny-by-default egress before starting the agent.",
                 "Provision proxy authorization separately when required; it is never embedded here.",
-                "Set proxyEnvironment and requiredProxyHeaders on both CONNECT and provider requests.",
+                "Set requiredProxyHeaders on CONNECT, requiredProviderHeaders inside the tunnel, and the enrollment header on a direct plain-HTTP proxy request.",
                 "Run allow and deny canaries, then start the agent with normal provider URLs.",
             ],
         },

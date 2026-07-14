@@ -71,6 +71,7 @@ const DEFAULT_RESPONSE_WRITE_DEADLINE_MS: u64 = 120_000;
 const SOCKET_IO_SLICE: Duration = Duration::from_secs(1);
 const RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
 const RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-proof-nonce";
+const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
 const SUPPORTED_ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
 
 #[derive(Clone)]
@@ -2317,6 +2318,41 @@ fn credential_injection_target(injection: &Value) -> Result<CredentialInjectionT
     Ok(target)
 }
 
+fn is_managed_oauth_provider(provider: &str) -> bool {
+    matches!(
+        provider.trim().to_ascii_lowercase().as_str(),
+        "google" | "google.oauth" | "google.oauth2" | "twitter" | "x" | "x.oauth" | "x.oauth2"
+    )
+}
+
+fn validate_managed_oauth_injection(
+    credential_id: &str,
+    provider: &str,
+    injection: &Value,
+) -> Result<(), String> {
+    if !is_managed_oauth_provider(provider) {
+        return Ok(());
+    }
+    let canonical = injection.get("type").and_then(Value::as_str) == Some("bearer")
+        && injection
+            .get("header")
+            .and_then(Value::as_str)
+            .unwrap_or("Authorization")
+            .eq_ignore_ascii_case("authorization")
+        && injection.get("field").and_then(Value::as_str) == Some("access_token")
+        && injection
+            .get("prefix")
+            .and_then(Value::as_str)
+            .unwrap_or("Bearer ")
+            == "Bearer ";
+    if !canonical {
+        return Err(format!(
+            "OAuth credential {credential_id} must inject only access_token as canonical Authorization Bearer"
+        ));
+    }
+    Ok(())
+}
+
 fn is_non_forwardable_agent_header(name: &str) -> bool {
     is_standard_hop_by_hop_header(name)
         || is_serverware_service_auth_header(name)
@@ -2327,6 +2363,7 @@ fn is_non_forwardable_agent_header(name: &str) -> bool {
                 | "content-length"
                 | "host"
                 | "x-serverware-agent"
+                | ENROLLMENT_SESSION_HEADER
                 | RESPONSE_PROOF_NONCE_HEADER
         )
 }
@@ -2569,6 +2606,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         let provider_subject = credential.get("providerSubject").and_then(Value::as_str);
         let provider_account = provider_account_scope_value(provider, provider_subject);
         let injection = credential.get("injection").unwrap_or(&Value::Null);
+        validate_managed_oauth_injection(credential_id, provider, injection)?;
         let target = credential_injection_target(injection)
             .map_err(|error| format!("credential {credential_id} {error}"))?;
         if credential_targets
@@ -4585,6 +4623,65 @@ fn lower_headers(headers: &BTreeMap<String, String>) -> BTreeMap<String, String>
         .collect()
 }
 
+fn validate_enrollment_session_id(value: &str) -> Result<(), String> {
+    if !(24..=128).contains(&value.len())
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(
+            "X-Serverware-Enrollment-Session must contain 24-128 base64url characters".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn enrollment_session_id_from_headers(
+    headers: &BTreeMap<String, String>,
+) -> Result<Option<String>, String> {
+    let mut enrollment_session_id = None;
+    for (name, value) in headers {
+        if !name.eq_ignore_ascii_case(ENROLLMENT_SESSION_HEADER) {
+            continue;
+        }
+        if enrollment_session_id.is_some() {
+            return Err("X-Serverware-Enrollment-Session is duplicated or ambiguous".to_string());
+        }
+        validate_enrollment_session_id(value)?;
+        enrollment_session_id = Some(value.clone());
+    }
+    Ok(enrollment_session_id)
+}
+
+fn inherit_connect_enrollment_session(
+    headers: &mut BTreeMap<String, String>,
+    enrollment_session_id: Option<&str>,
+) -> Result<(), String> {
+    if enrollment_session_id_from_headers(headers)?.is_some() {
+        return Err("tunneled request must not supply X-Serverware-Enrollment-Session".to_string());
+    }
+    if let Some(enrollment_session_id) = enrollment_session_id {
+        validate_enrollment_session_id(enrollment_session_id)?;
+        headers.insert(
+            ENROLLMENT_SESSION_HEADER.to_string(),
+            enrollment_session_id.to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn with_enrollment_session_id(mut value: Value, enrollment_session_id: Option<&str>) -> Value {
+    if let (Some(object), Some(enrollment_session_id)) =
+        (value.as_object_mut(), enrollment_session_id)
+    {
+        object.insert(
+            "enrollment_session_id".to_string(),
+            Value::String(enrollment_session_id.to_string()),
+        );
+    }
+    value
+}
+
 fn query_pairs(url: &Url) -> Vec<(String, String)> {
     let mut pairs = url
         .query_pairs()
@@ -4852,6 +4949,16 @@ fn body_sha(req: &DecisionRequest) -> String {
 
 fn digest_json(value: &Value) -> String {
     sha256_prefixed(canonical_json(value).as_bytes())
+}
+
+fn random_request_attempt_id() -> Result<String, String> {
+    let rng = ring_rand::SystemRandom::new();
+    let mut nonce = [0u8; 32];
+    rng.fill(&mut nonce)
+        .map_err(|_| "generate request attempt ID failed".to_string())?;
+    let attempt_id = sha256_prefixed(&nonce);
+    nonce.zeroize();
+    Ok(attempt_id)
 }
 
 fn response_proof_signing_material() -> Result<(SigningKey, String, String), String> {
@@ -6474,9 +6581,13 @@ fn decision_audit_event(
         "policy_hash",
         "credential_ref",
         "credential_version",
+        "enrollment_session_id",
         "client_request_digest",
         "request_digest",
         "operation_digest",
+        "flow_id",
+        "grant_id",
+        "approval_id",
         "operation",
     ] {
         if let Some(value) = decision.get(key) {
@@ -6510,21 +6621,26 @@ fn connect_audit_event(
     client_ip: Option<&str>,
     outcome: &str,
 ) -> Value {
-    json!({
-        "component":"serverware-decision-gate-rs",
-        "method":"CONNECT",
-        "target":target,
-        "authority":decision.get("authority").cloned().unwrap_or(Value::Null),
-        "outcome":outcome,
-        "action":decision.get("action").cloned().unwrap_or(Value::Null),
-        "status_code":decision.get("status_code").cloned().unwrap_or(Value::Null),
-        "reason":decision.get("reason").cloned().unwrap_or(Value::Null),
-        "payload":decision.get("payload").cloned().unwrap_or(Value::Null),
-        "principal_id":decision.get("principal_id").cloned().unwrap_or(Value::Null),
-        "policy_hash":decision.get("policy_hash").cloned().unwrap_or(Value::Null),
-        "route_ids":decision.get("route_ids").cloned().unwrap_or(Value::Null),
-        "client_ip":client_ip,
-    })
+    with_enrollment_session_id(
+        json!({
+            "component":"serverware-decision-gate-rs",
+            "method":"CONNECT",
+            "target":target,
+            "authority":decision.get("authority").cloned().unwrap_or(Value::Null),
+            "outcome":outcome,
+            "action":decision.get("action").cloned().unwrap_or(Value::Null),
+            "status_code":decision.get("status_code").cloned().unwrap_or(Value::Null),
+            "reason":decision.get("reason").cloned().unwrap_or(Value::Null),
+            "payload":decision.get("payload").cloned().unwrap_or(Value::Null),
+            "principal_id":decision.get("principal_id").cloned().unwrap_or(Value::Null),
+            "policy_hash":decision.get("policy_hash").cloned().unwrap_or(Value::Null),
+            "route_ids":decision.get("route_ids").cloned().unwrap_or(Value::Null),
+            "client_ip":client_ip,
+        }),
+        decision
+            .get("enrollment_session_id")
+            .and_then(Value::as_str),
+    )
 }
 
 fn audit_status(state: &GateState) -> Value {
@@ -7181,6 +7297,17 @@ fn connect_preflight(
     headers: &BTreeMap<String, String>,
 ) -> Value {
     let started = Instant::now();
+    let enrollment_session_id = match enrollment_session_id_from_headers(headers) {
+        Ok(enrollment_session_id) => enrollment_session_id,
+        Err(err) => {
+            return deny(
+                400,
+                "invalid enrollment session header",
+                json!({"error":"invalid_enrollment_session_header","detail":err}),
+                started,
+            )
+        }
+    };
     let headers = lower_headers(headers);
     let (host, port) = match connect_authority(target) {
         Ok(parsed) => parsed,
@@ -7211,21 +7338,24 @@ fn connect_preflight(
             started,
         );
     }
-    json!({
-        "action":"allow",
-        "allowed":true,
-        "status_code":200,
-        "principal_id":principal.id,
-        "policy_hash":snapshot.hash,
-        "policy_id":snapshot.policy_id,
-        "policy_sequence":snapshot.policy_sequence,
-        "policy_rollback_epoch":snapshot.rollback_epoch,
-        "snapshot_epoch":snapshot.epoch,
-        "authority":authority,
-        "route_ids":route_ids,
-        "decision_us":started.elapsed().as_micros() as u64,
-        "hot_path":{"sqlite_calls":0,"filesystem_calls":0},
-    })
+    with_enrollment_session_id(
+        json!({
+            "action":"allow",
+            "allowed":true,
+            "status_code":200,
+            "principal_id":principal.id,
+            "policy_hash":snapshot.hash,
+            "policy_id":snapshot.policy_id,
+            "policy_sequence":snapshot.policy_sequence,
+            "policy_rollback_epoch":snapshot.rollback_epoch,
+            "snapshot_epoch":snapshot.epoch,
+            "authority":authority,
+            "route_ids":route_ids,
+            "decision_us":started.elapsed().as_micros() as u64,
+            "hot_path":{"sqlite_calls":0,"filesystem_calls":0},
+        }),
+        enrollment_session_id.as_deref(),
+    )
 }
 
 fn get_object<'a>(value: &'a Value, key: &str) -> Option<&'a Map<String, Value>> {
@@ -10409,6 +10539,17 @@ fn decide_internal(
         );
     }
     let mut req = req;
+    let enrollment_session_id = match enrollment_session_id_from_headers(&req.headers) {
+        Ok(enrollment_session_id) => enrollment_session_id,
+        Err(err) => {
+            return deny(
+                400,
+                "invalid enrollment session header",
+                json!({"error":"invalid_enrollment_session_header","detail":err}),
+                started,
+            )
+        }
+    };
     let headers = lower_headers(&req.headers);
     let path_validation = match validate_request_target_path(&req.url) {
         Ok(validation) => validation,
@@ -10654,13 +10795,17 @@ fn decide_internal(
     );
     let request_digest = digest_json(&canonical);
     let operation_digest = operation_digest(&canonical);
-    let flow_id = digest_json(&json!({
-        "route_id":route.id,
-        "principal_id":principal.id,
-        "request_digest":request_digest,
-        "operation_digest":operation_digest,
-        "now_ms":now_epoch_ms(),
-    }));
+    let flow_id = match random_request_attempt_id() {
+        Ok(flow_id) => flow_id,
+        Err(error) => {
+            return deny(
+                503,
+                "request attempt identity unavailable",
+                json!({"error":"request_attempt_identity_unavailable","detail":error}),
+                started,
+            )
+        }
+    };
     let grant_attempt_id = digest_json(&json!({
         "v":1,
         "purpose":"grant-consume",
@@ -10828,24 +10973,25 @@ fn decide_internal(
     }
     let grant_audit_enqueued = if let Some(ref grant) = consumed_grant {
         let committed = grant_audit_reservation.as_mut().is_some_and(|reservation| {
-            reservation.commit(
-                "data_plane.jit.grant_consumed",
+            let event = with_enrollment_session_id(
                 json!({
-                "component":"serverware-decision-gate-rs",
-                "grant_id":grant.id.clone(),
-                "approval_id":grant.approval_id.clone(),
-                "principal_id":principal.id.clone(),
-                "route_id":route.id.clone(),
-                "adapter":route.adapter_type.clone(),
-                "policy_hash":snapshot.hash.clone(),
-                "credential_ref":credential_ref.clone(),
-                "credential_version":credential_version,
-                "request_digest":request_digest.clone(),
-                "operation_digest":operation_digest.clone(),
-                "flow_id":flow_id.clone(),
-                "grant_store":grant_store,
+                    "component":"serverware-decision-gate-rs",
+                    "grant_id":grant.id.clone(),
+                    "approval_id":grant.approval_id.clone(),
+                    "principal_id":principal.id.clone(),
+                    "route_id":route.id.clone(),
+                    "adapter":route.adapter_type.clone(),
+                    "policy_hash":snapshot.hash.clone(),
+                    "credential_ref":credential_ref.clone(),
+                    "credential_version":credential_version,
+                    "request_digest":request_digest.clone(),
+                    "operation_digest":operation_digest.clone(),
+                    "flow_id":flow_id.clone(),
+                    "grant_store":grant_store,
                 }),
-            )
+                enrollment_session_id.as_deref(),
+            );
+            reservation.commit("data_plane.jit.grant_consumed", event)
         });
         if !committed {
             return deny(
@@ -10864,53 +11010,61 @@ fn decide_internal(
         true
     };
     let action = if allowed { "allow" } else { "jit_required" };
-    json!({
-        "action": action,
-        "allowed": allowed,
-        "status_code": if allowed {200} else {428},
-        "principal_id": principal.id,
-        "route_id": route.id,
-        "adapter": route.adapter_type,
-        "policy_hash": snapshot.hash,
-        "snapshot_epoch": snapshot.epoch,
-        "credential_ref": credential_ref,
-        "credential_version": credential_version,
-        "client_request_digest": client_request_digest,
-        "request_digest": request_digest,
-        "operation_digest": operation_digest,
-        "operation": operation,
-        "rewrite": rewrite,
-        "jit": if jit_required {
-            match consumed_grant {
-                Some(ref grant) => json!({"required":true,"grant_consumed":true,"grant_id":grant.id,"approval_id":grant.approval_id,"grant_store":grant_store,"secondary_audit_enqueued":grant_audit_enqueued}),
-                None => json!({
-                    "required":true,
-                    "grant_consumed":false,
-                    "grant_store":grant_store,
-                    "approval_id":pending_approval.as_ref().map(|approval| approval.id.clone()),
-                    "expires_at":pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
-                    "retry_after_seconds":3
-                }),
-            }
-        } else {
-            json!({"required":false})
-        },
-        "approval_id": pending_approval.as_ref().map(|approval| approval.id.clone()),
-        "expires_at": pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
-        "injection": if allowed {
-            json!({
-                "credential_ref":route.credential_ref,
-                "credential_version":credential_version,
-                "secret_available":secret_available,
-                "plan":injection,
-            })
-        } else {
-            json!(null)
-        },
-        "canonical_request": canonical,
-        "decision_us": started.elapsed().as_micros() as u64,
-        "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
-    })
+    with_enrollment_session_id(
+        json!({
+            "action": action,
+            "allowed": allowed,
+            "status_code": if allowed {200} else {428},
+            "principal_id": principal.id,
+            "route_id": route.id,
+            "adapter": route.adapter_type,
+            "policy_hash": snapshot.hash,
+            "snapshot_epoch": snapshot.epoch,
+            "credential_ref": credential_ref,
+            "credential_version": credential_version,
+            "client_request_digest": client_request_digest,
+            "request_digest": request_digest,
+            "operation_digest": operation_digest,
+            "flow_id": flow_id.clone(),
+            "grant_id": consumed_grant.as_ref().map(|grant| grant.id.clone()),
+            "operation": operation,
+            "rewrite": rewrite,
+            "jit": if jit_required {
+                match consumed_grant {
+                    Some(ref grant) => json!({"required":true,"grant_consumed":true,"grant_id":grant.id,"approval_id":grant.approval_id,"grant_store":grant_store,"secondary_audit_enqueued":grant_audit_enqueued}),
+                    None => json!({
+                        "required":true,
+                        "grant_consumed":false,
+                        "grant_store":grant_store,
+                        "approval_id":pending_approval.as_ref().map(|approval| approval.id.clone()),
+                        "expires_at":pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
+                        "retry_after_seconds":3
+                    }),
+                }
+            } else {
+                json!({"required":false})
+            },
+            "approval_id": consumed_grant
+                .as_ref()
+                .and_then(|grant| grant.approval_id.clone())
+                .or_else(|| pending_approval.as_ref().map(|approval| approval.id.clone())),
+            "expires_at": pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
+            "injection": if allowed {
+                json!({
+                    "credential_ref":route.credential_ref,
+                    "credential_version":credential_version,
+                    "secret_available":secret_available,
+                    "plan":injection,
+                })
+            } else {
+                json!(null)
+            },
+            "canonical_request": canonical,
+            "decision_us": started.elapsed().as_micros() as u64,
+            "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
+        }),
+        enrollment_session_id.as_deref(),
+    )
 }
 
 fn http_response(status: &str, body: Value) -> Vec<u8> {
@@ -16482,6 +16636,7 @@ fn read_request_head_from<R: Read>(
         "authorization",
         "proxy-authorization",
         "x-serverware-data-plane-token",
+        ENROLLMENT_SESSION_HEADER,
         RESPONSE_PROOF_NONCE_HEADER,
     ];
     for line in lines {
@@ -16542,6 +16697,7 @@ fn read_request_head_from<R: Read>(
             return Err(format!("Connection nominates supplied header {nominated}"));
         }
     }
+    enrollment_session_id_from_headers(&headers)?;
     Ok(RequestHead {
         method,
         target,
@@ -16990,6 +17146,10 @@ fn handle_connect_request(
         .get("principal_id")
         .and_then(Value::as_str)
         .map(ToString::to_string);
+    let enrollment_session_id = decision
+        .get("enrollment_session_id")
+        .and_then(Value::as_str)
+        .map(ToString::to_string);
     let mut tls = StreamOwned::new(tls_conn, stream);
     let mut handled_requests = 0u64;
     loop {
@@ -17010,6 +17170,17 @@ fn handle_connect_request(
         };
         let close_after = request_head_wants_close(&head);
         let mut head = head;
+        if let Err(err) =
+            inherit_connect_enrollment_session(&mut head.headers, enrollment_session_id.as_deref())
+        {
+            let response = json_status_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error":"invalid_enrollment_session_context","detail":err}),
+            );
+            let _ = tls.write_all(&response);
+            let _ = tls.flush();
+            break;
+        }
         let response_proof =
             if lower_headers(&head.headers).contains_key(RESPONSE_PROOF_NONCE_HEADER) {
                 if !matches!(head.method.as_str(), "GET" | "HEAD") {
@@ -18194,6 +18365,98 @@ mod tests {
         read_request_head_from(&mut Cursor::new(raw), Some("127.0.0.1".to_string()))
     }
 
+    fn correlated_test_decision_request(session_id: &str) -> DecisionRequest {
+        DecisionRequest {
+            client_ip: None,
+            method: "GET".to_string(),
+            url: "https://example.test/resource".to_string(),
+            headers: BTreeMap::from([(
+                ENROLLMENT_SESSION_HEADER.to_string(),
+                session_id.to_string(),
+            )]),
+            body: String::new(),
+            body_sha256: Some(sha256_prefixed(b"")),
+            forwarded_body_length: Some(0),
+            forwarded_body_utf8_valid: Some(true),
+            credential_metadata: BTreeMap::new(),
+            gmail_proofs: Vec::new(),
+            client_request_digest: None,
+        }
+    }
+
+    #[test]
+    fn enrollment_session_header_is_strict_singleton_base64url() {
+        for session_id in ["a".repeat(24), "Z_9-".repeat(32)] {
+            let raw = format!(
+                "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Serverware-Enrollment-Session: {session_id}\r\n\r\n"
+            );
+            let head = parse_head(raw.as_bytes()).expect("valid enrollment session header");
+            assert_eq!(
+                enrollment_session_id_from_headers(&head.headers)
+                    .expect("validated enrollment session"),
+                Some(session_id)
+            );
+        }
+
+        for invalid in [
+            "a".repeat(23),
+            "a".repeat(129),
+            format!("{}=", "a".repeat(23)),
+            format!("{},b", "a".repeat(24)),
+        ] {
+            let raw = format!(
+                "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Serverware-Enrollment-Session: {invalid}\r\n\r\n"
+            );
+            assert!(parse_head(raw.as_bytes())
+                .err()
+                .expect("malformed enrollment session must fail closed")
+                .contains("24-128 base64url"));
+        }
+
+        let session_id = "a".repeat(24);
+        let duplicate = format!(
+            "CONNECT example.test:443 HTTP/1.1\r\nHost: example.test:443\r\nX-Serverware-Enrollment-Session: {session_id}\r\nx-serverware-enrollment-session: {session_id}\r\n\r\n"
+        );
+        assert!(parse_head(duplicate.as_bytes())
+            .err()
+            .expect("duplicate enrollment session must fail closed")
+            .contains("duplicate singleton"));
+
+        let ambiguous = BTreeMap::from([
+            (
+                "X-Serverware-Enrollment-Session".to_string(),
+                session_id.clone(),
+            ),
+            ("x-serverware-enrollment-session".to_string(), session_id),
+        ]);
+        assert!(enrollment_session_id_from_headers(&ambiguous)
+            .expect_err("case-ambiguous enrollment session must fail closed")
+            .contains("ambiguous"));
+    }
+
+    #[test]
+    fn connect_enrollment_session_is_inherited_but_cannot_be_overridden() {
+        let session_id = "A_-0123456789abcdefghijk";
+        assert_eq!(session_id.len(), 24);
+        let mut inner_headers = BTreeMap::new();
+        inherit_connect_enrollment_session(&mut inner_headers, Some(session_id))
+            .expect("CONNECT enrollment context");
+        assert_eq!(
+            enrollment_session_id_from_headers(&inner_headers)
+                .expect("inherited enrollment context")
+                .as_deref(),
+            Some(session_id)
+        );
+
+        let mut supplied_inner =
+            BTreeMap::from([(ENROLLMENT_SESSION_HEADER.to_string(), "b".repeat(24))]);
+        assert!(
+            inherit_connect_enrollment_session(&mut supplied_inner, Some(session_id))
+                .expect_err("inner request must not override CONNECT enrollment context")
+                .contains("must not supply")
+        );
+    }
+
     #[test]
     fn internal_service_tokens_are_scoped_strong_and_distinct() {
         let credential_lease =
@@ -18289,6 +18552,10 @@ mod tests {
             (
                 "X-Serverware-Data-Plane-Token".to_string(),
                 "service-secret".to_string(),
+            ),
+            (
+                "X-Serverware-Enrollment-Session".to_string(),
+                "A_-0123456789abcdefghijk".to_string(),
             ),
             ("X-Serverware-Agent".to_string(), "agent:test".to_string()),
             ("X-Visible".to_string(), "visible".to_string()),
@@ -18448,6 +18715,99 @@ mod tests {
             serialized,
             json!({"event_type":"data_plane.test","event":{"ok":true}})
         );
+    }
+
+    #[test]
+    fn enrollment_session_id_reaches_decision_and_request_audit() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let session_id = "A_-0123456789abcdefghijk";
+        let decision = decide_internal(
+            &state,
+            &snapshot,
+            correlated_test_decision_request(session_id),
+            Some("agent:test"),
+        );
+        assert_eq!(decision["allowed"], true);
+        assert_eq!(decision["enrollment_session_id"], session_id);
+
+        let event = decision_audit_event(
+            &decision,
+            "GET",
+            &Url::parse("https://example.test/resource").expect("audit URL"),
+            "release_started",
+            json!({"stage":"credential_release"}),
+        );
+        assert_eq!(event["enrollment_session_id"], session_id);
+
+        let mut ambiguous = correlated_test_decision_request(session_id);
+        ambiguous.headers.insert(
+            "X-Serverware-Enrollment-Session".to_string(),
+            session_id.to_string(),
+        );
+        let denied = decide_internal(&state, &snapshot, ambiguous, Some("agent:test"));
+        assert_eq!(denied["status_code"], 400);
+        assert_eq!(
+            denied["payload"]["error"],
+            "invalid_enrollment_session_header"
+        );
+    }
+
+    #[test]
+    fn jit_grant_consumed_audit_includes_enrollment_session_id() {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.routes[0].jit = json!({"required":true});
+        let snapshot = Arc::new(snapshot);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("token".to_string());
+        let session_id = "A_-0123456789abcdefghijk";
+
+        let pending = decide_internal(
+            &state,
+            &snapshot,
+            correlated_test_decision_request(session_id),
+            Some("agent:test"),
+        );
+        assert_eq!(pending["status_code"], 428);
+        let request_digest = pending["request_digest"]
+            .as_str()
+            .expect("pending request digest");
+        let operation_digest = pending["operation_digest"]
+            .as_str()
+            .expect("pending operation digest");
+        let key = grant_key(
+            "agent:test",
+            "route:test",
+            "",
+            0,
+            &snapshot.hash,
+            request_digest,
+            operation_digest,
+        );
+        state.grants.lock().expect("grant cache").insert(
+            key,
+            Grant {
+                id: "grant:test".to_string(),
+                approval_id: Some("approval:test".to_string()),
+                uses_remaining: 1,
+                expires_at_ms: now_epoch_ms() + 30_000,
+            },
+        );
+
+        let allowed = decide_internal(
+            &state,
+            &snapshot,
+            correlated_test_decision_request(session_id),
+            Some("agent:test"),
+        );
+        assert_eq!(allowed["allowed"], true);
+        let queue = state.audit_queue.lock().expect("audit queue");
+        let event = queue
+            .iter()
+            .find(|event| event.event_type == "data_plane.jit.grant_consumed")
+            .expect("JIT grant-consumed audit event");
+        assert_eq!(event.event["enrollment_session_id"], session_id);
     }
 
     #[test]
@@ -19699,9 +20059,22 @@ mod tests {
             "id":"credential:x",
             "provider":"x",
             "providerSubject":"replace-with-verified-x-user-id",
-            "injection":{"type":"bearer"}
+            "injection":{"type":"bearer","header":"Authorization","field":"access_token"}
         }]);
         validate_policy_capabilities(&raw).expect("account quota with signed subject");
+        for invalid_injection in [
+            json!({"type":"bearer","header":"Authorization"}),
+            json!({"type":"bearer","header":"Authorization","field":"refresh_token"}),
+            json!({"type":"bearer","header":"X-OAuth","field":"access_token"}),
+            json!({"type":"query","name":"access_token","field":"access_token"}),
+            json!({"type":"bearer","header":"Authorization","field":"access_token","prefix":"Token "}),
+        ] {
+            let mut invalid = raw.clone();
+            invalid["credentials"][0]["injection"] = invalid_injection;
+            assert!(validate_policy_capabilities(&invalid)
+                .expect_err("managed OAuth injection must be access-token-only bearer")
+                .contains("access_token"));
+        }
         raw["credentials"][0]
             .as_object_mut()
             .expect("credential object")
@@ -20109,6 +20482,16 @@ mod tests {
         assert_eq!(request["flowId"], "sha256:flow");
         assert_eq!(request["attemptId"], "sha256:attempt");
         assert_eq!(request["canonicalRequest"], canonical);
+    }
+
+    #[test]
+    fn request_attempt_ids_are_random_and_unique() {
+        let mut ids = HashSet::new();
+        for _ in 0..1024 {
+            let attempt_id = random_request_attempt_id().expect("request attempt ID");
+            assert!(is_sha256_digest(&attempt_id));
+            assert!(ids.insert(attempt_id), "request attempt ID repeated");
+        }
     }
 
     #[test]
@@ -21263,6 +21646,7 @@ mod tests {
             "policy_hash":"sha256:policy",
             "request_digest":"sha256:request",
             "operation_digest":"sha256:operation",
+            "enrollment_session_id":"A_-0123456789abcdefghijk",
         });
         let url = Url::parse("https://example.test/resource").expect("URL");
         assert!(!record_required_credential_release_start(
@@ -21317,6 +21701,7 @@ mod tests {
         let captured = server.join().expect("audit test server");
         assert!(captured.contains("data_plane.credential.release_started"));
         assert!(captured.contains("credential:test"));
+        assert!(captured.contains("\"enrollment_session_id\":\"A_-0123456789abcdefghijk\""));
         assert!(state.audit_queue.lock().expect("audit queue").is_empty());
         assert_eq!(state.audit_sent.load(Ordering::Relaxed), 1);
         assert!(!record_required_credential_release_start(

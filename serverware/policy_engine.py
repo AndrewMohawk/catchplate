@@ -411,6 +411,13 @@ def _secret_for_injection(secret: str, injection: dict[str, Any]) -> str:
 def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy, credential: dict[str, Any]) -> str:
     injection = credential_policy.injection or {"type": credential.get("kind", "bearer")}
     injection_type = injection.get("type", credential.get("kind", "bearer"))
+    if credential.get("kind") == "oauth2" and (
+        injection_type != "bearer"
+        or str(injection.get("header") or "Authorization").lower() != "authorization"
+        or injection.get("field") != "access_token"
+        or injection.get("prefix", "Bearer ") != "Bearer "
+    ):
+        raise ValueError("managed OAuth credential injection is not canonical access-token-only bearer")
     secret = _secret_for_injection(str(credential["secret"]), injection)
     guard = _ResponseCredentialGuard()
     guard.add_text_encodings(secret)

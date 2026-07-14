@@ -33,6 +33,15 @@ from serverware.config import (
 
 
 SUPPORTED_ADAPTERS = {"generic.rest", "gmail.v1", "x.v2", "npm.registry"}
+MANAGED_OAUTH_PROVIDERS = {
+    "google",
+    "google.oauth",
+    "google.oauth2",
+    "twitter",
+    "x",
+    "x.oauth",
+    "x.oauth2",
+}
 X_V2_BOUNDED_READ_OPERATIONS = frozenset(
     {
         "accountActivity.read",
@@ -547,6 +556,20 @@ def _validate_credential_injection(credential_id: str, raw: Any) -> dict[str, An
     elif not name or len(name) > 128 or any(ord(character) < 33 or ord(character) == 127 for character in name):
         raise PolicyBundleError(f"credential {credential_id} has an invalid injection query key")
     return injection
+
+
+def _validate_managed_oauth_injection(credential_id: str, provider: str, injection: dict[str, Any]) -> None:
+    if provider.strip().lower() not in MANAGED_OAUTH_PROVIDERS:
+        return
+    if (
+        injection.get("type") != "bearer"
+        or str(injection.get("header") or "Authorization").lower() != "authorization"
+        or injection.get("field") != "access_token"
+        or injection.get("prefix", "Bearer ") != "Bearer "
+    ):
+        raise PolicyBundleError(
+            f"OAuth credential {credential_id} must inject only access_token as canonical Authorization Bearer"
+        )
 
 
 def _validate_generic_required_headers(
@@ -1428,12 +1451,13 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                 raise PolicyBundleError(f"credential {credential_id} has an invalid provider subject")
             if provider in {"", "generic"}:
                 raise PolicyBundleError(f"credential {credential_id} provider subject requires a concrete provider")
-        if provider.lower() in {"google", "google.oauth2", "x", "x.oauth2", "twitter"} and provider_subject is None:
+        if provider.lower() in MANAGED_OAUTH_PROVIDERS and provider_subject is None:
             raise PolicyBundleError(f"OAuth credential {credential_id} requires a signed provider subject")
         injection = _validate_credential_injection(
             credential_id,
             item.get("injection", {"type": "bearer"}),
         )
+        _validate_managed_oauth_injection(credential_id, provider, injection)
         credentials[credential_id] = CredentialPolicy(
             id=credential_id,
             provider=provider,

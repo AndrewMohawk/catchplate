@@ -465,6 +465,7 @@ verify-agent-enrollment:
 	docker compose up -d --build serverware
 	python3 scripts/test_agent_enrollment.py
 	docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
+	docker compose exec -T serverware python scripts/test_setup_verify.py
 
 verify-production-images-no-shell:
 	python3 scripts/test_production_images_no_shell.py

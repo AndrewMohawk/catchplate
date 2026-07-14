@@ -159,12 +159,15 @@ export SSL_CERT_FILE=/etc/serverware/serverware-ca.pem
 export REQUESTS_CA_BUNDLE=/etc/serverware/serverware-ca.pem
 ```
 
+For a principal that uses `requiredHeaders`, HTTPS clients must send those identity headers on the proxy `CONNECT` request as well as the provider request. For example, curl uses `--proxy-header 'X-Serverware-Agent: mail-reader'` for the tunnel and `-H 'X-Serverware-Agent: mail-reader'` inside it. The enrollment packet exposes the exact `identity.requiredHeaders` and any `identity.proxyAuthorization` requirements. Production deployments should prefer source-bound proxy authorization or isolated source CIDRs when the agent SDK cannot set custom proxy headers.
+
 Agent instruction block:
 
 ```text
 Use the normal provider SDKs and upstream URLs.
 Do not ask for, store, print, or cache provider credentials.
 All HTTP and HTTPS traffic must use the configured Serverware proxy.
+Apply the enrollment packet's proxy identity requirements to the proxy connection, including CONNECT.
 If Serverware returns 428, wait for human approval and retry the same request.
 If Serverware returns 403 or 5xx, stop and report the route/error; do not bypass the proxy.
 ```

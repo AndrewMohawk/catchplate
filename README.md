@@ -26,10 +26,13 @@ export HTTP_PROXY=http://localhost:8080
 curl -X POST -H "X-Serverware-Admin-Token: $SERVERWARE_ADMIN_TOKEN" \
   http://localhost:3000/api/demo/seed
 curl --proxy "$HTTPS_PROXY" \
+  --proxy-header 'X-Serverware-Agent: demo-agent' \
   --cacert .tmp/serverware-ca.pem \
   -H 'X-Serverware-Agent: demo-agent' \
   https://demo-upstream:8443/echo
 ```
+
+For HTTPS, the proxy authenticates the `CONNECT` tunnel before it can inspect the encrypted upstream request. Identity headers therefore belong on both the proxy request (`--proxy-header`) and the provider request (`-H`) in this header-based demo. Production principals should prefer a source-bound proxy token or isolated source CIDR so normal SDKs can use the proxy without provider-specific credential handling.
 
 For local debugging only, `/ca.pem` remains an authenticated endpoint and returns `X-Serverware-Debug-Only: true`. Production sets `SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED=0` and uses `/api/ca/install-sessions` plus `scripts/install_verified_ca.sh`, so the CA is only released through a short-lived nonce-bound verifier-mediated install session.
 

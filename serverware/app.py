@@ -3842,7 +3842,7 @@ UI_HTML = r"""
       await refresh();
     }
     async function showCaVerifier() {
-      const command = 'make install-ca\nexport HTTPS_PROXY=http://localhost:8080\nexport HTTP_PROXY=http://localhost:8080\ncurl --proxy "$HTTPS_PROXY" --cacert .tmp/serverware-ca.pem -H "X-Serverware-Agent: demo-agent" https://demo-upstream:8443/echo';
+      const command = 'make install-ca\nexport HTTPS_PROXY=http://localhost:8080\nexport HTTP_PROXY=http://localhost:8080\ncurl --proxy "$HTTPS_PROXY" --proxy-header "X-Serverware-Agent: demo-agent" --cacert .tmp/serverware-ca.pem -H "X-Serverware-Agent: demo-agent" https://demo-upstream:8443/echo';
       try { await navigator.clipboard.writeText(command); } catch (_) {}
       alert(command);
     }

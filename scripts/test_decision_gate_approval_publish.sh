@@ -8,6 +8,7 @@ TMP_DIR="${TMP_DIR:-.tmp}"
 CA_FILE="$TMP_DIR/serverware-ca.pem"
 ADMIN_HEADER=(-H "X-Serverware-Admin-Token: ${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}")
 AGENT_HEADER=(-H "X-Serverware-Agent: demo-agent")
+AGENT_PROXY_HEADER=(--proxy-header "X-Serverware-Agent: demo-agent")
 
 mkdir -p "$TMP_DIR"
 
@@ -30,7 +31,7 @@ npm_body="{\"name\":\"demo-package\",\"version\":\"$run_version\",\"tarball_inte
 npm_url="https://demo-upstream:8443/npm/demo-package"
 approval_code="$(curl -sS -o "$TMP_DIR/decision-gate-approval-required.json" -w "%{http_code}" \
   -X PUT --data "$npm_body" -H "Content-Type: application/json" \
-  --proxy "$PROXY" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" "$npm_url")"
+  --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" "$npm_url")"
 if [[ "$approval_code" != "428" ]]; then
   echo "expected npm publish to require approval with 428, got $approval_code" >&2
   cat "$TMP_DIR/decision-gate-approval-required.json" >&2

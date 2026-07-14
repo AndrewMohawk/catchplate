@@ -52,6 +52,7 @@ def main() -> None:
             "copyEnrollment()",
             "downloadEnrollment()",
             "state.enrollmentPacket",
+            '--proxy-header "X-Serverware-Agent: demo-agent"',
         )
         for marker in required_markup:
             if marker not in ui_html:

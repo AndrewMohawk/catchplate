@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -73,6 +75,30 @@ def assert_production_dependencies() -> None:
         raise AssertionError("default docker-compose.yml must not enable the mitmproxy prototype")
     if '"8080:9090"' not in compose:
         raise AssertionError("default docker-compose.yml must expose the Rust decision gate on the agent proxy port")
+    production_compose_path = ROOT / "docker-compose.production.yml"
+    production_compose = production_compose_path.read_text(encoding="utf-8")
+    if "SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9091" not in production_compose:
+        raise AssertionError("production control plane must use the isolated decision-gate management listener")
+    compose_env = os.environ.copy()
+    for name in re.findall(r"\$\{([A-Z0-9_]+):\?[^}]*\}", production_compose):
+        compose_env.setdefault(name, "serverware-compose-test-value")
+    result = subprocess.run(
+        ["docker", "compose", "-f", str(production_compose_path), "config", "--format", "json"],
+        cwd=ROOT,
+        env=compose_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"production Compose model did not parse: {result.stderr.decode(errors='replace')}")
+    model = json.loads(result.stdout)
+    ports = model["services"]["decision-gate-rs"].get("ports") or []
+    if any(int(binding["target"]) == 9091 for binding in ports):
+        raise AssertionError("production must not publish the decision-gate management listener")
+    proxy_ports = [binding for binding in ports if int(binding["target"]) == 9090]
+    if len(proxy_ports) != 1 or str(proxy_ports[0].get("published")) != "8080":
+        raise AssertionError(f"production must publish only container proxy port 9090 as host port 8080: {ports}")
 
 
 def run_dry_build() -> dict:

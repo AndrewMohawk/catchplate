@@ -33,6 +33,7 @@ status, payload = request(
     "GET https://demo-upstream:8443/echo HTTP/1.1\r\n"
     "Host: demo-upstream:8443\r\n"
     "X-Serverware-Agent: demo-agent\r\n"
+    "X-Serverware-Data-Plane-Token: caller-controlled-value\r\n"
     "Connection: close\r\n\r\n"
 )
 assert status == 200, payload
@@ -42,6 +43,7 @@ assert payload["authorization_sha256"] == "sha256:" + hashlib.sha256(b"Bearer de
 assert "authorization" not in payload, payload
 assert "proxy_authorization" not in payload, payload
 assert "serverware_agent" not in payload, payload
+assert payload["query"]["_data_plane_token_seen"] is False, payload
 assert payload["path"] == "/echo", payload
 
 status, payload = request(

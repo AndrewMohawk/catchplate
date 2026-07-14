@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-GATE="${DECISION_GATE_BASE:-http://localhost:9090}"
+GATE="${DECISION_GATE_BASE:-http://localhost:9091}"
 BASE="${BASE:-http://localhost:3000}"
+export SERVERWARE_DATA_PLANE_AUDIT_TOKEN="${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:-dev-data-plane-audit-token}"
 
 python3 - "$GATE" <<'PY'
 import json
+import os
 import sys
 import urllib.request
 
@@ -14,7 +16,14 @@ gate = sys.argv[1].rstrip("/")
 
 def request_json(path: str, payload: dict | None = None) -> dict:
     data = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    req = urllib.request.Request(f"{gate}{path}", data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        f"{gate}{path}",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+        },
+    )
     with urllib.request.urlopen(req, timeout=10) as response:
         return json.loads(response.read())
 
@@ -51,6 +60,7 @@ PY
 
 python3 - "$GATE" "$reduced_hash" <<'PY'
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -61,7 +71,14 @@ expected_hash = sys.argv[2]
 
 def request_json(path: str, payload: dict | None = None) -> dict:
     data = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    req = urllib.request.Request(f"{gate}{path}", data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        f"{gate}{path}",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+        },
+    )
     with urllib.request.urlopen(req, timeout=10) as response:
         return json.loads(response.read())
 
@@ -121,6 +138,7 @@ PY
 
 python3 - "$GATE" "$unsupported_failed_before" "$reduced_hash" "$unsupported_hash" <<'PY'
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -133,7 +151,14 @@ unsupported_hash = sys.argv[4]
 
 def request_json(path: str, payload: dict | None = None) -> dict:
     data = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    req = urllib.request.Request(f"{gate}{path}", data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        f"{gate}{path}",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+        },
+    )
     with urllib.request.urlopen(req, timeout=10) as response:
         return json.loads(response.read())
 
@@ -192,6 +217,7 @@ PY
 
 python3 - "$GATE" "$failed_before" "$BASE" "$reduced_hash" <<'PY'
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -204,7 +230,14 @@ expected_hash = sys.argv[4]
 
 def request_json(path: str, payload: dict | None = None) -> dict:
     data = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    req = urllib.request.Request(f"{gate}{path}", data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        f"{gate}{path}",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+        },
+    )
     with urllib.request.urlopen(req, timeout=10) as response:
         return json.loads(response.read())
 
@@ -254,6 +287,7 @@ PY
 
 python3 - "$GATE" "$restored_hash" <<'PY'
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -264,7 +298,14 @@ expected_hash = sys.argv[2]
 
 def request_json(path: str, payload: dict | None = None) -> dict:
     data = None if payload is None else json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
-    req = urllib.request.Request(f"{gate}{path}", data=data, headers={"Content-Type": "application/json"})
+    req = urllib.request.Request(
+        f"{gate}{path}",
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "X-Serverware-Data-Plane-Token": os.environ["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+        },
+    )
     with urllib.request.urlopen(req, timeout=10) as response:
         return json.loads(response.read())
 

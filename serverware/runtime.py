@@ -24,6 +24,7 @@ from serverware.config import (
     CREDENTIAL_GENERATION_POLL_SECONDS,
     CREDENTIAL_GENERATIONS_PATH,
     CREDENTIAL_LEASES_PATH,
+    DATA_PLANE_AUDIT_TOKEN,
     DATA_PLANE_GID,
     DATA_PLANE_UID,
     DECISION_GATE_CA_CERT_PATH,
@@ -370,7 +371,10 @@ def publish_decision_gate_grant(approval: dict[str, Any]) -> dict[str, Any]:
     request = urllib.request.Request(
         f"{DECISION_GATE_BASE}/v1/grants",
         data=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "X-Serverware-Data-Plane-Token": DATA_PLANE_AUDIT_TOKEN,
+        },
         method="POST",
     )
     try:

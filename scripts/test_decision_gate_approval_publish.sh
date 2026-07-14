@@ -3,7 +3,7 @@ set -euo pipefail
 
 BASE="${BASE:-http://localhost:3000}"
 PROXY="${PROXY:-http://localhost:8080}"
-GATE="${DECISION_GATE_BASE:-http://localhost:9090}"
+GATE="${DECISION_GATE_BASE:-http://localhost:9091}"
 TMP_DIR="${TMP_DIR:-.tmp}"
 CA_FILE="$TMP_DIR/serverware-ca.pem"
 ADMIN_HEADER=(-H "X-Serverware-Admin-Token: ${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}")
@@ -67,12 +67,14 @@ curl -fsS "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
 
 python3 - "$TMP_DIR/decision-gate-approval-approved.json" "$GATE" "$npm_body" <<'PY'
 import json
+import os
 import sys
 import urllib.request
 
 approved = json.load(open(sys.argv[1]))
 gate = sys.argv[2].rstrip("/")
 body = sys.argv[3]
+management_token = os.environ.get("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip() or "dev-data-plane-audit-token"
 publish = approved.get("data_plane_grant_publish") or {}
 assert publish.get("enabled") is True, approved
 assert publish.get("ok") is True, approved
@@ -91,7 +93,10 @@ def post(path, payload):
     req = urllib.request.Request(
         f"{gate}{path}",
         data=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode(),
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "X-Serverware-Data-Plane-Token": management_token,
+        },
     )
     with urllib.request.urlopen(req, timeout=10) as response:
         return json.loads(response.read())

@@ -188,7 +188,9 @@ def request_view(request: Request) -> dict[str, Any]:
 
 @app.api_route("/echo", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def echo(request: Request) -> dict[str, Any]:
-    return request_view(request)
+    view = request_view(request)
+    view["query"]["_data_plane_token_seen"] = "x-serverware-data-plane-token" in request.headers
+    return view
 
 
 @app.api_route("/approval/echo", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])

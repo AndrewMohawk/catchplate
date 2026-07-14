@@ -22,7 +22,7 @@ services:
       SERVERWARE_ADMIN_TOKEN: dev-admin-token
       SERVERWARE_ADMIN_USER: user:demo
       SERVERWARE_DEV_AUTHENTICATOR: "1"
-      SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9090
+      SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9091
       SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-data-plane-audit-token
       SERVERWARE_AUDIT_ANCHOR_URL: http://audit-anchor:9100/anchors
       SERVERWARE_AUDIT_ANCHOR_TOKEN: dev-audit-anchor-token
@@ -39,7 +39,7 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:a99141a33e72d95cfb2709a4725c08acef849b76de7c0c16f491f8947a8e82c3
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:e3e042e99c86156d4a8ee7a5453321d7626571589e2c846d963a7e8557a047e6
     ports:
       - "3000:3000"
     volumes:
@@ -183,11 +183,14 @@ services:
       SERVERWARE_DATA_PLANE_AUDIT_TOKEN: dev-data-plane-audit-token
       SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
       SERVERWARE_DECISION_GATE_PORT: "9090"
+      SERVERWARE_DECISION_GATE_MANAGEMENT_HOST: 0.0.0.0
+      SERVERWARE_DECISION_GATE_MANAGEMENT_PORT: "9091"
       SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
       SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
     ports:
       - "8080:9090"
       - "9090:9090"
+      - "127.0.0.1:9091:9091"
     volumes:
       - serverware-data:/data:ro
     tmpfs:

@@ -4,11 +4,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import socket
 import statistics
 import time
 import urllib.error
 import urllib.request
 from typing import Any
+from urllib.parse import urlsplit
+
+
+MANAGEMENT_TOKEN = os.getenv("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", "").strip() or "dev-data-plane-audit-token"
+MANAGEMENT_HEADERS = {"X-Serverware-Data-Plane-Token": MANAGEMENT_TOKEN}
 
 
 def percentile(values: list[float], pct: float) -> float:
@@ -33,6 +39,45 @@ def request_json(
         return json.loads(response.read())
 
 
+def request_head_only(
+    base: str,
+    target: str,
+    headers: dict[str, str] | None = None,
+    *,
+    method: str = "POST",
+    content_length: int = 1048576,
+) -> tuple[int, dict[str, Any]]:
+    parsed = urlsplit(base)
+    if parsed.scheme != "http" or not parsed.hostname:
+        raise AssertionError(f"head-only listener probe requires an http URL: {base}")
+    port = parsed.port or 80
+    if target.startswith("/"):
+        target = f"{parsed.path.rstrip('/')}{target}"
+    lines = [
+        f"{method} {target} HTTP/1.1",
+        f"Host: {parsed.hostname}:{port}",
+        "Content-Type: application/json",
+        f"Content-Length: {content_length}",
+        "Connection: close",
+    ]
+    lines.extend(f"{name}: {value}" for name, value in (headers or {}).items())
+    raw = ("\r\n".join(lines) + "\r\n\r\n").encode("ascii")
+    with socket.create_connection((parsed.hostname, port), timeout=3) as sock:
+        sock.settimeout(3)
+        sock.sendall(raw)
+        response = b""
+        while True:
+            chunk = sock.recv(4096)
+            if not chunk:
+                break
+            response += chunk
+    head, separator, body = response.partition(b"\r\n\r\n")
+    if not separator:
+        raise AssertionError(f"listener did not reject from request headers: {response!r}")
+    status = int(head.split(b" ", 2)[1])
+    return status, json.loads(body)
+
+
 def bootstrap(base: str, admin_token: str) -> tuple[int, dict[str, str]]:
     data = request_json(f"{base.rstrip('/')}/api/bootstrap", headers={"X-Serverware-Admin-Token": admin_token})
     credential = next(item for item in data["credentials"] if item["id"] == "cred-demo-bearer")
@@ -51,11 +96,11 @@ def update_demo_credential(base: str, admin_token: str, secret: str, metadata: d
 
 
 def decide(base: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return request_json(f"{base.rstrip('/')}/v1/decide", payload)
+    return request_json(f"{base.rstrip('/')}/v1/decide", payload, headers=MANAGEMENT_HEADERS)
 
 
 def create_grant(base: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return request_json(f"{base.rstrip('/')}/v1/grants", payload)
+    return request_json(f"{base.rstrip('/')}/v1/grants", payload, headers=MANAGEMENT_HEADERS)
 
 
 def assert_decision(name: str, decision: dict[str, Any], action: str, error: str | None = None) -> None:
@@ -67,7 +112,8 @@ def assert_decision(name: str, decision: dict[str, Any], action: str, error: str
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Benchmark the Rust Serverware data-plane decision gate.")
-    parser.add_argument("--gate", default=os.getenv("DECISION_GATE_BASE", "http://localhost:9090"))
+    parser.add_argument("--gate", default=os.getenv("DECISION_GATE_BASE", "http://localhost:9091"))
+    parser.add_argument("--proxy", default=os.getenv("PROXY", "http://localhost:8080"))
     parser.add_argument("--serverware", default=os.getenv("BASE", "http://localhost:3000"))
     parser.add_argument("--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN", "dev-admin-token"))
     parser.add_argument("--requests", type=int, default=1000)
@@ -89,6 +135,34 @@ def main() -> None:
         shared_jit_store = health.get("jit_grant_store") == "shared"
         if health.get("credential_leases", 0) < 1:
             raise AssertionError(f"Rust gate did not load broker credential leases: {health}")
+        for path in ("/v1/decide", "/v1/grants"):
+            status, denial = request_head_only(args.gate, path)
+            if status != 401 or denial.get("error") != "management_auth_required":
+                raise AssertionError(f"unexpected unauthenticated management denial for {path}: {status} {denial}")
+            status, denial = request_head_only(
+                args.gate,
+                path,
+                {"X-Serverware-Data-Plane-Token": "incorrect-management-token"},
+            )
+            if status != 401 or denial.get("error") != "management_auth_required":
+                raise AssertionError(f"unexpected wrong-token management denial for {path}: {status} {denial}")
+            status, denial = request_head_only(args.proxy, path, MANAGEMENT_HEADERS)
+            if status != 404 or denial.get("error") != "not_found":
+                raise AssertionError(f"unexpected public-listener denial for {path}: {status} {denial}")
+        for method, target in (
+            ("CONNECT", "demo-upstream:8443"),
+            ("GET", "https://demo-upstream:8443/echo"),
+        ):
+            status, denial = request_head_only(
+                args.gate,
+                target,
+                MANAGEMENT_HEADERS,
+                method=method,
+            )
+            if status != 404 or denial.get("error") != "not_found":
+                raise AssertionError(
+                    f"management listener accepted proxy traffic {method} {target}: {status} {denial}"
+                )
         echo = decide(args.gate, base_payload)
         assert_decision("echo allow", echo, "allow")
         injection = echo.get("injection") or {}

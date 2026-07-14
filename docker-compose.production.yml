@@ -38,7 +38,7 @@ services:
       SERVERWARE_METADATA_STORE_POSTGRES_DSN: ${SERVERWARE_METADATA_STORE_POSTGRES_DSN:?set metadata DSN}
       SERVERWARE_GRANT_STORE_BACKEND: postgres
       SERVERWARE_GRANT_STORE_POSTGRES_DSN: ${SERVERWARE_GRANT_STORE_POSTGRES_DSN:?set grant DSN}
-      SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9090
+      SERVERWARE_DECISION_GATE_BASE: http://decision-gate-rs:9091
       SERVERWARE_DATA_PLANE_AUDIT_TOKEN: ${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:?set data-plane token}
       SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
       SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
@@ -111,10 +111,12 @@ services:
       SERVERWARE_DATA_PLANE_AUDIT_TOKEN: ${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:?set data-plane token}
       SERVERWARE_DECISION_GATE_HOST: 0.0.0.0
       SERVERWARE_DECISION_GATE_PORT: "9090"
+      SERVERWARE_DECISION_GATE_MANAGEMENT_HOST: 0.0.0.0
+      SERVERWARE_DECISION_GATE_MANAGEMENT_PORT: "9091"
       SERVERWARE_RELEASE_PROVENANCE: /data/release-provenance.json
       SERVERWARE_IMAGE_SIGNATURES: /data/image-signatures.json
     ports:
-      - "9090:9090"
+      - "8080:9090"
     volumes:
       - serverware-data:/data:ro
     tmpfs:

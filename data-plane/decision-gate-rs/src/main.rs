@@ -405,6 +405,15 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
     diff == 0
 }
 
+fn management_api_authorized(state: &GateState, headers: &BTreeMap<String, String>) -> bool {
+    let Some(expected) = state.audit_token.as_deref() else {
+        return false;
+    };
+    lower_headers(headers)
+        .get("x-serverware-data-plane-token")
+        .is_some_and(|provided| constant_time_eq(provided, expected))
+}
+
 fn ip_in_any_network(client_ip: Option<&str>, networks: &[IpNet]) -> bool {
     if networks.is_empty() {
         return true;
@@ -4750,6 +4759,7 @@ fn filtered_forward_headers(headers: &BTreeMap<String, String>) -> HeaderMap {
             || lower == "proxy-authorization"
             || lower == "authorization"
             || lower == "x-serverware-agent"
+            || lower == "x-serverware-data-plane-token"
             || lower.starts_with("proxy-")
             || lower == HOST.as_str()
             || lower == CONTENT_LENGTH.as_str()
@@ -9425,7 +9435,7 @@ fn handle_connect_request(mut stream: TcpStream, state: Arc<GateState>, request:
     }
 }
 
-fn handle_connection(mut stream: TcpStream, state: Arc<GateState>) {
+fn handle_connection(mut stream: TcpStream, state: Arc<GateState>, management_listener: bool) {
     let client_ip = stream.peer_addr().ok().map(|addr| addr.ip().to_string());
     let head = match read_request_head(&mut stream, client_ip) {
         Ok(head) => head,
@@ -9439,6 +9449,35 @@ fn handle_connection(mut stream: TcpStream, state: Arc<GateState>) {
             return;
         }
     };
+    let (origin_path, _) = request_target_parts(&head.target);
+    let public_read =
+        head.method == "GET" && matches!(origin_path.as_str(), "/healthz" | "/attestation");
+    let management_post =
+        head.method == "POST" && matches!(head.target.as_str(), "/v1/decide" | "/v1/grants");
+    let proxy_request = head.method == "CONNECT" || absolute_form_target(&head.target);
+
+    if management_listener {
+        if proxy_request || (!public_read && !management_post) {
+            let response = http_response("404 Not Found", json!({"error":"not_found"}));
+            let _ = stream.write_all(&response);
+            let _ = stream.flush();
+            return;
+        }
+        if management_post && !management_api_authorized(&state, &head.headers) {
+            let response = http_response(
+                "401 Unauthorized",
+                json!({"error":"management_auth_required"}),
+            );
+            let _ = stream.write_all(&response);
+            let _ = stream.flush();
+            return;
+        }
+    } else if management_post || (!proxy_request && !public_read) {
+        let response = http_response("404 Not Found", json!({"error":"not_found"}));
+        let _ = stream.write_all(&response);
+        let _ = stream.flush();
+        return;
+    }
     if head.method == "CONNECT" {
         let request = match read_request_body_from_head(&mut stream, head) {
             Ok(request) => request,
@@ -9683,6 +9722,10 @@ fn main() -> Result<(), String> {
         .max(10);
     let host = env::var("SERVERWARE_DECISION_GATE_HOST").unwrap_or_else(|_| "0.0.0.0".to_string());
     let port = env::var("SERVERWARE_DECISION_GATE_PORT").unwrap_or_else(|_| "9090".to_string());
+    let management_host = env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_HOST")
+        .unwrap_or_else(|_| "127.0.0.1".to_string());
+    let management_port =
+        env::var("SERVERWARE_DECISION_GATE_MANAGEMENT_PORT").unwrap_or_else(|_| "9091".to_string());
     let release_provenance_path = env::var("SERVERWARE_RELEASE_PROVENANCE").ok();
     let image_signatures_path = env::var("SERVERWARE_IMAGE_SIGNATURES").ok();
     let initial_policy_mtime = file_mtime(&policy_path);
@@ -9755,11 +9798,13 @@ fn main() -> Result<(), String> {
         let audit_state = Arc::clone(&state);
         thread::spawn(move || audit_worker(audit_state, Duration::from_millis(audit_flush_ms)));
     }
-    let listener = TcpListener::bind(format!("{host}:{port}"))
-        .map_err(|err| format!("bind decision gate: {err}"))?;
+    let proxy_listener = TcpListener::bind(format!("{host}:{port}"))
+        .map_err(|err| format!("bind decision gate proxy listener: {err}"))?;
+    let management_listener = TcpListener::bind(format!("{management_host}:{management_port}"))
+        .map_err(|err| format!("bind decision gate management listener: {err}"))?;
     let snapshot = current_snapshot(&state);
     eprintln!(
-        "serverware decision gate listening on {host}:{port} policy_hash={} binary_digest={} routes={} generations={} leases={} connect_mitm={} audit={}",
+        "serverware decision gate listening proxy={host}:{port} management={management_host}:{management_port} policy_hash={} binary_digest={} routes={} generations={} leases={} connect_mitm={} audit={}",
         snapshot.hash,
         state.binary_digest,
         snapshot.routes.len(),
@@ -9776,13 +9821,25 @@ fn main() -> Result<(), String> {
         state.mitm_authority.is_some(),
         audit_enabled(&state)
     );
-    for stream in listener.incoming() {
+    let management_state = Arc::clone(&state);
+    thread::spawn(move || {
+        for stream in management_listener.incoming() {
+            match stream {
+                Ok(stream) => {
+                    let state = Arc::clone(&management_state);
+                    thread::spawn(move || handle_connection(stream, state, true));
+                }
+                Err(err) => eprintln!("management accept failed: {err}"),
+            }
+        }
+    });
+    for stream in proxy_listener.incoming() {
         match stream {
             Ok(stream) => {
                 let state = Arc::clone(&state);
-                thread::spawn(move || handle_connection(stream, state));
+                thread::spawn(move || handle_connection(stream, state, false));
             }
-            Err(err) => eprintln!("accept failed: {err}"),
+            Err(err) => eprintln!("proxy accept failed: {err}"),
         }
     }
     Ok(())

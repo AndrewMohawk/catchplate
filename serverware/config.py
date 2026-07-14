@@ -99,6 +99,16 @@ if OAUTH_STATE_TTL_SECONDS <= 0:
     raise RuntimeError("SERVERWARE_OAUTH_STATE_TTL_SECONDS must be positive")
 if _production_release() and not 60 <= OAUTH_STATE_TTL_SECONDS <= 900:
     raise RuntimeError("production SERVERWARE_OAUTH_STATE_TTL_SECONDS must be between 60 and 900 seconds")
+OAUTH_PENDING_CREDENTIAL_TTL_SECONDS = int(
+    os.getenv("SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS", "900")
+)
+if not 60 <= OAUTH_PENDING_CREDENTIAL_TTL_SECONDS <= 3600:
+    raise RuntimeError("SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS must be between 60 and 3600 seconds")
+OAUTH_PENDING_CREDENTIAL_MAX_COUNT = int(
+    os.getenv("SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT", "1000")
+)
+if not 1 <= OAUTH_PENDING_CREDENTIAL_MAX_COUNT <= 10_000:
+    raise RuntimeError("SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT must be between 1 and 10000")
 
 CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES = int(
     os.getenv("SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES", "1000000")
@@ -157,6 +167,32 @@ OIDC_ALLOWED_ALGORITHMS = tuple(
     if item.strip()
 )
 OIDC_LEEWAY_SECONDS = int(os.getenv("SERVERWARE_OIDC_LEEWAY_SECONDS", "60"))
+OIDC_BROWSER_LOGIN_ENABLED = os.getenv("SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED", "0") == "1"
+OIDC_AUTHORIZATION_ENDPOINT = os.getenv("SERVERWARE_OIDC_AUTHORIZATION_ENDPOINT", "").strip()
+OIDC_TOKEN_ENDPOINT = os.getenv("SERVERWARE_OIDC_TOKEN_ENDPOINT", "").strip()
+OIDC_CLIENT_ID = os.getenv("SERVERWARE_OIDC_CLIENT_ID", OIDC_AUDIENCE).strip()
+OIDC_CLIENT_SECRET, OIDC_CLIENT_SECRET_FILE = _oauth_client_secret(
+    value_name="SERVERWARE_OIDC_CLIENT_SECRET",
+    file_name="SERVERWARE_OIDC_CLIENT_SECRET_FILE",
+)
+OIDC_REDIRECT_URI = os.getenv(
+    "SERVERWARE_OIDC_REDIRECT_URI",
+    f"{PUBLIC_URL}/api/auth/oidc/callback",
+).strip()
+OIDC_BROWSER_SCOPES = tuple(
+    item.strip()
+    for item in os.getenv("SERVERWARE_OIDC_BROWSER_SCOPES", "openid,profile,email").split(",")
+    if item.strip()
+)
+OIDC_TOKEN_AUTH_METHOD = os.getenv("SERVERWARE_OIDC_TOKEN_AUTH_METHOD", "client_secret_basic").strip()
+if OIDC_TOKEN_AUTH_METHOD not in {"client_secret_basic", "client_secret_post", "none"}:
+    raise RuntimeError("SERVERWARE_OIDC_TOKEN_AUTH_METHOD is unsupported")
+OIDC_LOGIN_STATE_TTL_SECONDS = int(os.getenv("SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS", "300"))
+if not 60 <= OIDC_LOGIN_STATE_TTL_SECONDS <= 900:
+    raise RuntimeError("SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS must be between 60 and 900 seconds")
+OIDC_SESSION_TTL_SECONDS = int(os.getenv("SERVERWARE_OIDC_SESSION_TTL_SECONDS", "3600"))
+if not 300 <= OIDC_SESSION_TTL_SECONDS <= 43_200:
+    raise RuntimeError("SERVERWARE_OIDC_SESSION_TTL_SECONDS must be between 300 and 43200 seconds")
 WEBAUTHN_RP_ID = os.getenv("SERVERWARE_WEBAUTHN_RP_ID", "localhost")
 WEBAUTHN_ORIGIN = os.getenv("SERVERWARE_WEBAUTHN_ORIGIN", PUBLIC_URL)
 WEBAUTHN_RP_NAME = os.getenv("SERVERWARE_WEBAUTHN_RP_NAME", "Serverware")
@@ -188,7 +224,7 @@ CONTROL_PLANE_TWO_PERSON_ACTIONS = tuple(
     item.strip()
     for item in os.getenv(
         "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS",
-        "credential.create,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
+        "credential.create,credential.oauth.activate,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
     ).split(",")
     if item.strip()
 )

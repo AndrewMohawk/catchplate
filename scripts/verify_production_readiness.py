@@ -39,6 +39,9 @@ READINESS_CHECKS = [
 ]
 METADATA_TABLES = (
     "credentials",
+    "pending_oauth_credentials",
+    "oidc_login_states",
+    "oauth_revocation_work",
     "routes",
     "approval_requests",
     "control_plane_approvals",
@@ -251,6 +254,7 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     two_person_actions = {item.strip() for item in env.get("SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS", "").split(",") if item.strip()}
     required_two_person_actions = {
         "credential.create",
+        "credential.oauth.activate",
         "credential.update",
         "credential.delete",
         "route.create",
@@ -266,7 +270,7 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     add(
         failures,
         "*" in two_person_actions or required_two_person_actions.issubset(two_person_actions),
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential, route, policy publish, WebAuthn enrollment, RBAC, deprovisioning, token rotation, and break-glass mutations",
+        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, route, policy publish, WebAuthn enrollment, RBAC, deprovisioning, token rotation, and break-glass mutations",
     )
     bootstrap_token = env.get("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "")
     add(
@@ -417,6 +421,26 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
         "SERVERWARE_OAUTH_STATE_TTL_SECONDS must be between 60 and 900 seconds",
     )
     try:
+        pending_credential_ttl = int(env.get("SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS", ""))
+    except ValueError:
+        pending_credential_ttl = 0
+    add(
+        failures,
+        60 <= pending_credential_ttl <= 3600,
+        "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS must be between 60 and 3600 seconds",
+    )
+    try:
+        pending_credential_max_count = int(
+            env.get("SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT", "")
+        )
+    except ValueError:
+        pending_credential_max_count = 0
+    add(
+        failures,
+        1 <= pending_credential_max_count <= 10_000,
+        "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT must be between 1 and 10000",
+    )
+    try:
         replay_capacity = int(env.get("SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES", ""))
     except ValueError:
         replay_capacity = 0
@@ -430,6 +454,7 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
         "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
         "SERVERWARE_X_OAUTH_CLIENT_SECRET",
         "SERVERWARE_TWITTER_OAUTH_CLIENT_SECRET",
+        "SERVERWARE_OIDC_CLIENT_SECRET",
     )
     for setting_name in plaintext_names:
         add(
@@ -471,6 +496,75 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
             and redirect_uri == expected_redirect,
             f"{redirect_name} must be the exact HTTPS callback {expected_redirect}",
         )
+
+    add(
+        failures,
+        env_bool(env, "SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED"),
+        "operator browser OIDC login must be enabled",
+    )
+    oidc_issuer = urllib.parse.urlparse(env.get("SERVERWARE_OIDC_ISSUER", "").strip())
+    for name in ("SERVERWARE_OIDC_AUTHORIZATION_ENDPOINT", "SERVERWARE_OIDC_TOKEN_ENDPOINT"):
+        value = env.get(name, "").strip()
+        parsed = urllib.parse.urlparse(value)
+        add(
+            failures,
+            parsed.scheme == "https"
+            and bool(parsed.netloc)
+            and (parsed.scheme, parsed.netloc) == (oidc_issuer.scheme, oidc_issuer.netloc),
+            f"{name} must be an HTTPS endpoint on the configured OIDC issuer origin",
+        )
+    add(
+        failures,
+        bool(env.get("SERVERWARE_OIDC_CLIENT_ID", "").strip())
+        and env.get("SERVERWARE_OIDC_CLIENT_ID", "").strip()
+        == env.get("SERVERWARE_OIDC_AUDIENCE", "").strip(),
+        "SERVERWARE_OIDC_CLIENT_ID must match SERVERWARE_OIDC_AUDIENCE",
+    )
+    check_oauth_secret_file(
+        env,
+        provider="operator OIDC",
+        setting_name="SERVERWARE_OIDC_CLIENT_SECRET_FILE",
+        failures=failures,
+    )
+    oidc_redirect = env.get("SERVERWARE_OIDC_REDIRECT_URI", "").strip()
+    expected_oidc_redirect = f"{public_url.rstrip('/')}/api/auth/oidc/callback"
+    add(
+        failures,
+        public_url_is_https and oidc_redirect == expected_oidc_redirect,
+        f"SERVERWARE_OIDC_REDIRECT_URI must be the exact HTTPS callback {expected_oidc_redirect}",
+    )
+    oidc_scopes = [
+        item.strip()
+        for item in env.get("SERVERWARE_OIDC_BROWSER_SCOPES", "").split(",")
+        if item.strip()
+    ]
+    add(
+        failures,
+        "openid" in oidc_scopes and len(oidc_scopes) == len(set(oidc_scopes)) <= 20,
+        "SERVERWARE_OIDC_BROWSER_SCOPES must be unique, bounded, and include openid",
+    )
+    add(
+        failures,
+        env.get("SERVERWARE_OIDC_TOKEN_AUTH_METHOD", "").strip()
+        in {"client_secret_basic", "client_secret_post"},
+        "production browser OIDC must authenticate the token endpoint client",
+    )
+    try:
+        oidc_login_ttl = int(env.get("SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS", ""))
+        oidc_session_ttl = int(env.get("SERVERWARE_OIDC_SESSION_TTL_SECONDS", ""))
+    except ValueError:
+        oidc_login_ttl = 0
+        oidc_session_ttl = 0
+    add(
+        failures,
+        60 <= oidc_login_ttl <= 900,
+        "SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS must be between 60 and 900 seconds",
+    )
+    add(
+        failures,
+        300 <= oidc_session_ttl <= 43_200,
+        "SERVERWARE_OIDC_SESSION_TTL_SECONDS must be between 300 and 43200 seconds",
+    )
 
 
 def check_nitro(env: dict[str, str], failures: list[str]) -> None:

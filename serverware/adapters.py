@@ -12,6 +12,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 from serverware import runtime
 from serverware.policies import PolicyDecision
+from serverware.policy_bundle import X_V2_RECENT_SEARCH_PATHS, bounded_pattern_matches
 
 
 OLDER_THAN_RE = re.compile(r"\bolder_than:(\d+)([dmy])\b", re.IGNORECASE)
@@ -75,6 +76,48 @@ class ApiAdapter:
             )
 
         allowed_headers = {str(item).strip().lower() for item in request_cfg.get("allowedHeaders") or []}
+        required_headers = request_cfg.get("requiredHeaders") or {}
+        if not isinstance(required_headers, dict):
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason="generic required header policy is invalid",
+                payload={"error": "generic_required_headers_invalid"},
+            )
+        for name, rule in required_headers.items():
+            value = self._header_value(flow.request.headers, str(name))
+            if value is None:
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=403,
+                    reason=f"generic required request header is missing: {name}",
+                    payload={"error": "required_header_missing", "header": name},
+                )
+            if not isinstance(rule, dict):
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=500,
+                    reason=f"generic required request header policy is invalid: {name}",
+                    payload={"error": "required_header_policy_invalid", "header": name},
+                )
+            minimum = rule.get("minLength")
+            maximum = rule.get("maxLength")
+            pattern = rule.get("pattern")
+            encoded_length = len(str(value).encode("utf-8"))
+            pattern_match = bounded_pattern_matches(pattern, str(value)) if isinstance(pattern, str) else True
+            if (
+                rule.get("type") != "string"
+                or type(minimum) is not int
+                or type(maximum) is not int
+                or not minimum <= encoded_length <= maximum
+                or pattern_match is not True
+            ):
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=403,
+                    reason=f"generic required request header is invalid: {name}",
+                    payload={"error": "required_header_invalid", "header": name},
+                )
         for raw_name in getattr(flow.request, "headers", {}):
             name = str(raw_name).strip().lower()
             if name in _GENERIC_NON_FORWARDED_HEADERS:
@@ -159,6 +202,17 @@ class ApiAdapter:
                     payload={"error": "request_form_invalid"},
                 )
         return PolicyDecision(allowed=True)
+
+    @staticmethod
+    def _header_value(headers: Any, name: str) -> str | None:
+        value = headers.get(name)
+        if value is not None:
+            return str(value)
+        lower = name.lower()
+        for raw_name, candidate in getattr(headers, "items", lambda: [])():
+            if str(raw_name).lower() == lower:
+                return str(candidate)
+        return None
 
     def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
         request_cfg = route.adapter_config.get("request") or {}
@@ -1046,6 +1100,17 @@ class XV2Adapter(ApiAdapter):
                 reason="x.v2 write operation blocked by read-only policy",
                 payload={"error": "x_write_blocked", "mode": route.adapter_config.get("mode", "readOnly")},
             )
+        path = (urlsplit(flow.request.pretty_url).path or "/").rstrip("/") or "/"
+        if (
+            route.adapter_config.get("mode") == "recentSearchOnly"
+            and path not in X_V2_RECENT_SEARCH_PATHS
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason="x.v2 endpoint is outside the recent-search surface",
+                payload={"error": "x_recent_search_endpoint_denied", "path": path},
+            )
         allowed_reads = set(route.adapter_config.get("allowedReadOperations") or [])
         if operation.endswith(".read") and operation not in allowed_reads:
             return PolicyDecision(
@@ -1085,16 +1150,39 @@ class NpmRegistryAdapter(ApiAdapter):
             return "/"
         return path
 
+    @staticmethod
+    def _json_body(flow: Any) -> dict[str, Any] | None:
+        try:
+            body = json.loads((flow.request.raw_content or b"").decode("utf-8"))
+        except Exception:
+            return None
+        return body if isinstance(body, dict) else None
+
     def _operation_name(self, flow: Any, params: dict[str, str]) -> str:
         method = flow.request.method.upper()
         path = self._registry_path(flow)
         if method in {"GET", "HEAD"}:
             return "read"
-        if path.startswith("/-/package/") and "/dist-tags/" in path:
-            return "distTagWrite"
         if path.startswith("/-/npm/v1/tokens") or path.startswith("/-/user/token"):
             return "tokenWrite"
-        if method in {"PATCH"}:
+        if path.startswith("/-/package/") and (
+            "/dist-tags/" in path or path.endswith("/dist-tags")
+        ):
+            return "distTagWrite"
+        if "/-rev/" in path and not path.startswith("/-/") and method in {"PUT", "DELETE"}:
+            return "unpublish"
+        if path.startswith(
+            (
+                "/-/npm/v1/user",
+                "/-/package/",
+                "/-/team/",
+                "/-/org/",
+                "/-/user/",
+            )
+        ):
+            return "metadataWrite"
+        body = self._json_body(flow)
+        if method == "PUT" and isinstance(body, dict) and body.get("_rev"):
             return "metadataWrite"
         if method in {"PUT", "POST"}:
             return "publish"
@@ -1108,10 +1196,7 @@ class NpmRegistryAdapter(ApiAdapter):
         package = params.get("package")
         if package:
             fields["packageName"] = unquote(package)
-        try:
-            body = json.loads((flow.request.raw_content or b"{}").decode("utf-8"))
-        except Exception:
-            body = {}
+        body = self._json_body(flow) or {}
         if isinstance(body, dict):
             if body.get("name"):
                 fields["packageName"] = str(body["name"])
@@ -1162,6 +1247,13 @@ class NpmRegistryAdapter(ApiAdapter):
                 status_code=403,
                 reason="npm publish body must be a JSON object",
                 payload={"error": "npm_publish_invalid_json"},
+            )
+        if body.get("_rev"):
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason="npm publish body must not update an existing packument revision",
+                payload={"error": "npm_publish_revision_denied"},
             )
         route_package = unquote(params.get("package") or "")
         document_package = body.get("name")

@@ -4,6 +4,7 @@ import base64
 import hmac
 import html
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -19,7 +20,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from serverware import __version__
@@ -52,6 +53,8 @@ from serverware.config import (
     DIRECT_CA_DOWNLOAD_ENABLED,
     EXPECTED_DATA_PLANE_BINARY_DIGEST,
     MITMPROXY_CONF_DIR,
+    OAUTH_PENDING_CREDENTIAL_TTL_SECONDS,
+    OIDC_LOGIN_STATE_TTL_SECONDS,
     POLICY_BUNDLE_PATH,
     POLICY_CANARY_BUNDLE_PATH,
     POLICY_CANARY_MAX_DENIALS,
@@ -67,7 +70,7 @@ from serverware.config import (
     validate_internal_service_auth,
 )
 from serverware import db, grants, runtime
-from serverware.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, AdminIdentity, admin_status, issue_csrf_cookie, require_admin, require_role, rotate_generated_admin_token, validate_csrf_request
+from serverware.auth import CSRF_COOKIE_NAME, CSRF_HEADER_NAME, OIDC_SESSION_COOKIE_NAME, AdminIdentity, OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError, admin_status, issue_csrf_cookie, oidc_identity_from_token, require_admin, require_role, rotate_generated_admin_token, validate_csrf_request
 from serverware.crypto import encrypt_credential_lease_envelope
 from serverware.enrollment import AgentEnrollmentError, build_agent_enrollment, policy_principal_summaries
 from serverware.key_release import KeyReleaseError, release_material, status as key_release_status
@@ -78,10 +81,13 @@ from serverware.oauth import (
     consume_state,
     create_authorization_url,
     exchange_authorization_code,
+    normalize_provider_id,
     provider_status,
     refresh_access_token,
+    revoke_oauth_token,
     resolve_requested_scopes,
 )
+from serverware.operator_oidc import OperatorOIDCError, browser_login_configured, complete_operator_login, start_operator_login
 from serverware.policy_bundle import (
     PolicyBundleError,
     compile_policy_bundle,
@@ -109,6 +115,10 @@ from serverware.webauthn_trust import WebAuthnTrustError, status as webauthn_tru
 
 
 app = FastAPI(title="Serverware", version=__version__)
+_OAUTH_REVOCATION_RECONCILE_BATCH_SIZE = 8
+_OAUTH_REVOCATION_RECONCILE_INTERVAL_SECONDS = 15
+_oauth_revocation_worker_lock = threading.Lock()
+_oauth_revocation_worker_started = False
 _credential_lease_audit_lock = threading.Lock()
 _credential_lease_audit_last: dict[tuple[str, str, str, str, str, str, str], float] = {}
 _CREDENTIAL_LEASE_AUDIT_INTERVAL_SECONDS = 60.0
@@ -219,6 +229,7 @@ class CredentialUpdate(BaseModel):
 class OAuthStartRequest(BaseModel):
     provider: str = Field(min_length=1)
     credential_name: str | None = Field(default=None, alias="credentialName")
+    credential_id: str | None = Field(default=None, max_length=512, alias="credentialId")
     scopes: list[str] | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     mfa: dict[str, Any] | None = None
@@ -227,6 +238,12 @@ class OAuthStartRequest(BaseModel):
     @classmethod
     def validate_metadata(cls, value: dict[str, Any]) -> dict[str, Any]:
         return db.validate_credential_metadata(value)
+
+
+class OAuthPendingActivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    mfa: dict[str, Any] | None = None
 
 
 class RouteCreate(BaseModel):
@@ -522,6 +539,7 @@ def startup() -> None:
     runtime.start_runtime_workers()
     runtime.start_audit_anchor_worker()
     runtime.start_decision_gate_ca_publisher()
+    _start_oauth_revocation_reconciler()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -542,6 +560,130 @@ def healthz() -> dict[str, Any]:
         "policy_hash": snapshot.hash if snapshot else None,
         **admin_status(),
     }
+
+
+@app.get("/api/auth/status")
+def operator_auth_status(request: Request) -> dict[str, Any]:
+    identity = None
+    token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
+    if token:
+        try:
+            identity = oidc_identity_from_token(token, auth_method="oidc-session")
+        except (OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError):
+            identity = None
+    return {
+        "authenticated": identity is not None,
+        "userId": identity.user_id if identity else None,
+        "roles": sorted(identity.roles) if identity else [],
+        "authMethod": identity.auth_method if identity else None,
+        "oidcBrowserLoginConfigured": browser_login_configured(),
+    }
+
+
+def _operator_oidc_source_key(request: Request) -> str:
+    client = getattr(request, "client", None)
+    peer_host = getattr(client, "host", None)
+    try:
+        canonical_peer = ipaddress.ip_address(str(peer_host)).compressed
+    except ValueError:
+        canonical_peer = "unknown"
+    return "sha256:" + hashlib.sha256(
+        f"serverware-oidc-peer:{canonical_peer}".encode("ascii")
+    ).hexdigest()
+
+
+@app.get("/api/auth/oidc/start")
+def operator_oidc_start(response: Response, request: Request) -> dict[str, Any]:
+    source_key = _operator_oidc_source_key(request)
+    try:
+        with db.oidc_login_source(source_key):
+            started = start_operator_login()
+    except (OperatorOIDCError, db.MetadataStoreError, ValueError) as exc:
+        detail = str(exc)
+        status_code = 429 if "rate limit" in detail or "source capacity" in detail else 503
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    response.set_cookie(
+        "serverware_oidc_flow",
+        started["browser_nonce"],
+        max_age=OIDC_LOGIN_STATE_TTL_SECONDS,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        path="/api/auth/oidc/callback",
+    )
+    db.record_audit_event(
+        "control_plane.oidc_login.started",
+        {
+            "state_hash": started["state_hash"],
+            "expires_at": started["expires_at"],
+            "source_key": source_key,
+        },
+    )
+    return {"authorizationUrl": started["authorization_url"], "expiresAt": started["expires_at"]}
+
+
+@app.get("/api/auth/oidc/callback")
+def operator_oidc_callback(
+    request: Request,
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+) -> Response:
+    if error or not state or not code:
+        raise HTTPException(status_code=400, detail="OIDC login was denied or returned an incomplete callback")
+    try:
+        completed = complete_operator_login(
+            state=state,
+            code=code,
+            browser_nonce=request.cookies.get("serverware_oidc_flow", ""),
+        )
+    except OperatorOIDCError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    identity = completed["identity"]
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        OIDC_SESSION_COOKIE_NAME,
+        completed["id_token"],
+        max_age=completed["max_age"],
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        path="/",
+    )
+    response.delete_cookie("serverware_oidc_flow", path="/api/auth/oidc/callback")
+    issue_csrf_cookie(response, request)
+    db.record_audit_event(
+        "control_plane.oidc_login.completed",
+        {
+            "user_id": identity.user_id,
+            "roles": sorted(identity.roles),
+            "expires_at_epoch": completed["expires_at"],
+        },
+        actor_id=identity.user_id,
+    )
+    return response
+
+
+@app.post("/api/auth/logout")
+def operator_logout(
+    response: Response,
+    request: Request,
+    identity: AdminIdentity = Depends(require_admin),
+) -> dict[str, Any]:
+    response.delete_cookie(
+        OIDC_SESSION_COOKIE_NAME,
+        path="/",
+        secure=request.url.scheme == "https",
+        httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(CSRF_COOKIE_NAME, path="/")
+    db.record_audit_event(
+        "control_plane.logout",
+        {"auth_method": identity.auth_method},
+        actor_id=identity.user_id,
+    )
+    return {"ok": True}
 
 
 def _approval_jit_policy(approval: dict[str, Any], *, require_current_policy: bool = False) -> dict[str, Any]:
@@ -883,6 +1025,178 @@ def _require_control_plane_two_person(
             "retry": {"mfa.approvalId": approval["id"]},
         },
     )
+
+
+def _reconcile_oauth_revocations(*, limit: int = _OAUTH_REVOCATION_RECONCILE_BATCH_SIZE) -> dict[str, int]:
+    worker_id = f"oauth-reconciler-{os.getpid()}-{secrets.token_hex(8)}"
+    claimed = db.claim_oauth_revocations(worker_id=worker_id, limit=limit)
+    revoked = 0
+    failed = 0
+    for item in claimed:
+        error = None
+        try:
+            token_secret = json.loads(item["secret"])
+            if not isinstance(token_secret, dict):
+                raise OAuthError("OAuth revocation material is malformed")
+            revoke_oauth_token(
+                provider_id=str(item["provider_id"]),
+                token_secret=token_secret,
+            )
+        except (OAuthError, json.JSONDecodeError, TypeError, ValueError) as exc:
+            error = str(exc)[:500] or type(exc).__name__
+        if item["kind"] == "pending":
+            result = db.finish_pending_oauth_revocation(
+                item["id"],
+                actor_id="oauth-reconciler",
+                succeeded=error is None,
+                error=error,
+            )
+        else:
+            result = db.finish_oauth_revocation_work(
+                item["id"],
+                worker_id=worker_id,
+                succeeded=error is None,
+                error=error,
+            )
+            db.record_audit_event(
+                (
+                    "credential.oauth_exchange_revoked"
+                    if error is None
+                    else "credential.oauth_exchange_revocation_failed"
+                ),
+                {
+                    "provider": item["provider_id"],
+                    "source": item["source"],
+                    "revocation_work_id": item["id"],
+                    "result": "revoked" if error is None else "failed",
+                    "retry_retained": error is not None,
+                },
+                actor_id=str(item["actor_id"]),
+            )
+        if result.get("ok"):
+            revoked += 1
+        else:
+            failed += 1
+    return {"claimed": len(claimed), "revoked": revoked, "failed": failed}
+
+
+def _oauth_revocation_reconciler_loop() -> None:
+    while True:
+        try:
+            _reconcile_oauth_revocations()
+        except Exception:
+            pass
+        time.sleep(_OAUTH_REVOCATION_RECONCILE_INTERVAL_SECONDS)
+
+
+def _start_oauth_revocation_reconciler() -> None:
+    global _oauth_revocation_worker_started
+    with _oauth_revocation_worker_lock:
+        if _oauth_revocation_worker_started:
+            return
+        worker = threading.Thread(
+            target=_oauth_revocation_reconciler_loop,
+            name="serverware-oauth-revocation",
+            daemon=True,
+        )
+        worker.start()
+        _oauth_revocation_worker_started = True
+
+
+def _revoke_terminal_pending_oauth_credential(
+    pending_credential_id: str,
+    *,
+    actor_id: str,
+) -> dict[str, Any]:
+    material = db.get_pending_oauth_revocation_material(pending_credential_id)
+    if material is None:
+        return {"ok": False, "reason": "pending_credential_not_revocable"}
+    try:
+        token_secret = json.loads(material["secret"])
+        if not isinstance(token_secret, dict):
+            raise OAuthError("OAuth credential is malformed")
+        revoked = revoke_oauth_token(
+            provider_id=str(material.get("review", {}).get("provider") or ""),
+            token_secret=token_secret,
+        )
+    except (OAuthError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        return db.finish_pending_oauth_revocation(
+            pending_credential_id,
+            actor_id=actor_id,
+            succeeded=False,
+            error=str(exc)[:500],
+        )
+    result = db.finish_pending_oauth_revocation(
+        pending_credential_id,
+        actor_id=actor_id,
+        succeeded=True,
+    )
+    return {**result, "provider": revoked.get("provider")}
+
+
+def _disconnect_credential(credential_id: str, *, actor_id: str) -> dict[str, bool]:
+    with db.oauth_refresh_lock(credential_id):
+        try:
+            disconnect = db.begin_oauth_credential_disconnect(credential_id)
+        except db.ManagedOAuthCredentialError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if disconnect.get("ok"):
+            credential = disconnect["credential"]
+            runtime.invalidate_secret_leases(credential_id)
+            try:
+                token_secret = json.loads(str(credential.get("secret") or ""))
+                if not isinstance(token_secret, dict):
+                    raise OAuthError("OAuth credential is malformed")
+                revoke_oauth_token(
+                    provider_id=str(disconnect["provider"]),
+                    token_secret=token_secret,
+                )
+            except (OAuthError, json.JSONDecodeError, TypeError, ValueError) as exc:
+                failed = db.finish_oauth_credential_disconnect(
+                    credential_id,
+                    expected_version=int(credential["credential_version"]),
+                    actor_id=actor_id,
+                    succeeded=False,
+                    error=str(exc)[:500],
+                )
+                runtime.invalidate_secret_leases(credential_id)
+                raise HTTPException(
+                    status_code=503,
+                    detail={
+                        "error": "oauth_provider_revocation_failed",
+                        "credentialId": credential_id,
+                        "lifecycleStatus": "revocation_failed",
+                        "retryable": True,
+                        "reason": failed.get("reason"),
+                    },
+                ) from exc
+            finished = db.finish_oauth_credential_disconnect(
+                credential_id,
+                expected_version=int(credential["credential_version"]),
+                actor_id=actor_id,
+                succeeded=True,
+            )
+            if not finished.get("ok"):
+                runtime.invalidate_secret_leases(credential_id)
+                raise HTTPException(
+                    status_code=409,
+                    detail={"error": "oauth_disconnect_state_changed", **finished},
+                )
+            return {"deleted": True, "provider_revoked": True}
+        if disconnect.get("reason") == "credential_not_managed_oauth":
+            try:
+                return {
+                    "deleted": db.delete_credential(credential_id),
+                    "provider_revoked": False,
+                }
+            except db.ManagedOAuthCredentialError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if disconnect.get("reason") == "credential_not_found":
+            return {"deleted": False, "provider_revoked": False}
+        raise HTTPException(
+            status_code=409,
+            detail={"error": "credential_disconnect_failed", **disconnect},
+        )
 
 
 def _policy_ids(raw: dict[str, Any], key: str) -> dict[str, dict[str, Any]]:
@@ -1761,6 +2075,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
     can_view_approvals = identity.has_any_role({"approver", "auditor"})
     can_view_logs = identity.has_any_role({"auditor"})
     credentials = db.list_credentials() if can_view_credentials else []
+    pending_oauth_credentials = db.list_pending_oauth_credentials() if can_view_credentials else []
     routes = db.list_routes() if can_view_routes else []
     approvals = db.list_approvals(limit=100) if can_view_approvals else []
     logs = db.list_logs(limit=150) if can_view_logs else []
@@ -1772,6 +2087,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
     webauthn_credential_count = len(db.list_webauthn_credentials(identity.user_id))
     result = {
         "credentials": credentials,
+        "pendingOAuthCredentials": pending_oauth_credentials,
         "routes": routes,
         "approvals": approvals,
         "logs": logs,
@@ -1783,6 +2099,8 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "policy_path": str(POLICY_BUNDLE_PATH),
         "policyPrincipals": policy_principals,
         "oauthProviders": provider_status() if can_view_credentials else [],
+        "currentUserId": identity.user_id,
+        "currentUserRoles": sorted(identity.roles),
         "webauthnCredentialCount": webauthn_credential_count,
         "webauthnBootstrapRequired": (
             webauthn_credential_count == 0
@@ -1796,6 +2114,7 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
             "policy_hash": snapshot.hash if snapshot else None,
             "counts": {
                 "credentials": len(credentials),
+                "pending_oauth_credentials": len(pending_oauth_credentials),
                 "routes": len(routes),
                 "approvals": len(approvals),
                 "logs": len(logs),
@@ -2044,6 +2363,14 @@ def control_plane_approval_deny(
     )
     if not updated:
         raise HTTPException(status_code=409, detail="control-plane approval state changed before it could be denied")
+    if updated["action"] == "credential.oauth.activate" and updated.get("resource_id"):
+        updated = {
+            **updated,
+            "oauthRevocation": _revoke_terminal_pending_oauth_credential(
+                updated["resource_id"],
+                actor_id=identity.user_id,
+            ),
+        }
     return updated
 
 
@@ -2334,51 +2661,298 @@ def _canonical_oauth_granted_scopes(raw_scopes: Any, *, field_name: str = "OAuth
     return tuple(sorted(scopes))
 
 
+def _oauth_activation_review(
+    exchanged: dict[str, Any],
+    credential_metadata: dict[str, Any],
+    granted_scopes: tuple[str, ...],
+    reconnect_binding: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        provider_id, provider_subject, provider_account = db.validate_managed_oauth_account_identity(
+            credential_metadata
+        )
+    except db.ManagedOAuthCredentialError as exc:
+        raise OAuthError(str(exc)) from exc
+    if exchanged.get("provider") != provider_id:
+        raise OAuthError("OAuth exchange provider does not match verified provider identity")
+    review = {
+        "credential_type": "oauth2",
+        "provider": provider_id,
+        "provider_subject": provider_subject,
+        "provider_account": provider_account,
+        "scopes": list(granted_scopes),
+        "credential_name": exchanged.get("name"),
+        "metadata_keys": sorted(credential_metadata),
+        "expires_at_epoch_ms": exchanged.get("expiresAtEpochMs"),
+    }
+    if provider_id == "x":
+        x_app_id = credential_metadata.get("x_app_id")
+        if not isinstance(x_app_id, str) or not x_app_id:
+            raise OAuthError("X OAuth credential is missing its app binding")
+        review["x_app_id"] = x_app_id
+    if reconnect_binding is not None:
+        review["reconnect_credential_id"] = reconnect_binding["credential_id"]
+        review["reconnect_credential_version"] = reconnect_binding["credential_version"]
+    return review
+
+
+def _oauth_reconnect_binding_from_credential(credential: dict[str, Any]) -> dict[str, Any]:
+    if credential.get("kind") != "oauth2":
+        raise OAuthError("OAuth reconnect credential kind is invalid")
+    try:
+        provider_id, provider_subject, provider_account = db.validate_managed_oauth_account_identity(
+            credential.get("metadata")
+        )
+    except db.ManagedOAuthCredentialError as exc:
+        raise OAuthError(str(exc)) from exc
+    version = credential.get("credential_version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        raise OAuthError("OAuth reconnect credential version is invalid")
+    return {
+        "credential_id": str(credential["id"]),
+        "credential_version": version,
+        "provider": provider_id,
+        "provider_subject": provider_subject,
+        "provider_account": provider_account,
+    }
+
+
+def _validate_oauth_reconnect_callback(
+    exchanged: dict[str, Any],
+    credential_metadata: dict[str, Any],
+) -> dict[str, Any] | None:
+    reconnect_binding = exchanged.get("reconnect")
+    if reconnect_binding is None:
+        return None
+    if not isinstance(reconnect_binding, dict) or set(reconnect_binding) != {
+        "credential_id",
+        "credential_version",
+        "provider",
+        "provider_subject",
+        "provider_account",
+    }:
+        raise OAuthError("OAuth reconnect binding is malformed")
+    credential_id = reconnect_binding.get("credential_id")
+    expected_version = reconnect_binding.get("credential_version")
+    if not isinstance(credential_id, str) or not credential_id:
+        raise OAuthError("OAuth reconnect credential ID is invalid")
+    if not isinstance(expected_version, int) or isinstance(expected_version, bool) or expected_version < 1:
+        raise OAuthError("OAuth reconnect credential version is invalid")
+    current = db.get_credential(credential_id)
+    if current is None:
+        raise OAuthError("OAuth reconnect credential is no longer active")
+    current_binding = _oauth_reconnect_binding_from_credential(current)
+    try:
+        provider_id, provider_subject, provider_account = db.validate_managed_oauth_account_identity(
+            credential_metadata
+        )
+    except db.ManagedOAuthCredentialError as exc:
+        raise OAuthError(str(exc)) from exc
+    expected = {
+        "credential_id": credential_id,
+        "credential_version": expected_version,
+        "provider": reconnect_binding.get("provider"),
+        "provider_subject": reconnect_binding.get("provider_subject"),
+        "provider_account": reconnect_binding.get("provider_account"),
+    }
+    if current_binding != expected:
+        raise OAuthError("OAuth reconnect credential changed during authorization")
+    if (provider_id, provider_subject, provider_account) != (
+        expected["provider"],
+        expected["provider_subject"],
+        expected["provider_account"],
+    ):
+        raise OAuthError("OAuth reconnect must verify the exact existing provider subject and account")
+    if exchanged.get("name") != current.get("name"):
+        raise OAuthError("OAuth reconnect credential name changed during authorization")
+    return expected
+
+
+def _ensure_oauth_exchange_revocation_work(
+    exchanged: dict[str, Any],
+    *,
+    actor_id: str,
+) -> str:
+    existing = exchanged.get("revocationWorkId")
+    if isinstance(existing, str) and re.fullmatch(r"[0-9a-f-]{36}", existing):
+        return existing
+    provider_id = exchanged.get("provider")
+    try:
+        token_secret = json.loads(str(exchanged.get("secret") or ""))
+        if not isinstance(provider_id, str) or not isinstance(token_secret, dict):
+            raise OAuthError("OAuth exchange revocation material is malformed")
+        work_id = db.create_oauth_revocation_work(
+            provider_id=provider_id,
+            actor_id=actor_id,
+            source="callback_validation",
+            secret=json.dumps(token_secret, separators=(",", ":"), sort_keys=True),
+        )
+    except (db.ManagedOAuthCredentialError, db.MetadataStoreError, json.JSONDecodeError, ValueError) as exc:
+        raise OAuthError("OAuth exchange revocation material could not be retained") from exc
+    exchanged["revocationWorkId"] = work_id
+    return work_id
+
+
+def _revoke_rejected_oauth_exchange(
+    exchanged: dict[str, Any],
+    *,
+    actor_id: str,
+    rejection_reason: str = "callback_validation_failed",
+) -> None:
+    provider_id = exchanged.get("provider")
+    result = "retained"
+    reason = None
+    try:
+        work_id = _ensure_oauth_exchange_revocation_work(exchanged, actor_id=actor_id)
+        db.mark_oauth_revocation_work_pending(
+            work_id,
+            error=rejection_reason[:500],
+        )
+        _reconcile_oauth_revocations()
+        retained = db.get_oauth_revocation_work_status(work_id)
+        if retained is None:
+            result = "revoked"
+        elif retained["attempts"]:
+            result = "retained_for_retry"
+            reason = "provider_revocation_failed"
+    except (OAuthError, db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError):
+        try:
+            token_secret = json.loads(str(exchanged.get("secret") or ""))
+            if not isinstance(provider_id, str) or not isinstance(token_secret, dict):
+                raise OAuthError("rejected OAuth exchange is malformed")
+            revoke_oauth_token(provider_id=provider_id, token_secret=token_secret)
+            result = "revoked"
+        except (OAuthError, json.JSONDecodeError, TypeError, ValueError):
+            result = "failed"
+            reason = "revocation_retention_failed"
+    db.record_audit_event(
+        (
+            "credential.oauth_reconnect_rejected"
+            if isinstance(exchanged.get("reconnect"), dict)
+            else "credential.oauth_exchange_rejected"
+        ),
+        {
+            "provider": provider_id,
+            "credential_id": (exchanged.get("reconnect") or {}).get("credential_id")
+            if isinstance(exchanged.get("reconnect"), dict)
+            else None,
+            "result": result,
+            "reason": reason,
+            "rejection_reason": rejection_reason,
+        },
+        actor_id=actor_id,
+    )
+
+
+def _revoke_rejected_oauth_refresh(
+    refreshed: dict[str, Any],
+    *,
+    provider_id: str,
+    rejection_reason: str,
+) -> None:
+    issued_secret = refreshed.get("revocationSecret") or refreshed.get("secret")
+    exchange = {
+        "provider": provider_id,
+        "secret": issued_secret,
+        "createdBy": "oauth-refresh",
+        "revocationWorkId": refreshed.get("revocationWorkId"),
+    }
+    _revoke_rejected_oauth_exchange(
+        exchange,
+        actor_id="oauth-refresh",
+        rejection_reason=rejection_reason,
+    )
+
+
+def _oauth_activation_payload_digest(
+    *,
+    review: dict[str, Any],
+    secret: str,
+) -> str:
+    return _control_plane_payload_digest(
+        {
+            "action": "credential.oauth.activate",
+            "review": review,
+            "encrypted_token_source_sha256": "sha256:" + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
+        }
+    )
+
+
 @app.post("/api/oauth/start")
 def oauth_start(
     payload: OAuthStartRequest,
     response: Response,
     identity: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner")),
 ) -> dict[str, Any]:
+    reconnect_binding = None
+    credential_name = payload.credential_name
+    authorization_metadata = payload.metadata
+    requested_scope_input = payload.scopes
+    mutation_action = "credential.create"
+    mutation_resource_id = None
+    if payload.credential_id:
+        existing = db.get_credential(payload.credential_id)
+        if existing is None:
+            raise HTTPException(status_code=404, detail="OAuth reconnect credential not found or inactive")
+        try:
+            reconnect_binding = _oauth_reconnect_binding_from_credential(existing)
+        except OAuthError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        if normalize_provider_id(payload.provider) != reconnect_binding["provider"]:
+            raise HTTPException(
+                status_code=409,
+                detail="OAuth reconnect provider does not match the existing credential",
+            )
+        if payload.credential_name is not None and payload.credential_name.strip() != existing["name"]:
+            raise HTTPException(
+                status_code=409,
+                detail="OAuth reconnect preserves the existing credential name",
+            )
+        if payload.metadata and payload.metadata != existing["metadata"]:
+            raise HTTPException(
+                status_code=409,
+                detail="OAuth reconnect preserves existing credential metadata until provider verification",
+            )
+        credential_name = existing["name"]
+        authorization_metadata = existing["metadata"]
+        if requested_scope_input is None:
+            existing_scopes = existing["metadata"].get("scopes")
+            if not isinstance(existing_scopes, list):
+                raise HTTPException(status_code=409, detail="OAuth reconnect credential scopes are invalid")
+            requested_scope_input = existing_scopes
+        mutation_action = "credential.update"
+        mutation_resource_id = payload.credential_id
     try:
-        requested_scopes = list(resolve_requested_scopes(payload.provider, payload.scopes))
+        requested_scopes = list(resolve_requested_scopes(payload.provider, requested_scope_input))
     except OAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     mutation_payload = payload.model_dump(exclude={"mfa"})
     mutation_payload["scopes"] = requested_scopes
+    mutation_payload["credential_name"] = credential_name
+    mutation_payload["metadata"] = authorization_metadata
     payload_digest = _control_plane_payload_digest(mutation_payload)
     mfa = _require_control_plane_mutation_mfa(
-        action="credential.create",
-        resource_id=None,
+        action=mutation_action,
+        resource_id=mutation_resource_id,
         payload_digest=payload_digest,
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="credential.create",
-        resource_id=None,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={
-            "credential_type": "oauth2",
-            "provider": payload.provider,
-            "credential_name": payload.credential_name,
-            "scopes": requested_scopes,
-            "metadata_keys": sorted(payload.metadata),
-        },
-    )
+    # The account identity is unknown here. Two-person review is deferred until
+    # the callback binds the exact provider subject and granted scopes.
+    two_person = None
     browser_nonce = secrets.token_urlsafe(32)
     try:
         started = create_authorization_url(
             provider_id=payload.provider,
-            credential_name=payload.credential_name,
+            credential_name=credential_name,
             scopes=requested_scopes,
-            metadata=payload.metadata,
+            metadata=authorization_metadata,
             actor_id=identity.user_id,
             browser_nonce=browser_nonce,
             control_plane_mfa=mfa,
             control_plane_approval=two_person,
+            reconnect_binding=reconnect_binding,
         )
     except OAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -2386,12 +2960,19 @@ def oauth_start(
         "credential.oauth_authorization_started",
         {
             "provider": started["provider"],
-            "credential_name": payload.credential_name,
+            "credential_name": credential_name,
+            "reconnect_credential_id": mutation_resource_id,
+            "reconnect_credential_version": (
+                reconnect_binding.get("credential_version") if reconnect_binding else None
+            ),
             "scopes": started["scopes"],
             "state_hash": "sha256:" + hashlib.sha256(started["state"].encode("ascii")).hexdigest(),
             "expires_at_epoch": started["expiresAtEpoch"],
             "control_plane_mfa": mfa,
             "control_plane_approval": two_person,
+            "post_identity_activation_approval": _control_plane_two_person_required(
+                "credential.oauth.activate"
+            ),
             "payload_digest": payload_digest,
         },
         actor_id=identity.user_id,
@@ -2457,6 +3038,7 @@ def oauth_callback(
             status_code=400,
             headers={"Cache-Control": "no-store"},
         )
+    exchanged: dict[str, Any] | None = None
     try:
         exchanged = exchange_authorization_code(
             provider_id=provider_id,
@@ -2466,6 +3048,11 @@ def oauth_callback(
         )
         if not isinstance(exchanged, dict):
             raise OAuthError("OAuth token exchange result is malformed")
+        actor_id = str(exchanged.get("createdBy") or "oauth-callback")
+        revocation_work_id = _ensure_oauth_exchange_revocation_work(
+            exchanged,
+            actor_id=actor_id,
+        )
         granted_scopes = _canonical_oauth_granted_scopes(exchanged.get("scopes"))
         credential_metadata = exchanged.get("metadata")
         if not isinstance(credential_metadata, dict):
@@ -2477,53 +3064,323 @@ def oauth_callback(
         if metadata_scopes != granted_scopes:
             raise OAuthError("OAuth credential metadata does not match the provider-granted scopes")
         credential_metadata = {**credential_metadata, "scopes": list(granted_scopes)}
+        reconnect_binding = _validate_oauth_reconnect_callback(exchanged, credential_metadata)
+        activation_review = _oauth_activation_review(
+            exchanged,
+            credential_metadata,
+            granted_scopes,
+            reconnect_binding,
+        )
     except OAuthError as exc:
+        if isinstance(exchanged, dict):
+            _revoke_rejected_oauth_exchange(
+                exchanged,
+                actor_id=str(exchanged.get("createdBy") or "oauth-callback"),
+                rejection_reason=str(exc),
+            )
         detail = html.escape(str(exc))
-        return HTMLResponse(
+        failed = HTMLResponse(
             f"<h1>OAuth failed</h1><p>{detail}</p>",
-            status_code=400,
+            status_code=409 if isinstance(exchanged, dict) and exchanged.get("reconnect") is not None else 400,
             headers={"Cache-Control": "no-store"},
         )
-    credential = db.create_credential(
-        exchanged["name"],
-        exchanged["kind"],
-        exchanged["secret"],
-        credential_metadata,
-    )
-    runtime.invalidate_secret_leases(credential["id"])
+        if oauth_cookie_name:
+            failed.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+        return failed
+    assert exchanged is not None
     actor_id = exchanged.get("createdBy") or "oauth-callback"
+    revocation_work_id = str(exchanged["revocationWorkId"])
+    if _control_plane_two_person_required("credential.oauth.activate"):
+        payload_digest = _oauth_activation_payload_digest(
+            review=activation_review,
+            secret=exchanged["secret"],
+        )
+        try:
+            pending = db.create_pending_oauth_credential(
+                name=exchanged["name"],
+                kind=exchanged["kind"],
+                secret=exchanged["secret"],
+                metadata=credential_metadata,
+                requester_id=actor_id,
+                payload_digest=payload_digest,
+                review=activation_review,
+                ttl_seconds=OAUTH_PENDING_CREDENTIAL_TTL_SECONDS,
+                target_credential_id=(
+                    reconnect_binding["credential_id"] if reconnect_binding else None
+                ),
+                target_credential_version=(
+                    reconnect_binding["credential_version"] if reconnect_binding else None
+                ),
+                revocation_work_id=revocation_work_id,
+            )
+        except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
+            _revoke_rejected_oauth_exchange(
+                exchanged,
+                actor_id=str(actor_id),
+                rejection_reason=str(exc),
+            )
+            db.record_audit_event(
+                "credential.oauth_pending_failed",
+                {
+                    "provider": exchanged["provider"],
+                    "provider_subject": exchanged.get("providerSubject"),
+                    "reason": type(exc).__name__,
+                },
+                actor_id=actor_id,
+            )
+            failed = HTMLResponse(
+                "<h1>OAuth failed</h1><p>The verified credential could not be staged for approval.</p>",
+                status_code=503,
+                headers={"Cache-Control": "no-store"},
+            )
+            if oauth_cookie_name:
+                failed.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+            return failed
+        db.record_audit_event(
+            "credential.oauth_pending_approval",
+            {
+                "pending_credential_id": pending["id"],
+                **activation_review,
+                "payload_digest": payload_digest,
+                "expires_at": pending["expires_at"],
+                "pre_identity_control_plane_mfa": exchanged.get("controlPlaneMfa"),
+                "pre_identity_control_plane_approval": exchanged.get("controlPlaneApproval"),
+            },
+            actor_id=actor_id,
+        )
+        account = html.escape(str(activation_review["provider_account"]))
+        pending_message = (
+            "The replacement grant is encrypted but not active. The existing credential and policy "
+            "assignments remain unchanged until exact-account approval."
+            if reconnect_binding is not None
+            else "The grant is encrypted but not active. Return to the portal to request exact-account approval."
+        )
+        connected = HTMLResponse(
+            f"""
+            <h1>OAuth account verified</h1>
+            <p><strong>{account}</strong>: {pending_message}</p>
+            <script>
+              setTimeout(() => {{ window.location.href = "/"; }}, 1200);
+            </script>
+            """,
+            headers={"Cache-Control": "no-store"},
+        )
+    else:
+        try:
+            if reconnect_binding is not None:
+                credential = db.reconnect_oauth_credential(
+                    reconnect_binding["credential_id"],
+                    expected_version=reconnect_binding["credential_version"],
+                    secret=exchanged["secret"],
+                    metadata=credential_metadata,
+                    revocation_work_id=revocation_work_id,
+                )
+            else:
+                credential = db.create_credential(
+                    exchanged["name"],
+                    exchanged["kind"],
+                    exchanged["secret"],
+                    credential_metadata,
+                    revocation_work_id=revocation_work_id,
+                )
+        except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
+            _revoke_rejected_oauth_exchange(
+                exchanged,
+                actor_id=str(actor_id),
+                rejection_reason=str(exc),
+            )
+            failed = HTMLResponse(
+                f"<h1>OAuth failed</h1><p>{html.escape(str(exc))}</p>",
+                status_code=409,
+                headers={"Cache-Control": "no-store"},
+            )
+            if oauth_cookie_name:
+                failed.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+            return failed
+        runtime.invalidate_secret_leases(credential["id"])
+        db.record_audit_event(
+            "credential.oauth_reconnected" if reconnect_binding is not None else "credential.oauth_connected",
+            {
+                "credential_id": credential["id"],
+                "name": credential["name"],
+                "kind": credential["kind"],
+                "credential_version": credential.get("credential_version"),
+                "secret_kek_id": credential.get("secret_kek_id"),
+                **activation_review,
+                "control_plane_mfa": exchanged.get("controlPlaneMfa"),
+                "control_plane_approval": exchanged.get("controlPlaneApproval"),
+            },
+            actor_id=actor_id,
+        )
+        heading = "OAuth credential reconnected" if reconnect_binding is not None else "OAuth credential connected"
+        connected = HTMLResponse(
+            f"""
+            <h1>{heading}</h1>
+            <p>The credential is encrypted in Serverware and remains assigned to its policy routes.</p>
+            <script>
+              setTimeout(() => {{ window.location.href = "/"; }}, 1200);
+            </script>
+            """,
+            headers={"Cache-Control": "no-store"},
+        )
+    if oauth_cookie_name:
+        connected.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
+    return connected
+
+
+@app.get("/api/oauth/pending")
+def oauth_pending_credentials(
+    _: AdminIdentity = Depends(require_role("admin", "policy_author", "credential_owner")),
+) -> dict[str, Any]:
+    return {"pendingCredentials": db.list_pending_oauth_credentials()}
+
+
+@app.post("/api/oauth/pending/{pending_credential_id}/activate")
+def oauth_pending_credential_activate(
+    pending_credential_id: str,
+    payload: OAuthPendingActivateRequest,
+    identity: AdminIdentity = Depends(require_role("admin", "credential_owner")),
+) -> dict[str, Any]:
+    pending = db.get_pending_oauth_credential(pending_credential_id)
+    if pending is None:
+        raise HTTPException(status_code=404, detail="pending OAuth credential not found or expired")
+    if pending["requester_id"] != identity.user_id:
+        raise HTTPException(status_code=403, detail="only the OAuth requester can activate this credential")
+    if pending.get("status") != "pending":
+        status = str(pending.get("status") or "unusable")
+        raise HTTPException(
+            status_code=410 if status == "expired" else 409,
+            detail={
+                "error": "oauth_pending_activation_not_usable",
+                "reason": f"pending_credential_{status}",
+                "pendingCredentialId": pending_credential_id,
+            },
+        )
+    action = "credential.oauth.activate"
+    payload_digest = pending["payload_digest"]
+    mfa = _require_control_plane_mutation_mfa(
+        action=action,
+        resource_id=pending_credential_id,
+        payload_digest=payload_digest,
+        mfa=payload.mfa,
+        identity=identity,
+    )
+    approval_id = _control_plane_approval_id(payload.mfa)
+    if not approval_id:
+        approval = db.ensure_control_plane_approval(
+            action=action,
+            resource_id=pending_credential_id,
+            payload_digest=payload_digest,
+            requester_id=identity.user_id,
+            request=pending["review"],
+            ttl_seconds=CONTROL_PLANE_TWO_PERSON_TTL_SECONDS,
+        )
+        raise HTTPException(
+            status_code=428,
+            detail={
+                "error": "control_plane_approval_required",
+                "approvalId": approval["id"],
+                "status": approval["status"],
+                "action": action,
+                "resourceId": pending_credential_id,
+                "payloadDigest": payload_digest,
+                "expiresAt": approval["expires_at"],
+                "retry": {"mfa.approvalId": approval["id"]},
+            },
+        )
+    result = db.activate_pending_oauth_credential(
+        pending_credential_id,
+        approval_id=approval_id,
+        actor_id=identity.user_id,
+    )
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "activation_failed")
+        status_code = 404 if reason == "pending_credential_not_found" else 410 if reason == "pending_credential_expired" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "error": "oauth_pending_activation_not_usable",
+                "reason": reason,
+                "pendingCredentialId": pending_credential_id,
+                "approvalId": approval_id,
+            },
+        )
+    credential = result["credential"]
+    approval = result["approval"]
+    runtime.invalidate_secret_leases(credential["id"])
     db.record_audit_event(
-        "credential.oauth_connected",
+        (
+            "credential.oauth_reconnected"
+            if pending.get("target_credential_id")
+            else "credential.oauth_connected"
+        ),
         {
             "credential_id": credential["id"],
             "name": credential["name"],
             "kind": credential["kind"],
             "credential_version": credential.get("credential_version"),
             "secret_kek_id": credential.get("secret_kek_id"),
-            "provider": exchanged["provider"],
-            "provider_account": exchanged.get("providerAccount"),
-            "provider_subject": exchanged.get("providerSubject"),
-            "provider_identity_verified": True,
-            "scopes": list(granted_scopes),
-            "expires_at_epoch_ms": exchanged.get("expiresAtEpochMs"),
-            "control_plane_mfa": exchanged.get("controlPlaneMfa"),
-            "control_plane_approval": exchanged.get("controlPlaneApproval"),
+            "pending_credential_id": pending_credential_id,
+            "reconnect": bool(pending.get("target_credential_id")),
+            **pending["review"],
+            "control_plane_mfa": mfa,
+            "control_plane_approval": {
+                "required": True,
+                "approval_id": approval["id"],
+                "approved_by": approval.get("approved_by"),
+                "approved_at": approval.get("approved_at"),
+                "payload_digest": payload_digest,
+            },
         },
-        actor_id=actor_id,
+        actor_id=identity.user_id,
     )
-    connected = HTMLResponse(
-        """
-        <h1>OAuth credential connected</h1>
-        <p>The credential is encrypted in Serverware and can now be assigned to a policy route.</p>
-        <script>
-          setTimeout(() => { window.location.href = "/"; }, 1200);
-        </script>
-        """,
-        headers={"Cache-Control": "no-store"},
+    return {"ok": True, "credential": credential, "approval": approval}
+
+
+@app.delete("/api/oauth/pending/{pending_credential_id}")
+def oauth_pending_credential_cancel(
+    pending_credential_id: str,
+    identity: AdminIdentity = Depends(require_role("admin", "credential_owner")),
+) -> dict[str, Any]:
+    result = db.cancel_pending_oauth_credential(
+        pending_credential_id,
+        actor_id=identity.user_id,
     )
-    if oauth_cookie_name:
-        connected.delete_cookie(oauth_cookie_name, path="/", secure=True, httponly=True, samesite="lax")
-    return connected
+    if not result.get("ok"):
+        reason = str(result.get("reason") or "cancel_failed")
+        status_code = 404 if reason == "pending_credential_not_found" else 403 if reason == "requester_mismatch" else 409
+        raise HTTPException(
+            status_code=status_code,
+            detail={"error": "oauth_pending_cancel_failed", "reason": reason},
+        )
+    return {
+        "ok": True,
+        "revocation": _revoke_terminal_pending_oauth_credential(
+            pending_credential_id,
+            actor_id=identity.user_id,
+        ),
+    }
+
+
+@app.post("/api/oauth/pending/{pending_credential_id}/revoke")
+def oauth_pending_credential_revoke(
+    pending_credential_id: str,
+    identity: AdminIdentity = Depends(require_role("admin", "credential_owner")),
+) -> dict[str, Any]:
+    pending = db.get_pending_oauth_credential(pending_credential_id)
+    if pending is None:
+        raise HTTPException(status_code=404, detail="pending OAuth credential not found")
+    if pending["requester_id"] != identity.user_id and not identity.has_any_role({"admin"}):
+        raise HTTPException(status_code=403, detail="only the OAuth requester or an admin can revoke this grant")
+    if pending.get("status") not in {"cancelled", "expired", "rejected"}:
+        raise HTTPException(status_code=409, detail="pending OAuth credential is not terminal")
+    result = _revoke_terminal_pending_oauth_credential(
+        pending_credential_id,
+        actor_id=identity.user_id,
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=503, detail={"error": "oauth_revocation_failed", **result})
+    return result
 
 
 @app.post("/api/credentials")
@@ -2647,7 +3504,9 @@ def delete_credential(
         identity=identity,
         request={"credential_id": credential_id},
     )
-    deleted = db.delete_credential(credential_id)
+    disconnect = _disconnect_credential(credential_id, actor_id=identity.user_id)
+    deleted = disconnect["deleted"]
+    provider_revoked = disconnect["provider_revoked"]
     if deleted:
         db.record_audit_event(
             "credential.deleted",
@@ -2656,11 +3515,12 @@ def delete_credential(
                 "control_plane_mfa": mfa,
                 "control_plane_approval": two_person,
                 "payload_digest": payload_digest,
+                "provider_revoked": provider_revoked,
             },
             actor_id=identity.user_id,
         )
         runtime.invalidate_secret_leases(credential_id)
-    return {"deleted": deleted}
+    return {"deleted": deleted, "providerRevoked": provider_revoked}
 
 
 @app.post("/api/routes")
@@ -3374,6 +4234,7 @@ def _should_record_credential_lease_issuance(
 def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
     credential: dict[str, Any] | None = None
     provider_id: str | None = None
+    refreshed: dict[str, Any] | None = None
     try:
         for _ in range(2):
             credential = runtime.get_credential(credential_id)
@@ -3420,6 +4281,15 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                 )
                 if not isinstance(refreshed, dict):
                     raise OAuthError("OAuth refresh result is malformed")
+                refresh_revocation = {
+                    "provider": provider_id,
+                    "secret": refreshed.get("revocationSecret") or refreshed.get("secret"),
+                    "revocationWorkId": refreshed.get("revocationWorkId"),
+                }
+                refreshed["revocationWorkId"] = _ensure_oauth_exchange_revocation_work(
+                    refresh_revocation,
+                    actor_id="oauth-refresh",
+                )
                 refreshed_scopes = _canonical_oauth_granted_scopes(refreshed.get("scopes"))
                 refreshed_metadata = refreshed.get("metadata")
                 if not isinstance(refreshed_metadata, dict):
@@ -3436,12 +4306,27 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                     expected_version=int(credential.get("credential_version") or 0),
                     secret=refreshed["secret"],
                     metadata=refreshed_metadata,
+                    revocation_work_id=str(refreshed["revocationWorkId"]),
                 )
                 if not persisted:
                     raise OAuthError("OAuth credential disappeared during refresh")
                 if not rotated:
+                    if int(persisted.get("credential_version") or 0) != int(
+                        credential.get("credential_version") or 0
+                    ):
+                        _revoke_rejected_oauth_refresh(
+                            refreshed,
+                            provider_id=provider_id,
+                            rejection_reason="OAuth credential changed during refresh",
+                        )
+                        refreshed = None
+                        runtime.invalidate_secret_leases(credential_id)
+                        continue
+                    refreshed = None
                     runtime.invalidate_secret_leases(credential_id)
-                    continue
+                    return persisted
+                persisted_refresh = refreshed
+                refreshed = None
                 runtime.invalidate_secret_leases(credential_id)
                 db.record_audit_event(
                     "credential.oauth_refreshed",
@@ -3450,8 +4335,8 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                         "provider": provider_id,
                         "previous_credential_version": credential.get("credential_version"),
                         "credential_version": persisted.get("credential_version"),
-                        "expires_at_epoch_ms": refreshed["expiresAtEpochMs"],
-                        "refresh_token_rotated": refreshed["refreshTokenRotated"],
+                        "expires_at_epoch_ms": persisted_refresh["expiresAtEpochMs"],
+                        "refresh_token_rotated": persisted_refresh["refreshTokenRotated"],
                         "scopes": list(refreshed_scopes),
                     },
                     actor_type="system",
@@ -3460,6 +4345,13 @@ def _credential_for_lease(credential_id: str) -> dict[str, Any] | None:
                 return persisted
         raise OAuthError("OAuth credential changed repeatedly during refresh")
     except (OAuthError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        if isinstance(refreshed, dict) and isinstance(provider_id, str):
+            _revoke_rejected_oauth_refresh(
+                refreshed,
+                provider_id=provider_id,
+                rejection_reason=str(exc),
+            )
+            refreshed = None
         try:
             db.record_audit_event(
                 "credential.oauth_refresh_failed",
@@ -4241,6 +5133,7 @@ UI_HTML = r"""
       --good: #166534;
     }
     * { box-sizing: border-box; }
+    [hidden] { display: none !important; }
     html, body { max-width: 100%; overflow-x: hidden; }
     .skip-link {
       position: fixed;
@@ -4327,6 +5220,7 @@ UI_HTML = r"""
     button.danger { background: var(--bad); border-color: #991b1b; }
     button:disabled { opacity: .55; cursor: not-allowed; }
     button[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+    :focus-visible { outline: 3px solid #2563eb; outline-offset: 2px; }
     table { width: 100%; border-collapse: collapse; background: var(--panel); }
     th, td { border-bottom: 1px solid var(--line); padding: 10px; text-align: left; vertical-align: top; }
     th { font-size: 12px; color: var(--muted); text-transform: uppercase; background: #fbfcfa; }
@@ -4373,8 +5267,11 @@ UI_HTML = r"""
     .approval-block-reason { flex-basis: 100%; color: var(--bad); font-size: 12px; line-height: 1.35; }
     .selected-row > td { background: #f0fdfa; }
     .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
+    .pending-oauth-list { display: grid; gap: 8px; margin-top: 12px; }
+    .pending-oauth-item { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: var(--panel); min-width: 0; }
     .filter-grid label { margin-top: 0; }
     .audit-summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+    .attestation-summary { margin-bottom: 12px; }
     dialog { border: 1px solid var(--line); border-radius: 8px; padding: 0; width: min(420px, calc(100vw - 32px)); color: var(--ink); background: var(--surface); }
     dialog::backdrop { background: rgba(15, 23, 42, .48); }
     dialog form { display: grid; gap: 12px; padding: 20px; }
@@ -4445,6 +5342,42 @@ UI_HTML = r"""
       .approval-table .empty-row td::before { content: none; }
       .approval-table .review-actions { align-items: stretch; }
       .approval-table .review-actions input { width: 100%; flex-basis: 100%; }
+      .mobile-table,
+      .mobile-table tbody,
+      .mobile-table tr,
+      .mobile-table td { display: block; width: 100%; }
+      .mobile-table thead { display: none; }
+      .mobile-table tr {
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        margin-bottom: 10px;
+        overflow: hidden;
+        background: var(--panel);
+      }
+      .mobile-table td {
+        display: grid;
+        grid-template-columns: minmax(72px, .3fr) minmax(0, 1fr);
+        gap: 10px;
+        overflow-wrap: anywhere;
+      }
+      .mobile-table td::before {
+        content: attr(data-label);
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+      }
+      .mobile-table .empty-row { border: 0; }
+      .mobile-table .empty-row td { display: block; }
+      .mobile-table .empty-row td::before { content: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+      }
     }
   </style>
 </head>
@@ -4454,8 +5387,11 @@ UI_HTML = r"""
     <div class="brand"><div class="mark" aria-hidden="true"></div><h1>Serverware operator portal</h1></div>
     <div class="status">
       <span id="ca-status" class="pill warn" aria-label="Certificate authority status">CA pending</span>
+      <span id="operator-auth-status" class="pill warn" aria-label="Operator authentication status">Signed out</span>
       <label class="sr-only" for="admin-token">Operator admin token or OIDC JWT</label>
       <input id="admin-token" class="token-field" type="password" placeholder="Admin token or OIDC JWT" autocomplete="off">
+      <button id="operator-sign-in" class="secondary" type="button" onclick="runUiAction('Sign in', signInWithOIDC)" hidden>Sign in</button>
+      <button id="operator-sign-out" class="secondary" type="button" onclick="runUiAction('Sign out', signOutOperator)" hidden>Sign out</button>
       <button class="secondary" type="button" onclick="runUiAction('Refresh', refresh)">Refresh</button>
       <button class="secondary" type="button" onclick="runUiAction('Register passkey', registerPasskey)">Register passkey</button>
       <button type="button" onclick="runUiAction('Seed demo', seedDemo)">Seed demo</button>
@@ -4540,6 +5476,10 @@ UI_HTML = r"""
             <p class="hint" id="oauth-status" role="status" aria-live="polite"></p>
             <button id="oauth-submit" type="submit">Connect with OAuth</button>
           </form>
+          <div id="pending-oauth-section" class="pending-oauth-list" hidden>
+            <h3>Verified accounts awaiting activation</h3>
+            <div id="pending-oauth-credentials"></div>
+          </div>
         </section>
         <section>
           <h2>Agent Enrollment</h2>
@@ -4674,10 +5614,18 @@ UI_HTML = r"""
           <button type="submit">Search audit</button>
         </form>
         <div id="audit-summary" class="audit-summary" role="status" aria-live="polite"><span class="muted">Run a search to inspect audit events.</span></div>
-        <table>
+        <table class="mobile-table">
           <thead><tr><th>Time</th><th>Event</th><th>Actor</th><th>Evidence</th><th>Chain</th></tr></thead>
           <tbody id="audit-events"></tbody>
         </table>
+      </section>
+      <section class="attestation-section">
+        <div class="toolbar">
+          <h2 style="margin-right:auto">Attestation</h2>
+          <button class="secondary" type="button" onclick="runUiAction('Refresh attestation', refreshAttestation)">Refresh evidence</button>
+        </div>
+        <div id="attestation-summary" class="attestation-summary" role="status" aria-live="polite"></div>
+        <div id="attestation-evidence" class="review-grid"></div>
       </section>
       <section class="traffic-section">
         <div class="toolbar">
@@ -4692,7 +5640,7 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null};
+    let state = {credentials: [], pendingOAuthCredentials: [], routes: [], approvals: [], controlPlaneApprovals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, approvalReview: null, activePolicy: null, policyCandidate: null, policyCanary: null, auditSearchResult: null, auditChain: null, attestation: null, authStatus: null};
     let pendingMutation = null;
     let refreshInFlight = null;
     let hasRendered = false;
@@ -4703,6 +5651,7 @@ UI_HTML = r"""
     const tokenKey = 'serverware.adminToken';
     const oauthDraftKey = 'serverware.oauthDraft';
     const pendingMutationKey = 'serverware.pendingMutation';
+    let csrfToken = null;
     const routeTemplates = {
       gmail_recent: {
         label: 'Gmail last 30 days',
@@ -4825,7 +5774,7 @@ UI_HTML = r"""
         provider: 'stripe',
         injection: {type: 'bearer'},
         match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['POST'], paths: ['/v1/payment_intents']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'idempotency-key', 'user-agent'], allowedQueryKeys: [], bodyMode: 'formUrlencoded', maxBodyBytes: 16384, operation: {name: 'stripe.payment_intents.create', formFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'amount', 'currency', 'status', 'payment_method', 'created'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'idempotency-key', 'user-agent'], requiredHeaders: {'idempotency-key': {type: 'string', minLength: 1, maxLength: 255, pattern: '^[-A-Za-z0-9._:]{1,255}$'}}, allowedQueryKeys: [], bodyMode: 'formUrlencoded', maxBodyBytes: 16384, operation: {name: 'stripe.payment_intents.create', formFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'amount', 'currency', 'status', 'payment_method', 'created'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
           {id: 'payment-intent-five-per-day', type: 'rateLimit', max: 5, windowSeconds: 86400, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
           {id: 'payment-intent-tokenized-only', type: 'formBody', contentTypes: ['application/x-www-form-urlencoded'], allowedFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id'], requiredFields: ['amount', 'currency', 'payment_method', 'confirm'], deniedFields: ['payment_method_data.card.number', 'payment_method_data.card.cvc', 'source', 'card'], fields: {amount: {type: 'integer', min: 50, max: 50000}, currency: {type: 'string', equals: 'usd'}, payment_method: {type: 'string', pattern: '^pm_[A-Za-z0-9]{8,64}$', maxLength: 67}, confirm: {type: 'string', equals: 'true'}, 'metadata.agent_request_id': {type: 'string', maxLength: 128}}}
@@ -4852,12 +5801,55 @@ UI_HTML = r"""
       return token ? {'X-Serverware-Admin-Token': token, 'Authorization': `Bearer ${token}`} : {};
     }
 
+    function hasOperatorAuth() {
+      return Boolean(adminToken() || state.authStatus?.authenticated);
+    }
+
     function requireAdminToken() {
-      if (adminToken()) return true;
+      if (hasOperatorAuth()) return true;
       $('admin-token').placeholder = 'Admin token or OIDC JWT required';
       $('admin-token').focus();
-      setStatus('Enter an operator admin token or pre-issued OIDC JWT.', 'error');
+      setStatus('Sign in with OIDC or enter an operator token.', 'error');
       return false;
+    }
+
+    async function fetchAuthStatus() {
+      const response = await fetch('/api/auth/status', {credentials: 'same-origin', cache: 'no-store'});
+      if (!response.ok) throw new Error(`Authentication status failed with ${response.status}`);
+      state.authStatus = await response.json();
+      renderAuthStatus();
+      return state.authStatus;
+    }
+
+    function renderAuthStatus() {
+      const authenticated = Boolean(state.authStatus?.authenticated);
+      const tokenAuthenticated = Boolean(adminToken());
+      const label = authenticated
+        ? state.authStatus.userId
+        : tokenAuthenticated
+          ? 'Token session'
+          : 'Signed out';
+      $('operator-auth-status').textContent = label;
+      $('operator-auth-status').className = authenticated || tokenAuthenticated ? 'pill good' : 'pill warn';
+      $('operator-sign-in').hidden = authenticated || tokenAuthenticated || !state.authStatus?.oidcBrowserLoginConfigured;
+      $('operator-sign-out').hidden = !authenticated;
+      $('admin-token').hidden = authenticated;
+    }
+
+    async function signInWithOIDC() {
+      const response = await fetch('/api/auth/oidc/start', {credentials: 'same-origin', cache: 'no-store'});
+      const payload = await response.json();
+      if (!response.ok) throw new ApiError(response.status, payload);
+      window.location.assign(payload.authorizationUrl);
+      return {pending: true};
+    }
+
+    async function signOutOperator() {
+      await api('/api/auth/logout', {method: 'POST'});
+      csrfToken = null;
+      await fetchAuthStatus();
+      render();
+      return {signedOut: true};
     }
 
     class ApiError extends Error {
@@ -4980,10 +5972,32 @@ UI_HTML = r"""
       return publicKey;
     }
 
+    async function ensureCsrfToken() {
+      if (adminToken()) return null;
+      if (csrfToken) return csrfToken;
+      const response = await fetch('/api/csrf', {
+        headers: adminHeaders(),
+        credentials: 'same-origin',
+        cache: 'no-store'
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new ApiError(response.status, payload);
+      csrfToken = payload.token;
+      return csrfToken;
+    }
+
     async function api(path, options = {}) {
       if (!requireAdminToken()) throw new Error('admin token required');
-      const headers = {'Content-Type': 'application/json', ...adminHeaders(), ...(options.headers || {})};
-      const res = await fetch(path, {...options, headers});
+      const method = String(options.method || 'GET').toUpperCase();
+      const unsafe = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
+      const csrf = unsafe ? await ensureCsrfToken() : null;
+      const headers = {
+        'Content-Type': 'application/json',
+        ...adminHeaders(),
+        ...(csrf ? {'X-Serverware-CSRF-Token': csrf} : {}),
+        ...(options.headers || {})
+      };
+      const res = await fetch(path, {...options, method, headers, credentials: 'same-origin'});
       const text = res.status === 204 ? '' : await res.text();
       let payload = null;
       if (text) {
@@ -4993,6 +6007,9 @@ UI_HTML = r"""
         $('admin-token').value = '';
         $('admin-token').placeholder = 'Operator token rejected';
         sessionStorage.removeItem(tokenKey);
+        csrfToken = null;
+        state.authStatus = {...(state.authStatus || {}), authenticated: false, userId: null, roles: [], authMethod: null};
+        renderAuthStatus();
       }
       if (!res.ok) throw new ApiError(res.status, payload);
       if (res.status === 204) return null;
@@ -5126,7 +6143,7 @@ UI_HTML = r"""
 
     async function refresh() {
       if (refreshInFlight) return refreshInFlight;
-      if (!adminToken()) {
+      if (!hasOperatorAuth()) {
         render();
         return;
       }
@@ -5137,19 +6154,24 @@ UI_HTML = r"""
           approvalReview: state.approvalReview,
           policyCandidate: state.policyCandidate,
           auditSearchResult: state.auditSearchResult,
-          auditChain: state.auditChain
+          auditChain: state.auditChain,
+          authStatus: state.authStatus
         };
         const bootstrap = await api('/api/bootstrap');
-        const [controlPlaneResult, policyResult, policyCanaryResult] = await Promise.allSettled([
+        const [controlPlaneResult, policyResult, policyCanaryResult, attestationResult] = await Promise.allSettled([
           api('/api/control-plane/approvals?limit=100'),
           api('/api/policy'),
-          api('/api/policy/canary/status')
+          api('/api/policy/canary/status'),
+          api(`/attestation?nonce=${encodeURIComponent(generateEnrollmentNonce())}`)
         ]);
         state = {
           ...bootstrap,
           controlPlaneApprovals: controlPlaneResult.status === 'fulfilled' ? controlPlaneResult.value : [],
           activePolicy: policyResult.status === 'fulfilled' ? policyResult.value : null,
           policyCanary: policyCanaryResult.status === 'fulfilled' ? policyCanaryResult.value : null,
+          attestation: attestationResult.status === 'fulfilled'
+            ? attestationResult.value
+            : {error: String(attestationResult.reason?.message || attestationResult.reason || 'Attestation unavailable')},
           ...retained
         };
         state.approvalReview = retained.approvalReview && state.approvals.some((item) => item.id === retained.approvalReview.id) ? retained.approvalReview : null;
@@ -5182,13 +6204,56 @@ UI_HTML = r"""
       const expires = Number(metadata.expires_at_epoch_ms || 0);
       const healthy = Number.isFinite(expires) && expires > Date.now();
       const verified = metadata.provider_identity_verified === true ? '<span class="pill good">verified identity</span>' : '<span class="pill warn">identity unverified</span>';
-      const status = healthy
-        ? '<span class="pill good">connected</span>'
-        : metadata.refreshable === true
-          ? '<span class="pill warn">refresh on use</span>'
-          : '<span class="pill bad">reconnect</span>';
+      const lifecycleStatus = item.lifecycle_status || 'active';
+      const status = lifecycleStatus === 'revocation_failed'
+        ? '<span class="pill bad">disconnect failed</span>'
+        : lifecycleStatus === 'revocation_pending'
+          ? '<span class="pill warn">disconnect pending</span>'
+          : healthy
+            ? '<span class="pill good">connected</span>'
+            : metadata.refreshable === true
+              ? '<span class="pill warn">refresh on use</span>'
+              : '<span class="pill bad">reconnect</span>';
       const expiry = expires ? new Date(expires).toLocaleString() : 'unknown expiry';
       return `<div class="stack"><div class="toolbar">${status}${verified}</div><strong>${esc(account)}</strong><span class="muted">${esc(provider)} / ${esc(expiry)}</span>${scopes ? `<span class="muted">${esc(scopes)}</span>` : ''}</div>`;
+    }
+
+    function credentialActions(item) {
+      const managedOAuth = item.kind === 'oauth2' && item.metadata?.oauth === true;
+      if (!managedOAuth) return `<button class="danger" type="button" onclick="runUiAction('Delete credential', () => deleteCredential('${item.id}'))">Delete</button>`;
+      if ((item.lifecycle_status || 'active') !== 'active') {
+        return `<button class="danger" type="button" onclick="runUiAction('Retry OAuth disconnect', () => deleteCredential('${item.id}'))">Retry disconnect</button>`;
+      }
+      return `<div class="toolbar"><button type="button" onclick="runUiAction('Reconnect OAuth credential', () => reconnectOAuthCredential('${item.id}'))">Reconnect</button><button class="danger" type="button" onclick="runUiAction('Disconnect OAuth credential', () => deleteCredential('${item.id}'))">Disconnect</button></div>`;
+    }
+
+    function renderPendingOAuthCredentials() {
+      const items = state.pendingOAuthCredentials || [];
+      $('pending-oauth-section').hidden = !items.length;
+      $('pending-oauth-credentials').innerHTML = items.map((item) => {
+        const review = item.review || {};
+        const mine = item.requester_id === state.currentUserId;
+        const canRevoke = mine || (state.currentUserRoles || []).includes('admin');
+        const status = item.status || 'pending';
+        const scopes = Array.isArray(review.scopes) ? review.scopes.join(', ') : '';
+        let action = '';
+        if (status === 'pending' && mine) {
+          action = `<div class="toolbar"><button type="button" onclick="runUiAction('Activate verified OAuth account', () => activatePendingOAuthCredential('${item.id}'))">Request approval and activate</button><button class="danger" type="button" onclick="runUiAction('Cancel OAuth connection', () => cancelPendingOAuthCredential('${item.id}'))">Cancel</button></div>`;
+        } else if (status === 'pending') {
+          action = '<span class="pill warn">requester action required</span>';
+        } else if (canRevoke && item.revocation_status !== 'revoked') {
+          action = `<button class="secondary" type="button" onclick="runUiAction('Retry provider revocation', () => revokePendingOAuthCredential('${item.id}'))">Retry provider revocation</button>`;
+        }
+        return `<div class="pending-oauth-item stack">
+          <div class="toolbar">${pill(status)}<strong>${esc(review.provider_account || 'Unknown account')}</strong></div>
+          <span class="muted">${esc(review.provider || 'oauth')} / expires ${esc(item.expires_at)}</span>
+          <code>${esc(review.provider_subject || '')}</code>
+          ${scopes ? `<span class="muted">${esc(scopes)}</span>` : ''}
+          <span class="muted">Requested by ${esc(item.requester_id)}</span>
+          ${item.revocation_status ? `<span class="muted">Provider revocation: ${esc(item.revocation_status)}${item.revocation_error ? ` / ${esc(item.revocation_error)}` : ''}</span>` : ''}
+          ${action}
+        </div>`;
+      }).join('');
     }
 
     function syncCredentialKindFields(reset = false) {
@@ -5252,6 +6317,7 @@ UI_HTML = r"""
     }
 
     function render(controlState = captureControlState()) {
+      renderAuthStatus();
       $('ca-status').textContent = state.ca_ready ? 'CA ready' : 'CA pending';
       $('ca-status').className = state.ca_ready ? 'pill good' : 'pill warn';
       $('route-credential').innerHTML = '<option value="">None</option>' + state.credentials.map((item) => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join('');
@@ -5264,13 +6330,14 @@ UI_HTML = r"""
       renderPolicyPrincipalOptions();
       renderPolicyCredentialOptions(controlState['id:policy-credential']?.value || '');
       renderEnrollmentOutput();
+      renderPendingOAuthCredentials();
       $('credentials').innerHTML = state.credentials.map((item) => `
         <tr>
           <td><strong>${esc(item.name)}</strong><br><code>${esc(item.id)}</code></td>
           <td>${esc(item.kind)}</td>
           <td>${credentialAccountStatus(item)}</td>
           <td><code class="json">${json(item.metadata)}</code></td>
-          <td><button class="danger" type="button" onclick="runUiAction('Delete credential', () => deleteCredential('${item.id}'))">Delete</button></td>
+          <td>${credentialActions(item)}</td>
         </tr>`).join('') || '<tr><td colspan="5" class="muted">No credentials</td></tr>';
 
       $('routes').innerHTML = state.routes.map((item) => `
@@ -5288,6 +6355,7 @@ UI_HTML = r"""
       renderPolicyCandidate();
       renderPolicyCanary();
       renderAuditInvestigation();
+      renderAttestation();
 
       $('logs').innerHTML = state.logs.map((item) => `
         <tr>
@@ -5319,7 +6387,8 @@ UI_HTML = r"""
 
     function safeControlPlaneRequest(request) {
       const allowed = [
-        'credential_type', 'provider', 'credential_name', 'scopes', 'metadata_keys', 'name', 'kind',
+        'credential_type', 'provider', 'provider_subject', 'provider_account', 'credential_name', 'scopes',
+        'metadata_keys', 'expires_at_epoch_ms', 'x_app_id', 'name', 'kind',
         'policy_id', 'previous_policy_hash', 'candidate_policy_hash', 'previous_sequence', 'new_sequence',
         'previous_rollback_epoch', 'new_rollback_epoch', 'diff', 'dry_run', 'route_id', 'changed_fields',
         'match_host', 'match_path_prefix', 'credential_id', 'enabled', 'subject_id', 'roles', 'reason'
@@ -5369,7 +6438,7 @@ UI_HTML = r"""
       $('approvals').innerHTML = rows.map((item) => {
         const approvalBlockReason = approvalReviewBlockReason(item);
         const approvalBlockReasonId = `jit-approval-block-reason-${item.id}`;
-        const approvalBlockAttributes = approvalBlockReason ? `aria-disabled="true" aria-describedby="${approvalBlockReasonId}"` : '';
+        const approvalBlockAttributes = approvalBlockReason ? `disabled aria-disabled="true" aria-describedby="${approvalBlockReasonId}"` : '';
         const approvalBlockMessage = approvalBlockReason ? `<span id="${approvalBlockReasonId}" class="approval-block-reason" role="status">${esc(approvalBlockReason)}</span>` : '';
         const grantTtlSeconds = Number(item.grant_ttl_seconds || 30);
         const selected = state.approvalReview?.id === item.id ? ' class="selected-row" aria-current="true"' : '';
@@ -5401,12 +6470,57 @@ UI_HTML = r"""
       const items = result?.items || [];
       $('audit-events').innerHTML = items.map((item) => `
         <tr>
-          <td><code>${esc(item.created_at)}</code></td>
-          <td><strong>${esc(item.event_type)}</strong><br><code>${esc(item.id)}</code></td>
-          <td><code>${esc(item.actor_type || '')}:${esc(item.actor_id || '')}</code></td>
-          <td><code class="json">${json(redactAuditEvidence(item.event || {}))}</code></td>
-          <td><code title="${esc(item.event_hash || '')}">${esc(String(item.event_hash || '').slice(0, 18))}${item.event_hash ? '...' : ''}</code></td>
-        </tr>`).join('') || '<tr><td colspan="5" class="muted">No matching audit events</td></tr>';
+          <td data-label="Time"><code>${esc(item.created_at)}</code></td>
+          <td data-label="Event"><strong>${esc(item.event_type)}</strong><br><code>${esc(item.id)}</code></td>
+          <td data-label="Actor"><code>${esc(item.actor_type || '')}:${esc(item.actor_id || '')}</code></td>
+          <td data-label="Evidence"><code class="json">${json(redactAuditEvidence(item.event || {}))}</code></td>
+          <td data-label="Chain"><code title="${esc(item.event_hash || '')}">${esc(String(item.event_hash || '').slice(0, 18))}${item.event_hash ? '...' : ''}</code></td>
+        </tr>`).join('') || '<tr class="empty-row"><td colspan="5" class="muted">No matching audit events</td></tr>';
+    }
+
+    function renderAttestation() {
+      const document = state.attestation;
+      if (!document || document.error) {
+        $('attestation-summary').innerHTML = `<span class="pill bad">unavailable</span><span class="muted">${esc(document?.error || 'Evidence has not been loaded')}</span>`;
+        $('attestation-evidence').innerHTML = '';
+        return;
+      }
+      const assurance = document.assurance || {};
+      const hardwareBacked = assurance.hardware_proof === true
+        && assurance.workload_custody_proven === true
+        && assurance.tls_peer_binding_proven === true;
+      $('attestation-summary').innerHTML = hardwareBacked
+        ? `<span class="pill good">hardware verified</span><strong>${esc(assurance.class || 'hardware-backed')}</strong>`
+        : `<span class="pill bad">not hardware verified</span><strong>${esc(assurance.class || 'unclassified')}</strong><span class="muted">${esc(assurance.reason || 'External verification is required.')}</span>`;
+      const fields = [
+        ['TEE platform', document.tee_platform],
+        ['Fact origin', assurance.fact_origin],
+        ['Nonce', document.nonce],
+        ['Policy digest', document.policy_bundle_digest],
+        ['Policy sequence', document.policy_sequence],
+        ['Rollback epoch', document.rollback_epoch],
+        ['Runtime manifest', document.runtime_manifest_digest],
+        ['Source tree', document.source_tree_digest],
+        ['Data-plane binary', document.data_plane_binary_digest],
+        ['Provenance', document.provenance_digest],
+        ['Response key', document.response_signing_key_id],
+        ['TLS exporter', document.tls_exporter_binding || 'not bound']
+      ];
+      $('attestation-evidence').innerHTML = fields.map(([label, value]) => `
+        <div class="review-field"><span>${esc(label)}</span><code>${esc(value ?? 'not published')}</code></div>
+      `).join('');
+    }
+
+    async function refreshAttestation() {
+      try {
+        state.attestation = await api(`/attestation?nonce=${encodeURIComponent(generateEnrollmentNonce())}`);
+      } catch (error) {
+        state.attestation = {error: error.message};
+        throw error;
+      } finally {
+        renderAttestation();
+      }
+      return state.attestation;
     }
 
     async function decideControlPlaneApproval(id, decision) {
@@ -5995,11 +7109,62 @@ UI_HTML = r"""
     }
 
     async function deleteCredential(id) {
-      if (!window.confirm(`Delete credential ${id}? Agents using it will fail closed.`)) return cancelledAction('Credential deletion');
+      const item = state.credentials.find((candidate) => candidate.id === id);
+      const managedOAuth = item?.kind === 'oauth2' && item?.metadata?.oauth === true;
+      const prompt = managedOAuth
+        ? `Disconnect credential ${id} and revoke its provider grant? Agents using it will fail closed.`
+        : `Delete credential ${id}? Agents using it will fail closed.`;
+      if (!window.confirm(prompt)) return cancelledAction('Credential deletion');
       const mutation = {kind: 'credential-delete', label: `Delete credential ${id}`, persist: false, path: `/api/credentials/${id}`, method: 'DELETE', body: {}};
       const completed = await runControlPlaneMutation(mutation);
       if (!completed.pending) await finishMutation(completed.mutation, completed.result);
       return completed;
+    }
+    async function reconnectOAuthCredential(id) {
+      const item = state.credentials.find((candidate) => candidate.id === id);
+      if (!item || item.kind !== 'oauth2' || item.metadata?.oauth !== true) throw new Error('Managed OAuth credential is unavailable');
+      if ((item.lifecycle_status || 'active') !== 'active') throw new Error('Complete provider revocation before reconnecting this credential');
+      const body = {
+        provider: item.metadata.provider_id,
+        credentialId: item.id,
+        credentialName: item.name,
+        scopes: Array.isArray(item.metadata.scopes) ? item.metadata.scopes : null
+      };
+      const mutation = {kind: 'oauth-start', label: `Reconnect ${item.name}`, persist: true, path: '/api/oauth/start', method: 'POST', body};
+      const completed = await runControlPlaneMutation(mutation);
+      if (!completed.pending) await finishMutation(completed.mutation, completed.result);
+      return completed;
+    }
+    async function activatePendingOAuthCredential(id) {
+      const item = (state.pendingOAuthCredentials || []).find((candidate) => candidate.id === id);
+      if (!item) throw new Error('Pending OAuth credential is no longer available');
+      if (item.requester_id !== state.currentUserId) throw new Error('Only the OAuth requester can activate this account');
+      const account = item.review?.provider_account || id;
+      const mutation = {
+        kind: 'oauth-activate',
+        label: `Activate verified OAuth account ${account}`,
+        persist: true,
+        path: `/api/oauth/pending/${id}/activate`,
+        method: 'POST',
+        body: {}
+      };
+      const completed = await runControlPlaneMutation(mutation);
+      if (!completed.pending) await finishMutation(completed.mutation, completed.result);
+      return completed;
+    }
+    async function cancelPendingOAuthCredential(id) {
+      if (!window.confirm('Cancel this OAuth connection attempt and revoke its provider grant?')) return cancelledAction('OAuth connection cancellation');
+      const result = await api(`/api/oauth/pending/${id}`, {method: 'DELETE'});
+      await refresh();
+      if (result.revocation?.ok !== true) throw new Error('Connection cancelled, but provider revocation must be retried');
+      return result;
+    }
+    async function revokePendingOAuthCredential(id) {
+      try {
+        return await api(`/api/oauth/pending/${id}/revoke`, {method: 'POST'});
+      } finally {
+        await refresh();
+      }
     }
     async function deleteRoute(id) {
       if (!window.confirm(`Delete local prototype route ${id}? Matching requests will be denied.`)) return cancelledAction('Route deletion');
@@ -6013,7 +7178,8 @@ UI_HTML = r"""
       render();
       requestAnimationFrame(() => {
         $('approval-review').focus({preventScroll: true});
-        $('approval-review').scrollIntoView({behavior: 'smooth', block: 'start'});
+        const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+        $('approval-review').scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block: 'start'});
       });
     }
     function approvalReviewBlockReason(item) {
@@ -6038,14 +7204,16 @@ UI_HTML = r"""
       const retry = review.retry_semantics || {};
       const previous = (review.previous_similar_approvals || []).map((item) => `
         <tr>
-          <td>${pill(item.status)}</td>
-          <td><code>${esc(item.requested_at || '')}</code></td>
-          <td>${esc(item.decision_note || '')}</td>
-          <td><code>${esc(item.request_digest || '')}</code></td>
-        </tr>`).join('') || '<tr><td colspan="4" class="muted">No similar approvals</td></tr>';
+          <td data-label="Status">${pill(item.status)}</td>
+          <td data-label="Requested"><code>${esc(item.requested_at || '')}</code></td>
+          <td data-label="Decision note">${esc(item.decision_note || '')}</td>
+          <td data-label="Request digest"><code>${esc(item.request_digest || '')}</code></td>
+        </tr>`).join('') || '<tr class="empty-row"><td colspan="4" class="muted">No similar approvals</td></tr>';
       target.innerHTML = `
+        <h3>Approval review</h3>
         <div class="review-grid">
           <div class="review-field"><span>Approval</span><code>${esc(review.id)}</code>${pill(review.status)}</div>
+          <div class="review-field"><span>Expires</span><code>${esc(review.expires_at || '')}</code></div>
           <div class="review-field"><span>Principal</span><code>${esc(review.principal_id)}</code></div>
           <div class="review-field"><span>Source</span><code class="json">${json(review.source_identity)}</code></div>
           <div class="review-field"><span>Route</span><code>${esc(review.route_id)}</code></div>
@@ -6074,7 +7242,7 @@ UI_HTML = r"""
         </div>
         <div class="review-block">
           <h3>Previous similar approvals</h3>
-          <table>
+          <table class="mobile-table">
             <thead><tr><th>Status</th><th>Requested</th><th>Decision note</th><th>Request digest</th></tr></thead>
             <tbody>${previous}</tbody>
           </table>
@@ -6220,6 +7388,7 @@ UI_HTML = r"""
     $('admin-token').addEventListener('change', async () => {
       if (adminToken()) sessionStorage.setItem(tokenKey, adminToken());
       else sessionStorage.removeItem(tokenKey);
+      renderAuthStatus();
       try {
         await refresh();
         restoreOAuthDraft();
@@ -6227,12 +7396,19 @@ UI_HTML = r"""
       } catch (_) {}
     });
     restorePendingMutation();
-    refresh().then(() => {
+    (async () => {
+      try {
+        await fetchAuthStatus();
+      } catch (_) {
+        state.authStatus = {authenticated: false, oidcBrowserLoginConfigured: false};
+        renderAuthStatus();
+      }
+      await refresh();
       restoreOAuthDraft();
       const template = policyTemplates[$('policy-template').value];
       if (template && !$('policy-route-id').value) $('policy-route-id').value = template.routeId;
       syncPolicyTemplateEditor();
-    }).catch(() => {});
+    })().catch(() => {});
     setInterval(() => refresh().catch(() => {}), 4000);
   </script>
 </body>

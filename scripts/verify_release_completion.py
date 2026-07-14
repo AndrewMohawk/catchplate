@@ -40,10 +40,31 @@ REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 REQUIRED_STORES = {"metadata", "grant", "audit"}
 TEST_ONLY_BYPASS_ENV = "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+SHA384_RE = re.compile(r"^sha384:[0-9a-f]{96}$")
 IMAGE_REF_RE = re.compile(r"^(?P<repo>[^@,\s]+)@(?P<digest>sha256:[0-9a-f]{64})$")
 BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 PROXY_PROOF_MAX_AGE_LIMIT_SECONDS = 900
 PROXY_PROOF_FUTURE_SKEW_SECONDS = 30
+HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
+HARDWARE_PROOF_MAX_AGE_SECONDS = 900
+HARDWARE_PROOF_FUTURE_SKEW_SECONDS = 30
+CURRENT_HOST_IDENTITY_SCHEME = "serverware.currentCompletionHostIdentity/v1"
+CURRENT_HOST_IDENTITY_MAX_OBSERVATION_AGE_SECONDS = 60
+CURRENT_HOST_MACHINE_ID_PATH = Path("/etc/machine-id")
+CURRENT_HOST_PRODUCT_UUID_PATH = Path("/sys/devices/virtual/dmi/id/product_uuid")
+CURRENT_HOST_BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
+MACHINE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+FINAL_HARDWARE_EVIDENCE = (
+    "independently signed verifier statement",
+    "fresh signed current-host identity commitment",
+    "EIF image measurement and build-manifest evidence",
+    "PCR0/PCR1/PCR2 measurements",
+    "enclave CID and parent-CID evidence",
+    "authenticated vsock handshake evidence",
+    "KMS Recipient enclave key-custody evidence",
+    "evidence that parent processes never held plaintext key material",
+)
 SECRET_FIELD_NAMES = {
     "plaintext",
     "secret",
@@ -345,6 +366,436 @@ def assert_no_secret_fields(value: Any, path: str = "$") -> None:
             assert_no_secret_fields(child, f"{path}[{index}]")
 
 
+def require_exact_keys(value: dict[str, Any], expected: set[str], label: str) -> None:
+    missing = sorted(expected - set(value))
+    unexpected = sorted(set(value) - expected)
+    require(not missing, f"{label} is missing required fields: {missing}")
+    require(not unexpected, f"{label} contains unexpected fields: {unexpected}")
+
+
+def require_sha384(value: Any, label: str) -> str:
+    require(isinstance(value, str) and SHA384_RE.fullmatch(value) is not None, f"{label} must be sha384-prefixed")
+    return value
+
+
+def current_host_identity_from_values(*, machine_id: str, product_uuid: str, boot_id: str) -> dict[str, str]:
+    normalized_machine_id = machine_id.strip().lower()
+    normalized_product_uuid = product_uuid.strip().lower()
+    normalized_boot_id = boot_id.strip().lower()
+    require(
+        MACHINE_ID_RE.fullmatch(normalized_machine_id) is not None and set(normalized_machine_id) != {"0"},
+        "current completion host machine id is invalid",
+    )
+    require(
+        UUID_RE.fullmatch(normalized_product_uuid) is not None and set(normalized_product_uuid.replace("-", "")) != {"0"},
+        "current completion host product UUID is invalid",
+    )
+    require(
+        UUID_RE.fullmatch(normalized_boot_id) is not None and set(normalized_boot_id.replace("-", "")) != {"0"},
+        "current completion host boot id is invalid",
+    )
+
+    def component_digest(label: str, value: str) -> str:
+        return sha256_prefixed_bytes(
+            f"{CURRENT_HOST_IDENTITY_SCHEME}:{label}\0{value}".encode("ascii")
+        )
+
+    identity = {
+        "scheme": CURRENT_HOST_IDENTITY_SCHEME,
+        "machine_id_sha256": component_digest("machine-id", normalized_machine_id),
+        "product_uuid_sha256": component_digest("product-uuid", normalized_product_uuid),
+        "boot_id_sha256": component_digest("boot-id", normalized_boot_id),
+    }
+    return {**identity, "identity_sha256": sha256_prefixed_json(identity)}
+
+
+def read_current_host_identity() -> dict[str, str]:
+    values: dict[str, str] = {}
+    for key, path in (
+        ("machine_id", CURRENT_HOST_MACHINE_ID_PATH),
+        ("product_uuid", CURRENT_HOST_PRODUCT_UUID_PATH),
+        ("boot_id", CURRENT_HOST_BOOT_ID_PATH),
+    ):
+        try:
+            values[key] = path.read_text(encoding="ascii").strip()
+        except OSError as exc:
+            raise ValueError(f"current completion host identity source is unavailable: {path}") from exc
+    return current_host_identity_from_values(**values)
+
+
+def current_host_identity_claim(identity: dict[str, str], *, observed_at_unix: int) -> dict[str, Any]:
+    require_exact_keys(
+        identity,
+        {"scheme", "machine_id_sha256", "product_uuid_sha256", "boot_id_sha256", "identity_sha256"},
+        "current completion host identity",
+    )
+    payload: dict[str, Any] = {**identity, "observed_at_unix": observed_at_unix}
+    return {**payload, "commitment_sha256": sha256_prefixed_json(payload)}
+
+
+def verify_hardware_assurance(
+    document: dict[str, Any],
+    *,
+    trusted_public_key_pem: str,
+    nitro_summary: dict[str, Any],
+    nitro_evidence_sha256: str,
+    production_host_preflight_sha256: str,
+    current_host: dict[str, Any],
+    now_unix: int | None = None,
+) -> dict[str, Any]:
+    assert_no_secret_fields(document)
+    require_exact_keys(
+        document,
+        {"apiVersion", "kind", "statement", "signing_key_id", "signature"},
+        "hardware assurance document",
+    )
+    require(document.get("apiVersion") == HARDWARE_PROOF_API_VERSION, "hardware assurance apiVersion mismatch")
+    require(document.get("kind") == "ServerwareHardwareAssurance", "hardware assurance kind mismatch")
+    statement = document.get("statement") if isinstance(document.get("statement"), dict) else {}
+    require(statement, "hardware assurance document is missing its signed statement")
+    require_exact_keys(
+        statement,
+        {
+            "verifier",
+            "issued_at_unix",
+            "expires_at_unix",
+            "challenge_nonce",
+            "current_host_identity",
+            "attestation_document_sha256",
+            "eif",
+            "pcrs",
+            "enclave",
+            "key_custody",
+            "no_parent_key",
+            "release_bindings",
+            "artifact_bindings",
+        },
+        "hardware assurance statement",
+    )
+
+    signing_key_id = require_sha256(document.get("signing_key_id"), "hardware assurance signing key id")
+    trusted_key_id = release_public_key_id(trusted_public_key_pem)
+    require(signing_key_id == trusted_key_id, "hardware assurance signer does not match the separately trusted verifier key")
+    signature = document.get("signature")
+    require(isinstance(signature, str) and signature, "hardware assurance document is missing its signature")
+    verify_ed25519(
+        trusted_public_key_pem,
+        signature,
+        canonical_json(statement).encode("utf-8"),
+        "hardware assurance",
+    )
+
+    verifier = statement.get("verifier") if isinstance(statement.get("verifier"), dict) else {}
+    require_exact_keys(verifier, {"name", "organization", "independent"}, "hardware assurance verifier identity")
+    require(isinstance(verifier.get("name"), str) and bool(verifier.get("name")), "hardware assurance verifier name is missing")
+    require(
+        isinstance(verifier.get("organization"), str) and bool(verifier.get("organization")),
+        "hardware assurance verifier organization is missing",
+    )
+    require(verifier.get("independent") is True, "hardware assurance was not issued by an independent verifier")
+
+    issued_at = statement.get("issued_at_unix")
+    expires_at = statement.get("expires_at_unix")
+    require(isinstance(issued_at, int) and not isinstance(issued_at, bool), "hardware assurance issued_at_unix is invalid")
+    require(isinstance(expires_at, int) and not isinstance(expires_at, bool), "hardware assurance expires_at_unix is invalid")
+    now = int(time.time()) if now_unix is None else now_unix
+    require(issued_at <= now + HARDWARE_PROOF_FUTURE_SKEW_SECONDS, "hardware assurance was issued in the future")
+    require(now - issued_at <= HARDWARE_PROOF_MAX_AGE_SECONDS, "hardware assurance is stale")
+    require(expires_at >= now, "hardware assurance has expired")
+    require(expires_at > issued_at, "hardware assurance expiry does not follow issuance")
+    require(
+        expires_at - issued_at <= HARDWARE_PROOF_MAX_AGE_SECONDS,
+        "hardware assurance validity window exceeds the allowed maximum",
+    )
+
+    host_identity = (
+        statement.get("current_host_identity")
+        if isinstance(statement.get("current_host_identity"), dict)
+        else {}
+    )
+    require_exact_keys(
+        host_identity,
+        {
+            "scheme",
+            "machine_id_sha256",
+            "product_uuid_sha256",
+            "boot_id_sha256",
+            "identity_sha256",
+            "observed_at_unix",
+            "commitment_sha256",
+        },
+        "hardware assurance current-host identity",
+    )
+    require(
+        host_identity.get("scheme") == CURRENT_HOST_IDENTITY_SCHEME,
+        "hardware assurance current-host identity scheme mismatch",
+    )
+    identity_payload = {
+        "scheme": host_identity["scheme"],
+        "machine_id_sha256": require_sha256(
+            host_identity.get("machine_id_sha256"),
+            "hardware assurance current-host machine id digest",
+        ),
+        "product_uuid_sha256": require_sha256(
+            host_identity.get("product_uuid_sha256"),
+            "hardware assurance current-host product UUID digest",
+        ),
+        "boot_id_sha256": require_sha256(
+            host_identity.get("boot_id_sha256"),
+            "hardware assurance current-host boot id digest",
+        ),
+    }
+    identity_sha256 = require_sha256(
+        host_identity.get("identity_sha256"),
+        "hardware assurance current-host identity digest",
+    )
+    require(
+        identity_sha256 == sha256_prefixed_json(identity_payload),
+        "hardware assurance current-host identity digest mismatch",
+    )
+    observed_at = host_identity.get("observed_at_unix")
+    require(
+        isinstance(observed_at, int) and not isinstance(observed_at, bool),
+        "hardware assurance current-host identity observation time is invalid",
+    )
+    require(
+        observed_at <= issued_at,
+        "hardware assurance current-host identity observation follows assurance issuance",
+    )
+    require(
+        issued_at - observed_at <= CURRENT_HOST_IDENTITY_MAX_OBSERVATION_AGE_SECONDS,
+        "hardware assurance current-host identity observation is stale relative to assurance issuance",
+    )
+    host_identity_commitment = require_sha256(
+        host_identity.get("commitment_sha256"),
+        "hardware assurance current-host identity commitment",
+    )
+    require(
+        host_identity_commitment
+        == sha256_prefixed_json({**identity_payload, "identity_sha256": identity_sha256, "observed_at_unix": observed_at}),
+        "hardware assurance current-host identity commitment mismatch",
+    )
+    current_host_identity_bound = False
+    if current_host.get("skipped") is not True:
+        require(
+            current_host.get("identity_recomputed") is True,
+            "current completion host identity was not recomputed",
+        )
+        recomputed_identity = current_host.get("identity") if isinstance(current_host.get("identity"), dict) else {}
+        require(
+            recomputed_identity == {**identity_payload, "identity_sha256": identity_sha256},
+            "hardware assurance current-host identity does not match current completion host",
+        )
+        current_host_identity_bound = True
+
+    challenge_nonce = statement.get("challenge_nonce")
+    require(
+        isinstance(challenge_nonce, str) and BASE64URL_RE.fullmatch(challenge_nonce) is not None,
+        "hardware assurance challenge nonce is invalid",
+    )
+    try:
+        challenge_nonce_bytes = b64d(challenge_nonce)
+    except Exception as exc:
+        raise ValueError("hardware assurance challenge nonce is invalid") from exc
+    require(len(challenge_nonce_bytes) >= 32, "hardware assurance challenge nonce is too short")
+
+    attestation_document_sha256 = require_sha256(
+        statement.get("attestation_document_sha256"),
+        "hardware assurance attestation document digest",
+    )
+    require(
+        attestation_document_sha256 == nitro_summary["raw_attestation_document_sha256"],
+        "hardware assurance does not bind the verified Nitro attestation document",
+    )
+
+    eif = statement.get("eif") if isinstance(statement.get("eif"), dict) else {}
+    require_exact_keys(
+        eif,
+        {"image_sha384", "build_manifest_sha256", "signature_verified", "evidence_sha256"},
+        "hardware assurance EIF evidence",
+    )
+    eif_image_sha384 = require_sha384(eif.get("image_sha384"), "hardware assurance EIF image digest")
+    require_sha256(eif.get("build_manifest_sha256"), "hardware assurance EIF build manifest digest")
+    require_sha256(eif.get("evidence_sha256"), "hardware assurance EIF evidence digest")
+    require(eif.get("signature_verified") is True, "hardware assurance did not verify the EIF signature")
+
+    pcrs = statement.get("pcrs") if isinstance(statement.get("pcrs"), dict) else {}
+    require_exact_keys(pcrs, {"PCR0", "PCR1", "PCR2"}, "hardware assurance PCR measurements")
+    verified_pcrs = {name: require_sha384(pcrs.get(name), f"hardware assurance {name}") for name in ("PCR0", "PCR1", "PCR2")}
+    require(verified_pcrs["PCR0"] == eif_image_sha384, "hardware assurance EIF image digest does not match PCR0")
+
+    enclave = statement.get("enclave") if isinstance(statement.get("enclave"), dict) else {}
+    require_exact_keys(
+        enclave,
+        {
+            "cid",
+            "parent_cid",
+            "vsock_port",
+            "cid_evidence_sha256",
+            "vsock_evidence_sha256",
+            "vsock_handshake_verified",
+        },
+        "hardware assurance enclave connectivity evidence",
+    )
+    cid = enclave.get("cid")
+    parent_cid = enclave.get("parent_cid")
+    vsock_port = enclave.get("vsock_port")
+    require(isinstance(cid, int) and not isinstance(cid, bool) and 4 <= cid <= 0xFFFFFFFF, "hardware assurance enclave CID is invalid")
+    require(parent_cid == 3, "hardware assurance parent CID is not the Nitro parent CID")
+    require(
+        isinstance(vsock_port, int) and not isinstance(vsock_port, bool) and 1 <= vsock_port <= 0xFFFFFFFF,
+        "hardware assurance vsock port is invalid",
+    )
+    require_sha256(enclave.get("cid_evidence_sha256"), "hardware assurance CID evidence digest")
+    require_sha256(enclave.get("vsock_evidence_sha256"), "hardware assurance vsock evidence digest")
+    require(enclave.get("vsock_handshake_verified") is True, "hardware assurance did not verify a vsock handshake")
+
+    key_custody = statement.get("key_custody") if isinstance(statement.get("key_custody"), dict) else {}
+    require_exact_keys(
+        key_custody,
+        {
+            "recipient_key_generated_in_enclave",
+            "kms_recipient_bound",
+            "plaintext_key_exported",
+            "parent_process_key_access",
+            "kms_recipient_bindings_sha256",
+            "evidence_sha256",
+        },
+        "hardware assurance key-custody evidence",
+    )
+    require(
+        key_custody.get("recipient_key_generated_in_enclave") is True,
+        "hardware assurance did not prove enclave-local recipient-key generation",
+    )
+    require(key_custody.get("kms_recipient_bound") is True, "hardware assurance did not bind AWS KMS Recipient release")
+    require(key_custody.get("plaintext_key_exported") is False, "hardware assurance permits plaintext key export")
+    require(key_custody.get("parent_process_key_access") is False, "hardware assurance permits parent-process key access")
+    kms_recipient_bindings_sha256 = require_sha256(
+        key_custody.get("kms_recipient_bindings_sha256"),
+        "hardware assurance KMS Recipient bindings digest",
+    )
+    require(
+        kms_recipient_bindings_sha256 == sha256_prefixed_json(nitro_summary["material_release_receipts"]),
+        "hardware assurance KMS Recipient bindings do not match Nitro release evidence",
+    )
+    require_sha256(key_custody.get("evidence_sha256"), "hardware assurance key-custody evidence digest")
+
+    no_parent_key = statement.get("no_parent_key") if isinstance(statement.get("no_parent_key"), dict) else {}
+    require_exact_keys(
+        no_parent_key,
+        {"verified", "parent_key_material_absent", "evidence_sha256"},
+        "hardware assurance no-parent-key evidence",
+    )
+    require(no_parent_key.get("verified") is True, "hardware assurance no-parent-key evidence is not verified")
+    require(
+        no_parent_key.get("parent_key_material_absent") is True,
+        "hardware assurance found key material in a parent process",
+    )
+    require_sha256(no_parent_key.get("evidence_sha256"), "hardware assurance no-parent-key evidence digest")
+
+    release_bindings = statement.get("release_bindings") if isinstance(statement.get("release_bindings"), dict) else {}
+    require(
+        release_bindings == nitro_summary["attested_runtime"],
+        "hardware assurance release bindings do not exactly match the Nitro-attested runtime",
+    )
+    artifact_bindings = statement.get("artifact_bindings") if isinstance(statement.get("artifact_bindings"), dict) else {}
+    require_exact_keys(
+        artifact_bindings,
+        {"nitro_evidence_sha256", "production_host_preflight_sha256"},
+        "hardware assurance artifact bindings",
+    )
+    require(
+        artifact_bindings.get("nitro_evidence_sha256") == nitro_evidence_sha256,
+        "hardware assurance does not bind the current Nitro evidence artifact",
+    )
+    require(
+        artifact_bindings.get("production_host_preflight_sha256") == production_host_preflight_sha256,
+        "hardware assurance does not bind the current production host preflight artifact",
+    )
+
+    independent_evidence_digests = {
+        eif["evidence_sha256"],
+        enclave["cid_evidence_sha256"],
+        enclave["vsock_evidence_sha256"],
+        key_custody["evidence_sha256"],
+        no_parent_key["evidence_sha256"],
+    }
+    require(
+        len(independent_evidence_digests) == 5,
+        "hardware assurance reused one evidence artifact for distinct assurance claims",
+    )
+    return {
+        "verified": True,
+        "trusted_verifier_key_id": trusted_key_id,
+        "verifier": verifier,
+        "issued_at_unix": issued_at,
+        "expires_at_unix": expires_at,
+        "challenge_nonce_sha256": sha256_prefixed_bytes(challenge_nonce_bytes),
+        "current_host_identity": host_identity,
+        "current_host_identity_bound": current_host_identity_bound,
+        "attestation_document_sha256": attestation_document_sha256,
+        "eif": eif,
+        "pcrs": verified_pcrs,
+        "enclave": enclave,
+        "key_custody": key_custody,
+        "no_parent_key": no_parent_key,
+        "release_bindings": release_bindings,
+        "artifact_bindings": artifact_bindings,
+        "independent_evidence_bound": True,
+    }
+
+
+def completion_assurance(
+    hardware_assurance: dict[str, Any] | None,
+    current_host: dict[str, Any],
+) -> dict[str, Any]:
+    current_identity = current_host.get("identity") if isinstance(current_host.get("identity"), dict) else {}
+    host_bound = (
+        current_host.get("skipped") is False
+        and current_host.get("preflight_bound") is True
+        and current_host.get("identity_recomputed") is True
+        and bool(current_identity)
+    )
+    if hardware_assurance is None:
+        return {
+            "level": "pre-enclave-readiness",
+            "final_completion": False,
+            "hardware_proof": False,
+            "hardware_evidence_verified": False,
+            "reason": "ordinary Docker, development, or /dev/nsm readiness does not prove enclave execution or key custody",
+            "required_final_evidence": list(FINAL_HARDWARE_EVIDENCE),
+        }
+    require(hardware_assurance.get("verified") is True, "hardware assurance summary is not verified")
+    if not host_bound:
+        return {
+            "level": "pre-enclave-readiness",
+            "final_completion": False,
+            "hardware_proof": False,
+            "hardware_evidence_verified": True,
+            "reason": "hardware evidence cannot establish final completion while the current-host binding is bypassed",
+            "required_final_evidence": ["current host binding without a test-only bypass"],
+        }
+    hardware_identity = (
+        hardware_assurance.get("current_host_identity")
+        if isinstance(hardware_assurance.get("current_host_identity"), dict)
+        else {}
+    )
+    require(
+        hardware_assurance.get("current_host_identity_bound") is True
+        and hardware_identity.get("identity_sha256") == current_identity.get("identity_sha256")
+        and hardware_identity.get("boot_id_sha256") == current_identity.get("boot_id_sha256"),
+        "hardware assurance is not bound to the recomputed current-host identity",
+    )
+    return {
+        "level": "hardware-backed-release-completion",
+        "final_completion": True,
+        "hardware_proof": True,
+        "hardware_evidence_verified": True,
+        "reason": "fresh independently signed hardware evidence and current-host binding verified",
+        "required_final_evidence": [],
+    }
+
+
 def release_materials(
     evidence: dict[str, Any],
     label: str,
@@ -489,6 +940,8 @@ def verify_nitro_evidence(evidence: dict[str, Any], label: str) -> dict[str, Any
     return {
         "provider": evidence.get("provider"),
         "tee_platform": evidence.get("tee_platform"),
+        "assurance_level": "pre-enclave-readiness",
+        "hardware_proof": False,
         "materials": sorted(REQUIRED_MATERIALS),
         "material_key_ids": {material: materials[material]["key_id_sha256"] for material in sorted(REQUIRED_MATERIALS)},
         "material_bindings": {
@@ -1432,7 +1885,7 @@ def verify_current_completion_host(preflight_summary: dict[str, Any], *, skip_cu
             os.environ.get(TEST_ONLY_BYPASS_ENV) == "1",
             f"--skip-current-host-check is test-only; set {TEST_ONLY_BYPASS_ENV}=1 in fixture tests",
         )
-        return {**current, "skipped": True, "preflight_bound": False}
+        return {**current, "skipped": True, "preflight_bound": False, "identity_recomputed": False}
     for key, message in (
         ("linux", "current completion host must be Linux"),
         ("nitro_nsm_device", "current completion host must expose /dev/nsm"),
@@ -1444,7 +1897,13 @@ def verify_current_completion_host(preflight_summary: dict[str, Any], *, skip_cu
             current[key] == preflight_summary["host"].get(key),
             f"current completion host {key} does not match production host preflight",
         )
-    return {**current, "skipped": False, "preflight_bound": True}
+    return {
+        **current,
+        "skipped": False,
+        "preflight_bound": True,
+        "identity_recomputed": True,
+        "identity": read_current_host_identity(),
+    }
 
 
 def verify_current_production_env_binding(
@@ -2526,13 +2985,15 @@ def verify_release_security_evidence(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Verify the Serverware final release-completion artifact set.")
+    parser = argparse.ArgumentParser(description="Verify Serverware release readiness and independently proven final completion.")
     parser.add_argument("--production-readiness", default=".tmp/production-readiness.json")
     parser.add_argument("--production-readiness-config", default=".tmp/production-readiness-config.json")
     parser.add_argument("--production-readiness-env", default="ops/production-readiness.env")
     parser.add_argument("--compose-file", default="docker-compose.production.yml")
     parser.add_argument("--production-host-preflight", default=".tmp/production-host-preflight.json")
     parser.add_argument("--nitro-evidence", default=".tmp/nitro-kms-evidence.json")
+    parser.add_argument("--hardware-assurance", default=None)
+    parser.add_argument("--hardware-assurance-trusted-public-key", default=None)
     parser.add_argument("--production-images-build", default=".tmp/production-images-build.json")
     parser.add_argument("--production-images-env", default=".tmp/production-images.env")
     parser.add_argument("--production-images-published", default=".tmp/production-images-published.json")
@@ -2565,6 +3026,10 @@ def main() -> None:
     parser.add_argument("--skip-current-host-check", action="store_true", help="Test-only bypass for synthetic fixture completion tests.")
     args = parser.parse_args()
 
+    require(
+        bool(args.hardware_assurance) == bool(args.hardware_assurance_trusted_public_key),
+        "hardware-backed completion requires both --hardware-assurance and --hardware-assurance-trusted-public-key",
+    )
     require(bool(args.proxy_response_proof), "production completion requires --proxy-response-proof")
     require(
         bool(args.proxy_proof_verifier_public_key),
@@ -2608,6 +3073,9 @@ def main() -> None:
         "proxy_proof_verifier_public_key": Path(args.proxy_proof_verifier_public_key),
         "proxy_collector_public_key": Path(args.proxy_collector_public_key),
     }
+    if args.hardware_assurance:
+        paths["hardware_assurance"] = Path(args.hardware_assurance)
+        paths["hardware_assurance_trusted_public_key"] = Path(args.hardware_assurance_trusted_public_key)
 
     readiness = load_json(paths["production_readiness"], "production readiness")
     production_readiness_config = load_json(paths["production_readiness_config"], "production readiness config")
@@ -2639,6 +3107,20 @@ def main() -> None:
     )
     nitro_summary = verify_nitro_evidence(nitro_evidence, "standalone Nitro/KMS evidence")
     nitro_binding = verify_nitro_binding(readiness_summary, nitro_summary, preflight_summary)
+    hardware_assurance_summary = None
+    if args.hardware_assurance:
+        hardware_assurance_document = load_json(paths["hardware_assurance"], "hardware assurance")
+        trusted_hardware_verifier_public_key_pem = paths["hardware_assurance_trusted_public_key"].read_text(
+            encoding="ascii"
+        )
+        hardware_assurance_summary = verify_hardware_assurance(
+            hardware_assurance_document,
+            trusted_public_key_pem=trusted_hardware_verifier_public_key_pem,
+            nitro_summary=nitro_summary,
+            nitro_evidence_sha256=file_digest(paths["nitro_evidence"]),
+            production_host_preflight_sha256=file_digest(paths["production_host_preflight"]),
+            current_host=current_host_summary,
+        )
     provenance_summary_out = verify_release_provenance(
         provenance_summary,
         provenance_document,
@@ -2754,11 +3236,18 @@ def main() -> None:
         == production_env_binding["expected_proxy_verifier_key_id"],
         "proxy response vendor verifier key does not match the signed production environment pin",
     )
+    assurance = completion_assurance(hardware_assurance_summary, current_host_summary)
 
     proof = {
-        "apiVersion": "serverware.completionProof/v2",
-        "kind": "ServerwareCompletionProof",
+        "apiVersion": "serverware.completionProof/v3",
+        "kind": "ServerwareCompletionProof" if assurance["final_completion"] else "ServerwarePreEnclaveReadiness",
         "ok": True,
+        "readiness_ok": True,
+        "completion_status": assurance["level"],
+        "release_completion": "pass" if assurance["final_completion"] else "not-final",
+        "final_completion": assurance["final_completion"],
+        "hardware_proof": assurance["hardware_proof"],
+        "assurance_ceiling": assurance,
         "generated_at_unix": int(time.time()),
         "artifacts": {label: {"path": str(path), "sha256": file_digest(path)} for label, path in paths.items()},
         "production_readiness": readiness_summary,
@@ -2769,6 +3258,9 @@ def main() -> None:
         "production_host_preflight": preflight_summary,
         "nitro_kms_evidence": nitro_summary,
         "nitro_evidence_binding": nitro_binding,
+        "hardware_assurance_evidence": hardware_assurance_summary
+        if hardware_assurance_summary is not None
+        else {"provided": False, "verified": False},
         "production_images_build": production_images_build_summary,
         "production_images_published": production_images_published_summary,
         "release_provenance": provenance_summary_out,

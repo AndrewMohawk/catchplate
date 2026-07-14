@@ -18,6 +18,7 @@ import build_production_images
 import production_release_input_preflight
 import run_production_readiness
 import test_production_release_input_preflight
+import verify_release_completion
 import verify_production_policy_identity
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -38,6 +39,10 @@ def sha256_prefixed_bytes(value: bytes) -> str:
     import hashlib
 
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def sha384(value: str) -> str:
+    return "sha384:" + value * 96
 
 
 def b64e(value: bytes) -> str:
@@ -94,6 +99,11 @@ def transparency_key_info() -> dict[str, Any]:
 
 def external_receipt_key_info() -> dict[str, Any]:
     key = Ed25519PrivateKey.from_private_bytes(b"\x06" * 32)
+    return ed25519_key_info(key)
+
+
+def hardware_verifier_key_info() -> dict[str, Any]:
+    key = Ed25519PrivateKey.from_private_bytes(b"\x05" * 32)
     return ed25519_key_info(key)
 
 
@@ -204,6 +214,40 @@ PROXY_REQUEST_DIGEST = digest("1")
 PROXY_OPERATION_DIGEST = digest("2")
 PROXY_SERVER_INSTANCE_ID = "spiffe://prod.serverware.dev/decision-gate/instance-01"
 PROXY_TLS_PEER_LEAF_CERTIFICATE_DIGEST = digest("a")
+FIXTURE_HOST_A_MACHINE_ID = "0123456789abcdef0123456789abcdef"
+FIXTURE_HOST_A_PRODUCT_UUID = "11111111-2222-4333-8444-555555555555"
+FIXTURE_HOST_A_BOOT_ID = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+FIXTURE_HOST_B_MACHINE_ID = "fedcba9876543210fedcba9876543210"
+FIXTURE_HOST_B_PRODUCT_UUID = "99999999-8888-4777-8666-555555555555"
+FIXTURE_HOST_B_BOOT_ID = "11111111-aaaa-4bbb-8ccc-222222222222"
+
+
+def fixture_current_host_identity(*, host_b: bool = False) -> dict[str, str]:
+    if host_b:
+        return verify_release_completion.current_host_identity_from_values(
+            machine_id=FIXTURE_HOST_B_MACHINE_ID,
+            product_uuid=FIXTURE_HOST_B_PRODUCT_UUID,
+            boot_id=FIXTURE_HOST_B_BOOT_ID,
+        )
+    return verify_release_completion.current_host_identity_from_values(
+        machine_id=FIXTURE_HOST_A_MACHINE_ID,
+        product_uuid=FIXTURE_HOST_A_PRODUCT_UUID,
+        boot_id=FIXTURE_HOST_A_BOOT_ID,
+    )
+
+
+def fixture_current_host_summary(*, host_b: bool = False) -> dict[str, Any]:
+    return {
+        "system": "Linux",
+        "machine": "x86_64",
+        "linux": True,
+        "nitro_nsm_device": True,
+        "apparmor_sysfs": True,
+        "skipped": False,
+        "preflight_bound": True,
+        "identity_recomputed": True,
+        "identity": fixture_current_host_identity(host_b=host_b),
+    }
 
 
 def proxy_response_key_info() -> dict[str, Any]:
@@ -805,6 +849,80 @@ def nitro_evidence(provenance_digest: str) -> dict[str, Any]:
     }
 
 
+def sign_hardware_assurance(
+    document: dict[str, Any],
+    key_info: dict[str, Any] | None = None,
+) -> None:
+    signer = key_info or hardware_verifier_key_info()
+    document["signing_key_id"] = signer["key_id"]
+    document["signature"] = "ed25519:" + b64e(
+        signer["key"].sign(canonical_json(document["statement"]).encode("utf-8"))
+    )
+
+
+def hardware_assurance_document(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
+    nitro_summary = verify_release_completion.verify_nitro_evidence(nitro, "hardware assurance fixture Nitro evidence")
+    issued_at = int(time.time())
+    document = {
+        "apiVersion": "serverware.hardwareAssurance/v1",
+        "kind": "ServerwareHardwareAssurance",
+        "statement": {
+            "verifier": {
+                "name": "fixture-independent-verifier",
+                "organization": "Serverware test assurance lab",
+                "independent": True,
+            },
+            "issued_at_unix": issued_at,
+            "expires_at_unix": issued_at + 300,
+            "challenge_nonce": b64e(b"hardware-assurance-fixture-nonce"),
+            "current_host_identity": verify_release_completion.current_host_identity_claim(
+                fixture_current_host_identity(),
+                observed_at_unix=issued_at,
+            ),
+            "attestation_document_sha256": nitro_summary["raw_attestation_document_sha256"],
+            "eif": {
+                "image_sha384": sha384("a"),
+                "build_manifest_sha256": digest("1"),
+                "signature_verified": True,
+                "evidence_sha256": digest("2"),
+            },
+            "pcrs": {"PCR0": sha384("a"), "PCR1": sha384("b"), "PCR2": sha384("c")},
+            "enclave": {
+                "cid": 16,
+                "parent_cid": 3,
+                "vsock_port": 5000,
+                "cid_evidence_sha256": digest("3"),
+                "vsock_evidence_sha256": digest("4"),
+                "vsock_handshake_verified": True,
+            },
+            "key_custody": {
+                "recipient_key_generated_in_enclave": True,
+                "kms_recipient_bound": True,
+                "plaintext_key_exported": False,
+                "parent_process_key_access": False,
+                "kms_recipient_bindings_sha256": sha256_prefixed_json(nitro_summary["material_release_receipts"]),
+                "evidence_sha256": digest("5"),
+            },
+            "no_parent_key": {
+                "verified": True,
+                "parent_key_material_absent": True,
+                "evidence_sha256": digest("6"),
+            },
+            "release_bindings": nitro_summary["attested_runtime"],
+            "artifact_bindings": {
+                "nitro_evidence_sha256": sha256_prefixed_bytes((tmp / "nitro-kms-evidence.json").read_bytes()),
+                "production_host_preflight_sha256": sha256_prefixed_bytes(
+                    (tmp / "production-host-preflight.json").read_bytes()
+                ),
+            },
+        },
+        "signing_key_id": "",
+        "signature": "",
+    }
+    sign_hardware_assurance(document)
+    return document
+
+
 def production_readiness(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
     checks = [
         "no-dev-fixtures",
@@ -1271,6 +1389,7 @@ def run_verifier(
     *extra: str,
     allow_host_bypass: bool = True,
     include_proxy_proof: bool = True,
+    include_hardware_assurance: bool = False,
 ) -> subprocess.CompletedProcess[bytes]:
     env = os.environ.copy()
     if allow_host_bypass:
@@ -1295,6 +1414,16 @@ def run_verifier(
             PROXY_TLS_CHANNEL_BINDING,
         ]
         if include_proxy_proof
+        else []
+    )
+    hardware_assurance_args = (
+        [
+            "--hardware-assurance",
+            str(tmp / "hardware-assurance.json"),
+            "--hardware-assurance-trusted-public-key",
+            str(tmp / "hardware-assurance-verifier.pub.pem"),
+        ]
+        if include_hardware_assurance
         else []
     )
     return subprocess.run(
@@ -1349,6 +1478,7 @@ def run_verifier(
             "--kms-materials",
             str(tmp / "kms-materials.json"),
             *proxy_proof_args,
+            *hardware_assurance_args,
             *extra,
         ],
         cwd=ROOT,
@@ -1361,6 +1491,38 @@ def run_verifier(
 
 def detail(result: subprocess.CompletedProcess[bytes]) -> str:
     return result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
+
+
+def expect_hardware_assurance_failure(
+    tmp: Path,
+    document: dict[str, Any],
+    expected_error: str,
+    label: str,
+) -> None:
+    write(tmp / "hardware-assurance.json", document)
+    rejected = run_verifier(tmp, include_hardware_assurance=True)
+    if rejected.returncode == 0 or expected_error not in detail(rejected):
+        raise AssertionError(f"completion verifier accepted {label}: {detail(rejected)}")
+
+
+def verify_hardware_assurance_fixture(
+    tmp: Path,
+    document: dict[str, Any],
+    current_host: dict[str, Any],
+) -> dict[str, Any]:
+    nitro = json.loads((tmp / "nitro-kms-evidence.json").read_text(encoding="utf-8"))
+    nitro_summary = verify_release_completion.verify_nitro_evidence(
+        nitro,
+        "hardware assurance fixture Nitro evidence",
+    )
+    return verify_release_completion.verify_hardware_assurance(
+        document,
+        trusted_public_key_pem=hardware_verifier_key_info()["public_key_pem"],
+        nitro_summary=nitro_summary,
+        nitro_evidence_sha256=sha256_file(tmp / "nitro-kms-evidence.json"),
+        production_host_preflight_sha256=sha256_file(tmp / "production-host-preflight.json"),
+        current_host=current_host,
+    )
 
 
 def expect_proxy_proof_failure(
@@ -1869,6 +2031,12 @@ def main() -> None:
             benchmark_document(),
         )
         write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+        valid_hardware_assurance = hardware_assurance_document(nitro, tmp)
+        write(tmp / "hardware-assurance.json", valid_hardware_assurance)
+        (tmp / "hardware-assurance-verifier.pub.pem").write_text(
+            hardware_verifier_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
         valid_proxy_response_proof = proxy_response_proof(provenance_summary["provenance_digest"])
         write(tmp / "proxy-response-proof.json", valid_proxy_response_proof)
         (tmp / "proxy-vendor-verifier-public-key.pem").write_text(
@@ -1886,8 +2054,18 @@ def main() -> None:
         proof = json.loads(result.stdout.decode("utf-8"))
         if proof.get("ok") is not True or not out_path.exists() or not proof.get("proof_sha256", "").startswith("sha256:"):
             raise AssertionError(f"completion verifier did not write a valid proof: {proof}")
+        if (
+            proof.get("apiVersion") != "serverware.completionProof/v3"
+            or proof.get("kind") != "ServerwarePreEnclaveReadiness"
+            or proof.get("completion_status") != "pre-enclave-readiness"
+            or proof.get("release_completion") != "not-final"
+            or proof.get("final_completion") is not False
+            or proof.get("hardware_proof") is not False
+            or (proof.get("nitro_kms_evidence") or {}).get("hardware_proof") is not False
+        ):
+            raise AssertionError(f"ordinary Docker/dev/NSM fixture exceeded the pre-enclave assurance ceiling: {proof}")
         proxy_summary = proof.get("production_proxy_response_proof") or {}
-        if proof.get("apiVersion") != "serverware.completionProof/v2" or not all(
+        if not all(
             proxy_summary.get(field) is True
             for field in (
                 "vendor_quote_verified",
@@ -1899,6 +2077,176 @@ def main() -> None:
             )
         ):
             raise AssertionError(f"completion verifier omitted verified production proxy proof bindings: {proof}")
+
+        missing_hardware_trust = run_verifier(
+            tmp,
+            "--hardware-assurance",
+            str(tmp / "hardware-assurance.json"),
+        )
+        if (
+            missing_hardware_trust.returncode == 0
+            or "requires both --hardware-assurance and --hardware-assurance-trusted-public-key"
+            not in detail(missing_hardware_trust)
+        ):
+            raise AssertionError(f"completion verifier accepted hardware evidence without a separate trust root: {detail(missing_hardware_trust)}")
+
+        hardware_result = run_verifier(tmp, include_hardware_assurance=True)
+        if hardware_result.returncode != 0:
+            raise AssertionError(f"completion verifier rejected valid signed hardware assurance evidence: {detail(hardware_result)}")
+        hardware_limited_proof = json.loads(hardware_result.stdout.decode("utf-8"))
+        hardware_summary = hardware_limited_proof.get("hardware_assurance_evidence") or {}
+        if (
+            hardware_summary.get("verified") is not True
+            or hardware_summary.get("current_host_identity_bound") is not False
+            or hardware_limited_proof.get("final_completion") is not False
+            or hardware_limited_proof.get("hardware_proof") is not False
+            or (hardware_limited_proof.get("assurance_ceiling") or {}).get("hardware_evidence_verified") is not True
+        ):
+            raise AssertionError(f"test-only host bypass escaped the hardware assurance ceiling: {hardware_limited_proof}")
+
+        exact_host_summary = fixture_current_host_summary()
+        exact_host_hardware_summary = verify_hardware_assurance_fixture(
+            tmp,
+            valid_hardware_assurance,
+            exact_host_summary,
+        )
+        if exact_host_hardware_summary.get("current_host_identity_bound") is not True:
+            raise AssertionError(
+                f"exact-host fixture did not bind signed hardware assurance: {exact_host_hardware_summary}"
+            )
+        final_assurance = verify_release_completion.completion_assurance(
+            exact_host_hardware_summary,
+            exact_host_summary,
+        )
+        if final_assurance.get("final_completion") is not True or final_assurance.get("hardware_proof") is not True:
+            raise AssertionError(f"fully verified hardware and current-host evidence did not enable final completion: {final_assurance}")
+
+        try:
+            verify_hardware_assurance_fixture(
+                tmp,
+                valid_hardware_assurance,
+                fixture_current_host_summary(host_b=True),
+            )
+        except ValueError as exc:
+            if "does not match current completion host" not in str(exc):
+                raise AssertionError(f"copied host-A evidence failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("completion verifier accepted copied host-A hardware evidence on host B")
+
+        unsigned_pcr_tamper = clone_document(valid_hardware_assurance)
+        unsigned_pcr_tamper["statement"]["pcrs"]["PCR2"] = sha384("d")
+        expect_hardware_assurance_failure(
+            tmp,
+            unsigned_pcr_tamper,
+            "hardware assurance signature verification failed",
+            "unsigned PCR tampering",
+        )
+
+        missing_host_identity = clone_document(valid_hardware_assurance)
+        missing_host_identity["statement"].pop("current_host_identity")
+        sign_hardware_assurance(missing_host_identity)
+        expect_hardware_assurance_failure(
+            tmp,
+            missing_host_identity,
+            "missing required fields",
+            "signed hardware evidence without a current-host identity",
+        )
+
+        stale_host_identity = clone_document(valid_hardware_assurance)
+        stale_host_identity["statement"]["current_host_identity"] = (
+            verify_release_completion.current_host_identity_claim(
+                fixture_current_host_identity(),
+                observed_at_unix=stale_host_identity["statement"]["issued_at_unix"]
+                - verify_release_completion.CURRENT_HOST_IDENTITY_MAX_OBSERVATION_AGE_SECONDS
+                - 1,
+            )
+        )
+        sign_hardware_assurance(stale_host_identity)
+        expect_hardware_assurance_failure(
+            tmp,
+            stale_host_identity,
+            "current-host identity observation is stale relative to assurance issuance",
+            "signed hardware evidence with a stale current-host identity observation",
+        )
+
+        missing_pcr = clone_document(valid_hardware_assurance)
+        missing_pcr["statement"]["pcrs"].pop("PCR2")
+        sign_hardware_assurance(missing_pcr)
+        expect_hardware_assurance_failure(tmp, missing_pcr, "missing required fields", "signed hardware evidence with a missing PCR")
+
+        unverified_vsock = clone_document(valid_hardware_assurance)
+        unverified_vsock["statement"]["enclave"]["vsock_handshake_verified"] = False
+        sign_hardware_assurance(unverified_vsock)
+        expect_hardware_assurance_failure(tmp, unverified_vsock, "did not verify a vsock handshake", "unverified vsock evidence")
+
+        parent_key_access = clone_document(valid_hardware_assurance)
+        parent_key_access["statement"]["key_custody"]["parent_process_key_access"] = True
+        sign_hardware_assurance(parent_key_access)
+        expect_hardware_assurance_failure(tmp, parent_key_access, "permits parent-process key access", "parent key access")
+
+        absent_no_parent_proof = clone_document(valid_hardware_assurance)
+        absent_no_parent_proof["statement"]["no_parent_key"]["parent_key_material_absent"] = False
+        sign_hardware_assurance(absent_no_parent_proof)
+        expect_hardware_assurance_failure(
+            tmp,
+            absent_no_parent_proof,
+            "found key material in a parent process",
+            "failed no-parent-key evidence",
+        )
+
+        mismatched_eif = clone_document(valid_hardware_assurance)
+        mismatched_eif["statement"]["eif"]["image_sha384"] = sha384("d")
+        sign_hardware_assurance(mismatched_eif)
+        expect_hardware_assurance_failure(tmp, mismatched_eif, "does not match PCR0", "EIF/PCR mismatch")
+
+        mismatched_release = clone_document(valid_hardware_assurance)
+        mismatched_release["statement"]["release_bindings"]["source_tree_digest"] = digest("0")
+        sign_hardware_assurance(mismatched_release)
+        expect_hardware_assurance_failure(
+            tmp,
+            mismatched_release,
+            "do not exactly match the Nitro-attested runtime",
+            "hardware evidence for another release",
+        )
+
+        mismatched_artifact = clone_document(valid_hardware_assurance)
+        mismatched_artifact["statement"]["artifact_bindings"]["nitro_evidence_sha256"] = digest("0")
+        sign_hardware_assurance(mismatched_artifact)
+        expect_hardware_assurance_failure(
+            tmp,
+            mismatched_artifact,
+            "does not bind the current Nitro evidence artifact",
+            "hardware evidence for another Nitro artifact",
+        )
+
+        reused_evidence = clone_document(valid_hardware_assurance)
+        reused_evidence["statement"]["no_parent_key"]["evidence_sha256"] = reused_evidence["statement"]["eif"][
+            "evidence_sha256"
+        ]
+        sign_hardware_assurance(reused_evidence)
+        expect_hardware_assurance_failure(
+            tmp,
+            reused_evidence,
+            "reused one evidence artifact",
+            "one placeholder artifact reused for distinct hardware claims",
+        )
+
+        rogue_signer = clone_document(valid_hardware_assurance)
+        rogue_key = ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x04" * 32))
+        sign_hardware_assurance(rogue_signer, rogue_key)
+        expect_hardware_assurance_failure(
+            tmp,
+            rogue_signer,
+            "does not match the separately trusted verifier key",
+            "self-selected hardware assurance signer",
+        )
+
+        stale_hardware = clone_document(valid_hardware_assurance)
+        stale_hardware["statement"]["issued_at_unix"] = int(time.time()) - 1000
+        stale_hardware["statement"]["expires_at_unix"] = int(time.time()) + 100
+        sign_hardware_assurance(stale_hardware)
+        expect_hardware_assurance_failure(tmp, stale_hardware, "hardware assurance is stale", "stale hardware evidence")
+        write(tmp / "hardware-assurance.json", valid_hardware_assurance)
 
         test_proxy_response_proof_requirements(
             tmp,
@@ -2383,7 +2731,7 @@ def main() -> None:
         if rejected_source.returncode == 0 or "source tree digest mismatch" not in detail(rejected_source):
             raise AssertionError(f"completion verifier accepted image signatures with wrong source binding: {detail(rejected_source)}")
 
-    print(canonical_json({"ok": True, "release_completion": "pass"}))
+    print(canonical_json({"ok": True, "attestation_assurance_ceiling": "pass"}))
 
 
 if __name__ == "__main__":

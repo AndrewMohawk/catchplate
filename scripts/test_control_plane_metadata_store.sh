@@ -32,6 +32,9 @@ assert int(tables.get("routes") or 0) >= 12, status
 sql = """
 SELECT json_build_object(
   'credentials', (SELECT COUNT(*) FROM credentials),
+  'pending_oauth_credentials', (SELECT COUNT(*) FROM pending_oauth_credentials),
+  'oidc_login_states', (SELECT COUNT(*) FROM oidc_login_states),
+  'oauth_revocation_work', (SELECT COUNT(*) FROM oauth_revocation_work),
   'routes', (SELECT COUNT(*) FROM routes),
   'approval_requests', (SELECT COUNT(*) FROM approval_requests),
   'control_plane_approvals', (SELECT COUNT(*) FROM control_plane_approvals),

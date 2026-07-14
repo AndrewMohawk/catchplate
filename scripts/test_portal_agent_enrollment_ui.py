@@ -177,6 +177,15 @@ def main() -> None:
             "sessionStorage.removeItem(tokenKey)",
             "'X-Serverware-Admin-Token': token",
             "'Authorization': `Bearer ${token}`",
+            'id="operator-sign-in"',
+            'id="operator-sign-out"',
+            "fetch('/api/auth/status'",
+            "fetch('/api/auth/oidc/start'",
+            "window.location.assign(payload.authorizationUrl)",
+            "api('/api/auth/logout', {method: 'POST'})",
+            "async function ensureCsrfToken()",
+            "'X-Serverware-CSRF-Token': csrf",
+            "credentials: 'same-origin'",
         )
         for marker in auth_markers:
             if marker not in ui_html:
@@ -233,6 +242,19 @@ def main() -> None:
             "metadata.provider_identity_verified === true",
             "verified identity",
             "<span class=\"pill warn\">refresh on use</span>",
+            "Verified accounts awaiting activation",
+            "function renderPendingOAuthCredentials()",
+            "state.pendingOAuthCredentials",
+            "item.requester_id === state.currentUserId",
+            "review.provider_account",
+            "review.provider_subject",
+            "review.scopes",
+            "Request approval and activate",
+            "`/api/oauth/pending/${id}/activate`",
+            "cancelPendingOAuthCredential",
+            "revokePendingOAuthCredential",
+            "item.revocation_status",
+            "Retry provider revocation",
         )
         for marker in oauth_markers:
             if marker not in ui_html:
@@ -255,7 +277,11 @@ def main() -> None:
             'id="jit-approval-status-filter"',
             'id="jit-approval-search"',
             'aria-current="true"',
-            "scrollIntoView({behavior: 'smooth', block: 'start'})",
+            "window.matchMedia?.('(prefers-reduced-motion: reduce)')",
+            "scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block: 'start'})",
+            'disabled aria-disabled="true" aria-describedby=',
+            "<h3>Approval review</h3>",
+            "review.expires_at",
         )
         for marker in queue_markers:
             if marker not in ui_html:
@@ -417,6 +443,27 @@ def main() -> None:
         for marker in audit_markers:
             if marker not in ui_html:
                 raise AssertionError(f"portal audit-investigation UI marker missing: {marker}")
+
+        attestation_markers = (
+            'class="attestation-section"',
+            'id="attestation-summary"',
+            'id="attestation-evidence"',
+            "function renderAttestation()",
+            "function refreshAttestation()",
+            "assurance.hardware_proof === true",
+            "assurance.workload_custody_proven === true",
+            "assurance.tls_peer_binding_proven === true",
+            "not hardware verified",
+            "document.source_tree_digest",
+            "document.data_plane_binary_digest",
+            "document.tls_exporter_binding || 'not bound'",
+            "api(`/attestation?nonce=${encodeURIComponent(generateEnrollmentNonce())}`)",
+        )
+        for marker in attestation_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal attestation UI marker missing: {marker}")
+        if '"hardware_proof": False' not in (ROOT / "serverware" / "attestation.py").read_text(encoding="utf-8"):
+            raise AssertionError("current attestation must expose its non-hardware assurance ceiling")
 
         confirmation_markers = (
             "Delete credential ${id}? Agents using it will fail closed.",
@@ -694,6 +741,12 @@ function credentialToJson(value){return value;}
                 raise AssertionError(f"unexpected common PolicyBundle template set: {sorted(templates)}")
             if "tweet.write" not in templates["x_one_post_daily"].get("requiredScopes", []):
                 raise AssertionError("X write template does not require the provider tweet.write scope")
+            stripe_required_headers = (
+                templates["stripe_payment_intent_jit"]["adapter"]["config"]["request"].get("requiredHeaders")
+                or {}
+            )
+            if "idempotency-key" not in stripe_required_headers:
+                raise AssertionError("Stripe payment template does not require a bounded idempotency key")
 
             for index, (template_id, template) in enumerate(templates.items(), start=1):
                 candidate = copy.deepcopy(snapshot.raw)

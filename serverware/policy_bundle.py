@@ -59,6 +59,16 @@ X_V2_BOUNDED_READ_OPERATIONS = frozenset(
         "webhooks.read",
     }
 )
+X_V2_RECENT_SEARCH_PATHS = frozenset(
+    {
+        "/2/tweets/counts/recent",
+        "/2/tweets/search/recent",
+    }
+)
+PROVIDER_ACCOUNT_OPERATION_FIELD = "providerAccount"
+NPM_WRITE_OPERATIONS = frozenset(
+    {"publish", "unpublish", "distTagWrite", "tokenWrite", "metadataWrite"}
+)
 SUPPORTED_CONSTRAINTS = {
     "rateLimit",
     "operationPolicy",
@@ -107,6 +117,25 @@ FORBIDDEN_AGENT_CREDENTIAL_HEADERS = {
     "cookie",
     "proxy-authorization",
 }
+NON_FORWARDABLE_AGENT_HEADERS = FORBIDDEN_AGENT_CREDENTIAL_HEADERS | {
+    "connection",
+    "content-length",
+    "host",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "x-serverware-agent",
+    "x-serverware-admin-token",
+    "x-serverware-audit-anchor-token",
+    "x-serverware-ca-install-token",
+    "x-serverware-csrf-token",
+    "x-serverware-data-plane-token",
+    "x-serverware-proof-nonce",
+}
 SAFE_RESPONSE_HEADERS = frozenset(
     {
         "cache-control",
@@ -120,6 +149,8 @@ SAFE_RESPONSE_HEADERS = frozenset(
 MAX_PROVIDER_RESPONSE_BODY_BYTES = 1024 * 1024
 MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024
 RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
+HTTP_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+REQUIRED_REQUEST_HEADER_RULE_FIELDS = {"type", "minLength", "maxLength", "pattern"}
 FIELD_RULE_FIELDS = {
     "required",
     "type",
@@ -158,6 +189,41 @@ CONSTRAINT_TYPE_FIELDS = {
 
 class PolicyBundleError(ValueError):
     pass
+
+
+def provider_account_scope_value(provider: str, provider_subject: str | None) -> str | None:
+    if not provider or not provider_subject:
+        return None
+    material = f"{provider}\0{provider_subject}".encode("utf-8")
+    return "sha256:" + hashlib.sha256(material).hexdigest()
+
+
+def credential_injection_target(injection: dict[str, Any]) -> tuple[str, str] | None:
+    if not isinstance(injection, dict):
+        return None
+    injection_type = injection.get("type", "bearer")
+    if not isinstance(injection_type, str):
+        return None
+
+    def target_value(name: str, default: str) -> str | None:
+        value = injection.get(name, default)
+        return value if isinstance(value, str) else None
+
+    if injection_type == "bearer":
+        value = target_value("header", "Authorization")
+        return ("header", value.lower()) if value is not None else None
+    if injection_type == "header":
+        value = target_value("name", "X-Api-Key")
+        return ("header", value.lower()) if value is not None else None
+    if injection_type == "basic":
+        value = target_value("header", "Authorization")
+        return ("header", value.lower()) if value is not None else None
+    if injection_type == "cookie":
+        return "header", "cookie"
+    if injection_type == "query":
+        value = target_value("name", "access_token")
+        return ("query", value) if value is not None else None
+    return None
 
 
 def canonical_json(value: Any) -> str:
@@ -450,6 +516,88 @@ def _validate_field_rule(
             f"route {route_id} constraint {constraint_id} field {field} min must not exceed max"
         )
     _validate_safe_pattern(route_id, constraint_id, field, rule)
+
+
+def _validate_credential_injection(credential_id: str, raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise PolicyBundleError(f"credential {credential_id} injection must be an object")
+    injection = dict(raw or {"type": "bearer"})
+    injection_type = injection.get("type", "bearer")
+    if injection_type not in {"bearer", "basic", "header", "query", "cookie"}:
+        raise PolicyBundleError(f"credential {credential_id} has unsupported injection type {injection_type!r}")
+    target = credential_injection_target(injection)
+    if target is None:
+        raise PolicyBundleError(f"credential {credential_id} has no enforceable injection target")
+    location, name = target
+    if location == "header":
+        if not name or len(name) > 128 or HTTP_HEADER_NAME_RE.fullmatch(name) is None:
+            raise PolicyBundleError(f"credential {credential_id} has an invalid injection header")
+    elif not name or len(name) > 128 or any(ord(character) < 33 or ord(character) == 127 for character in name):
+        raise PolicyBundleError(f"credential {credential_id} has an invalid injection query key")
+    return injection
+
+
+def _validate_generic_required_headers(
+    route_id: str,
+    request_config: dict[str, Any],
+    allowed_headers: set[str],
+) -> set[str]:
+    raw = request_config.get("requiredHeaders") or {}
+    if not isinstance(raw, dict) or len(raw) > 16:
+        raise PolicyBundleError(
+            f"route {route_id} generic.rest requiredHeaders must be an object with at most 16 entries"
+        )
+    required_headers: set[str] = set()
+    for name, rule in raw.items():
+        if (
+            not isinstance(name, str)
+            or name != name.lower()
+            or len(name) > 128
+            or HTTP_HEADER_NAME_RE.fullmatch(name) is None
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest required header names must be lower-case HTTP field names"
+            )
+        if name not in allowed_headers or name in NON_FORWARDABLE_AGENT_HEADERS:
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest required header {name} is not an allowed forwarded header"
+            )
+        if not isinstance(rule, dict):
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest required header {name} rule must be an object"
+            )
+        unknown = sorted(set(rule) - REQUIRED_REQUEST_HEADER_RULE_FIELDS)
+        if unknown:
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest required header {name} has unsupported rules: {', '.join(unknown)}"
+            )
+        if rule.get("type") != "string":
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest required header {name} type must be string"
+            )
+        minimum = rule.get("minLength")
+        maximum = rule.get("maxLength")
+        if (
+            type(minimum) is not int
+            or type(maximum) is not int
+            or minimum < 1
+            or maximum < minimum
+            or maximum > 8192
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest required header {name} must define lengths between 1 and 8192"
+            )
+        pattern = rule.get("pattern")
+        if pattern is not None and (
+            not isinstance(pattern, str)
+            or parse_bounded_pattern(pattern) is None
+            or maximum > 4096
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest required header {name} pattern must use the bounded runtime grammar"
+            )
+        required_headers.add(name)
+    return required_headers
 
 
 @dataclass(frozen=True)
@@ -931,6 +1079,35 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
     return tuple(compiled)
 
 
+def _validate_provider_account_rate_limits(
+    route_id: str,
+    constraints: tuple[dict[str, Any], ...],
+    credential: CredentialPolicy | None,
+) -> None:
+    identity_scopes = {"principal", "credential", "credentialVersion"}
+    for constraint in constraints:
+        if constraint.get("type") != "rateLimit":
+            continue
+        key = constraint.get("key") or {}
+        operation_fields = set(key.get("operationFields") or [])
+        if PROVIDER_ACCOUNT_OPERATION_FIELD not in operation_fields:
+            continue
+        scope = set(key.get("scope") or ["principal", "credential", "route", "operation"])
+        conflicting = sorted(scope.intersection(identity_scopes))
+        if conflicting:
+            raise PolicyBundleError(
+                f"route {route_id} provider-account rate limit {constraint.get('id')} "
+                f"must not be partitioned by {', '.join(conflicting)}"
+            )
+        if credential is None or provider_account_scope_value(
+            credential.provider, credential.provider_subject
+        ) is None:
+            raise PolicyBundleError(
+                f"route {route_id} provider-account rate limit {constraint.get('id')} "
+                "requires a signed credential providerSubject"
+            )
+
+
 def _validate_response_body_limit(
     route_id: str,
     profile: dict[str, Any],
@@ -1105,6 +1282,10 @@ def _validate_adapter_security_invariants(
                 raise PolicyBundleError(
                     f"route {route_id} X recent-search policy may only allow search.read"
                 )
+            if mode == "recentSearchOnly" and not set(paths).issubset(X_V2_RECENT_SEARCH_PATHS):
+                raise PolicyBundleError(
+                    f"route {route_id} X recent-search policy may only match exact recent-search endpoints"
+                )
             if "streams.read" in allowed_reads:
                 if allowed_reads != {"streams.read"} or response_mode != "stream":
                     raise PolicyBundleError(
@@ -1137,7 +1318,7 @@ def _validate_adapter_security_invariants(
 
     if adapter_type == "npm.registry":
         operations = set(adapter_config.get("operations") or [])
-        write_operations = operations.intersection({"publish", "distTagWrite", "tokenWrite", "metadataWrite"})
+        write_operations = operations.intersection(NPM_WRITE_OPERATIONS)
         response = adapter_config.get("response")
         _validate_bounded_response_profiles(route_id, response, "npm")
         if not write_operations:
@@ -1237,12 +1418,16 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                 raise PolicyBundleError(f"credential {credential_id} provider subject requires a concrete provider")
         if provider.lower() in {"google", "google.oauth2", "x", "x.oauth2", "twitter"} and provider_subject is None:
             raise PolicyBundleError(f"OAuth credential {credential_id} requires a signed provider subject")
+        injection = _validate_credential_injection(
+            credential_id,
+            item.get("injection", {"type": "bearer"}),
+        )
         credentials[credential_id] = CredentialPolicy(
             id=credential_id,
             provider=provider,
             provider_subject=provider_subject,
             scopes=tuple(item.get("scopes") or ()),
-            injection=dict(item.get("injection") or {"type": "bearer"}),
+            injection=injection,
         )
 
     routes: list[RoutePolicy] = []
@@ -1327,12 +1512,56 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                     f"route {route_id} generic.rest policy is missing explicit controls: "
                     f"request={missing_request} response={missing_response}"
                 )
-            allowed_headers = [str(item).strip().lower() for item in request_config.get("allowedHeaders") or []]
-            forbidden_headers = sorted(FORBIDDEN_AGENT_CREDENTIAL_HEADERS.intersection(allowed_headers))
+            raw_allowed_headers = request_config.get("allowedHeaders")
+            if not isinstance(raw_allowed_headers, list) or any(
+                not isinstance(header, str)
+                or not header
+                or len(header) > 128
+                or HTTP_HEADER_NAME_RE.fullmatch(header) is None
+                for header in raw_allowed_headers
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} generic.rest allowedHeaders must contain HTTP field names"
+                )
+            allowed_headers = [header.lower() for header in raw_allowed_headers]
+            if len(allowed_headers) != len(set(allowed_headers)):
+                raise PolicyBundleError(
+                    f"route {route_id} generic.rest allowedHeaders must be unique after normalization"
+                )
+            allowed_header_set = set(allowed_headers)
+            forbidden_headers = sorted(FORBIDDEN_AGENT_CREDENTIAL_HEADERS.intersection(allowed_header_set))
             if forbidden_headers:
                 raise PolicyBundleError(
                     f"route {route_id} generic.rest allows credential headers supplied by the agent: {forbidden_headers}"
                 )
+            required_headers = _validate_generic_required_headers(
+                route_id,
+                request_config,
+                allowed_header_set,
+            )
+            raw_allowed_query = request_config.get("allowedQueryKeys")
+            if not isinstance(raw_allowed_query, list) or any(
+                not isinstance(key, str) or not key or len(key) > 256 for key in raw_allowed_query
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} generic.rest allowedQueryKeys must contain bounded strings"
+                )
+            if len(raw_allowed_query) != len(set(raw_allowed_query)):
+                raise PolicyBundleError(
+                    f"route {route_id} generic.rest allowedQueryKeys must be unique"
+                )
+            if credential_ref:
+                target = credential_injection_target(credentials[credential_ref].injection)
+                if target is not None:
+                    location, name = target
+                    if location == "header" and (name in allowed_header_set or name in required_headers):
+                        raise PolicyBundleError(
+                            f"route {route_id} generic.rest agent header {name} collides with credential injection"
+                        )
+                    if location == "query" and name in set(raw_allowed_query):
+                        raise PolicyBundleError(
+                            f"route {route_id} generic.rest agent query key {name} collides with credential injection"
+                        )
         route_principals = tuple(item.get("principals") or ())
         for principal_id in route_principals:
             if principal_id != "*" and principal_id not in principals:
@@ -1366,6 +1595,11 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             if authn.get("webauthnRequired") and not authn.get("allowedAuthenticatorClasses"):
                 raise PolicyBundleError(f"route {route_id} WebAuthn JIT policy must define allowed authenticator classes")
         constraints = _validate_constraints(route_id, item.get("constraints"))
+        _validate_provider_account_rate_limits(
+            route_id,
+            constraints,
+            credentials.get(credential_ref) if credential_ref else None,
+        )
         _validate_adapter_security_invariants(
             route_id,
             adapter_type,

@@ -23,6 +23,9 @@ from serverware.config import (
     ADMIN_USER_ID,
     OIDC_ALLOWED_ALGORITHMS,
     OIDC_AUDIENCE,
+    OIDC_AUTHORIZATION_ENDPOINT,
+    OIDC_BROWSER_LOGIN_ENABLED,
+    OIDC_CLIENT_ID,
     OIDC_ENABLED,
     OIDC_ISSUER,
     OIDC_JWKS_JSON,
@@ -30,6 +33,7 @@ from serverware.config import (
     OIDC_LEEWAY_SECONDS,
     OIDC_ROLE_CLAIM,
     OIDC_SUBJECT_CLAIM,
+    OIDC_TOKEN_ENDPOINT,
     RELEASE_CHANNEL,
     ensure_data_dirs,
 )
@@ -37,7 +41,9 @@ from serverware.config import (
 
 CSRF_COOKIE_NAME = "serverware_csrf"
 CSRF_HEADER_NAME = "X-Serverware-CSRF-Token"
+OIDC_SESSION_COOKIE_NAME = "serverware_oidc_session"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+MAX_OIDC_BEARER_TOKEN_BYTES = 64 * 1024
 
 
 class OIDCAuthError(ValueError):
@@ -128,18 +134,31 @@ def _oidc_jwks() -> dict[str, object]:
     return data
 
 
-def _oidc_key_for_header(header: dict[str, object]) -> dict[str, object]:
+def _oidc_key_for_header(header: dict[str, object], algorithm: str) -> dict[str, object]:
     jwks = _oidc_jwks()
     keys = [key for key in jwks.get("keys", []) if isinstance(key, dict)]
     kid = header.get("kid")
     if kid:
         for key in keys:
             if key.get("kid") == kid:
-                return key
-        raise OIDCAuthError("OIDC token kid is not trusted")
-    if len(keys) == 1:
-        return keys[0]
-    raise OIDCAuthError("OIDC token kid is required when JWKS has multiple keys")
+                selected = key
+                break
+        else:
+            raise OIDCAuthError("OIDC token kid is not trusted")
+    elif len(keys) == 1:
+        selected = keys[0]
+    else:
+        raise OIDCAuthError("OIDC token kid is required when JWKS has multiple keys")
+    key_use = selected.get("use")
+    if key_use is not None and key_use != "sig":
+        raise OIDCAuthError("OIDC JWK is not authorized for signatures")
+    key_ops = selected.get("key_ops")
+    if key_ops is not None and (not isinstance(key_ops, list) or "verify" not in key_ops):
+        raise OIDCAuthError("OIDC JWK is not authorized for verification")
+    key_algorithm = selected.get("alg")
+    if key_algorithm is not None and key_algorithm != algorithm:
+        raise OIDCAuthError("OIDC JWK algorithm does not match the token")
+    return selected
 
 
 def _verify_oidc_signature(algorithm: str, jwk: dict[str, object], signing_input: bytes, signature: bytes) -> None:
@@ -177,7 +196,7 @@ def _verify_oidc_signature(algorithm: str, jwk: dict[str, object], signing_input
     raise OIDCAuthError(f"OIDC token algorithm/key type is unsupported: {algorithm}/{key_type}")
 
 
-def _validate_oidc_claims(payload: dict[str, object]) -> None:
+def _validate_oidc_claims(payload: dict[str, object], *, expected_nonce: str | None = None) -> None:
     now = int(time.time())
     exp = payload.get("exp")
     if not isinstance(exp, int) or exp < now - OIDC_LEEWAY_SECONDS:
@@ -192,9 +211,23 @@ def _validate_oidc_claims(payload: dict[str, object]) -> None:
         raise OIDCAuthError("OIDC issuer mismatch")
     if OIDC_AUDIENCE:
         audience = payload.get("aud")
-        audiences = {audience} if isinstance(audience, str) else set(audience or []) if isinstance(audience, list) else set()
+        if isinstance(audience, str):
+            audiences = {audience}
+        elif isinstance(audience, list) and audience and all(isinstance(item, str) for item in audience):
+            audiences = set(audience)
+        else:
+            raise OIDCAuthError("OIDC audience claim is invalid")
         if OIDC_AUDIENCE not in audiences:
             raise OIDCAuthError("OIDC audience mismatch")
+        authorized_party = payload.get("azp")
+        if len(audiences) > 1 and not isinstance(authorized_party, str):
+            raise OIDCAuthError("OIDC authorized party is required for multiple audiences")
+        if authorized_party is not None and authorized_party != OIDC_AUDIENCE:
+            raise OIDCAuthError("OIDC authorized party mismatch")
+    if expected_nonce is not None:
+        nonce = payload.get("nonce")
+        if not isinstance(nonce, str) or not hmac.compare_digest(nonce, expected_nonce):
+            raise OIDCAuthError("OIDC nonce mismatch")
 
 
 def _roles_from_claim(value: object) -> frozenset[str]:
@@ -226,7 +259,7 @@ def _authoritative_oidc_roles(user_id: str, claimed_roles: frozenset[str]) -> fr
 
 
 def _refresh_oidc_authorization(identity: AdminIdentity) -> AdminIdentity:
-    if identity.auth_method != "oidc-bearer":
+    if not identity.auth_method.startswith("oidc-"):
         return identity
     try:
         roles = _authoritative_oidc_roles(identity.user_id, identity.roles)
@@ -237,9 +270,18 @@ def _refresh_oidc_authorization(identity: AdminIdentity) -> AdminIdentity:
     return AdminIdentity(identity.user_id, roles, identity.auth_method)
 
 
-def oidc_identity_from_token(token: str | None) -> AdminIdentity | None:
+def oidc_identity_from_token(
+    token: str | None,
+    *,
+    expected_nonce: str | None = None,
+    auth_method: str = "oidc-bearer",
+) -> AdminIdentity | None:
     if not OIDC_ENABLED or not token:
         return None
+    if not OIDC_ISSUER or not OIDC_AUDIENCE:
+        raise OIDCAuthError("OIDC issuer and audience must be configured")
+    if len(token.encode("utf-8")) > MAX_OIDC_BEARER_TOKEN_BYTES:
+        raise OIDCAuthError("OIDC bearer token is too large")
     parts = token.split(".")
     if len(parts) != 3:
         raise OIDCAuthError("OIDC bearer token must be a JWT")
@@ -253,9 +295,9 @@ def oidc_identity_from_token(token: str | None) -> AdminIdentity | None:
     algorithm = str(header.get("alg") or "")
     if algorithm not in set(OIDC_ALLOWED_ALGORITHMS):
         raise OIDCAuthError("OIDC token algorithm is not allowed")
-    jwk = _oidc_key_for_header(header)
+    jwk = _oidc_key_for_header(header, algorithm)
     _verify_oidc_signature(algorithm, jwk, f"{parts[0]}.{parts[1]}".encode("ascii"), _b64url_decode(parts[2]))
-    _validate_oidc_claims(payload)
+    _validate_oidc_claims(payload, expected_nonce=expected_nonce)
     subject = payload.get(OIDC_SUBJECT_CLAIM) or payload.get("sub")
     if not isinstance(subject, str) or not subject:
         raise OIDCAuthError("OIDC token subject is missing")
@@ -263,7 +305,7 @@ def oidc_identity_from_token(token: str | None) -> AdminIdentity | None:
     if not roles:
         raise OIDCAuthError("OIDC token is missing Serverware RBAC roles")
     user_id = f"oidc:{subject}"
-    return AdminIdentity(user_id, _authoritative_oidc_roles(user_id, roles), "oidc-bearer")
+    return AdminIdentity(user_id, _authoritative_oidc_roles(user_id, roles), auth_method)
 
 
 def require_admin(
@@ -273,6 +315,7 @@ def require_admin(
     bearer = request.headers.get("Authorization", "")
     bearer_token = bearer.removeprefix("Bearer ").strip() if bearer.startswith("Bearer ") else None
     cookie_token = request.cookies.get("serverware_admin")
+    oidc_cookie_token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
     if check_admin_token(x_serverware_admin_token):
         return AdminIdentity(ADMIN_USER_ID, frozenset(ADMIN_ROLES), "admin-token-header")
     if check_admin_token(bearer_token):
@@ -289,6 +332,19 @@ def require_admin(
         return oidc_identity
     if check_admin_token(cookie_token):
         return AdminIdentity(ADMIN_USER_ID, frozenset(ADMIN_ROLES), "admin-cookie")
+    try:
+        oidc_cookie_identity = oidc_identity_from_token(
+            oidc_cookie_token,
+            auth_method="oidc-session",
+        )
+    except OIDCAuthoritativeStateError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except OIDCAccessDenied as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except OIDCAuthError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc), headers={"WWW-Authenticate": "Bearer"}) from exc
+    if oidc_cookie_identity:
+        return oidc_cookie_identity
     raise HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="admin authentication required",
@@ -337,7 +393,16 @@ def validate_csrf_request(request: Request) -> None:
     if not path.startswith("/api/") or path.startswith("/api/data-plane/"):
         return
     cookie_admin_token = request.cookies.get("serverware_admin")
-    if not check_admin_token(cookie_admin_token):
+    oidc_cookie_token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
+    oidc_cookie_valid = False
+    try:
+        oidc_cookie_valid = oidc_identity_from_token(
+            oidc_cookie_token,
+            auth_method="oidc-session",
+        ) is not None
+    except (OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError):
+        oidc_cookie_valid = False
+    if not check_admin_token(cookie_admin_token) and not oidc_cookie_valid:
         return
     if _request_has_valid_non_cookie_admin_auth(request):
         return
@@ -379,6 +444,14 @@ def admin_status() -> dict[str, object]:
             "role_claim": OIDC_ROLE_CLAIM,
             "subject_claim": OIDC_SUBJECT_CLAIM,
             "allowed_algorithms": list(OIDC_ALLOWED_ALGORITHMS),
+            "browser_login_enabled": OIDC_BROWSER_LOGIN_ENABLED,
+            "browser_login_configured": bool(
+                OIDC_ENABLED
+                and OIDC_BROWSER_LOGIN_ENABLED
+                and OIDC_AUTHORIZATION_ENDPOINT
+                and OIDC_TOKEN_ENDPOINT
+                and OIDC_CLIENT_ID
+            ),
         },
         "csrf": {
             "cookie_protection": "double-submit",

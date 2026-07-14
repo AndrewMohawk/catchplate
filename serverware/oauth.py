@@ -17,6 +17,7 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from serverware import db
 from serverware.config import (
     GOOGLE_OAUTH_CLIENT_ID,
     GOOGLE_OAUTH_CLIENT_SECRET,
@@ -60,6 +61,7 @@ class OAuthProvider:
     display_name: str
     authorization_url: str
     token_url: str
+    revocation_url: str
     identity_url: str
     client_id: str
     client_secret: str
@@ -80,6 +82,7 @@ def _providers() -> dict[str, OAuthProvider]:
         display_name="X / Twitter",
         authorization_url="https://twitter.com/i/oauth2/authorize",
         token_url="https://api.twitter.com/2/oauth2/token",
+        revocation_url="https://api.twitter.com/2/oauth2/revoke",
         identity_url="https://api.x.com/2/users/me?user.fields=id,name,username,verified",
         client_id=X_OAUTH_CLIENT_ID,
         client_secret=X_OAUTH_CLIENT_SECRET,
@@ -95,6 +98,7 @@ def _providers() -> dict[str, OAuthProvider]:
             display_name="Google",
             authorization_url="https://accounts.google.com/o/oauth2/v2/auth",
             token_url="https://oauth2.googleapis.com/token",
+            revocation_url="https://oauth2.googleapis.com/revoke",
             identity_url="https://openidconnect.googleapis.com/v1/userinfo",
             client_id=GOOGLE_OAUTH_CLIENT_ID,
             client_secret=GOOGLE_OAUTH_CLIENT_SECRET,
@@ -214,6 +218,46 @@ def _bounded_metadata(metadata: dict[str, Any] | None) -> dict[str, Any]:
     return value
 
 
+def _bounded_reconnect_binding(
+    provider: OAuthProvider,
+    reconnect_binding: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if reconnect_binding is None:
+        return None
+    if not isinstance(reconnect_binding, dict) or set(reconnect_binding) != {
+        "credential_id",
+        "credential_version",
+        "provider",
+        "provider_subject",
+        "provider_account",
+    }:
+        raise OAuthError("OAuth reconnect binding is malformed")
+    credential_version = reconnect_binding.get("credential_version")
+    if (
+        not isinstance(credential_version, int)
+        or isinstance(credential_version, bool)
+        or credential_version < 1
+    ):
+        raise OAuthError("OAuth reconnect credential version is invalid")
+    if reconnect_binding.get("provider") != provider.id:
+        raise OAuthError("OAuth reconnect provider does not match the existing credential")
+    for label, key, maximum in (
+        ("credential ID", "credential_id", 512),
+        ("provider subject", "provider_subject", 512),
+        ("provider account", "provider_account", 512),
+    ):
+        value = reconnect_binding.get(key)
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or len(value) > maximum
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise OAuthError(f"OAuth reconnect {label} is invalid")
+    return dict(reconnect_binding)
+
+
 def _read_states() -> dict[str, Any]:
     try:
         loaded = json.loads(OAUTH_STATE_PATH.read_text())
@@ -273,6 +317,7 @@ def create_authorization_url(
     browser_nonce: str,
     control_plane_mfa: dict[str, Any] | None = None,
     control_plane_approval: dict[str, Any] | None = None,
+    reconnect_binding: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     provider = provider_for(provider_id)
     if not provider.configured:
@@ -283,6 +328,7 @@ def create_authorization_url(
         f"{provider.display_name} OAuth credential",
     )
     metadata_value = _bounded_metadata(metadata)
+    reconnect_value = _bounded_reconnect_binding(provider, reconnect_binding)
     if not isinstance(browser_nonce, str) or _OAUTH_BROWSER_NONCE_RE.fullmatch(browser_nonce) is None:
         raise OAuthError("OAuth browser binding is malformed")
 
@@ -298,6 +344,7 @@ def create_authorization_url(
         "browser_nonce_sha256": "sha256:" + hashlib.sha256(browser_nonce.encode("ascii")).hexdigest(),
         "control_plane_mfa": control_plane_mfa,
         "control_plane_approval": control_plane_approval,
+        "reconnect": reconnect_value,
         "code_verifier": verifier,
         "redirect_uri": provider.redirect_uri,
         "created_at_epoch": _now(),
@@ -474,90 +521,176 @@ def exchange_authorization_code(
     if not isinstance(code, str) or not code or len(code.encode("utf-8")) > MAX_OAUTH_CODE_BYTES:
         raise OAuthError("OAuth authorization code is empty or too large")
     record = consume_state(provider_id=provider.id, state=state, browser_nonce=browser_nonce)
-    token_response = _post_token_request(
-        provider,
-        _token_request_body(provider, record, code),
-        _token_request_headers(provider),
-    )
-    access_token = token_response.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise OAuthError("OAuth token endpoint did not return access_token")
-    if len(access_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
-        raise OAuthError("OAuth token endpoint returned an oversized access token")
-    refresh_token = token_response.get("refresh_token")
-    if not isinstance(refresh_token, str) or not refresh_token:
-        raise OAuthError("OAuth token endpoint did not return a refresh token; reconnect with offline access")
-    if len(refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
-        raise OAuthError("OAuth token endpoint returned an oversized refresh token")
-    token_type = token_response.get("token_type") or "Bearer"
-    if not isinstance(token_type, str) or token_type.lower() != "bearer":
-        raise OAuthError("OAuth token endpoint returned an unsupported token type")
-    provider_identity = _fetch_provider_identity(provider, access_token)
-    now = _now()
-    expires_in = token_response.get("expires_in")
-    if (
-        not isinstance(expires_in, (int, float))
-        or isinstance(expires_in, bool)
-        or expires_in <= 0
-        or expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
-    ):
-        raise OAuthError("OAuth token endpoint returned an invalid access-token lifetime")
-    expires_at_epoch_ms = int((now + int(expires_in)) * 1000)
-    refresh_token_expires_at_epoch_ms = None
-    refresh_token_expires_in = token_response.get("refresh_token_expires_in")
-    if refresh_token_expires_in is not None and (
-        not isinstance(refresh_token_expires_in, (int, float))
-        or isinstance(refresh_token_expires_in, bool)
-        or refresh_token_expires_in <= 0
-        or refresh_token_expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
-    ):
-        raise OAuthError("OAuth token endpoint returned an invalid refresh-token lifetime")
-    if refresh_token_expires_in is not None:
-        refresh_token_expires_at_epoch_ms = int((now + int(refresh_token_expires_in)) * 1000)
-    scope_string = str(token_response.get("scope") or " ".join(record.get("scopes") or []))
-    scopes = [scope for scope in scope_string.split(" ") if scope]
-    requested_scopes = {scope for scope in record.get("scopes") or [] if isinstance(scope, str) and scope}
-    if not scopes or not set(scopes).issubset(requested_scopes):
-        raise OAuthError("OAuth token endpoint expanded or omitted the requested scope binding")
-    token_secret = {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "Bearer",
-        "scope": scope_string,
-        "expires_at_epoch_ms": expires_at_epoch_ms,
-        "refresh_token_expires_at_epoch_ms": refresh_token_expires_at_epoch_ms,
-    }
-    token_secret = {key: value for key, value in token_secret.items() if value not in (None, "")}
-    metadata = {
-        **(record.get("metadata") or {}),
-        "oauth": True,
-        "refreshable": True,
-        "provider": provider.metadata_provider,
-        "provider_id": provider.id,
-        "scopes": scopes,
-        "token_type": token_secret.get("token_type", "Bearer"),
-        "expires_at_epoch_ms": expires_at_epoch_ms,
-        "refresh_token_expires_at_epoch_ms": refresh_token_expires_at_epoch_ms,
-        "created_by": record.get("actor_id"),
-        "injection_field": "access_token",
-        **provider_identity,
-    }
-    if provider.id == "x":
-        metadata["x_app_id"] = provider.client_id
-    return {
-        "name": str(record.get("credential_name") or f"{provider.display_name} OAuth credential"),
-        "kind": "oauth2",
-        "secret": json.dumps(token_secret, separators=(",", ":"), sort_keys=True),
-        "metadata": {key: value for key, value in metadata.items() if value is not None},
-        "provider": provider.id,
-        "scopes": scopes,
-        "expiresAtEpochMs": expires_at_epoch_ms,
-        "createdBy": record.get("actor_id"),
-        "controlPlaneMfa": record.get("control_plane_mfa"),
-        "controlPlaneApproval": record.get("control_plane_approval"),
-        "providerAccount": provider_identity["provider_account"],
-        "providerSubject": provider_identity["provider_subject"],
-    }
+    actor_id = str(record.get("actor_id") or "oauth-callback")
+    try:
+        revocation_work_id = db.reserve_oauth_revocation_work(
+            provider_id=provider.id,
+            actor_id=actor_id,
+            source="authorization_code_exchange",
+        )
+    except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
+        raise OAuthError("OAuth token exchange is unavailable while revocation capacity is exhausted") from exc
+
+    material_attached = False
+    try:
+        token_response = _post_token_request(
+            provider,
+            _token_request_body(provider, record, code),
+            _token_request_headers(provider),
+        )
+        revocable_secret = {
+            key: value
+            for key, value in {
+                "access_token": token_response.get("access_token"),
+                "refresh_token": token_response.get("refresh_token"),
+                "token_type": token_response.get("token_type") or "Bearer",
+            }.items()
+            if isinstance(value, str) and value
+        }
+        if "access_token" in revocable_secret or "refresh_token" in revocable_secret:
+            revocable_secret_json = json.dumps(
+                revocable_secret,
+                separators=(",", ":"),
+                sort_keys=True,
+            )
+            try:
+                db.attach_oauth_revocation_material(
+                    revocation_work_id,
+                    secret=revocable_secret_json,
+                )
+            except Exception as retention_exc:
+                try:
+                    revoke_oauth_token(
+                        provider_id=provider.id,
+                        token_secret=revocable_secret,
+                    )
+                except OAuthError as revocation_exc:
+                    try:
+                        db.attach_oauth_revocation_material(
+                            revocation_work_id,
+                            secret=revocable_secret_json,
+                        )
+                        material_attached = True
+                    except Exception as retry_exc:
+                        raise OAuthError(
+                            "issued OAuth material could neither be retained nor revoked"
+                        ) from retry_exc
+                    raise OAuthError(
+                        "issued OAuth material was retained after immediate revocation failed"
+                    ) from revocation_exc
+                else:
+                    db.complete_oauth_revocation_work(revocation_work_id)
+                    raise OAuthError(
+                        "issued OAuth material was revoked because durable retention failed"
+                    ) from retention_exc
+            material_attached = True
+
+        access_token = token_response.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise OAuthError("OAuth token endpoint did not return access_token")
+        if len(access_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+            raise OAuthError("OAuth token endpoint returned an oversized access token")
+        refresh_token = token_response.get("refresh_token")
+        if not isinstance(refresh_token, str) or not refresh_token:
+            raise OAuthError("OAuth token endpoint did not return a refresh token; reconnect with offline access")
+        if len(refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+            raise OAuthError("OAuth token endpoint returned an oversized refresh token")
+        token_type = token_response.get("token_type") or "Bearer"
+        if not isinstance(token_type, str) or token_type.lower() != "bearer":
+            raise OAuthError("OAuth token endpoint returned an unsupported token type")
+        provider_identity = _fetch_provider_identity(provider, access_token)
+        now = _now()
+        expires_in = token_response.get("expires_in")
+        if (
+            not isinstance(expires_in, (int, float))
+            or isinstance(expires_in, bool)
+            or expires_in <= 0
+            or expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
+        ):
+            raise OAuthError("OAuth token endpoint returned an invalid access-token lifetime")
+        expires_at_epoch_ms = int((now + int(expires_in)) * 1000)
+        refresh_token_expires_at_epoch_ms = None
+        refresh_token_expires_in = token_response.get("refresh_token_expires_in")
+        if refresh_token_expires_in is not None and (
+            not isinstance(refresh_token_expires_in, (int, float))
+            or isinstance(refresh_token_expires_in, bool)
+            or refresh_token_expires_in <= 0
+            or refresh_token_expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
+        ):
+            raise OAuthError("OAuth token endpoint returned an invalid refresh-token lifetime")
+        if refresh_token_expires_in is not None:
+            refresh_token_expires_at_epoch_ms = int((now + int(refresh_token_expires_in)) * 1000)
+        scope_string = str(token_response.get("scope") or " ".join(record.get("scopes") or []))
+        scopes = [scope for scope in scope_string.split(" ") if scope]
+        requested_scopes = {
+            scope for scope in record.get("scopes") or [] if isinstance(scope, str) and scope
+        }
+        if not scopes or not set(scopes).issubset(requested_scopes):
+            raise OAuthError("OAuth token endpoint expanded or omitted the requested scope binding")
+        token_secret = {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "Bearer",
+            "scope": scope_string,
+            "expires_at_epoch_ms": expires_at_epoch_ms,
+            "refresh_token_expires_at_epoch_ms": refresh_token_expires_at_epoch_ms,
+        }
+        token_secret = {key: value for key, value in token_secret.items() if value not in (None, "")}
+        secret = json.dumps(token_secret, separators=(",", ":"), sort_keys=True)
+        db.attach_oauth_revocation_material(
+            revocation_work_id,
+            secret=secret,
+        )
+        material_attached = True
+        metadata = {
+            **(record.get("metadata") or {}),
+            "oauth": True,
+            "refreshable": True,
+            "provider": provider.metadata_provider,
+            "provider_id": provider.id,
+            "scopes": scopes,
+            "token_type": token_secret.get("token_type", "Bearer"),
+            "expires_at_epoch_ms": expires_at_epoch_ms,
+            "refresh_token_expires_at_epoch_ms": refresh_token_expires_at_epoch_ms,
+            "created_by": record.get("actor_id"),
+            "injection_field": "access_token",
+            **provider_identity,
+        }
+        if provider.id == "x":
+            metadata["x_app_id"] = provider.client_id
+        return {
+            "name": str(record.get("credential_name") or f"{provider.display_name} OAuth credential"),
+            "kind": "oauth2",
+            "secret": secret,
+            "metadata": {key: value for key, value in metadata.items() if value is not None},
+            "provider": provider.id,
+            "scopes": scopes,
+            "expiresAtEpochMs": expires_at_epoch_ms,
+            "createdBy": record.get("actor_id"),
+            "controlPlaneMfa": record.get("control_plane_mfa"),
+            "controlPlaneApproval": record.get("control_plane_approval"),
+            "reconnect": record.get("reconnect"),
+            "providerAccount": provider_identity["provider_account"],
+            "providerSubject": provider_identity["provider_subject"],
+            "revocationWorkId": revocation_work_id,
+        }
+    except Exception as exc:
+        if material_attached:
+            try:
+                db.mark_oauth_revocation_work_pending(
+                    revocation_work_id,
+                    error=str(exc)[:500] or type(exc).__name__,
+                )
+            except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError):
+                # Held work automatically becomes due if callback processing cannot update it.
+                pass
+        else:
+            db.complete_oauth_revocation_work(revocation_work_id)
+        if isinstance(exc, OAuthError):
+            raise
+        if isinstance(exc, (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError)):
+            raise OAuthError(str(exc)) from exc
+        raise
 
 
 def refresh_access_token(
@@ -595,76 +728,190 @@ def refresh_access_token(
     if not existing_scopes:
         raise OAuthError("OAuth credential has no bound scopes")
 
-    token_response = _post_token_request(
-        provider,
-        _refresh_token_request_body(provider, refresh_token),
-        _token_request_headers(provider),
-    )
-    access_token = token_response.get("access_token")
-    if not isinstance(access_token, str) or not access_token:
-        raise OAuthError("OAuth refresh response did not return access_token")
-    token_type = token_response.get("token_type") or token_secret.get("token_type") or "Bearer"
-    if not isinstance(token_type, str) or token_type.lower() != "bearer":
-        raise OAuthError("OAuth refresh response returned an unsupported token type")
-    expires_in = token_response.get("expires_in")
-    if (
-        not isinstance(expires_in, (int, float))
-        or isinstance(expires_in, bool)
-        or expires_in <= 0
-        or expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
-    ):
-        raise OAuthError("OAuth refresh response returned an invalid access-token lifetime")
-    expires_at_epoch_ms = int((now + int(expires_in)) * 1000)
+    actor_id = str(metadata.get("created_by") or "oauth-refresh")
+    try:
+        revocation_work_id = db.reserve_oauth_revocation_work(
+            provider_id=provider.id,
+            actor_id=actor_id,
+            source="refresh_token_exchange",
+        )
+    except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError) as exc:
+        raise OAuthError("OAuth refresh is unavailable while revocation capacity is exhausted") from exc
 
-    response_scope = token_response.get("scope")
-    scope_string = str(response_scope or existing_scope or " ".join(sorted(existing_scopes)))
-    refreshed_scopes = {scope for scope in scope_string.split(" ") if scope}
-    if refreshed_scopes != existing_scopes:
-        raise OAuthError("OAuth refresh response changed the credential scope binding")
+    material_attached = False
+    try:
+        token_response = _post_token_request(
+            provider,
+            _refresh_token_request_body(provider, refresh_token),
+            _token_request_headers(provider),
+        )
+        issued_secret = {
+            key: value
+            for key, value in {
+                "access_token": token_response.get("access_token"),
+                "refresh_token": token_response.get("refresh_token"),
+                "token_type": token_response.get("token_type") or "Bearer",
+            }.items()
+            if isinstance(value, str) and value
+        }
+        issued_secret_json = json.dumps(issued_secret, separators=(",", ":"), sort_keys=True)
+        if "access_token" in issued_secret or "refresh_token" in issued_secret:
+            try:
+                db.attach_oauth_revocation_material(
+                    revocation_work_id,
+                    secret=issued_secret_json,
+                )
+            except Exception as retention_exc:
+                try:
+                    revoke_oauth_token(
+                        provider_id=provider.id,
+                        token_secret=issued_secret,
+                    )
+                except OAuthError as revocation_exc:
+                    try:
+                        db.attach_oauth_revocation_material(
+                            revocation_work_id,
+                            secret=issued_secret_json,
+                        )
+                        material_attached = True
+                    except Exception as retry_exc:
+                        raise OAuthError(
+                            "issued OAuth refresh material could neither be retained nor revoked"
+                        ) from retry_exc
+                    raise OAuthError(
+                        "issued OAuth refresh material was retained after immediate revocation failed"
+                    ) from revocation_exc
+                else:
+                    db.complete_oauth_revocation_work(revocation_work_id)
+                    raise OAuthError(
+                        "issued OAuth refresh material was revoked because durable retention failed"
+                    ) from retention_exc
+            material_attached = True
 
-    rotated_refresh_token = token_response.get("refresh_token")
-    if rotated_refresh_token is None:
-        rotated_refresh_token = refresh_token
-    if not isinstance(rotated_refresh_token, str) or not rotated_refresh_token:
-        raise OAuthError("OAuth refresh response returned an invalid refresh token")
-    if len(rotated_refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
-        raise OAuthError("OAuth refresh response returned an oversized refresh token")
-
-    refresh_token_expires_at_epoch_ms = refresh_expires_at
-    refresh_token_expires_in = token_response.get("refresh_token_expires_in")
-    if refresh_token_expires_in is not None:
+        access_token = token_response.get("access_token")
+        if not isinstance(access_token, str) or not access_token:
+            raise OAuthError("OAuth refresh response did not return access_token")
+        token_type = token_response.get("token_type") or token_secret.get("token_type") or "Bearer"
+        if not isinstance(token_type, str) or token_type.lower() != "bearer":
+            raise OAuthError("OAuth refresh response returned an unsupported token type")
+        expires_in = token_response.get("expires_in")
         if (
-            not isinstance(refresh_token_expires_in, (int, float))
-            or isinstance(refresh_token_expires_in, bool)
-            or refresh_token_expires_in <= 0
-            or refresh_token_expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
+            not isinstance(expires_in, (int, float))
+            or isinstance(expires_in, bool)
+            or expires_in <= 0
+            or expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
         ):
-            raise OAuthError("OAuth refresh response returned an invalid refresh-token lifetime")
-        refresh_token_expires_at_epoch_ms = int((now + int(refresh_token_expires_in)) * 1000)
+            raise OAuthError("OAuth refresh response returned an invalid access-token lifetime")
+        expires_at_epoch_ms = int((now + int(expires_in)) * 1000)
 
-    refreshed_secret = {
-        **token_secret,
-        "access_token": access_token,
-        "refresh_token": rotated_refresh_token,
-        "token_type": "Bearer",
-        "scope": scope_string,
-        "expires_at_epoch_ms": expires_at_epoch_ms,
-    }
-    if refresh_token_expires_at_epoch_ms is not None:
-        refreshed_secret["refresh_token_expires_at_epoch_ms"] = refresh_token_expires_at_epoch_ms
-    refreshed_metadata = {
-        **metadata,
-        "refreshable": True,
-        "scopes": sorted(refreshed_scopes),
-        "token_type": "Bearer",
-        "expires_at_epoch_ms": expires_at_epoch_ms,
-    }
-    if refresh_token_expires_at_epoch_ms is not None:
-        refreshed_metadata["refresh_token_expires_at_epoch_ms"] = refresh_token_expires_at_epoch_ms
+        response_scope = token_response.get("scope")
+        scope_string = str(response_scope or existing_scope or " ".join(sorted(existing_scopes)))
+        refreshed_scopes = {scope for scope in scope_string.split(" ") if scope}
+        if refreshed_scopes != existing_scopes:
+            raise OAuthError("OAuth refresh response changed the credential scope binding")
+
+        rotated_refresh_token = token_response.get("refresh_token")
+        if rotated_refresh_token is None:
+            rotated_refresh_token = refresh_token
+        if not isinstance(rotated_refresh_token, str) or not rotated_refresh_token:
+            raise OAuthError("OAuth refresh response returned an invalid refresh token")
+        if len(rotated_refresh_token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+            raise OAuthError("OAuth refresh response returned an oversized refresh token")
+
+        refresh_token_expires_at_epoch_ms = refresh_expires_at
+        refresh_token_expires_in = token_response.get("refresh_token_expires_in")
+        if refresh_token_expires_in is not None:
+            if (
+                not isinstance(refresh_token_expires_in, (int, float))
+                or isinstance(refresh_token_expires_in, bool)
+                or refresh_token_expires_in <= 0
+                or refresh_token_expires_in > MAX_OAUTH_TOKEN_LIFETIME_SECONDS
+            ):
+                raise OAuthError("OAuth refresh response returned an invalid refresh-token lifetime")
+            refresh_token_expires_at_epoch_ms = int((now + int(refresh_token_expires_in)) * 1000)
+
+        refreshed_secret = {
+            **token_secret,
+            "access_token": access_token,
+            "refresh_token": rotated_refresh_token,
+            "token_type": "Bearer",
+            "scope": scope_string,
+            "expires_at_epoch_ms": expires_at_epoch_ms,
+        }
+        if refresh_token_expires_at_epoch_ms is not None:
+            refreshed_secret["refresh_token_expires_at_epoch_ms"] = refresh_token_expires_at_epoch_ms
+        refreshed_metadata = {
+            **metadata,
+            "refreshable": True,
+            "scopes": sorted(refreshed_scopes),
+            "token_type": "Bearer",
+            "expires_at_epoch_ms": expires_at_epoch_ms,
+        }
+        if refresh_token_expires_at_epoch_ms is not None:
+            refreshed_metadata["refresh_token_expires_at_epoch_ms"] = refresh_token_expires_at_epoch_ms
+        return {
+            "secret": json.dumps(refreshed_secret, separators=(",", ":"), sort_keys=True),
+            "metadata": refreshed_metadata,
+            "expiresAtEpochMs": expires_at_epoch_ms,
+            "scopes": sorted(refreshed_scopes),
+            "refreshTokenRotated": rotated_refresh_token != refresh_token,
+            "revocationWorkId": revocation_work_id,
+            "revocationSecret": issued_secret_json,
+        }
+    except Exception as exc:
+        if material_attached:
+            try:
+                db.mark_oauth_revocation_work_pending(
+                    revocation_work_id,
+                    error=str(exc)[:500] or type(exc).__name__,
+                )
+            except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError):
+                pass
+        else:
+            db.complete_oauth_revocation_work(revocation_work_id)
+        if isinstance(exc, OAuthError):
+            raise
+        if isinstance(exc, (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError)):
+            raise OAuthError(str(exc)) from exc
+        raise
+
+
+def revoke_oauth_token(*, provider_id: str, token_secret: dict[str, Any]) -> dict[str, Any]:
+    provider = provider_for(provider_id)
+    if not provider.configured:
+        raise OAuthError(f"{provider.display_name} OAuth is not configured")
+    if not isinstance(token_secret, dict):
+        raise OAuthError("OAuth credential is malformed")
+    token = token_secret.get("refresh_token") or token_secret.get("access_token")
+    token_type_hint = "refresh_token" if token_secret.get("refresh_token") else "access_token"
+    if not isinstance(token, str) or not token:
+        raise OAuthError("OAuth credential has no revocable token")
+    if len(token.encode("utf-8")) > MAX_OAUTH_REFRESH_TOKEN_BYTES:
+        raise OAuthError("OAuth revocation token is too large")
+    body = {"token": token, "token_type_hint": token_type_hint}
+    if provider.id == "x" and provider.token_auth != "basic":
+        body["client_id"] = provider.client_id
+    request = urllib.request.Request(
+        provider.revocation_url,
+        data=urllib.parse.urlencode(body).encode("utf-8"),
+        headers=_token_request_headers(provider),
+        method="POST",
+    )
+    try:
+        response = request_bytes(
+            request,
+            timeout=20,
+            max_bytes=64 * 1024,
+            require_https=True,
+        )
+    except urllib.error.HTTPError as exc:
+        raise OAuthError(f"OAuth token revocation failed: HTTP {exc.code}") from exc
+    except (HttpClientError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise OAuthError(f"OAuth token revocation failed: {exc}") from exc
+    if response.status < 200 or response.status >= 300:
+        raise OAuthError(f"OAuth token revocation failed: HTTP {response.status}")
     return {
-        "secret": json.dumps(refreshed_secret, separators=(",", ":"), sort_keys=True),
-        "metadata": refreshed_metadata,
-        "expiresAtEpochMs": expires_at_epoch_ms,
-        "scopes": sorted(refreshed_scopes),
-        "refreshTokenRotated": rotated_refresh_token != refresh_token,
+        "provider": provider.id,
+        "revoked": True,
+        "token_type_hint": token_type_hint,
     }

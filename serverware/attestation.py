@@ -461,6 +461,18 @@ def attestation_document(nonce: str | None = None) -> dict[str, Any]:
         "sealing_public_key_id": quote_public_key_info()["spki_sha256"],
     }
     quote = sign_quote(quote_claims)
+    assurance = {
+        "class": "development-consistency" if quote_claims["debug"] else "host-supplied-quote",
+        "hardware_proof": False,
+        "workload_custody_proven": False,
+        "tls_peer_binding_proven": False,
+        "fact_origin": "host-supplied",
+        "completion_eligible": False,
+        "reason": (
+            "The current document correlates signed runtime facts but does not prove that "
+            "policy enforcement, credential custody, and response generation ran inside one measured TEE."
+        ),
+    }
     return {
         "tee_platform": quote.get("tee_platform", TEE_PLATFORM),
         "quote": quote,
@@ -485,4 +497,5 @@ def attestation_document(nonce: str | None = None) -> dict[str, Any]:
         "release_channel": RELEASE_CHANNEL,
         "nonce": nonce,
         "tls_exporter_binding": None,
+        "assurance": assurance,
     }

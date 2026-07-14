@@ -4,6 +4,17 @@
   "title": "Serverware generic REST adapter config",
   "type": "object",
   "$defs": {
+    "requiredRequestHeader": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "minLength", "maxLength"],
+      "properties": {
+        "type": {"const": "string"},
+        "minLength": {"type": "integer", "minimum": 1, "maximum": 8192},
+        "maxLength": {"type": "integer", "minimum": 1, "maximum": 8192},
+        "pattern": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    },
     "allowedResponseHeaders": {
       "type": "array",
       "maxItems": 6,
@@ -32,6 +43,12 @@
       "properties": {
         "allowedQueryKeys": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
         "allowedHeaders": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Za-z0-9!#$%&'*+.^_`|~-]+$"}},
+        "requiredHeaders": {
+          "type": "object",
+          "maxProperties": 16,
+          "propertyNames": {"type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"},
+          "additionalProperties": {"$ref": "#/$defs/requiredRequestHeader"}
+        },
         "bodyMode": {"enum": ["none", "any", "json", "formUrlencoded", "stream", "jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"]},
         "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
         "maxLineBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},

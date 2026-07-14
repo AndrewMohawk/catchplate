@@ -159,6 +159,8 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_AUDIT_ANCHOR_TOKEN": "prod-anchor-token-32-bytes-minimum-value",
             "SERVERWARE_ADMIN_ROLES": "admin,approver,auditor,policy_author,policy_publisher,credential_owner",
             "SERVERWARE_OAUTH_STATE_TTL_SECONDS": "600",
+            "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS": "900",
+            "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT": "1000",
             "SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES": "1000000",
             "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "test-google-client-id",
             "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(
@@ -175,12 +177,24 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_OIDC_AUDIENCE": "serverware-control-plane",
             "SERVERWARE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kty": "RSA", "kid": "prod-key", "n": "AA", "e": "AQAB"}]}),
             "SERVERWARE_OIDC_ROLE_CLAIM": "serverware_roles",
+            "SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED": "1",
+            "SERVERWARE_OIDC_AUTHORIZATION_ENDPOINT": "https://idp.prod.acme-corp.net/authorize",
+            "SERVERWARE_OIDC_TOKEN_ENDPOINT": "https://idp.prod.acme-corp.net/token",
+            "SERVERWARE_OIDC_CLIENT_ID": "serverware-control-plane",
+            "SERVERWARE_OIDC_CLIENT_SECRET_FILE": str(
+                oauth_secret_file("oidc-client-secret", "test-operator-oidc-secret-0123456789")
+            ),
+            "SERVERWARE_OIDC_REDIRECT_URI": "https://serverware.prod.acme-corp.net/api/auth/oidc/callback",
+            "SERVERWARE_OIDC_BROWSER_SCOPES": "openid,profile,email",
+            "SERVERWARE_OIDC_TOKEN_AUTH_METHOD": "client_secret_basic",
+            "SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS": "300",
+            "SERVERWARE_OIDC_SESSION_TTL_SECONDS": "3600",
             "SERVERWARE_WEBAUTHN_ORIGIN": "https://serverware.prod.acme-corp.net",
             "SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "1",
             "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "0",
             "SERVERWARE_CA_INSTALL_SESSION_TTL_SECONDS": "300",
             "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
-            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
+            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.oauth.activate,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant",
             "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN": "test-production-bootstrap-token-32-chars-minimum",
             "SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED": "1",
             "SERVERWARE_POLICY_CANARY_REQUIRED": "1",
@@ -438,6 +452,14 @@ def main() -> None:
     unbounded_oauth_state_env["SERVERWARE_OAUTH_STATE_TTL_SECONDS"] = "901"
     expect_failure(unbounded_oauth_state_env, "between 60 and 900 seconds")
 
+    unbounded_pending_oauth_env = good_env()
+    unbounded_pending_oauth_env["SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS"] = "3601"
+    expect_failure(unbounded_pending_oauth_env, "between 60 and 3600 seconds")
+
+    unbounded_pending_oauth_count_env = good_env()
+    unbounded_pending_oauth_count_env["SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT"] = "10001"
+    expect_failure(unbounded_pending_oauth_count_env, "between 1 and 10000")
+
     undersized_lease_replay_env = good_env()
     undersized_lease_replay_env["SERVERWARE_CREDENTIAL_LEASE_REPLAY_MAX_ENTRIES"] = "9999"
     expect_failure(undersized_lease_replay_env, "between 10000 and 10000000")
@@ -523,6 +545,18 @@ def main() -> None:
     no_oidc_env.pop("SERVERWARE_OIDC_ENABLED", None)
     expect_failure(no_oidc_env, "OIDC authentication")
 
+    no_browser_oidc_env = good_env()
+    no_browser_oidc_env["SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED"] = "0"
+    expect_failure(no_browser_oidc_env, "browser OIDC login")
+
+    cross_origin_oidc_token_env = good_env()
+    cross_origin_oidc_token_env["SERVERWARE_OIDC_TOKEN_ENDPOINT"] = "https://tokens.prod.acme-corp.net/token"
+    expect_failure(cross_origin_oidc_token_env, "issuer origin")
+
+    wrong_oidc_callback_env = good_env()
+    wrong_oidc_callback_env["SERVERWARE_OIDC_REDIRECT_URI"] = "https://serverware.prod.acme-corp.net/oidc/callback"
+    expect_failure(wrong_oidc_callback_env, "exact HTTPS callback")
+
     localhost_oidc_env = good_env()
     localhost_oidc_env["SERVERWARE_OIDC_ISSUER"] = "http://localhost:8080"
     expect_failure(localhost_oidc_env, "OIDC_ISSUER")
@@ -558,7 +592,7 @@ def main() -> None:
 
     partial_two_person_env = good_env()
     partial_two_person_env["SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS"] = "credential.update,policy.publish"
-    expect_failure(partial_two_person_env, "must cover credential, route, policy publish")
+    expect_failure(partial_two_person_env, "must cover credential creation, exact-account OAuth activation")
 
     no_policy_dry_run_env = good_env()
     no_policy_dry_run_env.pop("SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED", None)

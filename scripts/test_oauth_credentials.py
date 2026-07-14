@@ -62,6 +62,8 @@ def run_config_secret_file_tests(tmp_path: Path) -> None:
         "SERVERWARE_RELEASE_CHANNEL",
         "SERVERWARE_PUBLIC_URL",
         "SERVERWARE_OAUTH_STATE_TTL_SECONDS",
+        "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS",
+        "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT",
         "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID",
         "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET",
         "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE",
@@ -82,6 +84,8 @@ def run_config_secret_file_tests(tmp_path: Path) -> None:
             "SERVERWARE_RELEASE_CHANNEL": "prod",
             "SERVERWARE_PUBLIC_URL": "https://serverware.test",
             "SERVERWARE_OAUTH_STATE_TTL_SECONDS": "600",
+            "SERVERWARE_OAUTH_PENDING_CREDENTIAL_TTL_SECONDS": "900",
+            "SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT": "1000",
             "SERVERWARE_GOOGLE_OAUTH_CLIENT_ID": "test-google-client",
             "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": str(google_secret),
             "SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI": "https://serverware.test/api/oauth/callback/google",
@@ -91,6 +95,10 @@ def run_config_secret_file_tests(tmp_path: Path) -> None:
         }
     )
     config_probe(base_env)
+
+    invalid_pending_capacity_env = dict(base_env)
+    invalid_pending_capacity_env["SERVERWARE_OAUTH_PENDING_CREDENTIAL_MAX_COUNT"] = "10001"
+    config_probe(invalid_pending_capacity_env, expected_error="must be between 1 and 10000")
 
     ambiguous_env = dict(base_env)
     ambiguous_secret = "test-ambiguous-client-secret-0123456789"
@@ -239,6 +247,41 @@ def main() -> None:
             raise AssertionError(f"x provider status is not usable: {x_provider}")
         if replace(oauth.provider_for("google"), client_secret="").configured:
             raise AssertionError("OAuth provider with an incomplete client secret was marked configured")
+
+        original_revocation_request_bytes = oauth.request_bytes
+        revocation_requests: list[object] = []
+
+        def fake_revocation_request(request, **kwargs):
+            revocation_requests.append(request)
+            return SimpleNamespace(status=200, body=b"", headers={})
+
+        oauth.request_bytes = fake_revocation_request
+        try:
+            google_revocation = oauth.revoke_oauth_token(
+                provider_id="google",
+                token_secret={"access_token": "google-access", "refresh_token": "google-refresh"},
+            )
+            x_revocation = oauth.revoke_oauth_token(
+                provider_id="x",
+                token_secret={"access_token": "x-access", "refresh_token": "x-refresh"},
+            )
+        finally:
+            oauth.request_bytes = original_revocation_request_bytes
+        if not google_revocation.get("revoked") or not x_revocation.get("revoked"):
+            raise AssertionError("OAuth provider revocation did not report success")
+        if len(revocation_requests) != 2:
+            raise AssertionError(f"OAuth provider revocation request count is wrong: {revocation_requests}")
+        google_request, x_request = revocation_requests
+        google_body = urllib.parse.parse_qs(bytes(google_request.data).decode("utf-8"))
+        x_body = urllib.parse.parse_qs(bytes(x_request.data).decode("utf-8"))
+        if google_request.full_url != "https://oauth2.googleapis.com/revoke" or google_body.get("token") != ["google-refresh"]:
+            raise AssertionError("Google revocation did not use the bounded refresh-token endpoint")
+        if google_request.headers.get("Authorization"):
+            raise AssertionError("Google revocation unexpectedly disclosed client credentials in a header")
+        if x_request.full_url != "https://api.twitter.com/2/oauth2/revoke" or x_body.get("token") != ["x-refresh"]:
+            raise AssertionError("X revocation did not use the bounded refresh-token endpoint")
+        if not str(x_request.headers.get("Authorization") or "").startswith("Basic "):
+            raise AssertionError("X confidential-client revocation did not authenticate the OAuth app")
 
         if app_module._canonical_oauth_granted_scopes(["scope.z", "scope.a"]) != ("scope.a", "scope.z"):
             raise AssertionError("OAuth granted scopes were not canonicalized")
@@ -461,6 +504,193 @@ def main() -> None:
         secret = json.loads(stored["secret"])
         if secret["access_token"] != "access-token-value" or secret["refresh_token"] != "refresh-token-value":
             raise AssertionError("encrypted OAuth credential did not preserve token response")
+
+        exhausted_start, exhausted_nonce = start_oauth(
+            app_module.OAuthStartRequest(
+                provider="google",
+                credentialName="Revocation capacity exhaustion",
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            )
+        )
+        original_revocation_capacity = db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT
+        token_exchange_calls = 0
+
+        def provider_exchange_must_not_run(provider, body, headers):
+            nonlocal token_exchange_calls
+            token_exchange_calls += 1
+            return fake_post_token_request(provider, body, headers)
+
+        db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT = 0
+        oauth._post_token_request = provider_exchange_must_not_run
+        try:
+            oauth.exchange_authorization_code(
+                provider_id="google",
+                code="must-not-exchange",
+                state=exhausted_start["state"],
+                browser_nonce=exhausted_nonce,
+            )
+        except oauth.OAuthError as exc:
+            if "revocation capacity" not in str(exc):
+                raise AssertionError(f"revocation capacity failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("OAuth token exchange ran without durable revocation capacity")
+        finally:
+            db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT = original_revocation_capacity
+            oauth._post_token_request = fake_post_token_request
+        if token_exchange_calls != 0:
+            raise AssertionError("OAuth provider received a token exchange after revocation capacity closed")
+
+        retention_failure_start, retention_failure_nonce = start_oauth(
+            app_module.OAuthStartRequest(
+                provider="google",
+                credentialName="Retention failure immediate revoke",
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            )
+        )
+        retention_access_token = "retention-failure-access-token"
+        retention_refresh_token = "retention-failure-refresh-token"
+        oauth._post_token_request = lambda provider, body, headers: {
+            "access_token": retention_access_token,
+            "refresh_token": retention_refresh_token,
+            "token_type": "Bearer",
+            "scope": "https://www.googleapis.com/auth/gmail.readonly",
+            "expires_in": 3600,
+        }
+        original_attach_revocation_material = db.attach_oauth_revocation_material
+        original_immediate_revoke = oauth.revoke_oauth_token
+        immediately_revoked: list[dict[str, object]] = []
+
+        def fail_revocation_attachment(work_id: str, *, secret: str) -> None:
+            raise db.MetadataStoreError("simulated revocation material persistence failure")
+
+        def immediate_provider_revoke(*, provider_id: str, token_secret: dict[str, object]):
+            immediately_revoked.append(dict(token_secret))
+            return {"provider": provider_id, "revoked": True}
+
+        db.attach_oauth_revocation_material = fail_revocation_attachment
+        oauth.revoke_oauth_token = immediate_provider_revoke
+        try:
+            oauth.exchange_authorization_code(
+                provider_id="google",
+                code="retention-failure-code",
+                state=retention_failure_start["state"],
+                browser_nonce=retention_failure_nonce,
+            )
+        except oauth.OAuthError as exc:
+            if "revoked because durable retention failed" not in str(exc):
+                raise AssertionError(f"retention failure did not fail closed: {exc}") from exc
+        else:
+            raise AssertionError("OAuth retention failure returned issued provider material")
+        finally:
+            db.attach_oauth_revocation_material = original_attach_revocation_material
+            oauth.revoke_oauth_token = original_immediate_revoke
+            oauth._post_token_request = fake_post_token_request
+        if immediately_revoked != [
+            {
+                "access_token": retention_access_token,
+                "refresh_token": retention_refresh_token,
+                "token_type": "Bearer",
+            }
+        ]:
+            raise AssertionError(f"retention failure revoked the wrong material: {immediately_revoked}")
+
+        failed_exchange_start, failed_exchange_nonce = start_oauth(
+            app_module.OAuthStartRequest(
+                provider="google",
+                credentialName="Post-exchange failure must revoke",
+                scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+            )
+        )
+        failed_access_token = "issued-access-token-must-be-revoked"
+        failed_refresh_token = "issued-refresh-token-must-be-revoked"
+        successful_identity_lookup = oauth._fetch_provider_identity
+        oauth._post_token_request = lambda provider, body, headers: {
+            "access_token": failed_access_token,
+            "refresh_token": failed_refresh_token,
+            "token_type": "Bearer",
+            "scope": "https://www.googleapis.com/auth/gmail.readonly",
+            "expires_in": 3600,
+        }
+
+        def failed_identity_lookup(provider, token):
+            raise oauth.OAuthError("provider identity response was adversarially malformed")
+
+        oauth._fetch_provider_identity = failed_identity_lookup
+        try:
+            oauth.exchange_authorization_code(
+                provider_id="google",
+                code="issued-but-invalid-code",
+                state=failed_exchange_start["state"],
+                browser_nonce=failed_exchange_nonce,
+            )
+        except oauth.OAuthError as exc:
+            if "identity response" not in str(exc):
+                raise AssertionError(f"post-exchange validation failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("post-exchange identity failure returned untracked provider tokens")
+        finally:
+            oauth._fetch_provider_identity = successful_identity_lookup
+            oauth._post_token_request = fake_post_token_request
+
+        with db.connect() as conn:
+            retained_rows = conn.execute(
+                "SELECT * FROM oauth_revocation_work WHERE source = ?",
+                ("authorization_code_exchange",),
+            ).fetchall()
+        if len(retained_rows) != 1 or retained_rows[0]["status"] != "pending":
+            raise AssertionError(f"post-exchange failure did not retain retryable revocation work: {retained_rows}")
+        retained_serialized = json.dumps(dict(retained_rows[0]), sort_keys=True)
+        if failed_access_token in retained_serialized or failed_refresh_token in retained_serialized:
+            raise AssertionError("OAuth revocation work persisted provider material without encryption")
+        retained_work_id = str(retained_rows[0]["id"])
+        original_reconcile_revoke = app_module.revoke_oauth_token
+        reconcile_attempts: list[dict[str, object]] = []
+
+        def retryable_revoke_failure(*, provider_id: str, token_secret: dict[str, object]):
+            reconcile_attempts.append(dict(token_secret))
+            raise oauth.OAuthError("provider revocation temporarily unavailable")
+
+        app_module.revoke_oauth_token = retryable_revoke_failure
+        try:
+            first_reconcile = app_module._reconcile_oauth_revocations(limit=1)
+        finally:
+            app_module.revoke_oauth_token = original_reconcile_revoke
+        if first_reconcile != {"claimed": 1, "revoked": 0, "failed": 1}:
+            raise AssertionError(f"failed OAuth revocation was not bounded and retryable: {first_reconcile}")
+        if (
+            len(reconcile_attempts) != 1
+            or reconcile_attempts[0].get("access_token") != failed_access_token
+            or reconcile_attempts[0].get("refresh_token") != failed_refresh_token
+        ):
+            raise AssertionError("OAuth revocation retry lost the exact issued provider material")
+        with db.connect() as conn:
+            retained_after_failure = conn.execute(
+                "SELECT * FROM oauth_revocation_work WHERE id = ?",
+                (retained_work_id,),
+            ).fetchone()
+            conn.execute(
+                "UPDATE oauth_revocation_work SET next_attempt_at = ? WHERE id = ?",
+                ("2000-01-01T00:00:00+00:00", retained_work_id),
+            )
+        if retained_after_failure is None or int(retained_after_failure["attempts"] or 0) != 1:
+            raise AssertionError("failed OAuth revocation work was not durably retained with retry state")
+        app_module.revoke_oauth_token = lambda **kwargs: {
+            "provider": kwargs["provider_id"],
+            "revoked": True,
+        }
+        try:
+            second_reconcile = app_module._reconcile_oauth_revocations(limit=1)
+        finally:
+            app_module.revoke_oauth_token = original_reconcile_revoke
+        if second_reconcile != {"claimed": 1, "revoked": 1, "failed": 0}:
+            raise AssertionError(f"OAuth revocation retry did not complete: {second_reconcile}")
+        with db.connect() as conn:
+            if conn.execute(
+                "SELECT 1 FROM oauth_revocation_work WHERE id = ?",
+                (retained_work_id,),
+            ).fetchone() is not None:
+                raise AssertionError("successfully reconciled OAuth revocation work remained queued")
+
         renamed = db.update_credential(stored["id"], {"name": "Gmail OAuth - Renamed"})
         if renamed is None or renamed["name"] != "Gmail OAuth - Renamed":
             raise AssertionError("managed OAuth credential rename failed")
@@ -648,26 +878,923 @@ def main() -> None:
         if x_credentials[0]["metadata"].get("scopes") != ["offline.access", "tweet.read", "users.read"]:
             raise AssertionError(f"X OAuth metadata did not preserve provider-granted scopes: {x_credentials}")
 
+        original_exchange_for_pending = app_module.exchange_authorization_code
+        original_two_person_required = app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED
+        original_two_person_actions = app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS
+        pending_access_token = "pending-access-token-must-never-leak"
+        pending_refresh_token = "pending-refresh-token-must-never-leak"
+        app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED = True
+        app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS = ("credential.oauth.activate",)
+        app_module.exchange_authorization_code = lambda **kwargs: {
+            "name": "Exact account OAuth - Test",
+            "kind": "oauth2",
+            "secret": json.dumps(
+                {
+                    "access_token": pending_access_token,
+                    "refresh_token": pending_refresh_token,
+                    "token_type": "Bearer",
+                    "scope": "https://www.googleapis.com/auth/gmail.readonly",
+                    "expires_at_epoch_ms": 4_102_444_800_000,
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
+            "metadata": {
+                "oauth": True,
+                "refreshable": True,
+                "provider": "google.oauth2",
+                "provider_id": "google",
+                "provider_subject": "google-exact-subject-789",
+                "provider_account": "exact-account@example.test",
+                "provider_identity_verified": True,
+                "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+                "token_type": "Bearer",
+                "expires_at_epoch_ms": 4_102_444_800_000,
+                "created_by": "user:operator",
+                "injection_field": "access_token",
+            },
+            "provider": "google",
+            "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
+            "expiresAtEpochMs": 4_102_444_800_000,
+            "createdBy": "user:operator",
+            "providerAccount": "exact-account@example.test",
+            "providerSubject": "google-exact-subject-789",
+        }
+        try:
+            pending_response = app_module.oauth_callback(
+                "google",
+                oauth_request("x" * 43, "y" * 43),
+                code="pending-auth-code",
+                state="x" * 43,
+            )
+            if pending_response.status_code != 200 or b"OAuth account verified" not in pending_response.body:
+                raise AssertionError(f"exact-account OAuth callback did not stage approval: {pending_response.body!r}")
+            if pending_access_token.encode() in pending_response.body or pending_refresh_token.encode() in pending_response.body:
+                raise AssertionError("pending OAuth callback response disclosed token material")
+            if b"exact-account@example.test" not in pending_response.body:
+                raise AssertionError("pending OAuth callback did not identify the exact account")
+
+            pending_items = db.list_pending_oauth_credentials()
+            pending = next((item for item in pending_items if item["name"] == "Exact account OAuth - Test"), None)
+            if pending is None:
+                raise AssertionError(f"OAuth callback did not create an encrypted pending credential: {pending_items}")
+            serialized_pending = json.dumps(pending, sort_keys=True)
+            if pending_access_token in serialized_pending or pending_refresh_token in serialized_pending:
+                raise AssertionError("pending OAuth listing disclosed token material")
+            if pending["review"].get("provider_account") != "exact-account@example.test":
+                raise AssertionError(f"pending OAuth review lost the verified account: {pending}")
+            if pending["review"].get("provider_subject") != "google-exact-subject-789":
+                raise AssertionError(f"pending OAuth review lost the verified subject: {pending}")
+            if db.get_credential(pending["id"], include_secret=True) is not None:
+                raise AssertionError("pending OAuth token was reachable through the active credential store")
+
+            bootstrap = app_module.bootstrap(identity)
+            if bootstrap.get("currentUserId") != "user:operator" or not any(
+                item["id"] == pending["id"] for item in bootstrap.get("pendingOAuthCredentials", [])
+            ):
+                raise AssertionError(f"portal bootstrap did not expose the exact-account activation task: {bootstrap}")
+
+            other_requester = AdminIdentity(
+                "user:other",
+                frozenset({"admin", "credential_owner"}),
+                "test",
+            )
+            try:
+                app_module.oauth_pending_credential_activate(
+                    pending["id"],
+                    app_module.OAuthPendingActivateRequest(),
+                    other_requester,
+                )
+            except app_module.HTTPException as exc:
+                if exc.status_code != 403:
+                    raise AssertionError(f"wrong OAuth requester failed with {exc.status_code}") from exc
+            else:
+                raise AssertionError("a different operator activated the pending OAuth credential")
+
+            try:
+                app_module.oauth_pending_credential_activate(
+                    pending["id"],
+                    app_module.OAuthPendingActivateRequest(),
+                    identity,
+                )
+            except app_module.HTTPException as exc:
+                if exc.status_code != 428 or not isinstance(exc.detail, dict):
+                    raise AssertionError(f"pending OAuth activation did not require exact approval: {exc.detail}") from exc
+                approval_id = exc.detail.get("approvalId")
+            else:
+                raise AssertionError("pending OAuth activation succeeded without exact-account approval")
+
+            approval = db.get_control_plane_approval(str(approval_id))
+            if approval is None:
+                raise AssertionError("exact-account OAuth approval was not persisted")
+            approval_json = json.dumps(approval, sort_keys=True)
+            if pending_access_token in approval_json or pending_refresh_token in approval_json:
+                raise AssertionError("exact-account OAuth approval disclosed token material")
+            for field, expected in (
+                ("provider", "google"),
+                ("provider_subject", "google-exact-subject-789"),
+                ("provider_account", "exact-account@example.test"),
+            ):
+                if approval["request"].get(field) != expected:
+                    raise AssertionError(f"exact-account approval did not bind {field}: {approval}")
+
+            unrelated = db.ensure_control_plane_approval(
+                action="credential.oauth.activate",
+                resource_id="different-pending-credential",
+                payload_digest=pending["payload_digest"],
+                requester_id="user:operator",
+                request=pending["review"],
+                ttl_seconds=300,
+            )
+            unrelated = db.approve_control_plane_approval(
+                unrelated["id"],
+                actor_id="user:reviewer",
+                note="wrong resource",
+            )
+            try:
+                app_module.oauth_pending_credential_activate(
+                    pending["id"],
+                    app_module.OAuthPendingActivateRequest(mfa={"approvalId": unrelated["id"]}),
+                    identity,
+                )
+            except app_module.HTTPException as exc:
+                if exc.status_code != 409 or exc.detail.get("reason") != "resource_mismatch":
+                    raise AssertionError(f"wrong-resource OAuth approval failed incorrectly: {exc.detail}") from exc
+            else:
+                raise AssertionError("wrong-resource approval activated a pending OAuth credential")
+            if db.get_pending_oauth_credential(pending["id"]) is None:
+                raise AssertionError("failed OAuth activation removed the pending credential")
+
+            approved = db.approve_control_plane_approval(
+                str(approval_id),
+                actor_id="user:reviewer",
+                note="verified exact account and scopes",
+            )
+            if approved is None or approved["status"] != "approved":
+                raise AssertionError(f"exact-account OAuth approval could not be approved: {approved}")
+            activated = app_module.oauth_pending_credential_activate(
+                pending["id"],
+                app_module.OAuthPendingActivateRequest(mfa={"approvalId": approval_id}),
+                identity,
+            )
+            if not activated.get("ok") or activated["approval"].get("status") != "consumed":
+                raise AssertionError(f"exact-account OAuth activation did not atomically consume approval: {activated}")
+            if db.get_pending_oauth_credential(pending["id"]) is not None:
+                raise AssertionError("activated OAuth credential remained in the pending store")
+            active_exact = db.get_credential(pending["id"], include_secret=True)
+            if active_exact is None:
+                raise AssertionError("approved exact-account OAuth credential was not promoted")
+            active_secret = json.loads(active_exact["secret"])
+            if active_secret.get("access_token") != pending_access_token or active_secret.get("refresh_token") != pending_refresh_token:
+                raise AssertionError("OAuth activation changed the encrypted token material")
+            try:
+                app_module.oauth_pending_credential_activate(
+                    pending["id"],
+                    app_module.OAuthPendingActivateRequest(mfa={"approvalId": approval_id}),
+                    identity,
+                )
+            except app_module.HTTPException as exc:
+                if exc.status_code != 404:
+                    raise AssertionError(f"OAuth activation replay failed with {exc.status_code}") from exc
+            else:
+                raise AssertionError("OAuth activation approval was replayed")
+
+            reconnect_route = db.create_route(
+                {
+                    "name": "OAuth reconnect identity route",
+                    "enabled": True,
+                    "match_host": "reconnect.example.test",
+                    "match_path_prefix": "/",
+                    "credential_id": active_exact["id"],
+                    "injection": {"type": "bearer", "field": "access_token"},
+                    "policies": [],
+                }
+            )
+            try:
+                start_oauth(
+                    app_module.OAuthStartRequest(
+                        provider="x",
+                        credentialId=active_exact["id"],
+                    )
+                )
+            except app_module.HTTPException as exc:
+                if exc.status_code != 409 or "provider" not in str(exc.detail):
+                    raise AssertionError(f"cross-provider reconnect failed incorrectly: {exc.detail}") from exc
+            else:
+                raise AssertionError("OAuth reconnect accepted a different provider")
+
+            original_reconnect_revoke = app_module.revoke_oauth_token
+            rejected_reconnect_tokens: list[tuple[str, dict[str, object]]] = []
+
+            def revoke_rejected_reconnect(*, provider_id: str, token_secret: dict[str, object]):
+                rejected_reconnect_tokens.append((provider_id, dict(token_secret)))
+                return {"provider": provider_id, "revoked": True}
+
+            def reconnect_exchange(
+                binding: dict[str, object],
+                suffix: str,
+                *,
+                provider_subject: str = "google-exact-subject-789",
+                provider_account: str = "exact-account@example.test",
+            ) -> dict[str, object]:
+                current = db.get_credential(active_exact["id"], include_secret=True)
+                if current is None:
+                    raise AssertionError("reconnect fixture credential disappeared")
+                next_secret = {
+                    **json.loads(current["secret"]),
+                    "access_token": f"reconnect-access-{suffix}",
+                    "refresh_token": f"reconnect-refresh-{suffix}",
+                    "expires_at_epoch_ms": 4_102_444_800_000,
+                }
+                next_metadata = {
+                    **current["metadata"],
+                    "provider_subject": provider_subject,
+                    "provider_account": provider_account,
+                    "expires_at_epoch_ms": 4_102_444_800_000,
+                }
+                return {
+                    "name": current["name"],
+                    "kind": "oauth2",
+                    "secret": json.dumps(next_secret, separators=(",", ":"), sort_keys=True),
+                    "metadata": next_metadata,
+                    "provider": "google",
+                    "scopes": list(next_metadata["scopes"]),
+                    "expiresAtEpochMs": 4_102_444_800_000,
+                    "createdBy": "user:operator",
+                    "providerAccount": provider_account,
+                    "providerSubject": provider_subject,
+                    "reconnect": dict(binding),
+                }
+
+            app_module.revoke_oauth_token = revoke_rejected_reconnect
+            try:
+                baseline_version = int(active_exact["credential_version"])
+                baseline_secret = active_exact["secret"]
+                pending_before_mismatch = {
+                    item["id"] for item in db.list_pending_oauth_credentials()
+                }
+                for suffix, changed_identity in (
+                    (
+                        "wrong-subject",
+                        {
+                            "provider_subject": "different-provider-subject",
+                            "provider_account": "exact-account@example.test",
+                        },
+                    ),
+                    (
+                        "wrong-account",
+                        {
+                            "provider_subject": "google-exact-subject-789",
+                            "provider_account": "different-account@example.test",
+                        },
+                    ),
+                ):
+                    reconnect_start, reconnect_nonce = start_oauth(
+                        app_module.OAuthStartRequest(
+                            provider="google",
+                            credentialId=active_exact["id"],
+                            credentialName=active_exact["name"],
+                            scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+                        )
+                    )
+                    reconnect_record = json.loads((Path(tmp) / "oauth-states.json").read_text())[
+                        "states"
+                    ][reconnect_start["state"]]
+                    binding = reconnect_record.get("reconnect")
+                    if (
+                        not isinstance(binding, dict)
+                        or binding.get("credential_id") != active_exact["id"]
+                        or binding.get("credential_version") != baseline_version
+                        or binding.get("provider_subject") != "google-exact-subject-789"
+                        or binding.get("provider_account") != "exact-account@example.test"
+                    ):
+                        raise AssertionError(f"OAuth reconnect state lost its exact credential binding: {binding}")
+                    app_module.exchange_authorization_code = lambda **kwargs: reconnect_exchange(
+                        binding,
+                        suffix,
+                        **changed_identity,
+                    )
+                    rejected = app_module.oauth_callback(
+                        "google",
+                        oauth_request(str(reconnect_start["state"]), reconnect_nonce),
+                        code=f"{suffix}-code",
+                        state=reconnect_start["state"],
+                    )
+                    if rejected.status_code != 409 or b"exact existing provider subject and account" not in rejected.body:
+                        raise AssertionError(f"OAuth reconnect identity drift was accepted: {rejected.body!r}")
+                    unchanged = db.get_credential(active_exact["id"], include_secret=True)
+                    if (
+                        unchanged is None
+                        or int(unchanged["credential_version"]) != baseline_version
+                        or unchanged["secret"] != baseline_secret
+                    ):
+                        raise AssertionError("rejected OAuth reconnect changed the active credential")
+                if len(rejected_reconnect_tokens) != 2:
+                    raise AssertionError(
+                        f"rejected OAuth reconnect tokens were not revoked: {rejected_reconnect_tokens}"
+                    )
+                pending_after_mismatch = {
+                    item["id"] for item in db.list_pending_oauth_credentials()
+                }
+                if pending_after_mismatch != pending_before_mismatch:
+                    raise AssertionError("identity-mismatched OAuth reconnect staged a pending credential")
+
+                stale_start, stale_nonce = start_oauth(
+                    app_module.OAuthStartRequest(
+                        provider="google",
+                        credentialId=active_exact["id"],
+                    )
+                )
+                stale_binding = json.loads((Path(tmp) / "oauth-states.json").read_text())["states"][
+                    stale_start["state"]
+                ]["reconnect"]
+                concurrently_refreshed_secret = {
+                    **json.loads(active_exact["secret"]),
+                    "access_token": "concurrent-refresh-before-reconnect",
+                }
+                concurrently_refreshed, rotated = db.update_credential_secret_if_version(
+                    active_exact["id"],
+                    expected_version=baseline_version,
+                    secret=json.dumps(concurrently_refreshed_secret, separators=(",", ":"), sort_keys=True),
+                    metadata=active_exact["metadata"],
+                )
+                if concurrently_refreshed is None or not rotated:
+                    raise AssertionError("stale reconnect fixture did not rotate the active credential")
+                app_module.runtime.invalidate_secret_leases(active_exact["id"])
+                app_module.exchange_authorization_code = lambda **kwargs: reconnect_exchange(
+                    stale_binding,
+                    "stale-version",
+                )
+                stale_response = app_module.oauth_callback(
+                    "google",
+                    oauth_request(str(stale_start["state"]), stale_nonce),
+                    code="stale-reconnect-code",
+                    state=stale_start["state"],
+                )
+                if stale_response.status_code != 409 or b"changed during authorization" not in stale_response.body:
+                    raise AssertionError(f"stale OAuth reconnect binding was accepted: {stale_response.body!r}")
+                after_stale = db.get_credential(active_exact["id"], include_secret=True)
+                if (
+                    after_stale is None
+                    or json.loads(after_stale["secret"]).get("access_token")
+                    != "concurrent-refresh-before-reconnect"
+                ):
+                    raise AssertionError("stale OAuth reconnect overwrote a concurrent credential rotation")
+                if len(rejected_reconnect_tokens) != 3:
+                    raise AssertionError("stale OAuth reconnect token was not revoked")
+
+                successful_start, successful_nonce = start_oauth(
+                    app_module.OAuthStartRequest(
+                        provider="google",
+                        credentialId=active_exact["id"],
+                    )
+                )
+                successful_binding = json.loads((Path(tmp) / "oauth-states.json").read_text())[
+                    "states"
+                ][successful_start["state"]]["reconnect"]
+                app_module.exchange_authorization_code = lambda **kwargs: reconnect_exchange(
+                    successful_binding,
+                    "accepted",
+                )
+                successful_callback = app_module.oauth_callback(
+                    "google",
+                    oauth_request(str(successful_start["state"]), successful_nonce),
+                    code="accepted-reconnect-code",
+                    state=successful_start["state"],
+                )
+                if successful_callback.status_code != 200 or b"OAuth account verified" not in successful_callback.body:
+                    raise AssertionError(f"valid OAuth reconnect did not stage approval: {successful_callback.body!r}")
+                reconnect_pending = next(
+                    (
+                        item
+                        for item in db.list_pending_oauth_credentials()
+                        if item.get("target_credential_id") == active_exact["id"]
+                    ),
+                    None,
+                )
+                if (
+                    reconnect_pending is None
+                    or reconnect_pending.get("target_credential_version")
+                    != successful_binding["credential_version"]
+                    or reconnect_pending["review"].get("reconnect_credential_id")
+                    != active_exact["id"]
+                ):
+                    raise AssertionError(f"valid OAuth reconnect lost its target binding: {reconnect_pending}")
+                still_active = db.get_credential(active_exact["id"], include_secret=True)
+                if still_active is None or json.loads(still_active["secret"]).get("access_token") != "concurrent-refresh-before-reconnect":
+                    raise AssertionError("pending OAuth reconnect replaced the active credential before approval")
+                if db.get_route(reconnect_route["id"])["credential_id"] != active_exact["id"]:
+                    raise AssertionError("pending OAuth reconnect changed the route credential identity")
+
+                try:
+                    app_module.oauth_pending_credential_activate(
+                        reconnect_pending["id"],
+                        app_module.OAuthPendingActivateRequest(),
+                        identity,
+                    )
+                except app_module.HTTPException as exc:
+                    if exc.status_code != 428:
+                        raise AssertionError(f"reconnect activation approval failed incorrectly: {exc.detail}") from exc
+                    reconnect_approval_id = exc.detail["approvalId"]
+                else:
+                    raise AssertionError("OAuth reconnect activated without exact-account approval")
+                reconnect_approval = db.approve_control_plane_approval(
+                    reconnect_approval_id,
+                    actor_id="user:reviewer",
+                    note="verified reconnect account and credential identity",
+                )
+                if reconnect_approval is None or reconnect_approval["status"] != "approved":
+                    raise AssertionError("OAuth reconnect approval could not be approved")
+                reconnected = app_module.oauth_pending_credential_activate(
+                    reconnect_pending["id"],
+                    app_module.OAuthPendingActivateRequest(
+                        mfa={"approvalId": reconnect_approval_id}
+                    ),
+                    identity,
+                )
+                if reconnected["credential"]["id"] != active_exact["id"]:
+                    raise AssertionError("OAuth reconnect allocated a new credential identity")
+                active_exact = db.get_credential(active_exact["id"], include_secret=True)
+                if (
+                    active_exact is None
+                    or json.loads(active_exact["secret"]).get("access_token") != "reconnect-access-accepted"
+                    or int(active_exact["credential_version"])
+                    <= int(successful_binding["credential_version"])
+                ):
+                    raise AssertionError("OAuth reconnect did not rotate the existing encrypted credential")
+                if db.get_route(reconnect_route["id"])["credential_id"] != active_exact["id"]:
+                    raise AssertionError("OAuth reconnect did not preserve the route policy reference")
+            finally:
+                app_module.revoke_oauth_token = original_reconnect_revoke
+                app_module.exchange_authorization_code = original_exchange_for_pending
+
+            original_pending_capacity = db.OAUTH_PENDING_CREDENTIAL_MAX_COUNT
+            db.OAUTH_PENDING_CREDENTIAL_MAX_COUNT = 1
+            capacity_ids: list[str] = []
+            capacity_metadata = dict(active_exact["metadata"])
+            capacity_secret = json.dumps(active_secret, separators=(",", ":"), sort_keys=True)
+            try:
+                first_review = {**pending["review"], "credential_name": "OAuth capacity one"}
+                first_digest = app_module._oauth_activation_payload_digest(
+                    review=first_review,
+                    secret=capacity_secret,
+                )
+                first_capacity_item = db.create_pending_oauth_credential(
+                    name="OAuth capacity one",
+                    kind="oauth2",
+                    secret=capacity_secret,
+                    metadata=capacity_metadata,
+                    requester_id="user:operator",
+                    payload_digest=first_digest,
+                    review=first_review,
+                    ttl_seconds=900,
+                )
+                capacity_ids.append(first_capacity_item["id"])
+
+                second_review = {**pending["review"], "credential_name": "OAuth capacity two"}
+                second_digest = app_module._oauth_activation_payload_digest(
+                    review=second_review,
+                    secret=capacity_secret,
+                )
+                try:
+                    db.create_pending_oauth_credential(
+                        name="OAuth capacity two",
+                        kind="oauth2",
+                        secret=capacity_secret,
+                        metadata=capacity_metadata,
+                        requester_id="user:operator",
+                        payload_digest=second_digest,
+                        review=second_review,
+                        ttl_seconds=900,
+                    )
+                except db.ManagedOAuthCredentialError as exc:
+                    if "capacity" not in str(exc):
+                        raise AssertionError(f"pending OAuth capacity failed incorrectly: {exc}") from exc
+                else:
+                    raise AssertionError("pending OAuth staging exceeded its configured capacity")
+
+                with db.connect() as conn:
+                    conn.execute(
+                        "UPDATE pending_oauth_credentials SET expires_at = ? WHERE id = ?",
+                        ("2000-01-01T00:00:00+00:00", first_capacity_item["id"]),
+                    )
+                expired_capacity_item = db.get_pending_oauth_credential(first_capacity_item["id"])
+                if expired_capacity_item is None or expired_capacity_item.get("status") != "expired":
+                    raise AssertionError("expired pending OAuth credential was not terminalized")
+                second_capacity_item = db.create_pending_oauth_credential(
+                    name="OAuth capacity two",
+                    kind="oauth2",
+                    secret=capacity_secret,
+                    metadata=capacity_metadata,
+                    requester_id="user:operator",
+                    payload_digest=second_digest,
+                    review=second_review,
+                    ttl_seconds=900,
+                )
+                capacity_ids.append(second_capacity_item["id"])
+                original_capacity_revoke = app_module.revoke_oauth_token
+                app_module.revoke_oauth_token = lambda **kwargs: (_ for _ in ()).throw(
+                    oauth.OAuthError("provider revocation outage")
+                )
+                try:
+                    failed_expiry_reconcile = app_module._reconcile_oauth_revocations(limit=1)
+                finally:
+                    app_module.revoke_oauth_token = original_capacity_revoke
+                if failed_expiry_reconcile != {"claimed": 1, "revoked": 0, "failed": 1}:
+                    raise AssertionError(
+                        f"expired OAuth grant was not automatically reconciled with bounded work: "
+                        f"{failed_expiry_reconcile}"
+                    )
+                retained_expired = db.get_pending_oauth_credential(first_capacity_item["id"])
+                if (
+                    retained_expired is None
+                    or retained_expired.get("status") != "expired"
+                    or retained_expired.get("revocation_status") != "failed"
+                    or retained_expired.get("revocation_attempts") != 1
+                ):
+                    raise AssertionError(
+                        f"expired OAuth revocation failure was not retained for retry: {retained_expired}"
+                    )
+                original_backlog_capacity = db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT
+                db.OAUTH_PENDING_CREDENTIAL_MAX_COUNT = 2
+                db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT = 1
+                backlog_review = {**pending["review"], "credential_name": "OAuth backlog bound"}
+                try:
+                    db.create_pending_oauth_credential(
+                        name="OAuth backlog bound",
+                        kind="oauth2",
+                        secret=capacity_secret,
+                        metadata=capacity_metadata,
+                        requester_id="user:operator",
+                        payload_digest=app_module._oauth_activation_payload_digest(
+                            review=backlog_review,
+                            secret=capacity_secret,
+                        ),
+                        review=backlog_review,
+                        ttl_seconds=900,
+                    )
+                except db.ManagedOAuthCredentialError as exc:
+                    if "revocation backlog capacity" not in str(exc):
+                        raise AssertionError(f"OAuth revocation backlog failed incorrectly: {exc}") from exc
+                else:
+                    raise AssertionError("terminal OAuth revocation work grew past its hard bound")
+                finally:
+                    db.OAUTH_PENDING_CREDENTIAL_MAX_COUNT = 1
+                    db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT = original_backlog_capacity
+                with db.connect() as conn:
+                    conn.execute(
+                        "UPDATE pending_oauth_credentials SET revocation_next_attempt_at = ? WHERE id = ?",
+                        ("2000-01-01T00:00:00+00:00", first_capacity_item["id"]),
+                    )
+                app_module.revoke_oauth_token = lambda **kwargs: {
+                    "provider": kwargs["provider_id"],
+                    "revoked": True,
+                }
+                try:
+                    successful_expiry_reconcile = app_module._reconcile_oauth_revocations(limit=1)
+                finally:
+                    app_module.revoke_oauth_token = original_capacity_revoke
+                if successful_expiry_reconcile != {"claimed": 1, "revoked": 1, "failed": 0}:
+                    raise AssertionError(
+                        f"expired OAuth revocation retry did not drain terminal work: "
+                        f"{successful_expiry_reconcile}"
+                    )
+                if db.get_pending_oauth_credential(first_capacity_item["id"]) is not None:
+                    raise AssertionError("revoked expired pending OAuth credential remained reachable")
+
+                mismatched_review = {**second_review, "provider_account": "different@example.test"}
+                try:
+                    db.create_pending_oauth_credential(
+                        name="OAuth capacity two",
+                        kind="oauth2",
+                        secret=capacity_secret,
+                        metadata=capacity_metadata,
+                        requester_id="user:operator",
+                        payload_digest=app_module._oauth_activation_payload_digest(
+                            review=mismatched_review,
+                            secret=capacity_secret,
+                        ),
+                        review=mismatched_review,
+                        ttl_seconds=900,
+                    )
+                except db.ManagedOAuthCredentialError as exc:
+                    if "verified account" not in str(exc):
+                        raise AssertionError(f"mismatched OAuth review failed incorrectly: {exc}") from exc
+                else:
+                    raise AssertionError("pending OAuth staging accepted a mismatched exact-account review")
+            finally:
+                db.OAUTH_PENDING_CREDENTIAL_MAX_COUNT = original_pending_capacity
+                with db.connect() as conn:
+                    for capacity_id in capacity_ids:
+                        conn.execute("DELETE FROM pending_oauth_credentials WHERE id = ?", (capacity_id,))
+
+            approvals_before_start = {
+                item["id"] for item in db.list_control_plane_approvals(limit=1000)
+            }
+            app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS = (
+                "credential.create",
+                "credential.oauth.activate",
+            )
+            blind_start, _ = start_oauth(
+                app_module.OAuthStartRequest(
+                    provider="google",
+                    credentialName="No blind pre-identity approval",
+                    scopes=["https://www.googleapis.com/auth/gmail.readonly"],
+                )
+            )
+            app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS = ("credential.oauth.activate",)
+            approvals_after_start = [
+                item
+                for item in db.list_control_plane_approvals(limit=1000)
+                if item["id"] not in approvals_before_start
+            ]
+            if not blind_start.get("authorizationUrl") or any(
+                item["action"] == "credential.create" for item in approvals_after_start
+            ):
+                raise AssertionError(
+                    "OAuth start created a blind two-person approval before provider identity was known"
+                )
+
+            terminal_ids: list[str] = []
+
+            def stage_terminal(name: str) -> dict[str, object]:
+                review = {**pending["review"], "credential_name": name}
+                digest = app_module._oauth_activation_payload_digest(
+                    review=review,
+                    secret=capacity_secret,
+                )
+                item = db.create_pending_oauth_credential(
+                    name=name,
+                    kind="oauth2",
+                    secret=capacity_secret,
+                    metadata=capacity_metadata,
+                    requester_id="user:operator",
+                    payload_digest=digest,
+                    review=review,
+                    ttl_seconds=900,
+                )
+                terminal_ids.append(str(item["id"]))
+                return item
+
+            reviewer = AdminIdentity(
+                "user:reviewer",
+                frozenset({"admin", "credential_owner"}),
+                "test",
+            )
+            original_revoke_oauth_token = app_module.revoke_oauth_token
+            revoked_tokens: list[tuple[str, dict[str, object]]] = []
+
+            def successful_revoke(*, provider_id: str, token_secret: dict[str, object]):
+                revoked_tokens.append((provider_id, dict(token_secret)))
+                return {"provider": provider_id, "revoked": True}
+
+            app_module.revoke_oauth_token = successful_revoke
+            try:
+                denied_pending = stage_terminal("OAuth denial terminal")
+                denied_approval = db.ensure_control_plane_approval(
+                    action="credential.oauth.activate",
+                    resource_id=str(denied_pending["id"]),
+                    payload_digest=str(denied_pending["payload_digest"]),
+                    requester_id="user:operator",
+                    request=dict(denied_pending["review"]),
+                    ttl_seconds=300,
+                )
+                denied = app_module.control_plane_approval_deny(
+                    denied_approval["id"],
+                    app_module.ControlPlaneApprovalDecision(note="wrong account for this workflow"),
+                    reviewer,
+                )
+                if denied.get("status") != "denied" or denied.get("oauthRevocation", {}).get("ok") is not True:
+                    raise AssertionError(f"OAuth denial was not terminal and revoked: {denied}")
+                if db.get_pending_oauth_credential(str(denied_pending["id"])) is not None:
+                    raise AssertionError("successfully revoked denied OAuth token remained staged")
+                try:
+                    app_module.oauth_pending_credential_activate(
+                        str(denied_pending["id"]),
+                        app_module.OAuthPendingActivateRequest(),
+                        identity,
+                    )
+                except app_module.HTTPException as exc:
+                    if exc.status_code != 404:
+                        raise AssertionError(f"denied OAuth activation failed with {exc.status_code}") from exc
+                else:
+                    raise AssertionError("denied OAuth connection created a second activation approval")
+
+                cancelled_pending = stage_terminal("OAuth cancellation terminal")
+
+                def failed_revoke(**kwargs):
+                    raise oauth.OAuthError("provider revocation temporarily unavailable")
+
+                app_module.revoke_oauth_token = failed_revoke
+                cancelled = app_module.oauth_pending_credential_cancel(
+                    str(cancelled_pending["id"]),
+                    identity,
+                )
+                if cancelled.get("revocation", {}).get("reason") != "provider_revocation_failed":
+                    raise AssertionError(f"failed OAuth revocation was not retained for retry: {cancelled}")
+                retained_cancelled = db.get_pending_oauth_credential(str(cancelled_pending["id"]))
+                if (
+                    retained_cancelled is None
+                    or retained_cancelled.get("status") != "cancelled"
+                    or retained_cancelled.get("revocation_status") != "failed"
+                ):
+                    raise AssertionError(f"cancelled OAuth token was not terminal and retryable: {retained_cancelled}")
+                try:
+                    app_module.oauth_pending_credential_activate(
+                        str(cancelled_pending["id"]),
+                        app_module.OAuthPendingActivateRequest(),
+                        identity,
+                    )
+                except app_module.HTTPException as exc:
+                    if exc.status_code != 409 or exc.detail.get("reason") != "pending_credential_cancelled":
+                        raise AssertionError(f"cancelled OAuth activation failed incorrectly: {exc.detail}") from exc
+                else:
+                    raise AssertionError("cancelled OAuth credential became activatable")
+
+                app_module.revoke_oauth_token = successful_revoke
+                retried = app_module.oauth_pending_credential_revoke(
+                    str(cancelled_pending["id"]),
+                    identity,
+                )
+                if not retried.get("ok") or db.get_pending_oauth_credential(str(cancelled_pending["id"])) is not None:
+                    raise AssertionError(f"OAuth revocation retry did not delete token material: {retried}")
+                if [provider for provider, _ in revoked_tokens] != ["google", "google"]:
+                    raise AssertionError(f"OAuth revocation used the wrong provider identity: {revoked_tokens}")
+            finally:
+                app_module.revoke_oauth_token = original_revoke_oauth_token
+                with db.connect() as conn:
+                    for terminal_id in terminal_ids:
+                        conn.execute("DELETE FROM pending_oauth_credentials WHERE id = ?", (terminal_id,))
+        finally:
+            app_module.exchange_authorization_code = original_exchange_for_pending
+            app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED = original_two_person_required
+            app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS = original_two_person_actions
+
+        disconnect_id = x_credentials[0]["id"]
+        disconnect_route = db.create_route(
+            {
+                "name": "OAuth disconnect fail-closed route",
+                "enabled": True,
+                "match_host": "disconnect.example.test",
+                "match_path_prefix": "/",
+                "credential_id": disconnect_id,
+                "injection": {"type": "bearer", "field": "access_token"},
+                "policies": [],
+            }
+        )
+        original_disconnect_revoke = app_module.revoke_oauth_token
+        disconnect_attempts: list[tuple[str, dict[str, object], str]] = []
+
+        def failed_disconnect_revoke(*, provider_id: str, token_secret: dict[str, object]):
+            retained = db.get_credential(
+                disconnect_id,
+                include_secret=True,
+                include_inactive=True,
+            )
+            if retained is None or retained.get("lifecycle_status") != "revocation_pending":
+                raise AssertionError("OAuth credential was deleted or remained active before provider revocation")
+            if db.get_credential(disconnect_id, include_secret=True) is not None:
+                raise AssertionError("OAuth credential remained leaseable during provider revocation")
+            disconnect_attempts.append((provider_id, dict(token_secret), "failed"))
+            raise oauth.OAuthError("provider revocation temporarily unavailable")
+
+        app_module.revoke_oauth_token = failed_disconnect_revoke
+        try:
+            app_module.delete_credential(disconnect_id, None, identity)
+        except app_module.HTTPException as exc:
+            if (
+                exc.status_code != 503
+                or not isinstance(exc.detail, dict)
+                or exc.detail.get("retryable") is not True
+                or exc.detail.get("lifecycleStatus") != "revocation_failed"
+            ):
+                raise AssertionError(f"OAuth disconnect did not fail closed and retryable: {exc.detail}") from exc
+        else:
+            raise AssertionError("OAuth disconnect deleted local material after provider revocation failed")
+        retained_disconnect = next(
+            (item for item in db.list_credentials() if item["id"] == disconnect_id),
+            None,
+        )
+        if (
+            retained_disconnect is None
+            or retained_disconnect.get("lifecycle_status") != "revocation_failed"
+            or "temporarily unavailable" not in str(retained_disconnect.get("revocation_error"))
+        ):
+            raise AssertionError(f"failed OAuth disconnect was not retained for retry: {retained_disconnect}")
+        if db.get_credential(disconnect_id, include_secret=True) is not None:
+            raise AssertionError("revocation-failed OAuth credential was available through the normal read path")
+        with db.credential_lease_snapshot(disconnect_id) as failed_snapshot:
+            if failed_snapshot is not None:
+                raise AssertionError("revocation-failed OAuth credential was available to a final lease snapshot")
+        if db.get_route(disconnect_route["id"])["credential_id"] != disconnect_id:
+            raise AssertionError("failed OAuth disconnect removed the policy reference needed for retry")
+        try:
+            db.delete_credential(disconnect_id)
+        except db.ManagedOAuthCredentialError:
+            pass
+        else:
+            raise AssertionError("direct database deletion bypassed managed OAuth provider revocation")
+
+        def successful_disconnect_revoke(*, provider_id: str, token_secret: dict[str, object]):
+            retained = db.get_credential(
+                disconnect_id,
+                include_secret=True,
+                include_inactive=True,
+            )
+            if retained is None or retained.get("lifecycle_status") != "revocation_pending":
+                raise AssertionError("OAuth revocation retry lost its retained provider material")
+            disconnect_attempts.append((provider_id, dict(token_secret), "revoked"))
+            return {"provider": provider_id, "revoked": True}
+
+        app_module.revoke_oauth_token = successful_disconnect_revoke
+        try:
+            disconnected = app_module.delete_credential(disconnect_id, None, identity)
+        finally:
+            app_module.revoke_oauth_token = original_disconnect_revoke
+        if disconnected != {"deleted": True, "providerRevoked": True}:
+            raise AssertionError(f"OAuth disconnect retry did not report provider revocation: {disconnected}")
+        if db.get_credential(disconnect_id, include_secret=True, include_inactive=True) is not None:
+            raise AssertionError("successfully revoked OAuth credential remained in local storage")
+        if db.get_route(disconnect_route["id"])["credential_id"] is not None:
+            raise AssertionError("successful OAuth disconnect did not clear the route credential reference")
+        if [attempt[0] for attempt in disconnect_attempts] != ["x", "x"]:
+            raise AssertionError(f"OAuth disconnect used the wrong provider: {disconnect_attempts}")
+        for _, token_secret, _ in disconnect_attempts:
+            if (
+                token_secret.get("access_token") != "x-access-token-value"
+                or token_secret.get("refresh_token") != "x-refresh-token-value"
+            ):
+                raise AssertionError("OAuth disconnect did not retain the exact provider token for retry")
+
         original_exchange_authorization_code = app_module.exchange_authorization_code
         app_module.exchange_authorization_code = lambda **kwargs: {
             "name": "Malformed OAuth scopes",
             "kind": "oauth2",
-            "secret": "must-not-persist",
+            "secret": json.dumps(
+                {
+                    "access_token": "malformed-scope-access-token",
+                    "refresh_token": "malformed-scope-refresh-token",
+                    "token_type": "Bearer",
+                },
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
             "metadata": {"scopes": ["scope.metadata"]},
             "provider": "google",
             "scopes": ["scope.provider"],
         }
-        malformed_response = app_module.oauth_callback(
-            "google",
-            oauth_request(str(x_start["state"]), "m" * 43),
-            code="malformed-code",
-            state="malformed-state",
+        original_malformed_revoke = app_module.revoke_oauth_token
+        app_module.revoke_oauth_token = lambda **kwargs: (_ for _ in ()).throw(
+            oauth.OAuthError("provider revocation unavailable during callback rejection")
         )
-        app_module.exchange_authorization_code = original_exchange_authorization_code
+        try:
+            malformed_response = app_module.oauth_callback(
+                "google",
+                oauth_request(str(x_start["state"]), "m" * 43),
+                code="malformed-code",
+                state="malformed-state",
+            )
+        finally:
+            app_module.exchange_authorization_code = original_exchange_authorization_code
+            app_module.revoke_oauth_token = original_malformed_revoke
         if malformed_response.status_code != 400 or b"does not match" not in malformed_response.body:
             raise AssertionError(f"mismatched provider/metadata scopes did not fail closed: {malformed_response.body!r}")
         if any(item["name"] == "Malformed OAuth scopes" for item in db.list_credentials()):
             raise AssertionError("OAuth callback persisted a credential with mismatched granted scopes")
+        with db.connect() as conn:
+            malformed_work = conn.execute(
+                "SELECT * FROM oauth_revocation_work WHERE source = ?",
+                ("callback_validation",),
+            ).fetchall()
+        if len(malformed_work) != 1 or malformed_work[0]["status"] != "pending":
+            raise AssertionError(
+                f"callback validation failure did not retain encrypted revocation work: {malformed_work}"
+            )
+        malformed_work_id = str(malformed_work[0]["id"])
+        malformed_work_text = json.dumps(dict(malformed_work[0]), sort_keys=True)
+        if "malformed-scope-access-token" in malformed_work_text:
+            raise AssertionError("callback revocation work disclosed provider token material")
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE oauth_revocation_work SET next_attempt_at = ? WHERE id = ?",
+                ("2000-01-01T00:00:00+00:00", malformed_work_id),
+            )
+        app_module.revoke_oauth_token = lambda **kwargs: {
+            "provider": kwargs["provider_id"],
+            "revoked": True,
+        }
+        try:
+            malformed_reconcile = app_module._reconcile_oauth_revocations(limit=1)
+        finally:
+            app_module.revoke_oauth_token = original_malformed_revoke
+        if malformed_reconcile != {"claimed": 1, "revoked": 1, "failed": 0}:
+            raise AssertionError(f"callback revocation retry did not drain work: {malformed_reconcile}")
+        with db.connect() as conn:
+            if conn.execute(
+                "SELECT 1 FROM oauth_revocation_work WHERE id = ?",
+                (malformed_work_id,),
+            ).fetchone() is not None:
+                raise AssertionError("reconciled callback revocation work remained queued")
 
         flow = SimpleNamespace(request=SimpleNamespace(headers={}, query={}))
         policy = SimpleNamespace(injection={"type": "bearer", "field": "access_token", "header": "Authorization"})
@@ -714,11 +1841,24 @@ def main() -> None:
         original_refresh_access_token = app_module.refresh_access_token
         app_module.refresh_access_token = lambda **kwargs: {
             "secret": json.dumps({**expired_secret, "access_token": "must-not-persist"}),
+            "revocationSecret": json.dumps(
+                {"access_token": "must-not-persist", "token_type": "Bearer"},
+                separators=(",", ":"),
+                sort_keys=True,
+            ),
             "metadata": {**expired_metadata, "scopes": "not-an-array"},
             "expiresAtEpochMs": int(time.time() * 1000) + 3_600_000,
             "scopes": ["https://www.googleapis.com/auth/gmail.readonly"],
             "refreshTokenRotated": False,
         }
+        original_refresh_rejection_revoke = app_module.revoke_oauth_token
+        rejected_refresh_material: list[dict[str, object]] = []
+
+        def revoke_rejected_refresh(*, provider_id: str, token_secret: dict[str, object]):
+            rejected_refresh_material.append(dict(token_secret))
+            return {"provider": provider_id, "revoked": True}
+
+        app_module.revoke_oauth_token = revoke_rejected_refresh
         try:
             app_module._credential_for_lease(listed["id"])
         except app_module.HTTPException as exc:
@@ -728,6 +1868,14 @@ def main() -> None:
             raise AssertionError("malformed refreshed OAuth scopes were persisted")
         finally:
             app_module.refresh_access_token = original_refresh_access_token
+            app_module.revoke_oauth_token = original_refresh_rejection_revoke
+        if rejected_refresh_material != [
+            {"access_token": "must-not-persist", "token_type": "Bearer"}
+        ]:
+            raise AssertionError(
+                f"post-refresh validation failure did not revoke only issued material: "
+                f"{rejected_refresh_material}"
+            )
         rejected_refresh = db.get_credential(listed["id"], include_secret=True)
         if (
             int(rejected_refresh["credential_version"]) != int(expired["credential_version"])
@@ -805,6 +1953,52 @@ def main() -> None:
         else:
             raise AssertionError("OAuth refresh expanded the credential scope binding")
 
+        def reconcile_failed_refresh(
+            *,
+            expected_access_token: str,
+            expected_refresh_token: str | None,
+        ) -> None:
+            with db.connect() as conn:
+                work_rows = conn.execute(
+                    "SELECT * FROM oauth_revocation_work WHERE source = ?",
+                    ("refresh_token_exchange",),
+                ).fetchall()
+            if len(work_rows) != 1 or work_rows[0]["status"] != "pending":
+                raise AssertionError(f"failed OAuth refresh was not durably retryable: {work_rows}")
+            serialized_work = json.dumps(dict(work_rows[0]), sort_keys=True)
+            if expected_access_token in serialized_work or (
+                expected_refresh_token and expected_refresh_token in serialized_work
+            ):
+                raise AssertionError("failed OAuth refresh persisted issued material without encryption")
+            revoked_refresh_material: list[dict[str, object]] = []
+            original_failed_refresh_revoke = app_module.revoke_oauth_token
+
+            def revoke_failed_refresh(*, provider_id: str, token_secret: dict[str, object]):
+                revoked_refresh_material.append(dict(token_secret))
+                return {"provider": provider_id, "revoked": True}
+
+            app_module.revoke_oauth_token = revoke_failed_refresh
+            try:
+                reconciled = app_module._reconcile_oauth_revocations(limit=1)
+            finally:
+                app_module.revoke_oauth_token = original_failed_refresh_revoke
+            if reconciled != {"claimed": 1, "revoked": 1, "failed": 0}:
+                raise AssertionError(f"failed OAuth refresh did not reconcile: {reconciled}")
+            if len(revoked_refresh_material) != 1:
+                raise AssertionError("failed OAuth refresh did not revoke one issued grant")
+            material = revoked_refresh_material[0]
+            if material.get("access_token") != expected_access_token:
+                raise AssertionError(f"failed OAuth refresh lost its issued access token: {material}")
+            if material.get("refresh_token") != expected_refresh_token:
+                raise AssertionError(
+                    f"failed OAuth refresh revoked the wrong refresh-token material: {material}"
+                )
+
+        reconcile_failed_refresh(
+            expected_access_token="expanded-scope-token",
+            expected_refresh_token="rotated-refresh-token",
+        )
+
         oauth._post_token_request = lambda provider, body, headers: {
             "access_token": "reduced-scope-token",
             "token_type": "Bearer",
@@ -829,8 +2023,12 @@ def main() -> None:
                 raise AssertionError(f"reduced OAuth scope failed for the wrong reason: {exc}") from exc
         else:
             raise AssertionError("OAuth refresh reduced the credential scope binding")
+        reconcile_failed_refresh(
+            expected_access_token="reduced-scope-token",
+            expected_refresh_token=None,
+        )
 
-        audits = db.list_audit_events(limit=20)
+        audits = db.list_audit_events(limit=1000)
         audit_text = json.dumps(audits, sort_keys=True)
         if (
             "access-token-value" in audit_text
@@ -845,6 +2043,9 @@ def main() -> None:
         if {
             "credential.oauth_authorization_started",
             "credential.oauth_connected",
+            "credential.oauth_reconnected",
+            "credential.oauth_revocation_failed",
+            "credential.oauth_disconnected",
             "credential.oauth_refreshed",
         } - event_types:
             raise AssertionError(f"OAuth audit events missing: {event_types}")

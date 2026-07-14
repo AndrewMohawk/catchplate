@@ -37,18 +37,35 @@ from serverware.constraints import (
 )
 from serverware.policy_bundle import (
     X_V2_BOUNDED_READ_OPERATIONS,
+    X_V2_RECENT_SEARCH_PATHS,
+    CredentialPolicy,
     PolicyBundleError,
     bounded_pattern_matches,
     compile_policy_bundle,
     demo_policy_bundle,
 )
 try:
-    from serverware.policy_engine import _inject_credential, evaluate_response
+    from serverware.policy_engine import (
+        _canonical_forwarded_request_headers,
+        _canonical_request,
+        _bind_provider_account_scope,
+        _credential_injection_collision,
+        _digest,
+        _inject_credential,
+        _operation_digest,
+        evaluate_response,
+    )
     from serverware.mitm_addon import ServerwareAddon
 except ModuleNotFoundError as exc:
     if exc.name != "mitmproxy":
         raise
     _inject_credential = None
+    _bind_provider_account_scope = None
+    _operation_digest = None
+    _canonical_forwarded_request_headers = None
+    _canonical_request = None
+    _credential_injection_collision = None
+    _digest = None
     evaluate_response = None
     ServerwareAddon = None
 
@@ -84,7 +101,11 @@ class Response:
 
 
 def flow(method: str, url: str, body: dict | None = None, response: dict | None = None) -> SimpleNamespace:
-    item = SimpleNamespace(request=Request(method, url, body), metadata={})
+    item = SimpleNamespace(
+        request=Request(method, url, body),
+        client_conn=SimpleNamespace(peername=("127.0.0.1", 12345)),
+        metadata={},
+    )
     if response is not None:
         item.response = Response(response)
     return item
@@ -97,14 +118,23 @@ def route(snapshot, route_id: str):
     raise AssertionError(f"missing route {route_id}")
 
 
-def request_decision(route_policy, item, operation: str, *, consume: bool = False):
+def request_decision(
+    route_policy,
+    item,
+    operation: str,
+    *,
+    consume: bool = False,
+    principal_id: str = "agent:demo",
+    credential_ref: str | None = None,
+    operation_fields: dict[str, str] | None = None,
+):
     return evaluate_request_constraints(
         item,
         route_policy,
-        principal_id="agent:demo",
-        credential_ref=route_policy.credential_ref,
+        principal_id=principal_id,
+        credential_ref=credential_ref or route_policy.credential_ref,
         credential_version=1,
-        operation_fields={"operation": operation},
+        operation_fields=operation_fields or {"operation": operation},
         consume_rate_limits=consume,
         policy_hash="sha256:" + "1" * 64,
         rate_limits_only=consume,
@@ -150,6 +180,48 @@ def main() -> None:
     demo = compile_policy_bundle(demo_bundle, validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     example_snapshot = compile_policy_bundle(examples, validate_schema=validate_schema)
+    assert example_snapshot.credentials["cred-object-store"].injection == {
+        "type": "header",
+        "name": "X-Api-Key",
+    }
+    invalid = copy.deepcopy(examples)
+    stripe = next(
+        item for item in invalid["routes"] if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+    )
+    stripe["adapter"]["config"]["request"]["requiredHeaders"]["idempotency-key"]["type"] = "integer"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a non-string generic required header",
+        validate_schema=validate_schema,
+    )
+    invalid = copy.deepcopy(examples)
+    stripe = next(
+        item for item in invalid["routes"] if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+    )
+    stripe["adapter"]["config"]["request"]["requiredHeaders"]["idempotency-key"]["maxLength"] = 9000
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an unbounded generic required header",
+        validate_schema=validate_schema,
+    )
+    invalid = copy.deepcopy(examples)
+    object_store = next(item for item in invalid["routes"] if item["id"] == "example.object_store.small_puts")
+    object_store["adapter"]["config"]["request"]["allowedHeaders"].append("x-api-key")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an agent header collision with credential injection",
+        validate_schema=validate_schema,
+    )
+    invalid = copy.deepcopy(examples)
+    object_store_credential = next(item for item in invalid["credentials"] if item["id"] == "cred-object-store")
+    object_store_credential["injection"] = {"type": "query", "name": "api_key"}
+    object_store = next(item for item in invalid["routes"] if item["id"] == "example.object_store.small_puts")
+    object_store["adapter"]["config"]["request"]["allowedQueryKeys"].append("api_key")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an agent query collision with credential injection",
+        validate_schema=validate_schema,
+    )
     for provider, subject in (
         ("generic", "verified-subject"),
         ("", "verified-subject"),
@@ -169,10 +241,56 @@ def main() -> None:
             f"compiler accepted invalid provider subject binding {provider!r} {subject!r}",
             validate_schema=validate_schema,
         )
+    x_write_example = next(
+        item for item in examples["routes"] if item["id"] == "example.x.tweet.one_per_day"
+    )
+    account_quota = next(
+        item for item in x_write_example["constraints"] if item["type"] == "rateLimit"
+    )
+    assert account_quota["key"] == {
+        "scope": ["route", "operation"],
+        "operationFields": ["providerAccount"],
+    }
+    invalid = copy.deepcopy(examples)
+    x_credential = next(item for item in invalid["credentials"] if item["id"] == "cred-x")
+    x_credential["provider"] = "custom-x"
+    x_credential.pop("providerSubject")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a provider-account quota without account identity",
+        validate_schema=validate_schema,
+    )
+    invalid = copy.deepcopy(examples)
+    invalid_x_write = next(
+        item for item in invalid["routes"] if item["id"] == "example.x.tweet.one_per_day"
+    )
+    invalid_quota = next(
+        item for item in invalid_x_write["constraints"] if item["type"] == "rateLimit"
+    )
+    invalid_quota["key"]["scope"].append("principal")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a provider-account quota partitioned by principal",
+        validate_schema=validate_schema,
+    )
+    invalid = copy.deepcopy(examples)
+    invalid_recent = next(
+        item for item in invalid["routes"] if item["id"] == "example.x.search.seven_days"
+    )
+    invalid_recent["match"]["paths"] = ["/2/tweets/search/all"]
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an X historical endpoint in recent-search mode",
+        validate_schema=validate_schema,
+    )
     x_schema = json.loads((ROOT / "schemas" / "adapters" / "x.v2.schema.json").read_text())
     x_schema_operations = set(x_schema["properties"]["allowedReadOperations"]["items"]["enum"])
     assert x_schema_operations == X_V2_READ_OPERATIONS
     assert X_V2_BOUNDED_READ_OPERATIONS == X_V2_READ_OPERATIONS - {"streams.read"}
+    assert X_V2_RECENT_SEARCH_PATHS == {
+        "/2/tweets/counts/recent",
+        "/2/tweets/search/recent",
+    }
     for operation, templates in X_V2_READ_OPERATION_PATHS:
         for template in templates:
             concrete_path = "/".join(
@@ -665,7 +783,18 @@ def main() -> None:
         b"amount=5000&currency=usd&payment_method=pm_12345678&confirm=true&"
         b"metadata%5Bagent_request_id%5D=req-123"
     )
+    assert_denied(
+        stripe_adapter.validate_request(stripe_request, stripe_route, {}),
+        "required_header_missing",
+    )
+    stripe_request.request.headers["idempotency-key"] = "agent-payment:req-123"
     assert stripe_adapter.validate_request(stripe_request, stripe_route, {}).allowed
+    invalid_idempotency_key = copy.deepcopy(stripe_request)
+    invalid_idempotency_key.request.headers["idempotency-key"] = "invalid key with spaces"
+    assert_denied(
+        stripe_adapter.validate_request(invalid_idempotency_key, stripe_route, {}),
+        "required_header_invalid",
+    )
     stripe_operation = stripe_adapter.operation_fields(stripe_request, stripe_route, {})
     assert stripe_operation == {
         "operation": "stripe.payment_intents.create",
@@ -676,6 +805,61 @@ def main() -> None:
         "metadata.agent_request_id": "req-123",
     }, stripe_operation
     assert request_decision(stripe_route, stripe_request, "stripe.payment_intents.create").allowed
+
+    if _canonical_forwarded_request_headers is not None:
+        stripe_credential = example_snapshot.credentials[stripe_route.credential_ref]
+        principal = example_snapshot.principals["agent:example"]
+        forwarded_headers = _canonical_forwarded_request_headers(stripe_request, stripe_credential)
+        assert forwarded_headers == {
+            "content-length": str(len(stripe_request.request.raw_content)),
+            "content-type": "application/x-www-form-urlencoded",
+            "host": "api.stripe.com",
+            "idempotency-key": "agent-payment:req-123",
+        }
+        canonical = _canonical_request(
+            stripe_request,
+            principal=principal,
+            route=stripe_route,
+            credential_version="1",
+            policy_hash=example_snapshot.hash,
+            operation_fields=stripe_operation,
+            forwarded_headers=forwarded_headers,
+        )
+        changed_idempotency_key = copy.deepcopy(stripe_request)
+        changed_idempotency_key.request.headers["idempotency-key"] = "agent-payment:req-124"
+        changed_forwarded_headers = _canonical_forwarded_request_headers(
+            changed_idempotency_key,
+            stripe_credential,
+        )
+        changed_canonical = _canonical_request(
+            changed_idempotency_key,
+            principal=principal,
+            route=stripe_route,
+            credential_version="1",
+            policy_hash=example_snapshot.hash,
+            operation_fields=stripe_operation,
+            forwarded_headers=changed_forwarded_headers,
+        )
+        assert _digest(canonical) != _digest(changed_canonical)
+        assert _operation_digest(canonical) != _operation_digest(changed_canonical)
+
+        header_collision = copy.deepcopy(stripe_request)
+        header_collision.request.headers["Authorization"] = "Bearer agent-controlled"
+        assert_denied(
+            _credential_injection_collision(header_collision, stripe_credential),
+            "credential_injection_header_collision",
+        )
+        query_collision = flow(
+            "PUT",
+            "https://objects.example.com/agent-artifacts/report-1?api_key=agent-controlled",
+        )
+        assert_denied(
+            _credential_injection_collision(
+                query_collision,
+                SimpleNamespace(injection={"type": "query", "name": "api_key"}),
+            ),
+            "credential_injection_query_collision",
+        )
 
     excessive_amount = copy.deepcopy(stripe_request)
     excessive_amount.request.raw_content = b"amount=50001&currency=usd&payment_method=pm_12345678&confirm=true"
@@ -705,6 +889,20 @@ def main() -> None:
     x_adapter = get_adapter(x_route.adapter_type)
     assert x_adapter.rewrite_request(x_request, x_route, {}).allowed
     assert set(x_request.request.query["tweet.fields"].split(",")) == {"author_id", "created_at"}
+    for historical_path in ("/2/tweets/search/all", "/2/tweets/counts/all"):
+        assert_denied(
+            x_adapter.validate_request(
+                flow("GET", f"https://api.x.com{historical_path}?query=serverware"),
+                x_route,
+                {},
+            ),
+            "x_recent_search_endpoint_denied",
+        )
+    assert x_adapter.validate_request(
+        flow("GET", "https://api.x.com/2/tweets/counts/recent?query=serverware"),
+        x_route,
+        {},
+    ).allowed
 
     full_x_route = route(example_snapshot, "example.x.full_bounded_read")
     full_x_adapter = get_adapter(full_x_route.adapter_type)
@@ -712,6 +910,7 @@ def main() -> None:
         "https://api.x.com/2/tweets/123": "tweets.read",
         "https://api.x.com/2/tweets/analytics": "analytics.read",
         "https://api.x.com/2/tweets/search/recent?query=serverware": "search.read",
+        "https://api.x.com/2/tweets/search/all?query=serverware": "search.read",
         "https://api.x.com/2/users/me": "users.read",
         "https://api.x.com/2/users/123/bookmarks/folders/456": "bookmarks.read",
         "https://api.x.com/2/users/123/owned_lists": "lists.read",
@@ -763,6 +962,14 @@ def main() -> None:
     }
     npm_request = flow("PUT", "https://registry.npmjs.org/@scope%2fexample", npm_document)
     npm_adapter = get_adapter(npm_route.adapter_type)
+    assert set(npm_route.adapter_config["operations"]) == {
+        "publish",
+        "unpublish",
+        "distTagWrite",
+        "tokenWrite",
+        "metadataWrite",
+    }
+    assert "operation" in npm_route.jit["binding"]["fields"]
     npm_fields = npm_adapter.operation_fields(npm_request, npm_route, {"package": "@scope%2fexample"})
     assert npm_fields["packageName"] == "@scope/example", npm_fields
     assert npm_fields["packageVersion"] == "1.2.3", npm_fields
@@ -778,6 +985,123 @@ def main() -> None:
         ),
         "npm_publish_requires_exactly_one_version",
     )
+
+    npm_operations = (
+        (
+            flow("DELETE", "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef"),
+            {"package": "@scope%2fexample", "revision": "42-deadbeef"},
+            "npm.unpublish",
+        ),
+        (
+            flow(
+                "PUT",
+                "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef",
+                {"_rev": "42-deadbeef", "name": "@scope/example", "versions": {}},
+            ),
+            {"package": "@scope%2fexample", "revision": "42-deadbeef"},
+            "npm.unpublish",
+        ),
+        (
+            flow("DELETE", "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next"),
+            {"package": "@scope%2fexample", "tag": "next"},
+            "npm.distTagWrite",
+        ),
+        (
+            flow("POST", "https://registry.npmjs.org/-/npm/v1/tokens", {"readonly": True}),
+            {},
+            "npm.tokenWrite",
+        ),
+        (
+            flow("DELETE", "https://registry.npmjs.org/-/npm/v1/tokens/token/token-key"),
+            {"token": "token-key"},
+            "npm.tokenWrite",
+        ),
+        (
+            flow("POST", "https://registry.npmjs.org/-/package/@scope%2fexample/access", {"access": "public"}),
+            {"package": "@scope%2fexample"},
+            "npm.metadataWrite",
+        ),
+        (
+            flow("POST", "https://registry.npmjs.org/-/npm/v1/user", {"email": "owner@example.test"}),
+            {},
+            "npm.metadataWrite",
+        ),
+        (
+            flow(
+                "PUT",
+                "https://registry.npmjs.org/@scope%2fexample",
+                {"_rev": "42-deadbeef", "name": "@scope/example", "versions": {}},
+            ),
+            {"package": "@scope%2fexample"},
+            "npm.metadataWrite",
+        ),
+    )
+    for npm_write, params, expected_operation in npm_operations:
+        fields = npm_adapter.operation_fields(npm_write, npm_route, params)
+        assert fields["operation"] == expected_operation, fields
+        assert npm_adapter.validate_request(npm_write, npm_route, params).allowed, fields
+
+    if _bind_provider_account_scope is not None:
+        db.clear_rate_limit_counters((x_write_example["id"],))
+        account_route = route(example_snapshot, x_write_example["id"])
+        account_credential = example_snapshot.credentials[account_route.credential_ref]
+        first_operation = {"operation": "tweets.write"}
+        assert _bind_provider_account_scope(account_route, account_credential, first_operation) is None
+        assert first_operation["providerAccount"] == (
+            "sha256:a807912d32ff627e2bcaeea09bad5a4ba3b43c74e891cdfb13d913f4230b122e"
+        )
+        account_tweet = flow("POST", "https://api.x.com/2/tweets", {"text": "first"})
+        assert request_decision(
+            account_route,
+            account_tweet,
+            "tweets.write",
+            consume=True,
+            principal_id="agent:first",
+            credential_ref="cred-x:first-version",
+            operation_fields=first_operation,
+        ).allowed
+
+        rotated_operation = {"operation": "tweets.write"}
+        assert _bind_provider_account_scope(account_route, account_credential, rotated_operation) is None
+        assert_denied(
+            request_decision(
+                account_route,
+                account_tweet,
+                "tweets.write",
+                consume=True,
+                principal_id="agent:second",
+                credential_ref="cred-x:rotated-version",
+                operation_fields=rotated_operation,
+            ),
+            "credential_rate_limit_exceeded",
+        )
+
+        other_account = CredentialPolicy(
+            id="cred-x:other-account",
+            provider="x",
+            provider_subject="different-x-user-id",
+        )
+        other_operation = {"operation": "tweets.write"}
+        assert _bind_provider_account_scope(account_route, other_account, other_operation) is None
+        assert other_operation["providerAccount"] != first_operation["providerAccount"]
+        assert request_decision(
+            account_route,
+            account_tweet,
+            "tweets.write",
+            consume=True,
+            principal_id="agent:third",
+            credential_ref=other_account.id,
+            operation_fields=other_operation,
+        ).allowed
+
+        missing_account = CredentialPolicy(id="cred-x:missing-account", provider="custom-x")
+        missing_decision = _bind_provider_account_scope(
+            account_route,
+            missing_account,
+            {"operation": "tweets.write"},
+        )
+        assert_denied(missing_decision, "provider_account_identity_unavailable")
+        db.clear_rate_limit_counters((x_write_example["id"],))
 
     reset_local_constraint_state()
     tweet_route = route(demo, "demo.x.tweet.one_per_day")

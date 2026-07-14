@@ -40,7 +40,7 @@ For streaming responses, validation and projection happen incrementally. Serverw
 
 `operationPolicy`: allow or deny normalized adapter operations. Use this to block writes for one app while allowing reads, or to make a broad route safe even if SDKs choose unexpected endpoints.
 
-`rateLimit`: fixed-window credential use limits keyed by principal, credential, route, operation, credential version, or selected operation fields. Examples: one tweet per day, five Slack posts per hour, ten object-store writes per hour. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas.
+`rateLimit`: fixed-window credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. Examples: one tweet per provider account per day, five Slack posts per hour, ten object-store writes per hour. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas.
 
 `queryDateWindow`: bounds query parameters such as `start_time`, `end_time`, or `since` to a maximum lookback. Formats supported: RFC3339, date, epoch seconds, and epoch milliseconds.
 
@@ -56,6 +56,37 @@ For streaming responses, validation and projection happen incrementally. Serverw
 
 `responseJson`: validates the semantic contract of a buffered JSON success response before release. It can apply to every normalized operation or only named operations, validate the root value or objects selected through explicit item paths, and apply the shared `fieldRule` assertions to every selected item. It validates data; it does not select or redact fields.
 
+## Generic Required Request Headers
+
+`generic.rest` routes can require ordinary provider request headers through `adapter.config.request.requiredHeaders`. This is adapter policy, not a route-level `constraint` and not principal identity. A principal's top-level `principals[].requiredHeaders` participates in client authentication and must be visible during HTTPS `CONNECT`; an adapter-required header is checked only after principal and route matching, then forwarded to the upstream provider.
+
+Each required adapter header must:
+
+- use a lower-case HTTP field name and also appear in `request.allowedHeaders`;
+- define `type: "string"`, `minLength`, and `maxLength`, with UTF-8 byte length bounded from 1 to 8192;
+- optionally use the shared bounded anchored-pattern grammar, with the pattern capped at 256 characters and the header maximum capped at 4096 bytes when a pattern is present;
+- avoid hop-by-hop, proxy, Host, Content-Length, Serverware service/identity, and credential-injection headers.
+
+At most 16 headers can be required. Duplicate normalized allowlist names, unsupported rule fields, unsafe patterns, non-forwardable names, and credential-injection collisions reject policy activation. At request time, Python and Rust both return a local denial for a missing or invalid value before JIT consumption or credential injection.
+
+The tokenized Stripe PaymentIntent template uses this contract for provider idempotency:
+
+```json
+{
+  "allowedHeaders": ["accept", "content-type", "idempotency-key", "user-agent"],
+  "requiredHeaders": {
+    "idempotency-key": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255,
+      "pattern": "^[-A-Za-z0-9._:]{1,255}$"
+    }
+  }
+}
+```
+
+The agent must generate a policy-conforming `Idempotency-Key` for each intended PaymentIntent operation. Serverware validates and forwards it; Serverware does not synthesize the key or treat it as client identity.
+
 ## Common Patterns Already Modeled
 
 The demo policy includes:
@@ -66,7 +97,7 @@ The demo policy includes:
 - X bounded read access covering every explicitly cataloged current GET endpoint while writes, unknown endpoints, and streaming endpoints stay blocked.
 - npm publish/dist-tag writes guarded by operation allowlists and per-operation JIT approval.
 
-[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting, GitHub issue listing, Stripe customer read-only access, tokenized PaymentIntent creation with amount caps and hardware-backed JIT approval, and bounded object-store writes. Each provider has a separate credential reference so copying the examples does not imply cross-provider credential reuse.
+[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting, GitHub issue listing, Stripe customer read-only access, tokenized PaymentIntent creation with a required bounded idempotency key, amount caps, and hardware-backed JIT approval, and bounded object-store writes. Each provider has a separate credential reference so copying the examples does not imply cross-provider credential reuse.
 
 ## X Endpoint Catalog
 

@@ -19,16 +19,37 @@ from serverware.policy_bundle import (
     CredentialPolicy,
     PolicySnapshot,
     PrincipalPolicy,
+    PROVIDER_ACCOUNT_OPERATION_FIELD,
     RoutePolicy,
     canonical_json,
+    credential_injection_target,
     get_policy_snapshot,
+    provider_account_scope_value,
     request_url_parts,
 )
 
 
 SENSITIVE_QUERY_KEYS = {"access_token", "api_key", "apikey", "key", "token", "auth", "authorization"}
 SECRET_FIELD_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
-VOLATILE_DIGEST_HEADERS = {"date", "user-agent", "content-length", "connection", "authorization", "proxy-authorization"}
+STANDARD_HOP_BY_HOP_HEADERS = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+}
+SERVERWARE_SERVICE_AUTH_HEADERS = {
+    "x-serverware-admin-token",
+    "x-serverware-audit-anchor-token",
+    "x-serverware-ca-install-token",
+    "x-serverware-csrf-token",
+    "x-serverware-data-plane-token",
+}
+RESPONSE_PROOF_NONCE_HEADER = "x-serverware-proof-nonce"
 _RESPONSE_CREDENTIAL_GUARD_ATTR = "_serverware_response_credential_guard"
 
 
@@ -143,15 +164,149 @@ def _body_sha256(flow: http.HTTPFlow) -> str:
     return "sha256:" + hashlib.sha256(_request_body(flow)).hexdigest()
 
 
-def _selected_headers(flow: http.HTTPFlow) -> dict[str, str]:
+def _canonical_authority(url: str) -> str:
+    parts = urlsplit(url)
+    host = (parts.hostname or "").rstrip(".").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError as exc:
+        raise ValueError("invalid request authority port") from exc
+    default_port = 443 if parts.scheme.lower() == "https" else 80 if parts.scheme.lower() == "http" else None
+    return f"{host}:{port}" if port is not None and port != default_port else host
+
+
+def _normalized_request_headers(flow: http.HTTPFlow) -> dict[str, str]:
     headers: dict[str, str] = {}
-    for name, value in flow.request.headers.items():
-        lower = name.lower()
-        if lower in VOLATILE_DIGEST_HEADERS or lower.startswith("proxy-"):
-            continue
-        if lower in {"content-type", "npm-command", "x-serverware-agent"}:
-            headers[lower] = value
-    return dict(sorted(headers.items()))
+    for raw_name, raw_value in flow.request.headers.items():
+        name = str(raw_name).lower()
+        if name in headers:
+            raise ValueError(f"request repeats header {name} after case normalization")
+        headers[name] = str(raw_value)
+    return headers
+
+
+def _canonical_forwarded_request_headers(
+    flow: http.HTTPFlow,
+    credential_policy: CredentialPolicy | None,
+) -> dict[str, str]:
+    headers = _normalized_request_headers(flow)
+    nominated = {
+        name.strip().lower()
+        for name in headers.get("connection", "").split(",")
+        if name.strip()
+    }
+    for name in nominated:
+        if name in headers:
+            raise ValueError(f"Connection nominates supplied header {name}")
+    target = credential_injection_target(credential_policy.injection) if credential_policy else None
+    credential_header = target[1] if target and target[0] == "header" else None
+    forwarded = {
+        name: value
+        for name, value in headers.items()
+        if name not in STANDARD_HOP_BY_HOP_HEADERS
+        and name not in nominated
+        and name != "authorization"
+        and name != credential_header
+        and name not in {"host", "content-length", "x-serverware-agent"}
+        and name not in SERVERWARE_SERVICE_AUTH_HEADERS
+        and name != RESPONSE_PROOF_NONCE_HEADER
+    }
+    forwarded["host"] = _canonical_authority(flow.request.pretty_url)
+    body_length = len(_request_body(flow))
+    configured_length = headers.get("content-length")
+    if configured_length is not None:
+        try:
+            parsed_length = int(configured_length)
+        except ValueError as exc:
+            raise ValueError("invalid content-length") from exc
+        if parsed_length < 0 or parsed_length != body_length:
+            raise ValueError("content-length does not match buffered request body")
+        forwarded["content-length"] = str(parsed_length)
+    elif body_length:
+        forwarded["content-length"] = str(body_length)
+    return dict(sorted(forwarded.items()))
+
+
+def _credential_injection_collision(
+    flow: http.HTTPFlow,
+    credential_policy: CredentialPolicy | None,
+) -> PolicyDecision | None:
+    if credential_policy is None:
+        return None
+    target = credential_injection_target(credential_policy.injection)
+    if target is None:
+        return PolicyDecision(
+            False,
+            "credential injection target is invalid",
+            500,
+            {"error": "credential_injection_target_invalid"},
+        )
+    try:
+        headers = _normalized_request_headers(flow)
+    except ValueError as exc:
+        return PolicyDecision(
+            False,
+            str(exc),
+            400,
+            {"error": "invalid_forwarding_headers", "detail": str(exc)},
+        )
+    location, name = target
+    if location == "header" and name in headers:
+        return PolicyDecision(
+            False,
+            f"agent header collides with credential injection: {name}",
+            403,
+            {"error": "credential_injection_header_collision", "header": name},
+        )
+    if location == "query" and any(
+        key == name
+        for key, _ in parse_qsl(urlsplit(flow.request.pretty_url).query, keep_blank_values=True)
+    ):
+        return PolicyDecision(
+            False,
+            f"agent query key collides with credential injection: {name}",
+            403,
+            {"error": "credential_injection_query_collision", "queryKey": name},
+        )
+    return None
+
+
+def _bind_provider_account_scope(
+    route: RoutePolicy,
+    credential_policy: CredentialPolicy | None,
+    operation_fields: dict[str, str],
+) -> PolicyDecision | None:
+    constraints = [
+        str(constraint.get("id") or "unnamed")
+        for constraint in route.constraints
+        if constraint.get("type") == "rateLimit"
+        and PROVIDER_ACCOUNT_OPERATION_FIELD
+        in set(((constraint.get("key") or {}).get("operationFields") or []))
+    ]
+    if not constraints:
+        return None
+    provider_account = (
+        provider_account_scope_value(
+            credential_policy.provider,
+            credential_policy.provider_subject,
+        )
+        if credential_policy is not None
+        else None
+    )
+    if provider_account is None:
+        return PolicyDecision(
+            False,
+            "provider account identity is unavailable for account-scoped quota",
+            500,
+            {
+                "error": "provider_account_identity_unavailable",
+                "constraint_ids": constraints,
+            },
+        )
+    operation_fields[PROVIDER_ACCOUNT_OPERATION_FIELD] = provider_account
+    return None
 
 
 def _canonical_request(
@@ -162,6 +317,7 @@ def _canonical_request(
     credential_version: str,
     policy_hash: str,
     operation_fields: dict[str, str],
+    forwarded_headers: dict[str, str],
 ) -> dict[str, Any]:
     parts = urlsplit(flow.request.pretty_url)
     return {
@@ -175,10 +331,10 @@ def _canonical_request(
         "request": {
             "method": flow.request.method.upper(),
             "scheme": parts.scheme,
-            "authority": parts.netloc.lower(),
+            "authority": _canonical_authority(flow.request.pretty_url),
             "path": parts.path or "/",
             "query": sorted(parse_qsl(parts.query, keep_blank_values=True)),
-            "headers": _selected_headers(flow),
+            "headers": forwarded_headers,
             "body_sha256": _body_sha256(flow),
         },
         "operation": operation_fields,
@@ -381,12 +537,68 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         )
         return RequestEvaluation(credential_decision, snapshot, principal, route, credential_policy, params)
 
+    collision_decision = _credential_injection_collision(flow, credential_policy)
+    if collision_decision is not None:
+        runtime.log_request(
+            route.id,
+            flow.request.method,
+            safe_url,
+            "blocked",
+            collision_decision.status_code,
+            collision_decision.reason,
+            pre_policy_audit_context,
+        )
+        return RequestEvaluation(collision_decision, snapshot, principal, route, credential_policy, params)
+
+    try:
+        forwarded_headers = _canonical_forwarded_request_headers(flow, credential_policy)
+    except ValueError as exc:
+        decision = PolicyDecision(
+            False,
+            "invalid forwarding headers",
+            400,
+            {"error": "invalid_forwarding_headers", "detail": str(exc)},
+        )
+        runtime.log_request(
+            route.id,
+            flow.request.method,
+            safe_url,
+            "blocked",
+            decision.status_code,
+            decision.reason,
+            pre_policy_audit_context,
+        )
+        return RequestEvaluation(decision, snapshot, principal, route, credential_policy, params)
+
     decision = adapter.validate_request(flow, route, params)
     if not decision.allowed:
         runtime.log_request(route.id, flow.request.method, safe_url, "blocked", decision.status_code, decision.reason, pre_policy_audit_context)
         return RequestEvaluation(decision, snapshot, principal, route, credential_policy, params)
 
     operation_fields = adapter.operation_fields(flow, route, params)
+    provider_account_decision = _bind_provider_account_scope(
+        route,
+        credential_policy,
+        operation_fields,
+    )
+    if provider_account_decision is not None:
+        runtime.log_request(
+            route.id,
+            flow.request.method,
+            safe_url,
+            "blocked",
+            provider_account_decision.status_code,
+            provider_account_decision.reason,
+            pre_policy_audit_context,
+        )
+        return RequestEvaluation(
+            provider_account_decision,
+            snapshot,
+            principal,
+            route,
+            credential_policy,
+            params,
+        )
     constraint_decision = evaluate_request_constraints(
         flow,
         route,
@@ -416,6 +628,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         credential_version=credential_version,
         policy_hash=snapshot.hash,
         operation_fields=operation_fields,
+        forwarded_headers=forwarded_headers,
     )
     request_digest = _digest(canonical_request)
     operation_digest = _operation_digest(canonical_request)

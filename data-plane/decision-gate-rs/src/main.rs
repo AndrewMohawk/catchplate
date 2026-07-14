@@ -71,6 +71,7 @@ const DEFAULT_RESPONSE_WRITE_DEADLINE_MS: u64 = 120_000;
 const SOCKET_IO_SLICE: Duration = Duration::from_secs(1);
 const RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
 const RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-proof-nonce";
+const SUPPORTED_ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
 
 #[derive(Clone)]
 struct Snapshot {
@@ -109,7 +110,15 @@ struct Principal {
 
 #[derive(Clone)]
 struct Credential {
+    provider: String,
+    provider_subject: Option<String>,
     injection: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum CredentialInjectionTarget {
+    Header(String),
+    Query(String),
 }
 
 #[derive(Clone)]
@@ -1045,6 +1054,20 @@ fn sha256_prefixed(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+const PROVIDER_ACCOUNT_OPERATION_FIELD: &str = "providerAccount";
+
+fn provider_account_scope_value(provider: &str, provider_subject: Option<&str>) -> Option<String> {
+    let provider_subject = provider_subject.filter(|subject| !subject.is_empty())?;
+    if provider.is_empty() {
+        return None;
+    }
+    let mut material = Vec::with_capacity(provider.len() + provider_subject.len() + 1);
+    material.extend_from_slice(provider.as_bytes());
+    material.push(0);
+    material.extend_from_slice(provider_subject.as_bytes());
+    Some(sha256_prefixed(&material))
 }
 
 fn signature_payload(raw: &Value) -> Value {
@@ -2201,6 +2224,150 @@ fn validate_optional_response_release_contract(
     Ok(())
 }
 
+fn credential_injection_target(injection: &Value) -> Result<CredentialInjectionTarget, String> {
+    let string_field = |name: &str, default: &str| -> Result<String, String> {
+        match injection.get(name) {
+            Some(Value::String(value)) => Ok(value.clone()),
+            Some(_) => Err(format!("credential injection {name} must be a string")),
+            None => Ok(default.to_string()),
+        }
+    };
+    let injection_type = match injection.get("type") {
+        Some(Value::String(value)) => value.as_str(),
+        Some(_) => return Err("credential injection type must be a string".to_string()),
+        None => "bearer",
+    };
+    let target = match injection_type {
+        "bearer" => CredentialInjectionTarget::Header(
+            string_field("header", "authorization")?.to_ascii_lowercase(),
+        ),
+        "header" => CredentialInjectionTarget::Header(
+            string_field("name", "x-api-key")?.to_ascii_lowercase(),
+        ),
+        "basic" => CredentialInjectionTarget::Header(
+            string_field("header", "authorization")?.to_ascii_lowercase(),
+        ),
+        "cookie" => CredentialInjectionTarget::Header("cookie".to_string()),
+        "query" => CredentialInjectionTarget::Query(string_field("name", "access_token")?),
+        other => return Err(format!("unsupported credential injection type {other}")),
+    };
+    match &target {
+        CredentialInjectionTarget::Header(name) => {
+            if name.is_empty()
+                || name.len() > 128
+                || HeaderName::from_bytes(name.as_bytes()).is_err()
+            {
+                return Err("credential injection header is invalid".to_string());
+            }
+        }
+        CredentialInjectionTarget::Query(name) => {
+            if name.is_empty()
+                || name.len() > 128
+                || name
+                    .chars()
+                    .any(|character| character.is_control() || character.is_whitespace())
+            {
+                return Err("credential injection query key is invalid".to_string());
+            }
+        }
+    }
+    Ok(target)
+}
+
+fn is_non_forwardable_agent_header(name: &str) -> bool {
+    is_standard_hop_by_hop_header(name)
+        || is_serverware_service_auth_header(name)
+        || matches!(
+            name,
+            "authorization"
+                | "cookie"
+                | "content-length"
+                | "host"
+                | "x-serverware-agent"
+                | RESPONSE_PROOF_NONCE_HEADER
+        )
+}
+
+fn validate_generic_required_header_policy(
+    route_id: &str,
+    request: &Map<String, Value>,
+    allowed_headers: &HashSet<String>,
+) -> Result<(), String> {
+    let required = match request.get("requiredHeaders") {
+        Some(Value::Object(required)) => required,
+        None => return Ok(()),
+        Some(_) => {
+            return Err(format!(
+                "route {route_id} generic.rest requiredHeaders must be an object"
+            ))
+        }
+    };
+    if required.len() > 16 {
+        return Err(format!(
+            "route {route_id} generic.rest requiredHeaders must have at most 16 entries"
+        ));
+    }
+    for (name, rule) in required {
+        if name.is_empty()
+            || name.len() > 128
+            || name != &name.to_ascii_lowercase()
+            || HeaderName::from_bytes(name.as_bytes()).is_err()
+        {
+            return Err(format!(
+                "route {route_id} generic.rest required header names must be lower-case HTTP field names"
+            ));
+        }
+        if !allowed_headers.contains(name) || is_non_forwardable_agent_header(name) {
+            return Err(format!(
+                "route {route_id} generic.rest required header {name} is not an allowed forwarded header"
+            ));
+        }
+        let rule = rule.as_object().ok_or_else(|| {
+            format!("route {route_id} generic.rest required header {name} rule must be an object")
+        })?;
+        for key in rule.keys() {
+            if !matches!(key.as_str(), "type" | "minLength" | "maxLength" | "pattern") {
+                return Err(format!(
+                    "route {route_id} generic.rest required header {name} rule {key} is unsupported"
+                ));
+            }
+        }
+        if rule.get("type").and_then(Value::as_str) != Some("string") {
+            return Err(format!(
+                "route {route_id} generic.rest required header {name} type must be string"
+            ));
+        }
+        let minimum = rule.get("minLength").and_then(Value::as_u64);
+        let maximum = rule.get("maxLength").and_then(Value::as_u64);
+        if minimum.is_none_or(|value| value == 0)
+            || maximum.is_none_or(|value| value == 0 || value > 8192)
+            || minimum
+                .zip(maximum)
+                .is_none_or(|(minimum, maximum)| minimum > maximum)
+        {
+            return Err(format!(
+                "route {route_id} generic.rest required header {name} must define lengths between 1 and 8192"
+            ));
+        }
+        if let Some(pattern) = rule.get("pattern") {
+            let pattern = pattern.as_str().ok_or_else(|| {
+                format!(
+                    "route {route_id} generic.rest required header {name} pattern must be a string"
+                )
+            })?;
+            if pattern.len() > 256
+                || simple_bounded_pattern(pattern).is_none()
+                || maximum.is_some_and(|value| value > 4096)
+            {
+                return Err(format!(
+                    "route {route_id} generic.rest required header {name} pattern must use the bounded runtime grammar"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
     const DEFAULTS: [(&str, &str); 5] = [
         ("action", "deny"),
@@ -2209,7 +2376,6 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         ("unknownPaths", "block"),
         ("validationFailure", "block"),
     ];
-    const ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
     const BUFFERED_RESPONSE_MODES: [&str; 3] = ["any", "headersOnly", "json"];
     const STREAMING_RESPONSE_MODES: [&str; 7] = [
         "stream",
@@ -2337,6 +2503,40 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         }
     }
 
+    let mut credential_targets = HashMap::new();
+    let mut credential_provider_accounts = HashMap::new();
+    for (index, item) in raw
+        .get("credentials")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let credential = item
+            .as_object()
+            .ok_or_else(|| format!("credential {index} must be an object"))?;
+        let credential_id = credential
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("credential {index} id missing"))?;
+        let provider = credential
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or("generic");
+        let provider_subject = credential.get("providerSubject").and_then(Value::as_str);
+        let provider_account = provider_account_scope_value(provider, provider_subject);
+        let injection = credential.get("injection").unwrap_or(&Value::Null);
+        let target = credential_injection_target(injection)
+            .map_err(|error| format!("credential {credential_id} {error}"))?;
+        if credential_targets
+            .insert(credential_id.to_string(), target)
+            .is_some()
+        {
+            return Err(format!("duplicate credential {credential_id}"));
+        }
+        credential_provider_accounts.insert(credential_id.to_string(), provider_account);
+    }
+
     let routes = raw
         .get("routes")
         .and_then(Value::as_array)
@@ -2355,7 +2555,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(|adapter| adapter.get("type"))
             .and_then(Value::as_str)
             .ok_or_else(|| format!("route {route_id} adapter type missing"))?;
-        if !ADAPTER_TYPES.contains(&adapter_type) {
+        if !SUPPORTED_ADAPTER_TYPES.contains(&adapter_type) {
             return Err(format!(
                 "route {route_id} adapter type {adapter_type} is not supported by the Rust runtime"
             ));
@@ -2571,7 +2771,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             let has_write = operations.iter().any(|operation| {
                 matches!(
                     operation.as_str(),
-                    Some("publish" | "distTagWrite" | "tokenWrite" | "metadataWrite")
+                    Some("publish" | "unpublish" | "distTagWrite" | "tokenWrite" | "metadataWrite")
                 )
             });
             let response = adapter_config
@@ -2679,6 +2879,74 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     return Err(format!(
                         "route {route_id} generic.rest response config missing {key}"
                     ));
+                }
+            }
+            let raw_allowed_headers = request
+                .get("allowedHeaders")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    format!("route {route_id} generic.rest allowedHeaders must be an array")
+                })?;
+            let mut allowed_headers = HashSet::new();
+            for raw_name in raw_allowed_headers {
+                let name = raw_name.as_str().ok_or_else(|| {
+                    format!(
+                        "route {route_id} generic.rest allowedHeaders must contain HTTP field names"
+                    )
+                })?;
+                let normalized = name.to_ascii_lowercase();
+                if name.is_empty()
+                    || name.len() > 128
+                    || HeaderName::from_bytes(name.as_bytes()).is_err()
+                    || !allowed_headers.insert(normalized.clone())
+                {
+                    return Err(format!(
+                        "route {route_id} generic.rest allowed header {name:?} is invalid or duplicated"
+                    ));
+                }
+                if matches!(
+                    normalized.as_str(),
+                    "authorization" | "cookie" | "proxy-authorization"
+                ) {
+                    return Err(format!(
+                        "route {route_id} generic.rest allows credential header {normalized} supplied by the agent"
+                    ));
+                }
+            }
+            let raw_allowed_query = request
+                .get("allowedQueryKeys")
+                .and_then(Value::as_array)
+                .ok_or_else(|| {
+                    format!("route {route_id} generic.rest allowedQueryKeys must be an array")
+                })?;
+            let mut allowed_query = HashSet::new();
+            for raw_name in raw_allowed_query {
+                let name = raw_name.as_str().ok_or_else(|| {
+                    format!("route {route_id} generic.rest allowedQueryKeys must contain strings")
+                })?;
+                if name.is_empty() || name.len() > 256 || !allowed_query.insert(name.to_string()) {
+                    return Err(format!(
+                        "route {route_id} generic.rest allowed query key {name:?} is invalid or duplicated"
+                    ));
+                }
+            }
+            validate_generic_required_header_policy(route_id, request, &allowed_headers)?;
+            if let Some(credential_id) = route.get("credentialRef").and_then(Value::as_str) {
+                let target = credential_targets.get(credential_id).ok_or_else(|| {
+                    format!("route {route_id} references unknown credential {credential_id}")
+                })?;
+                match target {
+                    CredentialInjectionTarget::Header(name) if allowed_headers.contains(name) => {
+                        return Err(format!(
+                            "route {route_id} generic.rest agent header {name} collides with credential injection"
+                        ));
+                    }
+                    CredentialInjectionTarget::Query(name) if allowed_query.contains(name) => {
+                        return Err(format!(
+                            "route {route_id} generic.rest agent query key {name} collides with credential injection"
+                        ));
+                    }
+                    _ => {}
                 }
             }
             let body_mode = request
@@ -2821,6 +3089,16 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 {
                     return Err(format!(
                         "route {route_id} X recent-search policy may only allow search.read"
+                    ));
+                }
+                if mode == "recentSearchOnly"
+                    && paths.iter().any(|path| {
+                        path.as_str()
+                            .is_none_or(|path| !X_V2_RECENT_SEARCH_PATHS.contains(&path))
+                    })
+                {
+                    return Err(format!(
+                        "route {route_id} X recent-search policy may only match exact recent-search endpoints"
                     ));
                 }
                 if allowed_reads.contains("streams.read") {
@@ -3329,6 +3607,50 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                             "route {route_id} rateLimit {constraint_id} has invalid operationFields"
                         ));
                     }
+                    if fields
+                        .iter()
+                        .any(|field| field.as_str() == Some(PROVIDER_ACCOUNT_OPERATION_FIELD))
+                    {
+                        let scope = key
+                            .and_then(|key| key.get("scope"))
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_else(|| {
+                                vec![
+                                    json!("principal"),
+                                    json!("credential"),
+                                    json!("route"),
+                                    json!("operation"),
+                                ]
+                            });
+                        if scope.iter().any(|item| {
+                            matches!(
+                                item.as_str(),
+                                Some("principal" | "credential" | "credentialVersion")
+                            )
+                        }) {
+                            return Err(format!(
+                                "route {route_id} provider-account rate limit {constraint_id} must not be partitioned by principal or credential identity"
+                            ));
+                        }
+                        let credential_id = route
+                            .get("credentialRef")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| {
+                                format!(
+                                    "route {route_id} provider-account rate limit {constraint_id} requires a credential"
+                                )
+                            })?;
+                        if credential_provider_accounts
+                            .get(credential_id)
+                            .and_then(Option::as_ref)
+                            .is_none()
+                        {
+                            return Err(format!(
+                                "route {route_id} provider-account rate limit {constraint_id} requires a signed credential providerSubject"
+                            ));
+                        }
+                    }
                 }
             }
             if matches!(constraint_type, "jsonBody" | "formBody") {
@@ -3751,6 +4073,15 @@ fn load_snapshot(
         credentials.insert(
             id,
             Credential {
+                provider: item
+                    .get("provider")
+                    .and_then(Value::as_str)
+                    .unwrap_or("generic")
+                    .to_string(),
+                provider_subject: item
+                    .get("providerSubject")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
                 injection: item
                     .get("injection")
                     .cloned()
@@ -4245,35 +4576,59 @@ fn is_serverware_service_auth_header(name: &str) -> bool {
 }
 
 fn credential_injection_header(injection: &Value) -> Option<String> {
-    match injection
-        .get("type")
-        .and_then(Value::as_str)
-        .unwrap_or("bearer")
-    {
-        "bearer" => Some(
-            injection
-                .get("header")
-                .and_then(Value::as_str)
-                .unwrap_or("authorization")
-                .to_ascii_lowercase(),
-        ),
-        "header" => Some(
-            injection
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("x-api-key")
-                .to_ascii_lowercase(),
-        ),
-        "basic" => Some("authorization".to_string()),
-        _ => None,
+    match credential_injection_target(injection).ok()? {
+        CredentialInjectionTarget::Header(name) => Some(name),
+        CredentialInjectionTarget::Query(_) => None,
     }
+}
+
+fn reject_credential_injection_collision(
+    headers: &BTreeMap<String, String>,
+    url: &Url,
+    injection: &Value,
+) -> Result<(), Value> {
+    let target = credential_injection_target(injection).map_err(|detail| {
+        json!({
+            "error":"credential_injection_target_invalid",
+            "detail":detail,
+            "status_code":500,
+        })
+    })?;
+    match target {
+        CredentialInjectionTarget::Header(name) => {
+            if lower_headers(headers).contains_key(&name) {
+                return Err(json!({
+                    "error":"credential_injection_header_collision",
+                    "header":name,
+                }));
+            }
+        }
+        CredentialInjectionTarget::Query(name) => {
+            if url.query_pairs().any(|(key, _)| key == name) {
+                return Err(json!({
+                    "error":"credential_injection_query_collision",
+                    "queryKey":name,
+                }));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn client_forward_header_material(
     headers: &BTreeMap<String, String>,
     injection: &Value,
 ) -> Result<BTreeMap<String, String>, String> {
-    let headers = lower_headers(headers);
+    let mut normalized = BTreeMap::new();
+    for (raw_name, value) in headers {
+        let name = raw_name.to_ascii_lowercase();
+        if normalized.insert(name.clone(), value.clone()).is_some() {
+            return Err(format!(
+                "request repeats header {name} after case normalization"
+            ));
+        }
+    }
+    let headers = normalized;
     let nominated = connection_nominated_headers(&headers);
     for name in &nominated {
         if headers.contains_key(name) {
@@ -4283,15 +4638,9 @@ fn client_forward_header_material(
     let credential_header = credential_injection_header(injection);
     let mut forwarded = BTreeMap::new();
     for (name, value) in headers {
-        if is_standard_hop_by_hop_header(&name)
+        if is_non_forwardable_agent_header(&name)
             || nominated.contains(&name)
-            || name == "authorization"
             || credential_header.as_deref() == Some(name.as_str())
-            || name == "host"
-            || name == "content-length"
-            || name == "x-serverware-agent"
-            || is_serverware_service_auth_header(&name)
-            || name == RESPONSE_PROOF_NONCE_HEADER
         {
             continue;
         }
@@ -4361,20 +4710,7 @@ fn canonical_client_proof_headers(
             return Err(format!("Connection nominates supplied header {name}"));
         }
     }
-    lowered.retain(|name, _| {
-        !is_standard_hop_by_hop_header(name)
-            && !nominated.contains(name)
-            && !matches!(
-                name.as_str(),
-                "host"
-                    | "content-length"
-                    | "authorization"
-                    | "proxy-authorization"
-                    | "x-serverware-agent"
-            )
-            && !is_serverware_service_auth_header(name)
-            && name != RESPONSE_PROOF_NONCE_HEADER
-    });
+    lowered.retain(|name, _| !is_non_forwardable_agent_header(name) && !nominated.contains(name));
     Ok(lowered)
 }
 
@@ -6887,6 +7223,8 @@ fn tighten_gmail_query(query: &str, days: u64) -> String {
     format!("({query}) newer_than:{days}d")
 }
 
+const X_V2_RECENT_SEARCH_PATHS: &[&str] = &["/2/tweets/counts/recent", "/2/tweets/search/recent"];
+
 const X_V2_READ_OPERATION_PATHS: &[(&str, &[&str])] = &[
     (
         "accountActivity.read",
@@ -7151,16 +7489,35 @@ fn npm_registry_path(url: &Url) -> String {
     path.to_string()
 }
 
-fn npm_operation(url: &Url, method: &str) -> String {
+fn npm_operation(url: &Url, method: &str, body: &str) -> String {
     let method = method.to_ascii_uppercase();
     let path = npm_registry_path(url);
     if method == "GET" || method == "HEAD" {
         "read".to_string()
-    } else if path.starts_with("/-/package/") && path.contains("/dist-tags/") {
-        "distTagWrite".to_string()
     } else if path.starts_with("/-/npm/v1/tokens") || path.starts_with("/-/user/token") {
         "tokenWrite".to_string()
-    } else if method == "PATCH" {
+    } else if path.starts_with("/-/package/")
+        && (path.contains("/dist-tags/") || path.ends_with("/dist-tags"))
+    {
+        "distTagWrite".to_string()
+    } else if path.contains("/-rev/")
+        && !path.starts_with("/-/")
+        && (method == "PUT" || method == "DELETE")
+    {
+        "unpublish".to_string()
+    } else if path.starts_with("/-/npm/v1/user")
+        || path.starts_with("/-/package/")
+        || path.starts_with("/-/team/")
+        || path.starts_with("/-/org/")
+        || path.starts_with("/-/user/")
+    {
+        "metadataWrite".to_string()
+    } else if method == "PUT"
+        && serde_json::from_str::<Value>(body)
+            .ok()
+            .and_then(|body| body.get("_rev").cloned())
+            .is_some()
+    {
         "metadataWrite".to_string()
     } else if method == "PUT" || method == "POST" {
         "publish".to_string()
@@ -7175,7 +7532,7 @@ fn npm_operation_fields(
     params: &BTreeMap<String, String>,
     body: &str,
 ) -> Result<Value, Value> {
-    let operation = npm_operation(url, method);
+    let operation = npm_operation(url, method, body);
     let mut fields = Map::new();
     fields.insert(
         "operation".to_string(),
@@ -7188,6 +7545,9 @@ fn npm_operation_fields(
         fields.insert("packageName".to_string(), Value::String(package.clone()));
     }
     if let Ok(Value::Object(body_json)) = serde_json::from_str::<Value>(body) {
+        if operation == "publish" && body_json.get("_rev").is_some() {
+            return Err(json!({"error":"npm_publish_revision_denied"}));
+        }
         if let Some(package_name) = body_json.get("name").and_then(Value::as_str) {
             if route_package
                 .as_deref()
@@ -7504,6 +7864,56 @@ fn generic_operation_fields(
     Ok(Value::Object(fields))
 }
 
+fn validate_required_request_headers(
+    request_config: &Map<String, Value>,
+    forwarded_headers: &BTreeMap<String, String>,
+) -> Result<(), Value> {
+    let required = match request_config.get("requiredHeaders") {
+        Some(Value::Object(required)) => required,
+        None => return Ok(()),
+        Some(_) => {
+            return Err(json!({
+                "error":"generic_required_headers_invalid",
+                "status_code":500,
+            }))
+        }
+    };
+    for (name, raw_rule) in required {
+        let Some(value) = forwarded_headers.get(name) else {
+            return Err(json!({
+                "error":"required_header_missing",
+                "header":name,
+            }));
+        };
+        let Some(rule) = raw_rule.as_object() else {
+            return Err(json!({
+                "error":"required_header_policy_invalid",
+                "header":name,
+                "status_code":500,
+            }));
+        };
+        let minimum = rule.get("minLength").and_then(Value::as_u64);
+        let maximum = rule.get("maxLength").and_then(Value::as_u64);
+        let length = value.len() as u64;
+        let pattern_matches = match rule.get("pattern") {
+            Some(Value::String(pattern)) => bounded_pattern_matches(pattern, value) == Some(true),
+            Some(_) => false,
+            None => true,
+        };
+        if rule.get("type").and_then(Value::as_str) != Some("string")
+            || minimum.is_none_or(|minimum| length < minimum)
+            || maximum.is_none_or(|maximum| length > maximum)
+            || !pattern_matches
+        {
+            return Err(json!({
+                "error":"required_header_invalid",
+                "header":name,
+            }));
+        }
+    }
+    Ok(())
+}
+
 fn validate_adapter(
     req: &DecisionRequest,
     forwarded_headers: &BTreeMap<String, String>,
@@ -7535,6 +7945,7 @@ fn validate_adapter(
                     }
                     None => HashSet::new(),
                 };
+                validate_required_request_headers(request_config, forwarded_headers)?;
                 for name in forwarded_headers.keys() {
                     if name != "host" && name != "content-length" && !allowed_headers.contains(name)
                     {
@@ -7657,6 +8068,15 @@ fn validate_adapter(
         "x.v2" => {
             let operation = x_operation(url, &req.method)
                 .ok_or_else(|| json!({"error":"x_unknown_operation_blocked"}))?;
+            let path = url.path().trim_end_matches('/');
+            if config.get("mode").and_then(Value::as_str) == Some("recentSearchOnly")
+                && !X_V2_RECENT_SEARCH_PATHS.contains(&path)
+            {
+                return Err(json!({
+                    "error":"x_recent_search_endpoint_denied",
+                    "path":path,
+                }));
+            }
             let allowed_app_ids = config
                 .get("appIds")
                 .and_then(Value::as_array)
@@ -7701,7 +8121,7 @@ fn validate_adapter(
             Ok((json!({"operation":operation}), rewrite))
         }
         "npm.registry" => {
-            let operation = npm_operation(url, &req.method);
+            let operation = npm_operation(url, &req.method, &req.body);
             let allowed = config
                 .get("operations")
                 .and_then(Value::as_array)
@@ -7776,6 +8196,60 @@ fn constraint_payload(
 
 fn constraint_error(constraint: &Value, error: &str, reason: &str) -> Value {
     constraint_payload(constraint, error, reason, Map::new())
+}
+
+fn bind_provider_account_scope(
+    route: &Route,
+    credential: Option<&Credential>,
+    operation: &mut Value,
+) -> Result<(), Value> {
+    let constraint_ids = route
+        .constraints
+        .iter()
+        .filter(|constraint| constraint.get("type").and_then(Value::as_str) == Some("rateLimit"))
+        .filter(|constraint| {
+            constraint
+                .get("key")
+                .and_then(|key| key.get("operationFields"))
+                .and_then(Value::as_array)
+                .is_some_and(|fields| {
+                    fields
+                        .iter()
+                        .any(|field| field.as_str() == Some(PROVIDER_ACCOUNT_OPERATION_FIELD))
+                })
+        })
+        .map(|constraint| {
+            constraint
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed")
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    if constraint_ids.is_empty() {
+        return Ok(());
+    }
+    let provider_account = credential.and_then(|credential| {
+        provider_account_scope_value(&credential.provider, credential.provider_subject.as_deref())
+    });
+    let Some(provider_account) = provider_account else {
+        return Err(json!({
+            "error":"provider_account_identity_unavailable",
+            "constraint_ids":constraint_ids,
+            "status_code":500,
+        }));
+    };
+    let operation = operation.as_object_mut().ok_or_else(|| {
+        json!({
+            "error":"provider_account_operation_context_invalid",
+            "status_code":500,
+        })
+    })?;
+    operation.insert(
+        PROVIDER_ACCOUNT_OPERATION_FIELD.to_string(),
+        Value::String(provider_account),
+    );
+    Ok(())
 }
 
 fn operation_name(operation: &Value) -> &str {
@@ -9930,6 +10404,21 @@ fn decide_internal(
     } else {
         json!(null)
     };
+    if credential_ref.is_some() {
+        if let Err(payload) = reject_credential_injection_collision(&req.headers, &url, &injection)
+        {
+            let status = payload
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .unwrap_or(403) as u16;
+            let reason = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("credential injection collision")
+                .to_string();
+            return deny(status, &reason, payload, started);
+        }
+    }
     let (credential_version, secret_available) =
         if let Some(credential_id) = credential_ref.as_ref() {
             let scope = CredentialLeaseScope::new(&principal.id, &route.id, credential_id);
@@ -10010,22 +10499,37 @@ fn decide_internal(
     }
     let client_request_digest = req.client_request_digest.clone();
 
-    let (operation, rewrite) = match validate_adapter(&req, &forwarded_headers, &url, &route_match)
-    {
-        Ok(value) => value,
-        Err(payload) => {
-            let status = payload
-                .get("status_code")
-                .and_then(Value::as_u64)
-                .unwrap_or(403) as u16;
-            let reason = payload
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("adapter denied")
-                .to_string();
-            return deny(status, &reason, payload, started);
-        }
-    };
+    let (mut operation, rewrite) =
+        match validate_adapter(&req, &forwarded_headers, &url, &route_match) {
+            Ok(value) => value,
+            Err(payload) => {
+                let status = payload
+                    .get("status_code")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(403) as u16;
+                let reason = payload
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("adapter denied")
+                    .to_string();
+                return deny(status, &reason, payload, started);
+            }
+        };
+    let credential_policy = credential_ref
+        .as_ref()
+        .and_then(|credential_id| snapshot.credentials.get(credential_id));
+    if let Err(payload) = bind_provider_account_scope(route, credential_policy, &mut operation) {
+        let status = payload
+            .get("status_code")
+            .and_then(Value::as_u64)
+            .unwrap_or(500) as u16;
+        let reason = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("provider account identity unavailable")
+            .to_string();
+        return deny(status, &reason, payload, started);
+    }
     if let Err(payload) = evaluate_request_constraints(
         state,
         route,
@@ -10789,7 +11293,11 @@ fn apply_credential_injection(
             let raw = Zeroizing::new(format!("{username}:{}", secret.as_str()));
             let token = Zeroizing::new(general_purpose::STANDARD.encode(raw.as_bytes()));
             let value = Zeroizing::new(format!("Basic {}", token.as_str()));
-            insert_header(headers, "authorization", value.as_str())?;
+            let header = injection
+                .get("header")
+                .and_then(Value::as_str)
+                .unwrap_or("authorization");
+            insert_header(headers, header, value.as_str())?;
             response_guard.add_text_encodings(raw.as_str());
             response_guard.add_text_encodings(token.as_str());
             response_guard.add_text_encodings(value.as_str());
@@ -17662,8 +18170,20 @@ mod tests {
     }
 
     #[test]
-    fn service_auth_headers_are_stripped_before_upstream_and_proof() {
+    fn ambient_authority_and_service_auth_headers_are_stripped_before_upstream_and_proof() {
         let headers = BTreeMap::from([
+            (
+                "Authorization".to_string(),
+                "Bearer ambient-authority".to_string(),
+            ),
+            (
+                "Cookie".to_string(),
+                "ambient_session=caller-controlled".to_string(),
+            ),
+            (
+                "Proxy-Authorization".to_string(),
+                "Basic ambient-proxy-authority".to_string(),
+            ),
             (
                 "X-Serverware-Admin-Token".to_string(),
                 "admin-secret".to_string(),
@@ -17684,6 +18204,7 @@ mod tests {
                 "X-Serverware-Data-Plane-Token".to_string(),
                 "service-secret".to_string(),
             ),
+            ("X-Serverware-Agent".to_string(), "agent:test".to_string()),
             ("X-Visible".to_string(), "visible".to_string()),
         ]);
         let forwarded = client_forward_header_material(&headers, &json!({"type":"bearer"}))
@@ -17694,6 +18215,139 @@ mod tests {
         );
         let proof = canonical_client_proof_headers(&headers).expect("proof headers");
         assert_eq!(proof, forwarded);
+    }
+
+    #[test]
+    fn specialized_adapters_strip_ambient_cookie_before_credential_injection() {
+        let injection = json!({"type":"bearer"});
+        let url = Url::parse("https://api.example.test/resource").expect("test URL");
+        let headers = BTreeMap::from([
+            (
+                "Authorization".to_string(),
+                "Bearer ambient-authority".to_string(),
+            ),
+            (
+                "Cookie".to_string(),
+                "ambient_session=caller-controlled".to_string(),
+            ),
+            ("Host".to_string(), "caller.example.test".to_string()),
+            (
+                "Proxy-Authorization".to_string(),
+                "Basic ambient-proxy-authority".to_string(),
+            ),
+            (
+                "X-Serverware-Data-Plane-Token".to_string(),
+                "service-session".to_string(),
+            ),
+            (
+                "X-Serverware-Proof-Nonce".to_string(),
+                "proof-nonce".to_string(),
+            ),
+            ("X-Visible".to_string(), "visible".to_string()),
+        ]);
+        let sanitized = client_forward_header_material(&headers, &injection)
+            .expect("shared forwarding sanitizer");
+        assert_eq!(
+            sanitized,
+            BTreeMap::from([("x-visible".to_string(), "visible".to_string())])
+        );
+        assert_eq!(
+            canonical_client_proof_headers(&headers).expect("proof headers"),
+            sanitized
+        );
+
+        let canonical = canonical_forwarded_request_headers(&headers, &url, None, &injection)
+            .expect("canonical forwarded headers");
+        assert_eq!(canonical["host"], "api.example.test");
+        assert_eq!(canonical["x-visible"], "visible");
+        assert!(!canonical.contains_key("cookie"));
+        let canonical_digest = digest_json(&json!({"headers":canonical}));
+
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let lease = SecretLease {
+            scope,
+            version: 1,
+            secret: Zeroizing::new("upstream-secret".to_string()),
+            metadata: BTreeMap::new(),
+            policy_hash: "sha256:policy".to_string(),
+            expires_at_epoch_ms: now_epoch_ms() + 60_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+        };
+        for adapter_type in SUPPORTED_ADAPTER_TYPES
+            .iter()
+            .copied()
+            .filter(|adapter_type| *adapter_type != "generic.rest")
+        {
+            let mut upstream = filtered_forward_headers(&headers, &injection)
+                .expect("actual upstream headers before credential injection");
+            assert_eq!(upstream.len(), sanitized.len(), "{adapter_type}");
+            assert_eq!(
+                upstream
+                    .get("x-visible")
+                    .and_then(|value| value.to_str().ok()),
+                Some("visible"),
+                "{adapter_type}"
+            );
+            assert!(!upstream.contains_key("cookie"), "{adapter_type}");
+            assert!(!upstream.contains_key("authorization"), "{adapter_type}");
+            assert!(
+                !upstream.contains_key("proxy-authorization"),
+                "{adapter_type}"
+            );
+
+            let mut upstream_url = url.clone();
+            let _guard =
+                apply_credential_injection(&mut upstream, &mut upstream_url, &injection, &lease)
+                    .expect("server credential injection");
+            assert!(!upstream.contains_key("cookie"), "{adapter_type}");
+            assert_eq!(
+                upstream
+                    .get("authorization")
+                    .and_then(|value| value.to_str().ok()),
+                Some("Bearer upstream-secret"),
+                "{adapter_type}"
+            );
+        }
+
+        let mut changed_cookie = headers.clone();
+        changed_cookie.insert(
+            "Cookie".to_string(),
+            "ambient_session=different-caller-value".to_string(),
+        );
+        let changed_canonical =
+            canonical_forwarded_request_headers(&changed_cookie, &url, None, &injection)
+                .expect("canonical headers after ambient cookie change");
+        assert_eq!(
+            canonical_digest,
+            digest_json(&json!({"headers":changed_canonical}))
+        );
+
+        let context = ResponseProofContext {
+            client_nonce: "proof-nonce".to_string(),
+            client_nonce_bytes: vec![7; 32],
+            tls_exporter: "test-exporter".to_string(),
+        };
+        let proof_request = IncomingRequest {
+            method: "GET".to_string(),
+            target: url.to_string(),
+            headers,
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        let proof_digest =
+            client_proof_request_digest(&proof_request, &context).expect("proof request digest");
+        let changed_proof_request = IncomingRequest {
+            method: "GET".to_string(),
+            target: url.to_string(),
+            headers: changed_cookie,
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        assert_eq!(
+            proof_digest,
+            client_proof_request_digest(&changed_proof_request, &context)
+                .expect("proof request digest after ambient cookie change")
+        );
     }
 
     #[test]
@@ -17930,6 +18584,8 @@ mod tests {
         snapshot.credentials.insert(
             "credential:test".to_string(),
             Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
                 injection: json!({}),
             },
         );
@@ -18067,6 +18723,18 @@ mod tests {
         assert_eq!(material["content-length"], "7");
         assert!(!material.contains_key("authorization"));
         assert!(!material.contains_key("connection"));
+
+        let duplicate_case = BTreeMap::from([
+            ("X-Custom".to_string(), "one".to_string()),
+            ("x-custom".to_string(), "two".to_string()),
+        ]);
+        assert!(canonical_forwarded_request_headers(
+            &duplicate_case,
+            &url,
+            None,
+            &json!({"type":"bearer"})
+        )
+        .is_err());
     }
 
     #[test]
@@ -18137,6 +18805,78 @@ mod tests {
     }
 
     #[test]
+    fn generic_policy_rejects_credential_injection_collisions() {
+        let mut header_route = generic_policy_route("none", json!(1024));
+        header_route["credentialRef"] = json!("credential:api-key");
+        header_route["adapter"]["config"]["request"]["allowedHeaders"] = json!(["x-api-key"]);
+        let mut header_policy = policy_with_route(header_route);
+        header_policy["credentials"] = json!([{
+            "id":"credential:api-key",
+            "injection":{"type":"header","name":"X-Api-Key"}
+        }]);
+        assert!(validate_policy_capabilities(&header_policy)
+            .expect_err("header collision must fail policy admission")
+            .contains("collides with credential injection"));
+
+        let mut query_route = generic_policy_route("none", json!(1024));
+        query_route["credentialRef"] = json!("credential:query");
+        query_route["adapter"]["config"]["request"]["allowedQueryKeys"] = json!(["api_key"]);
+        let mut query_policy = policy_with_route(query_route);
+        query_policy["credentials"] = json!([{
+            "id":"credential:query",
+            "injection":{"type":"query","name":"api_key"}
+        }]);
+        assert!(validate_policy_capabilities(&query_policy)
+            .expect_err("query collision must fail policy admission")
+            .contains("collides with credential injection"));
+    }
+
+    #[test]
+    fn generic_required_header_policy_is_typed_and_bounded() {
+        let mut route = generic_policy_route("none", json!(1024));
+        route["adapter"]["config"]["request"]["allowedHeaders"] = json!(["idempotency-key"]);
+        route["adapter"]["config"]["request"]["requiredHeaders"] = json!({
+            "idempotency-key":{
+                "type":"string",
+                "minLength":1,
+                "maxLength":255,
+                "pattern":"^[-A-Za-z0-9._:]{1,255}$"
+            }
+        });
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("bounded required header policy");
+
+        route["adapter"]["config"]["request"]["requiredHeaders"]["idempotency-key"]["type"] =
+            json!("integer");
+        assert!(validate_policy_capabilities(&policy_with_route(route))
+            .expect_err("non-string required header must fail policy admission")
+            .contains("type must be string"));
+    }
+
+    #[test]
+    fn runtime_rejects_agent_controlled_credential_injection_targets() {
+        let url = Url::parse("https://example.test/resource?api_key=agent").expect("URL");
+        let headers = BTreeMap::from([("X-Api-Key".to_string(), "agent".to_string())]);
+        let header_error = reject_credential_injection_collision(
+            &headers,
+            &url,
+            &json!({"type":"header","name":"X-Api-Key"}),
+        )
+        .expect_err("agent injection header must be rejected");
+        assert_eq!(
+            header_error["error"],
+            "credential_injection_header_collision"
+        );
+        let query_error = reject_credential_injection_collision(
+            &BTreeMap::new(),
+            &url,
+            &json!({"type":"query","name":"api_key"}),
+        )
+        .expect_err("agent injection query key must be rejected");
+        assert_eq!(query_error["error"], "credential_injection_query_collision");
+    }
+
+    #[test]
     fn body_mode_none_rejects_content_length_before_buffering() {
         let snapshot = test_snapshot(1);
         let head = parse_head(
@@ -18173,6 +18913,8 @@ mod tests {
         snapshot_value.credentials.insert(
             "credential".to_string(),
             Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
                 injection: json!({}),
             },
         );
@@ -18695,6 +19437,144 @@ mod tests {
             "DELETE"
         )
         .is_none());
+
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.adapter_type = "x.v2".to_string();
+        route.adapter_config = json!({
+            "mode":"recentSearchOnly",
+            "blockWrites":true,
+            "appIds":[],
+            "allowedReadOperations":["search.read"],
+            "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["data"]}
+        });
+        let route_match = RouteMatch {
+            route: &route,
+            params: BTreeMap::new(),
+        };
+        for path in ["/2/tweets/search/all", "/2/tweets/counts/all"] {
+            let request = DecisionRequest {
+                method: "GET".to_string(),
+                url: format!("https://api.x.com{path}?query=serverware"),
+                ..decision_request_with_body("")
+            };
+            let url = Url::parse(&request.url).expect("historical X URL");
+            let denied = validate_adapter(&request, &BTreeMap::new(), &url, &route_match)
+                .expect_err("recent-search mode must deny historical endpoints");
+            assert_eq!(denied["error"], "x_recent_search_endpoint_denied");
+        }
+        let request = DecisionRequest {
+            method: "GET".to_string(),
+            url: "https://api.x.com/2/tweets/counts/recent?query=serverware".to_string(),
+            ..decision_request_with_body("")
+        };
+        let url = Url::parse(&request.url).expect("recent X URL");
+        validate_adapter(&request, &BTreeMap::new(), &url, &route_match)
+            .expect("recent-search mode permits the exact recent counts endpoint");
+
+        let recent_route = json!({
+            "id":"x:recent",
+            "principals":["agent:test"],
+            "match":{
+                "scheme":"https","host":"api.x.com","port":443,
+                "methods":["GET"],"paths":["/2/tweets/search/recent"]
+            },
+            "credentialRef":"credential:x",
+            "adapter":{"type":"x.v2","config":{
+                "mode":"recentSearchOnly",
+                "blockWrites":true,
+                "appIds":["approved-app"],
+                "allowedReadOperations":["search.read"],
+                "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["data"]}
+            }},
+            "constraints":[{
+                "id":"x-search-only","type":"operationPolicy","allowedOperations":["search.read"]
+            }]
+        });
+        validate_policy_capabilities(&policy_with_route(recent_route.clone()))
+            .expect("exact recent-search policy");
+        let mut historical_route = recent_route;
+        historical_route["match"]["paths"] = json!(["/2/tweets/search/all"]);
+        assert!(
+            validate_policy_capabilities(&policy_with_route(historical_route))
+                .expect_err("historical endpoint must fail recent-search policy load")
+                .contains("exact recent-search endpoints")
+        );
+    }
+
+    #[test]
+    fn provider_account_quota_is_rotation_stable_and_fails_closed_without_subject() {
+        let credential = Credential {
+            provider: "x".to_string(),
+            provider_subject: Some("replace-with-verified-x-user-id".to_string()),
+            injection: json!({"type":"bearer"}),
+        };
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.constraints = vec![json!({
+            "id":"one-tweet-per-provider-account-per-day",
+            "type":"rateLimit",
+            "max":1,
+            "windowSeconds":86400,
+            "key":{
+                "scope":["route","operation"],
+                "operationFields":["providerAccount"]
+            }
+        })];
+        let mut operation = json!({"operation":"tweets.write"});
+        bind_provider_account_scope(&route, Some(&credential), &mut operation)
+            .expect("signed provider subject binds account quota");
+        assert_eq!(
+            operation[PROVIDER_ACCOUNT_OPERATION_FIELD],
+            "sha256:a807912d32ff627e2bcaeea09bad5a4ba3b43c74e891cdfb13d913f4230b122e"
+        );
+        let first_key = rate_limit_key(
+            &route.constraints[0],
+            &route,
+            "agent:first",
+            Some("credential:first"),
+            1,
+            &operation,
+        );
+        let rotated_key = rate_limit_key(
+            &route.constraints[0],
+            &route,
+            "agent:second",
+            Some("credential:rotated"),
+            99,
+            &operation,
+        );
+        assert_eq!(first_key, rotated_key);
+
+        let missing = Credential {
+            provider: "custom-x".to_string(),
+            provider_subject: None,
+            injection: json!({"type":"bearer"}),
+        };
+        let denied = bind_provider_account_scope(
+            &route,
+            Some(&missing),
+            &mut json!({"operation":"tweets.write"}),
+        )
+        .expect_err("missing provider subject must fail closed");
+        assert_eq!(denied["error"], "provider_account_identity_unavailable");
+
+        let mut raw_route = generic_policy_route("none", json!(1024));
+        raw_route["credentialRef"] = json!("credential:x");
+        raw_route["constraints"] = json!(route.constraints);
+        let mut raw = policy_with_route(raw_route);
+        raw["credentials"] = json!([{
+            "id":"credential:x",
+            "provider":"x",
+            "providerSubject":"replace-with-verified-x-user-id",
+            "injection":{"type":"bearer"}
+        }]);
+        validate_policy_capabilities(&raw).expect("account quota with signed subject");
+        raw["credentials"][0]
+            .as_object_mut()
+            .expect("credential object")
+            .remove("providerSubject");
+        assert!(validate_policy_capabilities(&raw)
+            .expect_err("account quota without signed subject must fail policy load")
+            .contains("providerSubject"));
     }
 
     #[test]
@@ -18773,6 +19653,63 @@ mod tests {
             mismatched_latest["error"],
             "npm_publish_latest_tag_mismatch"
         );
+
+        for (target, method, body, expected) in [
+            (
+                "https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef",
+                "DELETE",
+                "",
+                "unpublish",
+            ),
+            (
+                "https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef",
+                "PUT",
+                r#"{"_rev":"42-deadbeef","name":"@scope/pkg","versions":{}}"#,
+                "unpublish",
+            ),
+            (
+                "https://registry.test/npm/-/package/@scope%2fpkg/dist-tags/next",
+                "DELETE",
+                "",
+                "distTagWrite",
+            ),
+            (
+                "https://registry.test/npm/-/npm/v1/tokens",
+                "POST",
+                r#"{"readonly":true}"#,
+                "tokenWrite",
+            ),
+            (
+                "https://registry.test/npm/-/npm/v1/tokens/token/token-key",
+                "DELETE",
+                "",
+                "tokenWrite",
+            ),
+            (
+                "https://registry.test/npm/-/package/@scope%2fpkg/access",
+                "POST",
+                r#"{"access":"public"}"#,
+                "metadataWrite",
+            ),
+            (
+                "https://registry.test/npm/-/npm/v1/user",
+                "POST",
+                r#"{"email":"owner@example.test"}"#,
+                "metadataWrite",
+            ),
+            (
+                "https://registry.test/npm/@scope%2fpkg",
+                "PUT",
+                r#"{"_rev":"42-deadbeef","name":"@scope/pkg","versions":{}}"#,
+                "metadataWrite",
+            ),
+        ] {
+            let target = Url::parse(target).expect("npm operation URL");
+            assert_eq!(npm_operation(&target, method, body), expected);
+            let fields = npm_operation_fields(&target, method, &params, body)
+                .expect("known npm write operation fields");
+            assert_eq!(fields["operation"], format!("npm.{expected}"));
+        }
     }
 
     #[test]
@@ -19103,6 +20040,14 @@ mod tests {
         route.adapter_config = json!({
             "request":{
                 "allowedHeaders":["content-type","idempotency-key"],
+                "requiredHeaders":{
+                    "idempotency-key":{
+                        "type":"string",
+                        "minLength":1,
+                        "maxLength":255,
+                        "pattern":"^[-A-Za-z0-9._:]{1,255}$"
+                    }
+                },
                 "allowedQueryKeys":[],
                 "bodyMode":"formUrlencoded",
                 "maxBodyBytes":16384,
@@ -19134,17 +20079,30 @@ mod tests {
                 "capture":{"type":"boolean","equals":true}
             }
         });
-        let headers = BTreeMap::from([
-            ("host".to_string(), "api.stripe.com".to_string()),
-            (
-                "content-type".to_string(),
-                "application/x-www-form-urlencoded".to_string(),
-            ),
-        ]);
-        let request = decision_request_with_body(
+        let mut request = decision_request_with_body(
             "amount=5000&currency=usd&payment_method=pm_12345678&confirm=true&metadata%5Bagent_request_id%5D=req-123&ratio=1.5&capture=true",
         );
+        request.headers = BTreeMap::from([
+            (
+                "Content-Type".to_string(),
+                "application/x-www-form-urlencoded".to_string(),
+            ),
+            (
+                "Idempotency-Key".to_string(),
+                "agent-payment:req-123".to_string(),
+            ),
+        ]);
         let url = Url::parse(&request.url).expect("URL");
+        let headers = canonical_forwarded_request_headers(
+            &request.headers,
+            &url,
+            Some(request.body.len() as u64),
+            &json!({"type":"bearer"}),
+        )
+        .expect("normalized sanitized Stripe headers");
+        assert_eq!(headers["idempotency-key"], "agent-payment:req-123");
+        assert_eq!(headers["host"], "api.stripe.com");
+        assert_eq!(headers["content-length"], request.body.len().to_string());
         let (operation, _) = validate_adapter(&request, &headers, &url, &route_match)
             .expect("valid generic form request");
         assert_eq!(operation["operation"], "stripe.payment_intents.create");
@@ -19152,6 +20110,50 @@ mod tests {
         assert_eq!(operation["metadata.agent_request_id"], "req-123");
         assert_eq!(operation.get("ratio"), None);
         enforce_form_body(&constraint, &request, &headers).expect("valid form constraint");
+
+        let mut missing_idempotency_key = headers.clone();
+        missing_idempotency_key.remove("idempotency-key");
+        let missing = validate_adapter(&request, &missing_idempotency_key, &url, &route_match)
+            .expect_err("missing Stripe idempotency key must be denied");
+        assert_eq!(missing["error"], "required_header_missing");
+
+        let mut invalid_idempotency_key = headers.clone();
+        invalid_idempotency_key.insert(
+            "idempotency-key".to_string(),
+            "invalid key with spaces".to_string(),
+        );
+        let invalid = validate_adapter(&request, &invalid_idempotency_key, &url, &route_match)
+            .expect_err("invalid Stripe idempotency key must be denied");
+        assert_eq!(invalid["error"], "required_header_invalid");
+
+        let snapshot = test_snapshot(1);
+        let canonical = canonical_request(
+            &request,
+            &headers,
+            &url,
+            &snapshot.principals[0],
+            &route,
+            1,
+            &snapshot.hash,
+            &operation,
+        );
+        let mut changed_headers = headers.clone();
+        changed_headers.insert(
+            "idempotency-key".to_string(),
+            "agent-payment:req-124".to_string(),
+        );
+        let changed = canonical_request(
+            &request,
+            &changed_headers,
+            &url,
+            &snapshot.principals[0],
+            &route,
+            1,
+            &snapshot.hash,
+            &operation,
+        );
+        assert_ne!(digest_json(&canonical), digest_json(&changed));
+        assert_ne!(operation_digest(&canonical), operation_digest(&changed));
 
         for (body, expected) in [
             (
@@ -20532,6 +21534,8 @@ mod tests {
         snapshot_value.credentials.insert(
             "credential".to_string(),
             Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
                 injection: json!({}),
             },
         );
@@ -20570,6 +21574,8 @@ mod tests {
         snapshot_value.credentials.insert(
             "credential".to_string(),
             Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
                 injection: json!({}),
             },
         );
@@ -20650,6 +21656,8 @@ mod tests {
         snapshot_value.credentials.insert(
             "credential".to_string(),
             Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
                 injection: json!({}),
             },
         );

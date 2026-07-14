@@ -990,11 +990,15 @@ def _matches_type(value: Any, expected_type: str) -> bool:
 
 def _leaf_paths(value: Any, prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]]:
     if isinstance(value, dict):
+        if not value:
+            return [prefix] if prefix else []
         paths: list[tuple[str, ...]] = []
         for key, child in value.items():
             paths.extend(_leaf_paths(child, (*prefix, str(key))))
         return paths
     if isinstance(value, list):
+        if not value:
+            return [prefix] if prefix else []
         paths = []
         for child in value:
             paths.extend(_leaf_paths(child, prefix))

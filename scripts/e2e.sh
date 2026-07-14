@@ -268,6 +268,34 @@ if [[ "$x_write_code" != "403" ]]; then
   exit 1
 fi
 
+docker compose exec -T demo-upstream curl -kfsS \
+  "https://localhost:8443/_test/request-count?method=POST&path=/2/tweets" \
+  > "$TMP_DIR/x-empty-container-upstream-before.json"
+x_empty_container_code="$(curl -sS -o "$TMP_DIR/x-empty-container-block.json" -w "%{http_code}" \
+  -X POST --data '{"text":"ship it","unexpected":{}}' -H "Content-Type: application/json" \
+  --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+  "https://demo-upstream:8443/2/tweets")"
+if [[ "$x_empty_container_code" != "403" ]]; then
+  echo "expected an unknown empty JSON container to fail with 403, got $x_empty_container_code" >&2
+  cat "$TMP_DIR/x-empty-container-block.json" >&2
+  exit 1
+fi
+docker compose exec -T demo-upstream curl -kfsS \
+  "https://localhost:8443/_test/request-count?method=POST&path=/2/tweets" \
+  > "$TMP_DIR/x-empty-container-upstream-after.json"
+python3 - \
+  "$TMP_DIR/x-empty-container-block.json" \
+  "$TMP_DIR/x-empty-container-upstream-before.json" \
+  "$TMP_DIR/x-empty-container-upstream-after.json" <<'PY'
+import json, sys
+blocked = json.load(open(sys.argv[1]))
+payload = blocked.get("payload") if isinstance(blocked.get("payload"), dict) else blocked
+assert payload["error"] == "json_body_field_not_allowed", blocked
+before = json.load(open(sys.argv[2]))
+after = json.load(open(sys.argv[3]))
+assert before["count"] == after["count"], (before, after)
+PY
+
 x_unknown_read_code="$(curl -sS -o "$TMP_DIR/x-unknown-read-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/2/future/unknown_endpoint")"
 if [[ "$x_unknown_read_code" != "403" ]]; then
@@ -435,6 +463,13 @@ decision_events = [
     if item["event_type"] in {"proxy.request_decision", "data_plane.request.denied", "data_plane.response.released"}
 ]
 grant_events = [item["event"] for item in events if item["event_type"] == "jit.grant.consumed"]
+empty_container_denials = [
+    item["event"]
+    for item in events
+    if item["event_type"] == "data_plane.request.denied"
+    and item["event"].get("route_id") == "demo.x.tweet.one_per_day"
+    and item["event"].get("error") == "json_body_field_not_allowed"
+]
 assert any(
     event.get("route_id") == "demo.npm.publish.jit"
     and (event.get("credential_id") == "cred-demo-bearer" or event.get("credential_ref") == "cred-demo-bearer")
@@ -451,6 +486,7 @@ assert any(
     and event.get("flow_id")
     for event in grant_events
 ), grant_events[:5]
+assert empty_container_denials, decision_events[:10]
 PY
 
 echo "serverware e2e passed"

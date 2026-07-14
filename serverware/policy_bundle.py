@@ -484,6 +484,18 @@ def _validate_field_rule(
         not isinstance(expected_type, str) or expected_type not in allowed_types
     ):
         raise PolicyBundleError(f"route {route_id} constraint {constraint_id} field {field} has unsupported type")
+    typed_rule_families = (
+        (("minLength", "maxLength", "pattern"), {"string"}, "string"),
+        (("min", "max"), {"number", "integer"}, "number or integer"),
+        (("minItems", "maxItems"), {"array"}, "array"),
+    )
+    for names, compatible_types, label in typed_rule_families:
+        configured = [name for name in names if name in rule]
+        if configured and expected_type not in compatible_types:
+            raise PolicyBundleError(
+                f"route {route_id} constraint {constraint_id} field {field} rules "
+                f"{', '.join(configured)} require explicit type {label}"
+            )
     enum = rule.get("enum")
     if enum is not None and (
         not isinstance(enum, list)

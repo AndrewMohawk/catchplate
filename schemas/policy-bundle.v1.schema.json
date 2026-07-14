@@ -24,6 +24,27 @@
       },
       "allOf": [
         {
+          "if": {
+            "anyOf": [
+              {"required": ["minLength"]},
+              {"required": ["maxLength"]},
+              {"required": ["pattern"]}
+            ]
+          },
+          "then": {"required": ["type"], "properties": {"type": {"const": "string"}}}
+        },
+        {
+          "if": {"anyOf": [{"required": ["min"]}, {"required": ["max"]}]},
+          "then": {
+            "required": ["type"],
+            "properties": {"type": {"enum": ["number", "integer"]}}
+          }
+        },
+        {
+          "if": {"anyOf": [{"required": ["minItems"]}, {"required": ["maxItems"]}]},
+          "then": {"required": ["type"], "properties": {"type": {"const": "array"}}}
+        },
+        {
           "if": {"required": ["pattern"]},
           "then": {"required": ["maxLength"], "properties": {"maxLength": {"maximum": 4096}}}
         }

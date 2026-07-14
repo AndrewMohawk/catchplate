@@ -2017,6 +2017,42 @@ fn valid_response_json_path(path: &str) -> bool {
         })
 }
 
+fn validate_field_rule_type_compatibility(
+    route_id: &str,
+    constraint_type: &str,
+    constraint_id: &str,
+    field: &str,
+    rule: &Map<String, Value>,
+) -> Result<(), String> {
+    let expected_type = rule.get("type").and_then(Value::as_str);
+    if ["min", "max"].iter().any(|key| rule.contains_key(*key))
+        && !matches!(expected_type, Some("number" | "integer"))
+    {
+        return Err(format!(
+            "route {route_id} {constraint_type} {constraint_id} field {field} min/max require an explicit numeric type"
+        ));
+    }
+    if ["minLength", "maxLength", "pattern"]
+        .iter()
+        .any(|key| rule.contains_key(*key))
+        && expected_type != Some("string")
+    {
+        return Err(format!(
+            "route {route_id} {constraint_type} {constraint_id} field {field} minLength/maxLength/pattern require explicit type string"
+        ));
+    }
+    if ["minItems", "maxItems"]
+        .iter()
+        .any(|key| rule.contains_key(*key))
+        && expected_type != Some("array")
+    {
+        return Err(format!(
+            "route {route_id} {constraint_type} {constraint_id} field {field} minItems/maxItems require explicit type array"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_response_json_constraint(
     route_id: &str,
     constraint_id: &str,
@@ -2103,6 +2139,13 @@ fn validate_response_json_constraint(
                 "route {route_id} responseJson {constraint_id} field {field} has unsupported type"
             ));
         }
+        validate_field_rule_type_compatibility(
+            route_id,
+            "responseJson",
+            constraint_id,
+            field,
+            rule,
+        )?;
         if let Some(values) = rule.get("enum") {
             let values = values.as_array().filter(|values| !values.is_empty()).ok_or_else(|| {
                 format!(
@@ -3700,6 +3743,18 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 }
                 if let Some(fields) = constraint.get("fields").and_then(Value::as_object) {
                     for (field, rule) in fields {
+                        let rule = rule.as_object().ok_or_else(|| {
+                            format!(
+                                "route {route_id} {constraint_type} {constraint_id} fields must contain object rules"
+                            )
+                        })?;
+                        validate_field_rule_type_compatibility(
+                            route_id,
+                            constraint_type,
+                            constraint_id,
+                            field,
+                            rule,
+                        )?;
                         if constraint_type == "formBody"
                             && rule
                                 .get("type")
@@ -6428,6 +6483,13 @@ fn decision_audit_event(
             event.insert(key.to_string(), value.clone());
         }
     }
+    if let Some(error) = decision
+        .get("error")
+        .and_then(Value::as_str)
+        .or_else(|| decision.pointer("/payload/error").and_then(Value::as_str))
+    {
+        event.insert("error".to_string(), Value::String(error.to_string()));
+    }
     if let Some(value) = decision.pointer("/canonical_request/client_ip") {
         event.insert("client_ip".to_string(), value.clone());
     }
@@ -7066,6 +7128,24 @@ fn deny(status: u16, reason: &str, payload: Value, started: Instant) -> Value {
         "decision_us": started.elapsed().as_micros() as u64,
         "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
     })
+}
+
+fn deny_for_route(
+    status: u16,
+    reason: &str,
+    payload: Value,
+    route: &Route,
+    started: Instant,
+) -> Value {
+    let mut decision = deny(status, reason, payload, started);
+    if let Some(object) = decision.as_object_mut() {
+        object.insert("route_id".to_string(), Value::String(route.id.clone()));
+        object.insert(
+            "adapter".to_string(),
+            Value::String(route.adapter_type.clone()),
+        );
+    }
+    decision
 }
 
 fn connect_authority(target: &str) -> Result<(String, u16), String> {
@@ -9213,6 +9293,9 @@ fn values_at_parts<'a>(value: &'a Value, parts: &[&str], out: &mut Vec<&'a Value
 
 fn json_leaf_paths(value: &Value, prefix: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
     if let Some(object) = value.as_object() {
+        if object.is_empty() && !prefix.is_empty() {
+            out.push(prefix.clone());
+        }
         for (key, child) in object {
             prefix.push(key.clone());
             json_leaf_paths(child, prefix, out);
@@ -9221,6 +9304,9 @@ fn json_leaf_paths(value: &Value, prefix: &mut Vec<String>, out: &mut Vec<Vec<St
         return;
     }
     if let Some(items) = value.as_array() {
+        if items.is_empty() && !prefix.is_empty() {
+            out.push(prefix.clone());
+        }
         for item in items {
             json_leaf_paths(item, prefix, out);
         }
@@ -10528,7 +10614,7 @@ fn decide_internal(
             .and_then(Value::as_str)
             .unwrap_or("provider account identity unavailable")
             .to_string();
-        return deny(status, &reason, payload, started);
+        return deny_for_route(status, &reason, payload, route, started);
     }
     if let Err(payload) = evaluate_request_constraints(
         state,
@@ -10553,7 +10639,7 @@ fn decide_internal(
             .and_then(Value::as_str)
             .unwrap_or("credential_constraint_denied")
             .to_string();
-        return deny(status, &reason, payload, started);
+        return deny_for_route(status, &reason, payload, route, started);
     }
 
     let canonical = canonical_request(
@@ -10678,7 +10764,7 @@ fn decide_internal(
                 .and_then(Value::as_str)
                 .unwrap_or("credential_constraint_denied")
                 .to_string();
-            return deny(status, &reason, payload, started);
+            return deny_for_route(status, &reason, payload, route, started);
         }
     }
     let consumed_grant = if jit_required && grant_available {
@@ -18364,6 +18450,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn denied_request_audit_promotes_canonical_payload_error() {
+        let route = test_snapshot(1).routes[0].clone();
+        let decision = deny(
+            403,
+            "JSON body contains a field outside the allowlist",
+            json!({
+                "error":"json_body_field_not_allowed",
+                "reason":"JSON body contains a field outside the allowlist",
+                "field":"unknown"
+            }),
+            Instant::now(),
+        );
+        let event = decision_audit_event(
+            &decision,
+            "POST",
+            &Url::parse("https://example.test/resource").expect("audit URL"),
+            "denied",
+            json!({"stage":"policy_decision"}),
+        );
+
+        assert_eq!(event["error"], "json_body_field_not_allowed");
+        assert_eq!(
+            event["reason"],
+            "JSON body contains a field outside the allowlist"
+        );
+        assert!(event.get("payload").is_none());
+
+        let routed = deny_for_route(
+            403,
+            "JSON body contains a field outside the allowlist",
+            json!({"error":"json_body_field_not_allowed","field":"unknown"}),
+            &route,
+            Instant::now(),
+        );
+        let routed_event = decision_audit_event(
+            &routed,
+            "POST",
+            &Url::parse("https://example.test/resource").expect("audit URL"),
+            "denied",
+            json!({"stage":"policy_decision"}),
+        );
+        assert_eq!(routed_event["route_id"], route.id);
+        assert_eq!(routed_event["adapter"], route.adapter_type);
+        assert_eq!(routed_event["error"], "json_body_field_not_allowed");
+        assert!(routed_event.get("payload").is_none());
+    }
+
     fn decision_request_with_body(body: &str) -> DecisionRequest {
         DecisionRequest {
             client_ip: None,
@@ -20475,6 +20609,149 @@ mod tests {
             .expect_err("body policy without allowedFields must fail policy load");
         assert!(error.contains("allowedFields"));
         assert!(error.contains("fail closed"));
+    }
+
+    #[test]
+    fn json_body_allowed_fields_reject_unknown_empty_containers() {
+        let constraint = json!({
+            "id":"container-fields",
+            "type":"jsonBody",
+            "contentTypes":["application/json"],
+            "allowedFields":["safe","metadata","tags"],
+            "fields":{
+                "metadata":{"type":"object"},
+                "tags":{"type":"array","minItems":1,"maxItems":2}
+            }
+        });
+        let headers =
+            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
+
+        for (body, field) in [
+            (r#"{"safe":"ok","unknown":{}}"#, "unknown"),
+            (r#"{"safe":"ok","unknown":[]}"#, "unknown"),
+            (
+                r#"{"safe":"ok","unknown":{"nested":[{},[]]}}"#,
+                "unknown.nested",
+            ),
+        ] {
+            let denied =
+                enforce_json_body(&constraint, &decision_request_with_body(body), &headers)
+                    .expect_err("unknown empty containers must fail closed");
+            assert_eq!(denied["error"], "json_body_field_not_allowed");
+            assert_eq!(denied["field"], field);
+        }
+
+        enforce_json_body(
+            &constraint,
+            &decision_request_with_body(
+                r#"{"safe":"ok","metadata":{"nested":{"empty":[]}},"tags":[{},[]]}"#,
+            ),
+            &headers,
+        )
+        .expect("explicitly allowlisted container paths must remain usable");
+
+        let mut permits_empty_array = constraint.clone();
+        permits_empty_array["fields"]["tags"]["minItems"] = json!(0);
+        enforce_json_body(
+            &permits_empty_array,
+            &decision_request_with_body(r#"{"safe":"ok","metadata":{},"tags":[]}"#),
+            &headers,
+        )
+        .expect("an allowlisted empty array must pass when its bounds permit it");
+
+        for (body, error) in [
+            (
+                r#"{"safe":"ok","metadata":{},"tags":{}}"#,
+                "json_body_field_type_denied",
+            ),
+            (
+                r#"{"safe":"ok","metadata":{},"tags":[]}"#,
+                "json_body_field_min_items",
+            ),
+            (
+                r#"{"safe":"ok","metadata":{},"tags":[{},{},{}]}"#,
+                "json_body_field_max_items",
+            ),
+        ] {
+            let denied =
+                enforce_json_body(&constraint, &decision_request_with_body(body), &headers)
+                    .expect_err("container field rules must still be enforced");
+            assert_eq!(denied["error"], error);
+            assert_eq!(denied["field"], "tags");
+        }
+    }
+
+    #[test]
+    fn field_rule_type_compatibility_is_consistent_across_constraint_runtimes() {
+        let policy_for_rule = |constraint_type: &str, body_mode: &str, rule: Value| {
+            let constraint = if constraint_type == "responseJson" {
+                json!({
+                    "id":"typed-field",
+                    "type":"responseJson",
+                    "phase":"response",
+                    "fields":{"value":rule}
+                })
+            } else {
+                json!({
+                    "id":"typed-field",
+                    "type":constraint_type,
+                    "allowedFields":["value"],
+                    "fields":{"value":rule}
+                })
+            };
+            let mut route = generic_policy_route(body_mode, json!(1024));
+            route["constraints"] = json!([constraint]);
+            policy_with_route(route)
+        };
+        let constraint_types = [
+            ("jsonBody", "json"),
+            ("formBody", "formUrlencoded"),
+            ("responseJson", "none"),
+        ];
+        let incompatible_rules = [
+            ("numeric rule without type", json!({"min":0})),
+            (
+                "numeric rule with string type",
+                json!({"type":"string","max":10}),
+            ),
+            ("string rule without type", json!({"minLength":1})),
+            (
+                "string rule with numeric type",
+                json!({"type":"number","maxLength":8}),
+            ),
+            (
+                "pattern with numeric type",
+                json!({"type":"number","maxLength":8,"pattern":"^[0-9]{1,8}$"}),
+            ),
+            ("array rule without type", json!({"minItems":1})),
+            (
+                "array rule with object type",
+                json!({"type":"object","maxItems":2}),
+            ),
+        ];
+
+        for (constraint_type, body_mode) in constraint_types {
+            for (label, rule) in &incompatible_rules {
+                let error = validate_policy_capabilities(&policy_for_rule(
+                    constraint_type,
+                    body_mode,
+                    rule.clone(),
+                ))
+                .expect_err("type-incompatible field rules must fail policy admission");
+                assert!(error.contains(constraint_type), "{label}: {error}");
+                assert!(error.contains("require"), "{label}: {error}");
+            }
+
+            for rule in [
+                json!({"type":"number","min":0,"max":10}),
+                json!({"type":"integer","min":0,"max":10}),
+                json!({"type":"string","minLength":1,"maxLength":8}),
+                json!({"type":"array","minItems":1,"maxItems":2}),
+            ] {
+                validate_policy_capabilities(&policy_for_rule(constraint_type, body_mode, rule))
+                    .expect("compatible field rules must remain admissible");
+            }
+        }
     }
 
     #[test]

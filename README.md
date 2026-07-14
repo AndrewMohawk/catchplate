@@ -128,7 +128,7 @@ Every route binds:
 
 Unknown hosts, paths, methods, principals, and missing policy bundles are blocked. The legacy SQLite `routes` table remains only for UI compatibility and state inspection.
 
-Route `constraints` are the reusable layer for limits that should apply to any credential, independent of the upstream SDK. Implemented constraint types are `operationPolicy`, `rateLimit`, `queryDateWindow`, `queryNumericBounds`, `requestTimeWindow`, `jsonBody`, `formBody`, and `responseDateWindow`. The Python proxy and Rust data plane enforce the same typed rules before credential injection; response date-window checks run before redaction and release. `requestTimeWindow` provides RFC3339 activation/expiry bounds plus UTC weekday and daily intervals. `rateLimit.store: "shared"` uses the authenticated control-plane consume endpoint and metadata-store row locks/transactions so quotas are atomic across proxy replicas. The X one-post-per-day template uses the callback-verified provider subject as its stable account scope, so rotating a principal, credential ID, or credential version cannot reset the daily quota; missing account identity fails policy admission and runtime authorization closed. Unknown types or fields fail policy admission rather than being ignored.
+Route `constraints` are the reusable layer for limits that should apply to any credential, independent of the upstream SDK. Implemented constraint types are `operationPolicy`, `rateLimit`, `queryDateWindow`, `queryNumericBounds`, `requestTimeWindow`, `jsonBody`, `formBody`, and `responseDateWindow`. The Python proxy and Rust data plane enforce the same typed rules before credential injection; response date-window checks run before redaction and release. `jsonBody` allowlisting is structural, so unknown keys holding empty objects, empty arrays, or nested empty containers are denied rather than disappearing from scalar-leaf traversal. String, numeric, and array-specific field rules require explicit compatible types at schema and semantic admission. `requestTimeWindow` provides RFC3339 activation/expiry bounds plus UTC weekday and daily intervals. `rateLimit.store: "shared"` uses the authenticated control-plane consume endpoint and metadata-store row locks/transactions so quotas are atomic across proxy replicas. The X one-post-per-day template uses the callback-verified provider subject as its stable account scope, so rotating a principal, credential ID, or credential version cannot reset the daily quota; missing account identity fails policy admission and runtime authorization closed. Unknown types or fields fail policy admission rather than being ignored.
 
 Response policy is status-specific and fail closed. A `2xx` response must satisfy the route's success profile; a `4xx` or `5xx` response must satisfy an explicit nested `error` profile; redirects are rejected. Each profile has a required `maxBodyBytes`, a structured projection/redaction mode, and optional `allowedHeaders`. Only `Cache-Control`, `Content-Language`, `ETag`, `Last-Modified`, `Retry-After`, and `WWW-Authenticate` can be released when selected. Transport and state-bearing headers such as `Set-Cookie`, `Location`, hop-by-hop headers, upstream `Content-Length`, and upstream content encodings are removed and safe framing is rebuilt.
 
@@ -548,17 +548,17 @@ Latest verified post-gate Docker benchmark, measured over the Compose network fr
 
 ```json
 {
-  "p50_ms": 0.392,
-  "p95_ms": 0.547,
-  "p99_ms": 0.706,
-  "max_ms": 2.620,
-  "mean_ms": 0.411
+  "p50_ms": 0.466,
+  "p95_ms": 1.319,
+  "p99_ms": 2.028,
+  "max_ms": 4.054,
+  "mean_ms": 0.580
 }
 ```
 
 The full `make bench-gate-rs` matrix passed for this executable and checkout. The benchmark runs inside the Docker network so Docker Desktop host-port bridge jitter is not attributed to the gate. Its pre/post nonce-bound attestations require the executable, policy, and immutable runtime-manifest digests to remain unchanged; mutable health counters are reported outside that manifest. Production release evidence must rerun the same container-to-container path on the target host.
 
-This supports choosing Rust as the current production data-plane track over a generic Envoy front-proxy configuration. The measured executable is `sha256:1f5ed058b743cbf28224fe8db6f9a090c640e3ffac5da1f07ce7c40514519901`. The local provenance and image-signature artifacts are development fixtures; production images, signatures, benchmark bindings, and hardware quotes must be regenerated together from one exact checkout on the target host. Envoy should only replace Rust if a runnable ext_authz/ext_proc candidate proves the same explicit HTTPS CONNECT interception, dynamic attested leaf issuance, response mutation/validation, no hot-path DB/filesystem calls, and an acceptable TEE TCB.
+This supports choosing Rust as the current production data-plane track over a generic Envoy front-proxy configuration. The measured executable is `sha256:acd522af4b10b554fccd093a9b7d7abdcca14f2deda258f8eef8eaaaaf2f750d`. The local provenance and image-signature artifacts are development fixtures; production images, signatures, benchmark bindings, and hardware quotes must be regenerated together from one exact checkout on the target host. Envoy should only replace Rust if a runnable ext_authz/ext_proc candidate proves the same explicit HTTPS CONNECT interception, dynamic attested leaf issuance, response mutation/validation, no hot-path DB/filesystem calls, and an acceptable TEE TCB.
 
 ## TEE Path
 

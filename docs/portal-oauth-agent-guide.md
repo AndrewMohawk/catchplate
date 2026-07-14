@@ -22,7 +22,7 @@ Serverware currently has first-class portal OAuth setup for Google and X/Twitter
 
 [Private deployment screenshot omitted from public source.]
 
-The provider screenshot deliberately captures the disabled state before Google client environment variables are configured. Once configured, the same panel enables **Connect with OAuth**.
+The provider screenshot uses seeded fixture records to show connected, identity-verified, reconnect-required, and disconnect controls. It proves the rendered lifecycle states, not a live Google login. On an unconfigured installation the same panel stays disabled and names the missing client configuration.
 
 Google:
 
@@ -86,7 +86,7 @@ Production policy should be published as a signed `PolicyBundle`, not as ad hoc 
 
 [Private deployment screenshot omitted from public source.]
 
-The screenshot shows the Gmail template, principal and credential selectors, a signed candidate preview, two passing dry-run checks, and staged-candidate lifecycle controls. Previewing does not activate the assignment.
+The screenshot shows the Gmail template, principal and credential selectors, and the pre-preview staged-candidate controls. The empty preview area is intentional: previewing must populate the signed candidate, diff, hash, and dry-run results before staging becomes available, and it still does not activate the assignment.
 
 The canonical, schema-valid examples live in [credential-limits.examples.json](../policies/credential-limits.examples.json). Extract one without copying a potentially stale fragment:
 
@@ -269,7 +269,7 @@ For a safe, buffered `GET` or `HEAD`, `serverware-proof-client` can send a fresh
 
 ## Current Local Evidence
 
-The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:1f5ed058b743cbf28224fe8db6f9a090c640e3ffac5da1f07ce7c40514519901`. It records p50 `0.405 ms`, p95 `0.530 ms`, p99 `0.583 ms`, mean `0.412 ms`, and maximum `0.635 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
+The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:acd522af4b10b554fccd093a9b7d7abdcca14f2deda258f8eef8eaaaaf2f750d`. It records p50 `0.466 ms`, p95 `1.319 ms`, p99 `2.028 ms`, mean `0.580 ms`, and maximum `4.054 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
 
 The local provenance and image-signature records are explicitly development fixtures, and no current hardware-bound production image/quote set exists for this checkout. They cannot be combined with this benchmark as production release evidence; rebuild every source-, image-, binary-, signature-, benchmark-, and quote-bound artifact from one exact checkout on the target host.
 

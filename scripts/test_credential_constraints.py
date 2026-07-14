@@ -587,6 +587,12 @@ def main() -> None:
         ({"required": "yes"}, "non-boolean responseJson required rule"),
         ({"enum": []}, "empty responseJson enum"),
         ({"enum": ["same", "same"]}, "duplicate responseJson enum"),
+        ({"minLength": 1}, "string length rule without an explicit type"),
+        ({"type": "number", "maxLength": 10}, "string length rule on a numeric field"),
+        ({"type": "string", "min": 0}, "numeric rule on a string field"),
+        ({"max": 10}, "numeric rule without an explicit type"),
+        ({"type": "string", "minItems": 0}, "array item rule on a string field"),
+        ({"maxItems": 10}, "array item rule without an explicit type"),
         ({"minLength": 5, "maxLength": 4}, "inverted responseJson length range"),
         ({"min": 5, "max": 4}, "inverted responseJson numeric range"),
         ({"pattern": "^[0-9]{1,4}$"}, "unbounded responseJson pattern input"),
@@ -1117,6 +1123,46 @@ def main() -> None:
     reset_local_constraint_state()
     tweet_with_media = flow("POST", "https://demo-upstream:8443/2/tweets", {"text": "ship it", "media": {"ids": ["1"]}})
     assert_denied(request_decision(tweet_route, tweet_with_media, "tweets.write"), "json_body_field_not_allowed")
+
+    for unexpected_empty in ({}, [], [{}], {"nested": []}):
+        tweet_with_empty_unknown = flow(
+            "POST",
+            "https://demo-upstream:8443/2/tweets",
+            {"text": "ship it", "unexpected": unexpected_empty},
+        )
+        assert_denied(
+            request_decision(tweet_route, tweet_with_empty_unknown, "tweets.write"),
+            "json_body_field_not_allowed",
+        )
+
+    explicit_container_route = SimpleNamespace(
+        id="test.explicit-empty-container",
+        credential_ref=None,
+        constraints=[
+            {
+                "id": "explicit-empty-container-body",
+                "type": "jsonBody",
+                "contentTypes": ["application/json"],
+                "allowedFields": ["items"],
+                "requiredFields": ["items"],
+                "fields": {"items": {"type": "array", "minItems": 0, "maxItems": 1}},
+            }
+        ],
+    )
+    for allowed_items in ([], [{}]):
+        assert request_decision(
+            explicit_container_route,
+            flow("POST", "https://api.example.test/items", {"items": allowed_items}),
+            "items.write",
+        ).allowed
+    assert_denied(
+        request_decision(
+            explicit_container_route,
+            flow("POST", "https://api.example.test/items", {"items": [{}, {}]}),
+            "items.write",
+        ),
+        "json_body_field_max_items",
+    )
 
     readonly_route = route(demo, "demo.x.readonly")
     readonly_write = flow("POST", "https://demo-upstream:8443/2/tweets", {"text": "nope"})

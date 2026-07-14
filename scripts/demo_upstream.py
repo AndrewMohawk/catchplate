@@ -24,6 +24,12 @@ CERT_PATH = CERT_DIR / "cert.pem"
 KEY_PATH = CERT_DIR / "key.pem"
 
 app = FastAPI(title="Serverware demo upstream")
+_REQUEST_COUNTS: dict[tuple[str, str], int] = {}
+
+
+def _record_request(request: Request) -> None:
+    key = (request.method.upper(), request.url.path)
+    _REQUEST_COUNTS[key] = _REQUEST_COUNTS.get(key, 0) + 1
 
 
 def _epoch_millis(value: datetime) -> str:
@@ -571,9 +577,16 @@ async def gmail_message(message_id: str, request: Request) -> dict[str, Any]:
 
 @app.api_route("/2/tweets", methods=["GET", "POST", "DELETE"])
 async def x_tweets(request: Request) -> dict[str, Any]:
+    _record_request(request)
     view = request_view(request)
     view["data"] = [{"id": "tweet-1", "text": "demo"}]
     return view
+
+
+@app.get("/_test/request-count")
+async def request_count(method: str, path: str) -> dict[str, Any]:
+    key = (method.upper(), path)
+    return {"method": key[0], "path": key[1], "count": _REQUEST_COUNTS.get(key, 0)}
 
 
 @app.api_route("/npm/{package}", methods=["PUT", "POST"])

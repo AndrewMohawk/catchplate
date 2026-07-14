@@ -787,6 +787,289 @@ fn verify_policy_signature(raw: &Value, trust_root: &PolicyTrustRoot) -> Result<
         .map_err(|err| format!("policy signature verification failed: {err}"))
 }
 
+fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
+    const DEFAULTS: [(&str, &str); 5] = [
+        ("action", "deny"),
+        ("failMode", "closed"),
+        ("unknownHosts", "block"),
+        ("unknownPaths", "block"),
+        ("validationFailure", "block"),
+    ];
+    const ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
+    const JIT_BINDING_FIELDS: [&str; 15] = [
+        "principal",
+        "routeId",
+        "credentialRef",
+        "credentialVersion",
+        "policyHash",
+        "method",
+        "authority",
+        "path",
+        "query",
+        "selectedHeaders",
+        "bodySha256",
+        "packageName",
+        "packageVersion",
+        "tarballIntegrity",
+        "operation",
+    ];
+    const REQUIRED_JIT_BINDING_FIELDS: [&str; 9] = [
+        "principal",
+        "routeId",
+        "credentialRef",
+        "credentialVersion",
+        "policyHash",
+        "method",
+        "authority",
+        "path",
+        "bodySha256",
+    ];
+
+    let metadata = raw
+        .get("metadata")
+        .and_then(Value::as_object)
+        .ok_or("policy metadata missing")?;
+    if metadata.contains_key("validFrom") {
+        return Err("policy metadata.validFrom is not supported by the Rust runtime".to_string());
+    }
+
+    let defaults = raw
+        .get("defaults")
+        .and_then(Value::as_object)
+        .ok_or("policy defaults missing")?;
+    for (key, expected) in DEFAULTS {
+        let actual = defaults.get(key).and_then(Value::as_str);
+        if actual != Some(expected) {
+            return Err(format!(
+                "policy defaults.{key} must be {expected}, got {}",
+                actual.unwrap_or("missing or non-string")
+            ));
+        }
+    }
+    for key in defaults.keys() {
+        if !DEFAULTS.iter().any(|(supported, _)| key == supported) {
+            return Err(format!(
+                "policy defaults.{key} is not supported by the Rust runtime"
+            ));
+        }
+    }
+
+    let principals = raw
+        .get("principals")
+        .and_then(Value::as_array)
+        .ok_or("principals missing")?;
+    for (index, item) in principals.iter().enumerate() {
+        let principal = item
+            .as_object()
+            .ok_or_else(|| format!("principal {index} must be an object"))?;
+        let principal_id = principal
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("principal {index} id missing"))?;
+
+        if principal.contains_key("spiffeIds") {
+            return Err(format!(
+                "principal {principal_id} uses spiffeIds, which the Rust runtime does not enforce"
+            ));
+        }
+
+        let has_source_cidrs = match principal.get("sourceCidrs") {
+            Some(Value::Array(cidrs)) => {
+                if cidrs.iter().any(|cidr| !cidr.is_string()) {
+                    return Err(format!(
+                        "principal {principal_id} sourceCidrs must contain only strings"
+                    ));
+                }
+                !cidrs.is_empty()
+            }
+            None => false,
+            Some(_) => {
+                return Err(format!(
+                    "principal {principal_id} sourceCidrs must be an array"
+                ));
+            }
+        };
+        let has_required_headers = match principal.get("requiredHeaders") {
+            Some(Value::Object(headers)) => {
+                if headers.values().any(|value| !value.is_string()) {
+                    return Err(format!(
+                        "principal {principal_id} requiredHeaders values must be strings"
+                    ));
+                }
+                !headers.is_empty()
+            }
+            None => false,
+            Some(_) => {
+                return Err(format!(
+                    "principal {principal_id} requiredHeaders must be an object"
+                ));
+            }
+        };
+        let has_proxy_authorization = principal.get("proxyAuthorization").is_some();
+        if !has_source_cidrs && !has_required_headers && !has_proxy_authorization {
+            return Err(format!(
+                "principal {principal_id} has no identity selector enforced by the Rust runtime"
+            ));
+        }
+    }
+
+    let routes = raw
+        .get("routes")
+        .and_then(Value::as_array)
+        .ok_or("routes missing")?;
+    for (index, item) in routes.iter().enumerate() {
+        let route = item
+            .as_object()
+            .ok_or_else(|| format!("route {index} must be an object"))?;
+        let route_id = route
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("route {index} id missing"))?;
+        let adapter_type = route
+            .get("adapter")
+            .and_then(Value::as_object)
+            .and_then(|adapter| adapter.get("type"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("route {route_id} adapter type missing"))?;
+        if !ADAPTER_TYPES.contains(&adapter_type) {
+            return Err(format!(
+                "route {route_id} adapter type {adapter_type} is not supported by the Rust runtime"
+            ));
+        }
+
+        let constraints: &[Value] = match route.get("constraints") {
+            Some(Value::Array(constraints)) => constraints,
+            None => &[],
+            Some(_) => {
+                return Err(format!("route {route_id} constraints must be an array"));
+            }
+        };
+        for (constraint_index, constraint) in constraints.iter().enumerate() {
+            let constraint = constraint.as_object().ok_or_else(|| {
+                format!("route {route_id} constraint {constraint_index} must be an object")
+            })?;
+            let constraint_id = constraint
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed");
+            let constraint_type =
+                constraint
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        format!("route {route_id} constraint {constraint_id} type missing")
+                    })?;
+            let supported_phase = match constraint_type {
+                "rateLimit" | "operationPolicy" | "queryDateWindow" | "queryNumericBounds"
+                | "jsonBody" => "request",
+                "responseDateWindow" => "response",
+                _ => {
+                    return Err(format!(
+                        "route {route_id} constraint {constraint_id} type {constraint_type} is not supported by the Rust runtime"
+                    ));
+                }
+            };
+            let phase = match constraint.get("phase") {
+                Some(Value::String(phase)) => phase.as_str(),
+                None => "request",
+                Some(_) => {
+                    return Err(format!(
+                        "route {route_id} constraint {constraint_id} phase must be a string"
+                    ));
+                }
+            };
+            if phase != supported_phase {
+                return Err(format!(
+                    "route {route_id} constraint {constraint_id} type {constraint_type} is enforceable only in the {supported_phase} phase, not {phase}"
+                ));
+            }
+        }
+
+        let Some(jit_value) = route.get("jit") else {
+            continue;
+        };
+        let jit = jit_value
+            .as_object()
+            .ok_or_else(|| format!("route {route_id} JIT policy must be an object"))?;
+        jit.get("required")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| format!("route {route_id} JIT required must be a boolean"))?;
+        let mode = jit
+            .get("mode")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("route {route_id} JIT mode missing"))?;
+        if mode != "perOperation" {
+            return Err(format!(
+                "route {route_id} JIT mode {mode} is not supported by the Rust runtime"
+            ));
+        }
+        let consume_on = jit
+            .get("consumeOn")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("route {route_id} JIT consumeOn missing"))?;
+        if consume_on != "forwardStart" {
+            return Err(format!(
+                "route {route_id} JIT consumeOn must be forwardStart, got {consume_on}"
+            ));
+        }
+        let binding = jit
+            .get("binding")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("route {route_id} JIT binding missing"))?;
+        let binding_type = binding
+            .get("type")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("route {route_id} JIT binding type missing"))?;
+        if !matches!(binding_type, "requestDigest" | "operationDigest") {
+            return Err(format!(
+                "route {route_id} JIT binding type {binding_type} is not supported by the Rust runtime"
+            ));
+        }
+        let binding_fields = binding
+            .get("fields")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("route {route_id} JIT binding fields missing"))?;
+        if binding_fields.is_empty() {
+            return Err(format!(
+                "route {route_id} JIT binding fields must not be empty"
+            ));
+        }
+        for field in binding_fields {
+            let field = field
+                .as_str()
+                .ok_or_else(|| format!("route {route_id} JIT binding fields must be strings"))?;
+            if !JIT_BINDING_FIELDS.contains(&field) {
+                return Err(format!(
+                    "route {route_id} JIT binding field {field} is not supported by the Rust runtime"
+                ));
+            }
+        }
+        for required_field in REQUIRED_JIT_BINDING_FIELDS {
+            if !binding_fields
+                .iter()
+                .any(|field| field.as_str() == Some(required_field))
+            {
+                return Err(format!(
+                    "route {route_id} JIT binding is missing required field {required_field}"
+                ));
+            }
+        }
+        let quorum = jit
+            .get("approvers")
+            .and_then(Value::as_object)
+            .and_then(|approvers| approvers.get("quorum"))
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("route {route_id} JIT approver quorum missing"))?;
+        if quorum != 1 {
+            return Err(format!(
+                "route {route_id} JIT approver quorum must be 1, got {quorum}"
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn parse_cidrs(value: Option<&Value>, context: &str) -> Result<Vec<IpNet>, String> {
     let mut networks = Vec::new();
     for cidr in value.and_then(Value::as_array).into_iter().flatten() {
@@ -809,6 +1092,11 @@ fn parse_proxy_authorization(
         return Ok(None);
     };
     if let Some(exact) = value.as_str() {
+        if exact.is_empty() {
+            return Err(format!(
+                "principal {principal_id} proxyAuthorization must not be empty"
+            ));
+        }
         return Ok(Some(ProxyAuthorizationPolicy::LegacyExact(
             exact.to_string(),
         )));
@@ -904,6 +1192,7 @@ fn load_snapshot(
             ));
         }
     }
+    validate_policy_capabilities(&raw)?;
 
     let mut principals = Vec::new();
     for item in raw

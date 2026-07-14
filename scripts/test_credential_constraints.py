@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 import os
 import sys
@@ -29,7 +30,7 @@ from serverware.constraints import (
     evaluate_response_constraints,
     reset_local_constraint_state,
 )
-from serverware.policy_bundle import compile_policy_bundle, demo_policy_bundle
+from serverware.policy_bundle import PolicyBundleError, compile_policy_bundle, demo_policy_bundle
 
 
 class Request:
@@ -94,10 +95,20 @@ def schema_validation_available() -> bool:
     return True
 
 
+def assert_policy_rejected(bundle: dict, message: str, *, validate_schema: bool) -> None:
+    for use_schema in ((False, True) if validate_schema else (False,)):
+        try:
+            compile_policy_bundle(bundle, validate_schema=use_schema)
+        except PolicyBundleError:
+            continue
+        raise AssertionError(f"{message}; validate_schema={use_schema}")
+
+
 def main() -> None:
     db.init_db()
     validate_schema = schema_validation_available()
-    demo = compile_policy_bundle(demo_policy_bundle("cred-demo-bearer"), validate_schema=validate_schema)
+    demo_bundle = demo_policy_bundle("cred-demo-bearer")
+    demo = compile_policy_bundle(demo_bundle, validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     compile_policy_bundle(examples, validate_schema=validate_schema)
     if validate_schema:
@@ -109,6 +120,63 @@ def main() -> None:
             pass
         else:
             raise AssertionError("schema accepted wildcard credential injection field")
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid["metadata"]["validFrom"] = "2030-01-01T00:00:00Z"
+    assert_policy_rejected(invalid, "compiler accepted unenforced validFrom", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid["defaults"]["validationFailure"] = "allowWithAudit"
+    assert_policy_rejected(invalid, "compiler accepted fail-open validation", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid.pop("defaults")
+    assert_policy_rejected(invalid, "compiler accepted implicit policy defaults", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid["principals"][0] = {"id": "agent:spiffe", "spiffeIds": ["spiffe://example.test/agent"]}
+    assert_policy_rejected(invalid, "compiler accepted unsupported SPIFFE identity", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid["principals"][0] = {"id": "agent:unconstrained"}
+    assert_policy_rejected(invalid, "compiler accepted unconstrained principal", validate_schema=validate_schema)
+
+    jit_route = next(item for item in demo_bundle["routes"] if item.get("jit"))
+    invalid = copy.deepcopy(demo_bundle)
+    next(item for item in invalid["routes"] if item["id"] == jit_route["id"])["jit"]["approvers"]["quorum"] = 2
+    assert_policy_rejected(invalid, "compiler accepted unsupported JIT quorum", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    next(item for item in invalid["routes"] if item["id"] == jit_route["id"])["jit"]["consumeOn"] = "successfulResponse"
+    assert_policy_rejected(invalid, "compiler accepted unsupported JIT consumption", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    next(item for item in invalid["routes"] if item["id"] == jit_route["id"])["jit"]["mode"] = "perRequest"
+    assert_policy_rejected(invalid, "compiler accepted unsupported JIT mode", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    next(item for item in invalid["routes"] if item["id"] == jit_route["id"])["jit"]["binding"]["type"] = "unknownDigest"
+    assert_policy_rejected(invalid, "compiler accepted unsupported JIT binding", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    response_constraint = next(
+        constraint
+        for item in invalid["routes"]
+        for constraint in item.get("constraints", [])
+        if constraint["type"] == "responseDateWindow"
+    )
+    response_constraint["phase"] = "request"
+    assert_policy_rejected(invalid, "compiler accepted request-phase response constraint", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    request_constraint = next(
+        constraint
+        for item in invalid["routes"]
+        for constraint in item.get("constraints", [])
+        if constraint["type"] == "operationPolicy"
+    )
+    request_constraint["phase"] = "both"
+    assert_policy_rejected(invalid, "compiler accepted ambiguous constraint phase", validate_schema=validate_schema)
 
     reset_local_constraint_state()
     tweet_route = route(demo, "demo.x.tweet.one_per_day")

@@ -36,6 +36,14 @@ SUPPORTED_CONSTRAINTS = {
     "jsonBody",
     "responseDateWindow",
 }
+REQUEST_CONSTRAINTS = SUPPORTED_CONSTRAINTS - {"responseDateWindow"}
+FAIL_CLOSED_DEFAULTS = {
+    "action": "deny",
+    "failMode": "closed",
+    "unknownHosts": "block",
+    "unknownPaths": "block",
+    "validationFailure": "block",
+}
 REQUIRED_JIT_BINDING_FIELDS = {
     "principal",
     "routeId",
@@ -404,8 +412,12 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
         if constraint_type not in SUPPORTED_CONSTRAINTS:
             raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has unsupported type {constraint_type}")
         phase = constraint.get("phase", "request")
-        if phase not in {"request", "response", "both"}:
-            raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has invalid phase {phase}")
+        expected_phase = "request" if constraint_type in REQUEST_CONSTRAINTS else "response"
+        if phase != expected_phase:
+            raise PolicyBundleError(
+                f"route {route_id} constraint {constraint_id} type {constraint_type} "
+                f"must use phase {expected_phase}"
+            )
         store = constraint.get("store", "local")
         if store not in {"local", "shared"}:
             raise PolicyBundleError(f"route {route_id} constraint {constraint_id} has invalid store {store}")
@@ -451,6 +463,16 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
     if raw.get("kind") != "PolicyBundle":
         raise PolicyBundleError("kind must be PolicyBundle")
 
+    metadata = raw.get("metadata") or {}
+    if "validFrom" in metadata:
+        raise PolicyBundleError("metadata.validFrom is unsupported until activation-time enforcement is implemented")
+    defaults = raw.get("defaults")
+    if not isinstance(defaults, dict):
+        raise PolicyBundleError("policy bundle must define explicit fail-closed defaults")
+    for name, expected in FAIL_CLOSED_DEFAULTS.items():
+        if defaults.get(name) != expected:
+            raise PolicyBundleError(f"defaults.{name} must be {expected}")
+
     principal_items = raw.get("principals") or []
     credential_items = raw.get("credentials") or []
     route_items = raw.get("routes") or []
@@ -462,11 +484,27 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
         principal_id = item["id"]
         if principal_id in principals:
             raise PolicyBundleError(f"duplicate principal: {principal_id}")
+        if "spiffeIds" in item:
+            raise PolicyBundleError(
+                f"principal {principal_id} uses unsupported spiffeIds; workload identity evidence is not implemented"
+            )
+        source_cidrs = tuple(item.get("sourceCidrs") or ())
+        required_headers = dict(item.get("requiredHeaders") or {})
+        proxy_authorization = ProxyAuthorizationPolicy.from_raw(item.get("proxyAuthorization"))
+        if not (source_cidrs or required_headers or proxy_authorization):
+            raise PolicyBundleError(f"principal {principal_id} must define at least one enforceable identity selector")
+        try:
+            for cidr in source_cidrs:
+                ipaddress.ip_network(cidr, strict=False)
+            if proxy_authorization:
+                proxy_authorization.networks
+        except ValueError as exc:
+            raise PolicyBundleError(f"principal {principal_id} contains an invalid source CIDR") from exc
         principals[principal_id] = PrincipalPolicy(
             id=principal_id,
-            source_cidrs=tuple(item.get("sourceCidrs") or ()),
-            required_headers=dict(item.get("requiredHeaders") or {}),
-            proxy_authorization=ProxyAuthorizationPolicy.from_raw(item.get("proxyAuthorization")),
+            source_cidrs=source_cidrs,
+            required_headers=required_headers,
+            proxy_authorization=proxy_authorization,
         )
 
     credentials: dict[str, CredentialPolicy] = {}
@@ -520,13 +558,19 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             if principal_id != "*" and principal_id not in principals:
                 raise PolicyBundleError(f"route {route_id} references unknown principal {principal_id}")
         jit = dict(item.get("jit") or {})
-        if jit.get("required"):
+        if jit:
             for required_key in ("mode", "ttlSeconds", "maxUses", "consumeOn", "binding", "approvers"):
                 if required_key not in jit:
                     raise PolicyBundleError(f"route {route_id} JIT policy must define {required_key}")
+            if jit.get("mode") != "perOperation":
+                raise PolicyBundleError(f"route {route_id} JIT mode must be perOperation")
+            if jit.get("consumeOn") != "forwardStart":
+                raise PolicyBundleError(f"route {route_id} JIT consumeOn must be forwardStart")
             binding = jit.get("binding") or {}
             if binding.get("type") not in {"requestDigest", "operationDigest"}:
-                raise PolicyBundleError(f"route {route_id} JIT binding must define requestDigest or operationDigest")
+                raise PolicyBundleError(
+                    f"route {route_id} JIT binding must use requestDigest or operationDigest"
+                )
             binding_fields = set(binding.get("fields") or [])
             missing_fields = sorted(REQUIRED_JIT_BINDING_FIELDS - binding_fields)
             if missing_fields:
@@ -534,8 +578,8 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                     f"route {route_id} JIT binding is missing required fields: {', '.join(missing_fields)}"
                 )
             approvers = jit.get("approvers") or {}
-            if int(approvers.get("quorum", 0)) < 1:
-                raise PolicyBundleError(f"route {route_id} JIT policy must define approver quorum")
+            if int(approvers.get("quorum", 0)) != 1:
+                raise PolicyBundleError(f"route {route_id} JIT approver quorum must be 1")
             if not approvers.get("users"):
                 raise PolicyBundleError(f"route {route_id} JIT policy must define allowed approver users")
             authn = approvers.get("authn") or {}

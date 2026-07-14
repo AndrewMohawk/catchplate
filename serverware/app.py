@@ -391,13 +391,18 @@ def healthz() -> dict[str, Any]:
     }
 
 
-def _approval_jit_policy(approval: dict[str, Any]) -> dict[str, Any]:
-    route = _active_route_by_id(str(approval.get("route_id") or ""))
+def _approval_jit_policy(approval: dict[str, Any], *, require_current_policy: bool = False) -> dict[str, Any]:
+    snapshot = get_policy_snapshot()
+    if not snapshot:
+        raise HTTPException(status_code=503, detail="policy bundle missing")
+    if require_current_policy and snapshot.hash != approval.get("policy_hash"):
+        raise HTTPException(status_code=409, detail="active policy changed after approval request; request a new approval")
+    route = _active_route_by_id(str(approval.get("route_id") or ""), snapshot=snapshot)
     return route.jit or {}
 
 
-def _active_route_by_id(route_id: str) -> Any:
-    snapshot = get_policy_snapshot()
+def _active_route_by_id(route_id: str, *, snapshot: Any | None = None) -> Any:
+    snapshot = snapshot or get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
     route = next((item for item in snapshot.routes if item.id == route_id), None)
@@ -2496,7 +2501,7 @@ def approve(
         raise HTTPException(status_code=409, detail=f"approval is already {approval['status']}")
     if _approval_is_expired(approval):
         raise HTTPException(status_code=409, detail="approval is expired")
-    jit = _approval_jit_policy(approval)
+    jit = _approval_jit_policy(approval, require_current_policy=True)
     _assert_approver_allowed(identity, jit)
     authn_policy = _approval_authn_policy(jit)
     authn: dict[str, Any]
@@ -2577,7 +2582,7 @@ def approval_webauthn_options(
         raise HTTPException(status_code=404, detail="approval not found")
     if approval["status"] != "pending":
         raise HTTPException(status_code=409, detail="approval is not pending")
-    jit = _approval_jit_policy(approval)
+    jit = _approval_jit_policy(approval, require_current_policy=True)
     _assert_approver_allowed(identity, jit)
     return approval_options(approval, identity.user_id, _approval_authn_policy(jit))
 
@@ -3233,6 +3238,14 @@ UI_HTML = r"""
     .json { max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .hint { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.35; }
     .output { min-height: 190px; }
+    .approval-review { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+    .review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
+    .review-field { display: grid; gap: 4px; min-width: 0; }
+    .review-field span { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .review-field code { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+    .review-block { margin-top: 12px; display: grid; gap: 6px; }
+    .review-block h3 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; }
+    .review-actions input { width: 72px; flex: 0 0 72px; }
     @media (max-width: 980px) {
       main { grid-template-columns: 1fr; }
       aside { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -3402,6 +3415,7 @@ UI_HTML = r"""
           <thead><tr><th>Status</th><th>Route</th><th>Request</th><th>Until</th><th></th></tr></thead>
           <tbody id="approvals"></tbody>
         </table>
+        <div id="approval-review" class="approval-review"></div>
       </section>
       <section>
         <div class="toolbar">
@@ -3416,7 +3430,7 @@ UI_HTML = r"""
     </div>
   </main>
   <script>
-    let state = {credentials: [], routes: [], approvals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null};
+    let state = {credentials: [], routes: [], approvals: [], logs: [], ca_ready: false, oauthProviders: [], policyPrincipals: [], enrollmentPacket: null, approvalReview: null};
     const $ = (id) => document.getElementById(id);
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const json = (value) => esc(JSON.stringify(value, null, 2));
@@ -3535,8 +3549,10 @@ UI_HTML = r"""
       }
       try {
         const enrollmentPacket = state.enrollmentPacket;
+        const approvalReview = state.approvalReview;
         state = await api('/api/bootstrap');
         state.enrollmentPacket = enrollmentPacket;
+        state.approvalReview = approvalReview && state.approvals.some((item) => item.id === approvalReview.id) ? approvalReview : null;
         render();
       } catch (error) {
         console.warn(error.message);
@@ -3583,14 +3599,18 @@ UI_HTML = r"""
           <td><button class="danger" onclick="deleteRoute('${item.id}')">Delete</button></td>
         </tr>`).join('') || '<tr><td colspan="6" class="muted">No routes</td></tr>';
 
-      $('approvals').innerHTML = state.approvals.map((item) => `
-        <tr>
+      $('approvals').innerHTML = state.approvals.map((item) => {
+        const approvalBlockReason = approvalReviewBlockReason(item);
+        return `<tr>
           <td>${pill(item.status)}</td>
           <td>${esc(routeName(item.route_id))}</td>
           <td><strong>${esc(item.method)}</strong><br><code>${esc(item.url)}</code></td>
           <td><code>${esc(item.approved_until || item.expires_at)}</code></td>
-          <td>${item.status === 'pending' ? `<div class="row"><input id="ttl-${item.id}" value="30" inputmode="numeric"><button onclick="approve('${item.id}')">Approve</button><button class="danger" onclick="deny('${item.id}')">Deny</button></div>` : ''}</td>
-        </tr>`).join('') || '<tr><td colspan="5" class="muted">No approvals</td></tr>';
+          <td><div class="toolbar review-actions"><button class="secondary" onclick="loadApprovalReview('${item.id}')">Review</button>${item.status === 'pending' ? `<input id="ttl-${item.id}" value="30" inputmode="numeric"><button onclick="approve('${item.id}')" ${approvalBlockReason ? `disabled title="${esc(approvalBlockReason)}"` : ''}>Approve</button><button class="danger" onclick="deny('${item.id}')">Deny</button>` : ''}</div></td>
+        </tr>`;
+      }).join('') || '<tr><td colspan="5" class="muted">No approvals</td></tr>';
+
+      renderApprovalReview();
 
       $('logs').innerHTML = state.logs.map((item) => `
         <tr>
@@ -3720,7 +3740,82 @@ UI_HTML = r"""
 
     async function deleteCredential(id) { await api(`/api/credentials/${id}`, {method: 'DELETE'}); await refresh(); }
     async function deleteRoute(id) { await api(`/api/routes/${id}`, {method: 'DELETE'}); await refresh(); }
+    async function loadApprovalReview(id) {
+      state.approvalReview = await api(`/api/approvals/${id}/review`);
+      render();
+    }
+    function approvalReviewBlockReason(item) {
+      const review = state.approvalReview;
+      if (!review || review.id !== item.id) return 'Open review first';
+      const flags = new Set(review.risk_flags || []);
+      if (flags.has('approval_expired')) return 'Approval expired';
+      if (flags.has('policy_hash_not_current')) return 'Policy changed; request a new approval';
+      return '';
+    }
+    function reviewPill(flag) {
+      const cls = flag === 'policy_hash_not_current' || flag === 'approval_expired' ? 'bad' : flag === 'policy_hash_current' || flag === 'one_use_grant' ? 'good' : 'warn';
+      return `<span class="pill ${cls}">${esc(flag)}</span>`;
+    }
+    function renderApprovalReview() {
+      const target = $('approval-review');
+      const review = state.approvalReview;
+      if (!review) {
+        target.innerHTML = '<p class="muted">No approval selected</p>';
+        return;
+      }
+      const retry = review.retry_semantics || {};
+      const previous = (review.previous_similar_approvals || []).map((item) => `
+        <tr>
+          <td>${pill(item.status)}</td>
+          <td><code>${esc(item.requested_at || '')}</code></td>
+          <td>${esc(item.decision_note || '')}</td>
+          <td><code>${esc(item.request_digest || '')}</code></td>
+        </tr>`).join('') || '<tr><td colspan="4" class="muted">No similar approvals</td></tr>';
+      target.innerHTML = `
+        <div class="review-grid">
+          <div class="review-field"><span>Approval</span><code>${esc(review.id)}</code>${pill(review.status)}</div>
+          <div class="review-field"><span>Principal</span><code>${esc(review.principal_id)}</code></div>
+          <div class="review-field"><span>Source</span><code class="json">${json(review.source_identity)}</code></div>
+          <div class="review-field"><span>Route</span><code>${esc(review.route_id)}</code></div>
+          <div class="review-field"><span>Credential</span><code>${esc(review.credential_ref)}@${esc(review.credential_version)}</code></div>
+          <div class="review-field"><span>Policy</span><code>${esc(review.policy_hash)}</code></div>
+          <div class="review-field"><span>Request</span><code>${esc(review.method)} ${esc(review.url)}</code></div>
+          <div class="review-field"><span>Body hash</span><code>${esc(review.body_hash || '')}</code></div>
+          <div class="review-field"><span>Request digest</span><code>${esc(retry.request_digest || '')}</code></div>
+          <div class="review-field"><span>Operation digest</span><code>${esc(retry.operation_digest || '')}</code></div>
+        </div>
+        <div class="review-block">
+          <h3>Risk flags</h3>
+          <div class="toolbar">${(review.risk_flags || []).map(reviewPill).join('') || '<span class="muted">None</span>'}</div>
+        </div>
+        <div class="review-block">
+          <h3>Operation</h3>
+          <code class="json">${json(review.normalized_operation_fields)}</code>
+        </div>
+        <div class="review-block">
+          <h3>Redacted payload</h3>
+          <code class="json">${json(review.redacted_payload_summary)}</code>
+        </div>
+        <div class="review-block">
+          <h3>Retry semantics</h3>
+          <code class="json">${json(review.retry_semantics)}</code>
+        </div>
+        <div class="review-block">
+          <h3>Previous similar approvals</h3>
+          <table>
+            <thead><tr><th>Status</th><th>Requested</th><th>Decision note</th><th>Request digest</th></tr></thead>
+            <tbody>${previous}</tbody>
+          </table>
+        </div>`;
+    }
     async function approve(id) {
+      const item = state.approvals.find((approval) => approval.id === id) || {id};
+      const blockReason = approvalReviewBlockReason(item);
+      if (!state.approvalReview || state.approvalReview.id !== id) {
+        await loadApprovalReview(id);
+        return;
+      }
+      if (blockReason) return;
       const options = await api(`/api/approvals/${id}/webauthn/options`, {method: 'POST'});
       let body = {};
       if (window.PublicKeyCredential && (options.publicKey.allowCredentials || []).length) {

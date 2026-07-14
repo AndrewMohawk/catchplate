@@ -295,6 +295,7 @@ verify-approval-denial-reason:
 verify-approval-review:
 	docker compose up -d --build serverware
 	docker compose exec -T serverware python scripts/test_approval_review.py
+	python3 scripts/test_portal_agent_enrollment_ui.py
 
 verify-policy-publish-workflow:
 	docker compose up -d --build serverware

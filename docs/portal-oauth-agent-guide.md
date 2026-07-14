@@ -105,6 +105,21 @@ Common examples live in [credential-limits.examples.json](../policies/credential
 - Tokenized checkout creation with amount caps, no raw card fields, daily quota, and hardware-backed JIT approval.
 - Object-store writes bounded by path, size, and rate.
 
+## Review JIT Approvals
+
+When an agent hits a route that requires human approval, Serverware returns `428 serverware_approval_required` and stores a pending approval. The agent does not receive a grant token or credential. It waits and retries the same request after approval.
+
+In the portal **Approvals** table, open **Review** before approving. The review panel is populated from `GET /api/approvals/{id}/review` and shows:
+
+- principal and source identity;
+- route, credential reference, credential version, and policy hash;
+- method, URL, normalized operation fields, and request body hash;
+- redacted payload summary and risk flags such as WebAuthn requirement, hardware attestation requirement, current policy hash, credential-version binding, and one-use grant;
+- previous similar approvals or denials;
+- exact retry semantics, including the request digest, operation digest, grant TTL, max uses, and the fact that the agent receives no secret or token.
+
+The portal keeps **Approve** disabled until the matching review has been opened. If the active policy changed after the approval request was created, the review shows `policy_hash_not_current`, the portal keeps approval disabled, and the approval API returns `409` so the agent must issue a new request under the current policy. Approval still runs through the configured WebAuthn/YubiKey policy, creates a server-side one-use grant, and authorizes only the identical retry through the proxy. Denial can include an operator reason through the API, and denial records are searchable in audit.
+
 ## Teach Agents To Use Serverware
 
 Agents do not need provider tokens, OAuth refresh tokens, npm tokens, or API keys. Give them only the proxy/CA setup and the upstream API task.

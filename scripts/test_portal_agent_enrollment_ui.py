@@ -57,12 +57,52 @@ def main() -> None:
             if marker not in ui_html:
                 raise AssertionError(f"portal enrollment UI marker missing: {marker}")
 
+        required_approval_review_markup = (
+            'id="approval-review"',
+            "state.approvalReview",
+            "loadApprovalReview",
+            "renderApprovalReview",
+            "reviewPill",
+            "approvalReviewBlockReason",
+            "`/api/approvals/${id}/review`",
+            "Open review first",
+            "Policy changed; request a new approval",
+            "risk_flags",
+            "retry_semantics",
+            "previous_similar_approvals",
+            "normalized_operation_fields",
+            "redacted_payload_summary",
+            "credential_version",
+            "policy_hash",
+            "request_digest",
+            "operation_digest",
+        )
+        for marker in required_approval_review_markup:
+            if marker not in ui_html:
+                raise AssertionError(f"portal approval-review UI marker missing: {marker}")
+
+        try:
+            review_fn = ui_html.split("function renderApprovalReview()", 1)[1].split("async function approve", 1)[0]
+        except IndexError as exc:
+            raise AssertionError("could not isolate renderApprovalReview function") from exc
+
+        forbidden_review_literals = (
+            "access_token",
+            "refresh_token",
+            "secretToken",
+            "top-secret-value",
+            "Bearer top-secret-value",
+        )
+        for marker in forbidden_review_literals:
+            if marker in review_fn:
+                raise AssertionError(f"approval review UI must not hard-code secret-bearing examples: {marker}")
+
         forbidden_markup = ("tokenSha256", "proxy bearer token")
         for marker in forbidden_markup:
             if marker in ui_html:
                 raise AssertionError(f"portal UI should not mention secret-bearing enrollment internals: {marker}")
 
-    print(canonical_json({"ok": True, "portal_agent_enrollment_ui": "pass"}))
+    print(canonical_json({"ok": True, "portal_agent_enrollment_ui": "pass", "portal_approval_review_ui": "pass"}))
 
 
 if __name__ == "__main__":

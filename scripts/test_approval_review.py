@@ -123,6 +123,28 @@ def main() -> None:
         if "top-secret-value" in json.dumps(review, sort_keys=True):
             raise AssertionError(f"approval review leaked a secret value: {review}")
 
+        changed_bundle = policy_bundle.demo_policy_bundle("cred-demo-bearer")
+        changed_bundle["metadata"]["sequence"] = 2
+        policy_bundle.write_policy_bundle(changed_bundle)
+        stale_review = app_module.approval_review(
+            current["id"],
+            _=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
+        )
+        if "policy_hash_not_current" not in stale_review["risk_flags"]:
+            raise AssertionError(f"stale approval review did not flag policy change: {stale_review}")
+        try:
+            app_module.approve(
+                current["id"],
+                ttl_seconds=30,
+                payload=None,
+                identity=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),
+            )
+        except app_module.HTTPException as exc:
+            if exc.status_code != 409 or "policy changed" not in str(exc.detail):
+                raise AssertionError(f"stale approval failed with the wrong error: {exc.detail}") from exc
+        else:
+            raise AssertionError("stale approval was accepted after the active policy changed")
+
     print(json.dumps({"approval_review": "pass", "ok": True}, sort_keys=True))
 
 

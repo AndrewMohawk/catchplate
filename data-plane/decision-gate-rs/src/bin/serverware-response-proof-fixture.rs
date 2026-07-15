@@ -25,7 +25,7 @@ fn run() -> Result<Value, String> {
     let request: Value =
         serde_json::from_slice(&input).map_err(|err| format!("parse fixture request: {err}"))?;
     if request.get("apiVersion").and_then(Value::as_str)
-        != Some("serverware.responseProofAttestationRequest/v1")
+        != Some("serverware.responseProofAttestationRequest/v2")
         || request.get("kind").and_then(Value::as_str)
             != Some("ServerwareResponseProofAttestationRequest")
     {

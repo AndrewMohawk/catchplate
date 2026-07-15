@@ -39,6 +39,8 @@ def main() -> None:
     required_order = [
         "verify-credential-policy-contracts",
         "verify-control-plane-startup",
+        "verify-control-plane-oidc",
+        "verify-webauthn-recovery",
         "verify-portal-browser-oauth",
         "validate-production-policy-identity",
         "validate-policy-activation-evidence",
@@ -86,6 +88,14 @@ def main() -> None:
     startup_body = target_body(makefile, "verify-control-plane-startup")
     if "scripts/test_control_plane_startup.py" not in startup_body:
         raise AssertionError("control-plane startup verification omits the shared preflight test")
+
+    oidc_body = target_body(makefile, "verify-control-plane-oidc")
+    if "scripts/test_control_plane_oidc.py" not in oidc_body:
+        raise AssertionError("control-plane OIDC verification omits its session test")
+
+    recovery_body = target_body(makefile, "verify-webauthn-recovery")
+    if "scripts/test_webauthn_recovery.py" not in recovery_body:
+        raise AssertionError("WebAuthn recovery verification omits its race and rollback test")
 
     browser_body = target_body(makefile, "verify-portal-browser-oauth")
     for required in (

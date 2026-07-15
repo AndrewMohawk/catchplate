@@ -591,8 +591,12 @@ async def request_count(method: str, path: str) -> dict[str, Any]:
 
 @app.api_route("/npm/{package}", methods=["PUT", "POST"])
 async def npm_publish(package: str, request: Request) -> dict[str, Any]:
+    payload = await request.json()
+    versions = payload.get("versions") if isinstance(payload, dict) else None
+    version = next(iter(versions)) if isinstance(versions, dict) and len(versions) == 1 else None
     view = request_view(request)
     view["package"] = package
+    view["version"] = version
     view["published"] = True
     return view
 

@@ -2,18 +2,22 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import sys
 import tempfile
 import time
 import urllib.parse
+from http.cookies import SimpleCookie
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from unittest.mock import patch
 
+import cbor2
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.asymmetric import padding, rsa
+from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -90,6 +94,95 @@ def sign_jwt(
     return f"{signing_input.decode('ascii')}.{b64u(signature)}"
 
 
+def registration_response(webauthn: Any, challenge: str) -> tuple[dict[str, Any], Any]:
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    numbers = private_key.public_key().public_numbers()
+    public_key_cose = cbor2.dumps(
+        {
+            1: 2,
+            3: -7,
+            -1: 1,
+            -2: numbers.x.to_bytes(32, "big"),
+            -3: numbers.y.to_bytes(32, "big"),
+        }
+    )
+    credential_id = os.urandom(32)
+    auth_data = (
+        webauthn._rp_hash()
+        + bytes([webauthn.UP_FLAG | webauthn.UV_FLAG | webauthn.AT_FLAG])
+        + (1).to_bytes(4, "big")
+        + bytes(16)
+        + len(credential_id).to_bytes(2, "big")
+        + credential_id
+        + public_key_cose
+    )
+    client_data = {
+        "type": "webauthn.create",
+        "challenge": challenge,
+        "origin": webauthn.WEBAUTHN_ORIGIN,
+        "crossOrigin": False,
+    }
+    client_data_raw = json.dumps(
+        client_data, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    attestation = cbor2.dumps(
+        {"fmt": "none", "authData": auth_data, "attStmt": {}}
+    )
+    encoded_id = b64u(credential_id)
+    return (
+        {
+            "id": encoded_id,
+            "rawId": encoded_id,
+            "type": "public-key",
+            "transports": ["internal"],
+            "response": {
+                "clientDataJSON": b64u(client_data_raw),
+                "attestationObject": b64u(attestation),
+            },
+        },
+        private_key,
+    )
+
+
+def assertion_response(
+    webauthn: Any,
+    *,
+    credential_id: str,
+    private_key: Any,
+    challenge: str,
+    sign_count: int,
+) -> dict[str, Any]:
+    auth_data = (
+        webauthn._rp_hash()
+        + bytes([webauthn.UP_FLAG | webauthn.UV_FLAG])
+        + sign_count.to_bytes(4, "big")
+    )
+    client_data_raw = json.dumps(
+        {
+            "type": "webauthn.get",
+            "challenge": challenge,
+            "origin": webauthn.WEBAUTHN_ORIGIN,
+            "crossOrigin": False,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    signature = private_key.sign(
+        auth_data + hashlib.sha256(client_data_raw).digest(),
+        ec.ECDSA(hashes.SHA256()),
+    )
+    return {
+        "id": credential_id,
+        "rawId": credential_id,
+        "type": "public-key",
+        "response": {
+            "clientDataJSON": b64u(client_data_raw),
+            "authenticatorData": b64u(auth_data),
+            "signature": b64u(signature),
+        },
+    }
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         issuer = "https://idp.example"
@@ -111,6 +204,9 @@ def main() -> None:
         }
 
         os.environ["SERVERWARE_DATA_DIR"] = tmp
+        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
         os.environ["SERVERWARE_OIDC_ENABLED"] = "1"
         os.environ["SERVERWARE_OIDC_ISSUER"] = issuer
         os.environ["SERVERWARE_OIDC_AUDIENCE"] = audience
@@ -124,10 +220,11 @@ def main() -> None:
         os.environ["SERVERWARE_OIDC_REDIRECT_URI"] = "https://serverware.test/api/auth/oidc/callback"
         os.environ["SERVERWARE_ADMIN_TOKEN"] = "local-admin-token-for-csrf-test"
         os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
 
         from fastapi import HTTPException, Response
 
-        from serverware import auth, db, operator_oidc
+        from serverware import auth, db, operator_oidc, webauthn
         from serverware import app as app_module
 
         db.init_db()
@@ -287,8 +384,21 @@ def main() -> None:
                 raise AssertionError("browser OIDC state was replayed")
         finally:
             operator_oidc.request_bytes = original_request_bytes
-        if completed["identity"].auth_method != "oidc-session" or completed["id_token"] != browser_id_token:
+        session_token = completed["session_token"]
+        if (
+            completed["identity"].auth_method != "oidc-session"
+            or completed["session"]["status"] != "active"
+            or session_token == browser_id_token
+        ):
             raise AssertionError(f"browser OIDC login did not produce a verified session: {completed}")
+        with db.connect() as conn:
+            persisted_session = conn.execute(
+                "SELECT * FROM oidc_browser_sessions WHERE id = ?",
+                (completed["session"]["id"],),
+            ).fetchone()
+        persisted_values = json.dumps(dict(persisted_session), sort_keys=True)
+        if browser_id_token in persisted_values or session_token in persisted_values:
+            raise AssertionError("raw OIDC or browser session token was persisted")
         if len(token_exchange_requests) != 1:
             raise AssertionError("browser OIDC token endpoint was called more than once")
         exchange_body = urllib.parse.parse_qs(bytes(token_exchange_requests[0].data).decode("utf-8"))
@@ -298,18 +408,31 @@ def main() -> None:
             raise AssertionError("browser OIDC token exchange did not authenticate the client")
 
         cookie_identity = auth.require_admin(
-            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: browser_id_token}),
+            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: session_token}),
             x_serverware_admin_token=None,
         )
         if cookie_identity.auth_method != "oidc-session" or cookie_identity.user_id != "oidc:andrew":
             raise AssertionError(f"verified OIDC session cookie was not accepted: {cookie_identity}")
+        auth.OIDC_SESSION_WEBAUTHN_REQUIRED = True
+        try:
+            auth.require_admin(
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: session_token}),
+                x_serverware_admin_token=None,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 401 or "not bound" not in str(exc.detail):
+                raise AssertionError(f"unbound-session cutover failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("unbound session survived WebAuthn-required cutover")
+        finally:
+            auth.OIDC_SESSION_WEBAUTHN_REQUIRED = False
         csrf_cookie = "csrf-cookie-value"
         try:
             auth.validate_csrf_request(
                 FakeRequest(
                     method="POST",
                     path="/api/credentials",
-                    cookies={auth.OIDC_SESSION_COOKIE_NAME: browser_id_token, auth.CSRF_COOKIE_NAME: csrf_cookie},
+                    cookies={auth.OIDC_SESSION_COOKIE_NAME: session_token, auth.CSRF_COOKIE_NAME: csrf_cookie},
                 )
             )
         except HTTPException as exc:
@@ -321,10 +444,280 @@ def main() -> None:
             FakeRequest(
                 method="POST",
                 path="/api/credentials",
-                cookies={auth.OIDC_SESSION_COOKIE_NAME: browser_id_token, auth.CSRF_COOKIE_NAME: csrf_cookie},
+                cookies={auth.OIDC_SESSION_COOKIE_NAME: session_token, auth.CSRF_COOKIE_NAME: csrf_cookie},
                 csrf=csrf_cookie,
             )
         )
+
+        try:
+            auth.require_admin(
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: browser_id_token}),
+                x_serverware_admin_token=None,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise AssertionError(f"legacy raw ID-token cookie failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("legacy raw ID-token cookie remained accepted")
+
+        operator_oidc.OIDC_SESSION_WEBAUTHN_REQUIRED = True
+        pending_started = operator_oidc.start_operator_login()
+        pending_query = dict(
+            urllib.parse.parse_qsl(
+                urllib.parse.urlsplit(pending_started["authorization_url"]).query
+            )
+        )
+        pending_id_token = sign_jwt(
+            private_key,
+            kid=kid,
+            issuer=issuer,
+            audience=audience,
+            roles=["auditor", "policy_author"],
+            nonce=pending_query["nonce"],
+        )
+
+        def fake_pending_token_exchange(request, **kwargs):
+            return type(
+                "TokenResponse",
+                (),
+                {
+                    "status": 200,
+                    "headers": {},
+                    "body": json.dumps({"id_token": pending_id_token}).encode("utf-8"),
+                },
+            )()
+
+        operator_oidc.request_bytes = fake_pending_token_exchange
+        try:
+            pending = operator_oidc.complete_operator_login(
+                state=pending_query["state"],
+                code="pending-authorization-code",
+                browser_nonce=pending_started["browser_nonce"],
+            )
+        finally:
+            operator_oidc.request_bytes = original_request_bytes
+            operator_oidc.OIDC_SESSION_WEBAUTHN_REQUIRED = False
+        if pending["session"]["status"] != "pending_webauthn":
+            raise AssertionError(f"WebAuthn-required session was not pending: {pending}")
+        pending_token = pending["session_token"]
+        try:
+            auth.require_admin(
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}),
+                x_serverware_admin_token=None,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise AssertionError(f"pending session failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("pending OIDC session was authorized before WebAuthn")
+        try:
+            auth.validate_csrf_request(
+                FakeRequest(
+                    method="POST",
+                    path="/api/auth/session/webauthn/options",
+                    cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token},
+                )
+            )
+        except HTTPException as exc:
+            if exc.status_code != 403:
+                raise AssertionError(f"pending-session CSRF failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("pending OIDC session bypassed CSRF")
+
+        with (
+            patch.object(auth.db, "get_oidc_browser_session", return_value=None) as lookup,
+            patch.object(
+                auth.db,
+                "get_active_oidc_browser_session",
+                side_effect=AssertionError("auth status performed a second session lookup"),
+            ),
+        ):
+            missing_status = app_module.operator_auth_status(
+                FakeRequest(
+                    cookies={
+                        auth.OIDC_SESSION_COOKIE_NAME: "random-missing-session-cookie"
+                    }
+                )
+            )
+        if missing_status.get("authenticated") or lookup.call_count != 0:
+            raise AssertionError(
+                f"malformed-cookie auth status touched metadata: {missing_status}"
+            )
+
+        first_enrollment_options = app_module.operator_session_webauthn_register_options(
+            app_module.WebAuthnRegistrationStart(label="YubiKey"),
+            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}),
+        )
+        first_registration, first_private_key = registration_response(
+            webauthn, first_enrollment_options["publicKey"]["challenge"]
+        )
+        credential = app_module.operator_session_webauthn_register_verify(
+            app_module.WebAuthnRegistrationFinish(
+                label="YubiKey", response=first_registration
+            ),
+            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}),
+        )
+        pending_status = app_module.operator_auth_status(
+            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token})
+        )
+        if pending_status.get("webauthnRequired") is not True:
+            raise AssertionError(f"pending session status omitted WebAuthn: {pending_status}")
+        superseded_binding_options = app_module.operator_session_webauthn_options(
+            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token})
+        )
+        binding_options = app_module.operator_session_webauthn_options(
+            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token})
+        )
+        if db.get_unused_webauthn_challenge(
+            superseded_binding_options["publicKey"]["challenge"],
+            challenge_type="oidc-session-binding",
+            user_id="oidc:andrew",
+        ) is not None:
+            raise AssertionError("superseded OIDC binding challenge remained live")
+        with db.connect() as conn:
+            live_binding_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM webauthn_challenges "
+                "WHERE challenge_type = 'oidc-session-binding' "
+                "AND user_id = ? AND used_at IS NULL",
+                ("oidc:andrew",),
+            ).fetchone()["count"]
+        if int(live_binding_count) != 1:
+            raise AssertionError(
+                f"OIDC binding challenge replacement left {live_binding_count} live rows"
+            )
+        for _ in range(db._OIDC_BINDING_CHALLENGE_USER_RATE_MAX - 2):
+            binding_options = app_module.operator_session_webauthn_options(
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token})
+            )
+        try:
+            app_module.operator_session_webauthn_options(
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token})
+            )
+        except HTTPException as exc:
+            if exc.status_code != 409 or "rate limit" not in str(exc.detail):
+                raise AssertionError(
+                    f"OIDC binding challenge rate limit failed incorrectly: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("OIDC binding challenge rate limit was bypassed")
+        assertion = assertion_response(
+            webauthn,
+            credential_id=first_registration["id"],
+            private_key=first_private_key,
+            challenge=binding_options["publicKey"]["challenge"],
+            sign_count=2,
+        )
+        activation_payload = app_module.OIDCSessionWebAuthnVerify(response=assertion)
+        activation_response = Response()
+        with patch.object(
+            activation_response,
+            "set_cookie",
+            side_effect=RuntimeError("injected commit-before-delivery failure"),
+        ):
+            try:
+                app_module.operator_session_webauthn_verify(
+                    activation_payload,
+                    FakeRequest(
+                        cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}
+                    ),
+                    activation_response,
+                )
+            except RuntimeError as exc:
+                if "commit-before-delivery" not in str(exc):
+                    raise
+            else:
+                raise AssertionError("injected activation response loss did not fire")
+        activation_response = Response()
+        activated = app_module.operator_session_webauthn_verify(
+            activation_payload,
+            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}),
+            activation_response,
+        )
+        if not activated.get("authenticated"):
+            raise AssertionError(f"WebAuthn session activation failed: {activated}")
+        active_cookie = SimpleCookie()
+        active_cookie.load(activation_response.headers["set-cookie"])
+        active_token = active_cookie[auth.OIDC_SESSION_COOKIE_NAME].value
+        if active_token == pending_token:
+            raise AssertionError("pending OIDC session token was not rotated")
+        try:
+            app_module.operator_session_webauthn_verify(
+                activation_payload,
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}),
+                Response(),
+            )
+        except HTTPException as exc:
+            if exc.status_code != 409:
+                raise AssertionError(
+                    f"activation delivery replay failed incorrectly: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("activation delivery receipt was reusable")
+        try:
+            auth.require_admin(
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: pending_token}),
+                x_serverware_admin_token=None,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise AssertionError(f"rotated pending token failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("pending OIDC token remained valid after activation")
+        if auth.require_admin(
+            FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: active_token}),
+            x_serverware_admin_token=None,
+        ).user_id != "oidc:andrew":
+            raise AssertionError("WebAuthn-bound OIDC session was not activated")
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE oidc_browser_sessions SET activation_trust_bundle_digest = ? WHERE id = ?",
+                ("sha256:" + "f" * 64, pending["session"]["id"]),
+            )
+        try:
+            auth.require_admin(
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: active_token}),
+                x_serverware_admin_token=None,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 401 or "trust generation changed" not in str(exc.detail):
+                raise AssertionError(f"trust-generation mismatch failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("session survived a WebAuthn trust-generation mismatch")
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE oidc_browser_sessions SET activation_trust_bundle_digest = NULL WHERE id = ?",
+                (pending["session"]["id"],),
+            )
+        revoked = db.revoke_webauthn_credential(
+            credential["id"],
+            actor_id="oidc:andrew",
+            reason="test session revocation",
+        )
+        if revoked.get("revoked_oidc_browser_session_count") != 1:
+            raise AssertionError(f"credential revocation did not revoke its session: {revoked}")
+        try:
+            auth.require_admin(
+                FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: active_token}),
+                x_serverware_admin_token=None,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 401:
+                raise AssertionError(f"revoked session failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("credential-revoked OIDC session remained authorized")
+
+        db.revoke_unbound_oidc_browser_sessions(
+            actor_id="test:cutover",
+            reason="test cutover cleanup",
+        )
+        with patch.object(db, "append_audit_event") as empty_cutover_audit:
+            empty_cutover = db.revoke_unbound_oidc_browser_sessions(
+                actor_id="test:cutover",
+                reason="test cutover cleanup",
+            )
+        if empty_cutover["revoked_session_count"] != 0:
+            raise AssertionError(f"empty cutover changed sessions: {empty_cutover}")
+        empty_cutover_audit.assert_not_called()
 
         oidc_limits = (
             db._OIDC_LOGIN_GLOBAL_PENDING_MAX,

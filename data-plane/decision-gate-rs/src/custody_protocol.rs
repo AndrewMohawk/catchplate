@@ -1,23 +1,28 @@
 use base64::{engine::general_purpose, Engine as _};
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::pkcs8::DecodePublicKey;
+use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use ring::rand::{SecureRandom, SystemRandom};
 use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashSet};
+use std::env;
 use std::fmt;
+use std::fs;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zeroize::Zeroize;
 
 pub const PROTOCOL_API_VERSION: &str = "serverware.custodyProtocol/v1";
-pub const RESPONSE_STATEMENT_API_VERSION: &str = "serverware.proxyResponseStatement/v1";
+pub const RESPONSE_STATEMENT_API_VERSION: &str = "serverware.proxyResponseStatement/v2";
 pub const HELLO_OPERATION: &str = "hello/v1";
-pub const RESPONSE_PROOF_SIGN_OPERATION: &str = "responseProof.sign/v1";
-pub const MAX_FRAME_BYTES: usize = 64 * 1024;
+pub const RESPONSE_PROOF_SIGN_OPERATION: &str = "responseProof.sign/v2";
+pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const IO_DEADLINE: Duration = Duration::from_secs(2);
 pub const MAX_CONCURRENT_CONNECTIONS: usize = 32;
 pub const MAX_REQUESTS_PER_BOOT: usize = 65_536;
@@ -33,6 +38,17 @@ const MAX_CLIENT_NONCE_BYTES: usize = 64;
 const MAX_OPERATION_BYTES: usize = 64;
 const MAX_SERVER_INSTANCE_ID_BYTES: usize = 1024;
 const MAX_HEADER_VALUE_BYTES: usize = 8 * 1024;
+const MAX_RAW_HEADER_VALUES: usize = 128;
+const MAX_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
+const MAX_SIGNED_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
+const MAX_RELEASE_AUTHORIZATION_BINDING_BYTES: usize = 64 * 1024;
+const MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES: usize = 1024;
+const AUTHORIZATION_RECEIPT_API_VERSION: &str = "serverware.controlPlaneAuthorizationReceipt/v1";
+const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
+const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV: &str =
+    "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY";
+const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV: &str =
+    "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolError {
@@ -110,6 +126,7 @@ struct HelloParams {}
 #[serde(deny_unknown_fields)]
 struct SignParams {
     statement: ProxyResponseStatement,
+    authorization_binding: ReleaseAuthorizationBinding,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -120,8 +137,13 @@ pub struct ProxyResponseStatement {
     pub issued_at_unix: u64,
     pub client_nonce: String,
     pub client_request_digest: String,
+    pub principal_id: String,
+    pub route_id: String,
     pub request_digest: String,
     pub operation_digest: String,
+    pub release_authority: ReleaseAuthority,
+    pub control_plane_authorization_receipt: ControlPlaneAuthorizationReceipt,
+    pub upstream_response: UpstreamResponse,
     pub response: ProxyResponse,
     pub policy_digest: String,
     pub runtime_manifest_digest: String,
@@ -129,6 +151,103 @@ pub struct ProxyResponseStatement {
     pub release_digest: String,
     pub server_instance: ServerInstance,
     pub tls_channel_binding: TlsChannelBinding,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPlaneAuthorizationReceipt {
+    #[serde(rename = "apiVersion")]
+    pub api_version: String,
+    pub kind: String,
+    pub principal_id: String,
+    pub route_id: String,
+    pub release_authority: ReleaseAuthority,
+    pub request: ControlPlaneAuthorizationReceiptRequest,
+    pub response: ControlPlaneAuthorizationReceiptResponse,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPlaneAuthorizationReceiptRequest {
+    pub method: String,
+    pub path: String,
+    pub query: String,
+    pub nonce: String,
+    pub body_b64: String,
+    pub body_sha256: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ControlPlaneAuthorizationReceiptResponse {
+    pub status: u16,
+    pub body_b64: String,
+    pub body_sha256: String,
+    pub response_signing_key_id: String,
+    pub statement_b64: String,
+    pub statement_sha256: String,
+    pub signature: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ReleaseAuthority {
+    pub authority_mode: String,
+    pub grant_id: Option<String>,
+    pub approval_id: Option<String>,
+    pub credential_ref: Option<String>,
+    pub credential_version: u64,
+    pub request_digest: String,
+    pub operation_digest: String,
+    pub attempt_id: String,
+    pub consumption_identity_digest: String,
+    pub authorization_state_at_upstream_dispatch: String,
+    pub authorization_state_observed_at_epoch_ms: u64,
+    pub reservation_expires_at_epoch_ms: Option<u64>,
+    pub dispatch_expires_at_epoch_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ReleaseAuthorizationBinding {
+    attempt_id: String,
+    flow_id: String,
+    principal_id: String,
+    route_id: String,
+    credential_id: String,
+    credential_version: u64,
+    policy_hash: String,
+    request_digest: String,
+    operation_digest: Option<String>,
+    operation_context: Value,
+    require_jit_grant: bool,
+    shared_quotas: Vec<ReleaseAuthorizationBindingQuota>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct ReleaseAuthorizationBindingQuota {
+    counter_key: String,
+    constraint_id: String,
+    operation: Option<String>,
+    window_seconds: u64,
+    max_count: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct UpstreamResponse {
+    pub status: u16,
+    pub selected_raw_policy_headers_b64: BTreeMap<String, Vec<String>>,
+    pub body_digest: String,
+    pub canonical_digest: String,
+}
+
+#[derive(Serialize)]
+struct CanonicalUpstreamResponse<'a> {
+    status: u16,
+    selected_raw_policy_headers_b64: &'a BTreeMap<String, Vec<String>>,
+    body_digest: &'a str,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -153,6 +272,93 @@ pub struct TlsChannelBinding {
     #[serde(rename = "type")]
     pub binding_type: String,
     pub value: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DispatchRequestBody {
+    api_version: String,
+    attempt_id: String,
+    binding_digest: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DispatchResponseBody {
+    api_version: String,
+    ok: bool,
+    authorized: bool,
+    state: String,
+    reason: String,
+    attempt_id: String,
+    binding_digest: String,
+    idempotent_replay: bool,
+    grant_id: Option<String>,
+    approval_request_id: Option<String>,
+    approval_status: Option<String>,
+    approval_expires_at: Option<String>,
+    approval_created: Option<bool>,
+    reservation_expires_at_epoch_ms: Option<u64>,
+    dispatch_started_at_epoch_ms: Option<u64>,
+    dispatch_expires_at_epoch_ms: Option<u64>,
+    completion_outcome: Option<String>,
+    retry_after_seconds: u64,
+    quotas: Vec<DispatchQuota>,
+    store: DispatchStore,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchQuota {
+    counter_key: Option<String>,
+    constraint_id: Option<String>,
+    operation: Option<String>,
+    window_start_epoch_ms: Option<u64>,
+    window_seconds: Option<u64>,
+    max: Option<u64>,
+    count: Option<u64>,
+    remaining: Option<u64>,
+    reservation_state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct DispatchStore {
+    backend: Option<String>,
+    ha: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SignedResponseStatement {
+    version: String,
+    issued_at_ms: u64,
+    request: SignedResponseRequest,
+    status_code: u16,
+    body_sha256: String,
+    nonce: Option<String>,
+    response_signing_key_id: String,
+    context: SignedResponseContext,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SignedResponseRequest {
+    method: String,
+    path: String,
+    query: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct SignedResponseContext {
+    runtime_manifest_digest: String,
+    policy_bundle_digest: String,
+    provenance_digest: Option<String>,
+    image_signatures_digest: Option<String>,
+    source_tree_digest: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -208,11 +414,35 @@ pub struct CustodyRuntime {
     signing_key: SigningKey,
     public_key_pem: String,
     key_id: String,
+    control_plane_response_verifying_key: Option<VerifyingKey>,
     seen_request_ids: Mutex<HashSet<String>>,
 }
 
 impl CustodyRuntime {
     pub fn generate() -> Result<Self, ProtocolError> {
+        let control_plane_response_verifying_key =
+            configured_control_plane_response_verifying_key()?;
+        Self::generate_with_optional_control_plane_response_key(
+            control_plane_response_verifying_key,
+        )
+    }
+
+    pub fn generate_with_control_plane_response_public_key(
+        control_plane_response_verifying_key: VerifyingKey,
+        expected_key_id: &str,
+    ) -> Result<Self, ProtocolError> {
+        validate_pinned_control_plane_response_key(
+            &control_plane_response_verifying_key,
+            expected_key_id,
+        )?;
+        Self::generate_with_optional_control_plane_response_key(Some(
+            control_plane_response_verifying_key,
+        ))
+    }
+
+    fn generate_with_optional_control_plane_response_key(
+        control_plane_response_verifying_key: Option<VerifyingKey>,
+    ) -> Result<Self, ProtocolError> {
         let random = SystemRandom::new();
         let mut seed = [0u8; ED25519_SEED_BYTES];
         let mut boot_id_bytes = [0u8; BOOT_ID_BYTES];
@@ -226,7 +456,8 @@ impl CustodyRuntime {
                 "generate custody runtime boot ID",
             ));
         }
-        let runtime = Self::from_secret_material(seed, boot_id_bytes);
+        let runtime =
+            Self::from_secret_material(seed, boot_id_bytes, control_plane_response_verifying_key);
         seed.zeroize();
         boot_id_bytes.zeroize();
         Ok(runtime)
@@ -235,6 +466,7 @@ impl CustodyRuntime {
     fn from_secret_material(
         mut signing_seed: [u8; ED25519_SEED_BYTES],
         boot_id_bytes: [u8; BOOT_ID_BYTES],
+        control_plane_response_verifying_key: Option<VerifyingKey>,
     ) -> Self {
         let signing_key = SigningKey::from_bytes(&signing_seed);
         signing_seed.zeroize();
@@ -245,6 +477,7 @@ impl CustodyRuntime {
             signing_key,
             public_key_pem: pem_public_key(&spki_der),
             key_id: sha256_prefixed(&spki_der),
+            control_plane_response_verifying_key,
             seen_request_ids: Mutex::new(HashSet::new()),
         }
     }
@@ -327,7 +560,7 @@ impl CustodyRuntime {
                 let Some(boot_id) = request.boot_id.as_deref() else {
                     return Err(ProtocolError::new(
                         "missing_boot_id",
-                        "responseProof.sign/v1 requires the current bootId",
+                        "responseProof.sign/v2 requires the current bootId",
                     ));
                 };
                 validate_boot_id(boot_id)?;
@@ -339,9 +572,25 @@ impl CustodyRuntime {
                 }
                 let params = from_value_strict::<SignParams>(
                     request.params.clone(),
-                    "responseProof.sign/v1 params",
+                    "responseProof.sign/v2 params",
                 )?;
-                validate_response_statement(&params.statement)?;
+                let control_plane_response_verifying_key = self
+                    .control_plane_response_verifying_key
+                    .as_ref()
+                    .ok_or_else(|| {
+                        ProtocolError::new(
+                            "control_plane_response_key_unavailable",
+                            "responseProof.sign/v2 requires a pinned control-plane response public key",
+                        )
+                    })?;
+                validate_response_statement_with_control_plane_response_key(
+                    &params.statement,
+                    control_plane_response_verifying_key,
+                )?;
+                validate_release_authorization_binding(
+                    &params.statement,
+                    &params.authorization_binding,
+                )?;
                 let canonical_statement = canonical_json_bytes(&params.statement)?;
                 let statement_digest = sha256_prefixed(&canonical_statement);
                 let signature = self.signing_key.sign(&canonical_statement);
@@ -362,7 +611,7 @@ impl CustodyRuntime {
             }
             _ => Err(ProtocolError::new(
                 "unknown_operation",
-                "operation must be hello/v1 or responseProof.sign/v1",
+                "operation must be hello/v1 or responseProof.sign/v2",
             )),
         }
     }
@@ -389,6 +638,153 @@ impl CustodyRuntime {
         seen.insert(request_id.to_string());
         Ok(())
     }
+}
+
+fn configured_control_plane_response_verifying_key() -> Result<Option<VerifyingKey>, ProtocolError>
+{
+    let (public_key_path, expected_key_id) = match (
+        env::var_os(CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV),
+        env::var_os(CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV),
+    ) {
+        (Some(public_key_path), Some(expected_key_id)) => (public_key_path, expected_key_id),
+        (None, None) => return Ok(None),
+        _ => {
+            return Err(ProtocolError::new(
+                "invalid_control_plane_response_key_configuration",
+                format!(
+                    "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} and {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} must be configured together"
+                ),
+            ))
+        }
+    };
+    let expected_key_id = expected_key_id.into_string().map_err(|_| {
+        ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} must be valid UTF-8"),
+        )
+    })?;
+    let public_key_pem = read_control_plane_response_public_key_pem(Path::new(&public_key_path))?;
+    let verifying_key = VerifyingKey::from_public_key_pem(&public_key_pem).map_err(|error| {
+        ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!(
+                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} must contain an Ed25519 SubjectPublicKeyInfo PEM: {error}"
+            ),
+        )
+    })?;
+    validate_pinned_control_plane_response_key(&verifying_key, &expected_key_id)?;
+    Ok(Some(verifying_key))
+}
+
+fn read_control_plane_response_public_key_pem(path: &Path) -> Result<String, ProtocolError> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| {
+            ProtocolError::new(
+                "invalid_control_plane_response_key_configuration",
+                format!("open {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV}: {error}"),
+            )
+        })?;
+    let initial_metadata = file.metadata().map_err(|error| {
+        ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!("inspect {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV}: {error}"),
+        )
+    })?;
+    if !initial_metadata.is_file() {
+        return Err(ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} must be a regular file"),
+        ));
+    }
+    if initial_metadata.len() > MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES as u64 {
+        return Err(ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!(
+                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} exceeds {MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES} bytes"
+            ),
+        ));
+    }
+
+    let initial_modified = initial_metadata.modified().ok();
+    let mut bytes = Vec::with_capacity(initial_metadata.len() as usize);
+    let mut bounded_reader = file.take((MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES + 1) as u64);
+    bounded_reader.read_to_end(&mut bytes).map_err(|error| {
+        ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!("read {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV}: {error}"),
+        )
+    })?;
+    if bytes.len() > MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES {
+        return Err(ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!(
+                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} exceeds {MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES} bytes"
+            ),
+        ));
+    }
+
+    let final_metadata = bounded_reader.get_ref().metadata().map_err(|error| {
+        ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!("reinspect {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV}: {error}"),
+        )
+    })?;
+    let modified_during_read = initial_modified
+        .zip(final_metadata.modified().ok())
+        .is_some_and(|(initial, final_value)| initial != final_value);
+    if !final_metadata.is_file()
+        || final_metadata.len() != initial_metadata.len()
+        || final_metadata.len() != bytes.len() as u64
+        || modified_during_read
+    {
+        return Err(ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} changed while it was being loaded"),
+        ));
+    }
+
+    String::from_utf8(bytes).map_err(|_| {
+        ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} must contain valid UTF-8"),
+        )
+    })
+}
+
+fn validate_pinned_control_plane_response_key(
+    verifying_key: &VerifyingKey,
+    expected_key_id: &str,
+) -> Result<(), ProtocolError> {
+    if expected_key_id.len() != 71
+        || !expected_key_id.starts_with("sha256:")
+        || !expected_key_id[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err(ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!(
+                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} must be a canonical lowercase sha256 digest"
+            ),
+        ));
+    }
+    let actual_key_id = control_plane_response_key_id(verifying_key);
+    if expected_key_id != actual_key_id {
+        return Err(ProtocolError::new(
+            "invalid_control_plane_response_key_configuration",
+            format!(
+                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} does not match the configured Ed25519 public key"
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn control_plane_response_key_id(verifying_key: &VerifyingKey) -> String {
+    sha256_prefixed(&ed25519_spki_der(verifying_key.as_bytes()))
 }
 
 pub fn canonical_json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, ProtocolError> {
@@ -546,10 +942,26 @@ where
     })
 }
 
-fn validate_response_statement(statement: &ProxyResponseStatement) -> Result<(), ProtocolError> {
+pub fn validate_response_statement(
+    statement: &ProxyResponseStatement,
+) -> Result<(), ProtocolError> {
+    validate_response_statement_inner(statement, None)
+}
+
+pub fn validate_response_statement_with_control_plane_response_key(
+    statement: &ProxyResponseStatement,
+    control_plane_response_verifying_key: &VerifyingKey,
+) -> Result<(), ProtocolError> {
+    validate_response_statement_inner(statement, Some(control_plane_response_verifying_key))
+}
+
+fn validate_response_statement_inner(
+    statement: &ProxyResponseStatement,
+    control_plane_response_verifying_key: Option<&VerifyingKey>,
+) -> Result<(), ProtocolError> {
     if statement.api_version != RESPONSE_STATEMENT_API_VERSION {
         return Err(invalid_statement(
-            "apiVersion must be serverware.proxyResponseStatement/v1",
+            "apiVersion must be serverware.proxyResponseStatement/v2",
         ));
     }
     let now = SystemTime::now()
@@ -569,10 +981,32 @@ fn validate_response_statement(statement: &ProxyResponseStatement) -> Result<(),
         MIN_CLIENT_NONCE_BYTES,
         MAX_CLIENT_NONCE_BYTES,
     )?;
+    validate_bounded_identity("principal_id", &statement.principal_id)?;
+    validate_bounded_identity("route_id", &statement.route_id)?;
     for (name, digest) in [
         ("client_request_digest", &statement.client_request_digest),
         ("request_digest", &statement.request_digest),
         ("operation_digest", &statement.operation_digest),
+        (
+            "release_authority.request_digest",
+            &statement.release_authority.request_digest,
+        ),
+        (
+            "release_authority.operation_digest",
+            &statement.release_authority.operation_digest,
+        ),
+        (
+            "release_authority.consumption_identity_digest",
+            &statement.release_authority.consumption_identity_digest,
+        ),
+        (
+            "upstream_response.body_digest",
+            &statement.upstream_response.body_digest,
+        ),
+        (
+            "upstream_response.canonical_digest",
+            &statement.upstream_response.canonical_digest,
+        ),
         ("response.body_digest", &statement.response.body_digest),
         (
             "response.selected_headers_digest",
@@ -600,6 +1034,14 @@ fn validate_response_statement(statement: &ProxyResponseStatement) -> Result<(),
             "response.status must be a successful HTTP status",
         ));
     }
+    validate_release_authority(statement)?;
+    validate_control_plane_authorization_receipt(statement, control_plane_response_verifying_key)?;
+    if statement.upstream_response.status != statement.response.status {
+        return Err(invalid_statement(
+            "upstream_response.status must match response.status",
+        ));
+    }
+    validate_upstream_response(&statement.upstream_response)?;
     validate_selected_headers(statement)?;
     validate_server_instance(&statement.server_instance)?;
     if statement.tls_channel_binding.binding_type != "tls-exporter" {
@@ -613,6 +1055,481 @@ fn validate_response_statement(statement: &ProxyResponseStatement) -> Result<(),
         TLS_EXPORTER_BYTES,
         TLS_EXPORTER_BYTES,
     )?;
+    Ok(())
+}
+
+fn validate_release_authority(statement: &ProxyResponseStatement) -> Result<(), ProtocolError> {
+    let authority = &statement.release_authority;
+    if authority.authority_mode != "atomic" {
+        return Err(invalid_statement(
+            "release_authority.authority_mode must be atomic",
+        ));
+    }
+    for (name, value) in [
+        ("release_authority.grant_id", authority.grant_id.as_deref()),
+        (
+            "release_authority.approval_id",
+            authority.approval_id.as_deref(),
+        ),
+        (
+            "release_authority.credential_ref",
+            authority.credential_ref.as_deref(),
+        ),
+        (
+            "release_authority.attempt_id",
+            Some(authority.attempt_id.as_str()),
+        ),
+    ] {
+        if value.is_some_and(|value| {
+            value.is_empty()
+                || value != value.trim()
+                || value.len() > 256
+                || value.chars().any(char::is_control)
+        }) {
+            return Err(invalid_statement(format!("{name} is invalid")));
+        }
+    }
+    if authority.grant_id.is_some() != authority.approval_id.is_some() {
+        return Err(invalid_statement(
+            "release_authority grant_id and approval_id must be paired",
+        ));
+    }
+    if authority.credential_ref.is_some() != (authority.credential_version > 0) {
+        return Err(invalid_statement(
+            "release_authority credential_ref and credential_version are inconsistent",
+        ));
+    }
+    validate_sha256_digest("release_authority.attempt_id", &authority.attempt_id)?;
+    if authority.request_digest != statement.request_digest
+        || authority.operation_digest != statement.operation_digest
+    {
+        return Err(invalid_statement(
+            "release_authority request or operation digest mismatch",
+        ));
+    }
+    if authority.authorization_state_at_upstream_dispatch != "dispatching" {
+        return Err(invalid_statement(
+            "release_authority.authorization_state_at_upstream_dispatch must be dispatching",
+        ));
+    }
+    let statement_end_epoch_ms = statement
+        .issued_at_unix
+        .saturating_add(1)
+        .saturating_mul(1000)
+        .saturating_sub(1);
+    if authority.authorization_state_observed_at_epoch_ms == 0
+        || authority.authorization_state_observed_at_epoch_ms > statement_end_epoch_ms
+        || authority.dispatch_expires_at_epoch_ms
+            <= authority.authorization_state_observed_at_epoch_ms
+        || authority
+            .reservation_expires_at_epoch_ms
+            .is_some_and(|expires_at| {
+                authority.authorization_state_observed_at_epoch_ms >= expires_at
+            })
+    {
+        return Err(invalid_statement(
+            "release_authority historical authorization observation is temporally invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn canonical_json_ensure_ascii_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, ProtocolError> {
+    let encoded = String::from_utf8(canonical_json_bytes(value)?).map_err(|_| {
+        ProtocolError::new(
+            "json_serialization_error",
+            "canonical JSON serialization did not produce UTF-8",
+        )
+    })?;
+    let mut ascii = String::with_capacity(encoded.len());
+    for character in encoded.chars() {
+        let codepoint = character as u32;
+        if codepoint <= 0x7f {
+            ascii.push(character);
+        } else if codepoint <= 0xffff {
+            ascii.push_str(&format!("\\u{codepoint:04x}"));
+        } else {
+            let supplementary = codepoint - 0x1_0000;
+            let high = 0xd800 + (supplementary >> 10);
+            let low = 0xdc00 + (supplementary & 0x3ff);
+            ascii.push_str(&format!("\\u{high:04x}\\u{low:04x}"));
+        }
+    }
+    Ok(ascii.into_bytes())
+}
+
+fn validate_release_authorization_binding(
+    statement: &ProxyResponseStatement,
+    binding: &ReleaseAuthorizationBinding,
+) -> Result<(), ProtocolError> {
+    let authority = &statement.release_authority;
+    let expected_credential_id = authority.credential_ref.as_deref().unwrap_or("");
+    if binding.attempt_id != authority.attempt_id
+        || binding.flow_id != authority.attempt_id
+        || binding.principal_id != statement.principal_id
+        || binding.route_id != statement.route_id
+        || binding.credential_id != expected_credential_id
+        || binding.credential_version != authority.credential_version
+        || binding.policy_hash != statement.policy_digest
+        || binding.request_digest != statement.request_digest
+        || binding.operation_digest.as_deref() != Some(statement.operation_digest.as_str())
+    {
+        return Err(invalid_statement(
+            "release authorization binding claim substitution",
+        ));
+    }
+    if !binding.operation_context.is_object() {
+        return Err(invalid_statement(
+            "release authorization binding operation_context must be an object",
+        ));
+    }
+    let mut previous_counter_key = None;
+    for quota in &binding.shared_quotas {
+        validate_sha256_digest(
+            "release authorization binding shared quota counter_key",
+            &quota.counter_key,
+        )?;
+        validate_bounded_identity(
+            "release authorization binding shared quota constraint_id",
+            &quota.constraint_id,
+        )?;
+        if let Some(operation) = quota.operation.as_deref() {
+            validate_bounded_identity(
+                "release authorization binding shared quota operation",
+                operation,
+            )?;
+        }
+        if !(1..=31_536_000).contains(&quota.window_seconds)
+            || !(1..=1_000_000_000).contains(&quota.max_count)
+        {
+            return Err(invalid_statement(
+                "release authorization binding shared quota bounds are invalid",
+            ));
+        }
+        if previous_counter_key.is_some_and(|previous| previous >= quota.counter_key.as_str()) {
+            return Err(invalid_statement(
+                "release authorization binding shared quotas are not canonically ordered",
+            ));
+        }
+        previous_counter_key = Some(quota.counter_key.as_str());
+    }
+    let canonical_binding = canonical_json_ensure_ascii_bytes(binding)?;
+    if canonical_binding.len() > MAX_RELEASE_AUTHORIZATION_BINDING_BYTES {
+        return Err(invalid_statement(format!(
+            "release authorization binding exceeds {MAX_RELEASE_AUTHORIZATION_BINDING_BYTES} bytes"
+        )));
+    }
+    if sha256_prefixed(&canonical_binding) != authority.consumption_identity_digest {
+        return Err(invalid_statement(
+            "release authorization binding digest mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn decode_receipt_base64url(
+    name: &str,
+    value: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, ProtocolError> {
+    if value.contains('=') {
+        return Err(invalid_statement(format!(
+            "{name} must use unpadded base64url"
+        )));
+    }
+    let decoded = general_purpose::URL_SAFE_NO_PAD
+        .decode(value.as_bytes())
+        .map_err(|_| invalid_statement(format!("{name} is not valid base64url")))?;
+    if decoded.len() > max_bytes || general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != value {
+        return Err(invalid_statement(format!(
+            "{name} is too large or not canonical base64url"
+        )));
+    }
+    Ok(decoded)
+}
+
+fn validate_control_plane_authorization_receipt(
+    statement: &ProxyResponseStatement,
+    control_plane_response_verifying_key: Option<&VerifyingKey>,
+) -> Result<(), ProtocolError> {
+    let receipt = &statement.control_plane_authorization_receipt;
+    if receipt.api_version != AUTHORIZATION_RECEIPT_API_VERSION
+        || receipt.kind != "ControlPlaneAuthorizationReceipt"
+        || receipt.principal_id != statement.principal_id
+        || receipt.route_id != statement.route_id
+        || receipt.release_authority != statement.release_authority
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt authority substitution",
+        ));
+    }
+    validate_bounded_identity("receipt.principal_id", &receipt.principal_id)?;
+    validate_bounded_identity("receipt.route_id", &receipt.route_id)?;
+    let request = &receipt.request;
+    if request.method != "POST"
+        || request.path != RELEASE_AUTHORIZATION_DISPATCH_PATH
+        || !request.query.is_empty()
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt request context mismatch",
+        ));
+    }
+    validate_base64url("receipt.request.nonce", &request.nonce, 32, 32)?;
+    validate_sha256_digest("receipt.request.body_sha256", &request.body_sha256)?;
+    let request_body =
+        decode_receipt_base64url("receipt.request.body_b64", &request.body_b64, 4 * 1024)?;
+    if request.body_sha256 != sha256_prefixed(&request_body) {
+        return Err(invalid_statement(
+            "control-plane authorization receipt request body digest mismatch",
+        ));
+    }
+    let dispatch_request: DispatchRequestBody = decode_canonical_json(&request_body)
+        .map_err(|error| invalid_statement(format!("dispatch request body: {error}")))?;
+    if dispatch_request.api_version != "serverware.releaseAuthorizationDispatch/v1"
+        || dispatch_request.attempt_id != statement.release_authority.attempt_id
+        || dispatch_request.binding_digest
+            != statement.release_authority.consumption_identity_digest
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt dispatch request mismatch",
+        ));
+    }
+    let response = &receipt.response;
+    if response.status != 200 {
+        return Err(invalid_statement(
+            "control-plane authorization receipt response status mismatch",
+        ));
+    }
+    validate_sha256_digest("receipt.response.body_sha256", &response.body_sha256)?;
+    validate_sha256_digest(
+        "receipt.response.response_signing_key_id",
+        &response.response_signing_key_id,
+    )?;
+    if let Some(control_plane_response_verifying_key) = control_plane_response_verifying_key {
+        if response.response_signing_key_id
+            != control_plane_response_key_id(control_plane_response_verifying_key)
+        {
+            return Err(invalid_statement(
+                "control-plane authorization receipt response key does not match the pinned control-plane response public key",
+            ));
+        }
+    }
+    validate_sha256_digest(
+        "receipt.response.statement_sha256",
+        &response.statement_sha256,
+    )?;
+    let response_body = decode_receipt_base64url(
+        "receipt.response.body_b64",
+        &response.body_b64,
+        MAX_AUTHORIZATION_RECEIPT_BODY_BYTES,
+    )?;
+    if response.body_sha256 != sha256_prefixed(&response_body) {
+        return Err(invalid_statement(
+            "control-plane authorization receipt response body digest mismatch",
+        ));
+    }
+    let response_value = parse_json_without_duplicate_keys(&response_body)
+        .map_err(|error| invalid_statement(format!("dispatch response body: {error}")))?;
+    let dispatch_response: DispatchResponseBody = serde_json::from_value(response_value)
+        .map_err(|error| invalid_statement(format!("dispatch response body: {error}")))?;
+    let dispatch_started_at_epoch_ms = dispatch_response
+        .dispatch_started_at_epoch_ms
+        .ok_or_else(|| invalid_statement("dispatch response is missing dispatch start"))?;
+    let dispatch_expires_at_epoch_ms = dispatch_response
+        .dispatch_expires_at_epoch_ms
+        .ok_or_else(|| invalid_statement("dispatch response is missing dispatch expiry"))?;
+    let reservation_expires_at_epoch_ms = dispatch_response
+        .reservation_expires_at_epoch_ms
+        .ok_or_else(|| invalid_statement("dispatch response is missing reservation expiry"))?;
+    if dispatch_response.api_version != "serverware.releaseAuthorization/v1"
+        || !dispatch_response.ok
+        || !dispatch_response.authorized
+        || dispatch_response.state != "dispatching"
+        || dispatch_response.reason != "dispatching"
+        || dispatch_response.completion_outcome.is_some()
+        || dispatch_response.retry_after_seconds != 0
+        || dispatch_response.approval_status.is_some()
+        || dispatch_response.approval_expires_at.is_some()
+        || dispatch_response.approval_created.is_some()
+        || dispatch_response.grant_id != statement.release_authority.grant_id
+        || dispatch_response.approval_request_id != statement.release_authority.approval_id
+        || dispatch_response.attempt_id != statement.release_authority.attempt_id
+        || dispatch_response.binding_digest
+            != statement.release_authority.consumption_identity_digest
+        || Some(reservation_expires_at_epoch_ms)
+            != statement.release_authority.reservation_expires_at_epoch_ms
+        || dispatch_expires_at_epoch_ms != statement.release_authority.dispatch_expires_at_epoch_ms
+        || dispatch_started_at_epoch_ms
+            != statement
+                .release_authority
+                .authorization_state_observed_at_epoch_ms
+        || dispatch_started_at_epoch_ms >= dispatch_expires_at_epoch_ms
+        || dispatch_started_at_epoch_ms >= reservation_expires_at_epoch_ms
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt body and authority mismatch",
+        ));
+    }
+    let _bounded_nested_contract = (
+        dispatch_response.idempotent_replay,
+        dispatch_response.quotas.len(),
+        dispatch_response.store.ha,
+    );
+
+    let statement_bytes = decode_receipt_base64url(
+        "receipt.response.statement_b64",
+        &response.statement_b64,
+        MAX_SIGNED_RESPONSE_STATEMENT_BYTES,
+    )?;
+    if response.statement_sha256 != sha256_prefixed(&statement_bytes) {
+        return Err(invalid_statement(
+            "control-plane authorization receipt statement digest mismatch",
+        ));
+    }
+    let signed_statement: SignedResponseStatement = decode_canonical_json(&statement_bytes)
+        .map_err(|error| invalid_statement(format!("signed dispatch statement: {error}")))?;
+    if signed_statement.version != "serverware.responseSignature/v1"
+        || signed_statement.nonce.as_deref() != Some(request.nonce.as_str())
+        || signed_statement.request.method != request.method
+        || signed_statement.request.path != request.path
+        || signed_statement.request.query != request.query
+        || signed_statement.status_code != response.status
+        || signed_statement.body_sha256 != response.body_sha256
+        || signed_statement.response_signing_key_id != response.response_signing_key_id
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt signed statement mismatch",
+        ));
+    }
+    for (name, digest) in [
+        (
+            "receipt.response.context.runtime_manifest_digest",
+            Some(&signed_statement.context.runtime_manifest_digest),
+        ),
+        (
+            "receipt.response.context.policy_bundle_digest",
+            Some(&signed_statement.context.policy_bundle_digest),
+        ),
+        (
+            "receipt.response.context.provenance_digest",
+            signed_statement.context.provenance_digest.as_ref(),
+        ),
+        (
+            "receipt.response.context.image_signatures_digest",
+            signed_statement.context.image_signatures_digest.as_ref(),
+        ),
+        (
+            "receipt.response.context.source_tree_digest",
+            signed_statement.context.source_tree_digest.as_ref(),
+        ),
+    ] {
+        if let Some(digest) = digest {
+            validate_sha256_digest(name, digest)?;
+        }
+    }
+    if signed_statement.context.policy_bundle_digest != statement.policy_digest {
+        return Err(invalid_statement(
+            "control-plane authorization receipt policy context mismatch",
+        ));
+    }
+    let statement_end_epoch_ms = statement
+        .issued_at_unix
+        .saturating_add(1)
+        .saturating_mul(1000)
+        .saturating_sub(1);
+    let now_epoch_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    if signed_statement.issued_at_ms < dispatch_started_at_epoch_ms
+        || signed_statement.issued_at_ms >= dispatch_expires_at_epoch_ms
+        || signed_statement.issued_at_ms >= reservation_expires_at_epoch_ms
+        || signed_statement.issued_at_ms > statement_end_epoch_ms
+        || statement_end_epoch_ms.saturating_sub(dispatch_started_at_epoch_ms)
+            > MAX_STATEMENT_AGE_SECONDS.saturating_mul(1000)
+        || u128::from(dispatch_expires_at_epoch_ms) <= now_epoch_ms
+        || u128::from(reservation_expires_at_epoch_ms) <= now_epoch_ms
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt temporal relation is invalid",
+        ));
+    }
+    let signature = response
+        .signature
+        .strip_prefix("ed25519:")
+        .ok_or_else(|| invalid_statement("receipt response signature must use ed25519"))?;
+    let signature_bytes = decode_receipt_base64url(
+        "receipt.response.signature",
+        signature,
+        Signature::BYTE_SIZE,
+    )?;
+    let signature_bytes: [u8; Signature::BYTE_SIZE] = signature_bytes
+        .try_into()
+        .map_err(|_| invalid_statement("receipt response signature must be 64 bytes"))?;
+    if let Some(control_plane_response_verifying_key) = control_plane_response_verifying_key {
+        control_plane_response_verifying_key
+            .verify_strict(&statement_bytes, &Signature::from_bytes(&signature_bytes))
+            .map_err(|_| {
+                invalid_statement(
+                    "control-plane authorization receipt response signature verification failed",
+                )
+            })?;
+    }
+    Ok(())
+}
+
+fn validate_upstream_response(upstream: &UpstreamResponse) -> Result<(), ProtocolError> {
+    const REQUIRED_HEADERS: [&str; 3] = ["content-encoding", "content-length", "content-type"];
+    const ALLOWED_HEADERS: [&str; 9] = [
+        "cache-control",
+        "content-encoding",
+        "content-language",
+        "content-length",
+        "content-type",
+        "etag",
+        "last-modified",
+        "retry-after",
+        "www-authenticate",
+    ];
+    if REQUIRED_HEADERS
+        .iter()
+        .any(|name| !upstream.selected_raw_policy_headers_b64.contains_key(*name))
+    {
+        return Err(invalid_statement(
+            "upstream_response.selected_raw_policy_headers_b64 is missing a required header",
+        ));
+    }
+    for (name, values) in &upstream.selected_raw_policy_headers_b64 {
+        if !ALLOWED_HEADERS.contains(&name.as_str()) {
+            return Err(invalid_statement(format!(
+                "upstream_response.selected_raw_policy_headers_b64 contains unsupported header {name}"
+            )));
+        }
+        if values.len() > MAX_RAW_HEADER_VALUES {
+            return Err(invalid_statement(format!(
+                "upstream_response selected raw header {name} has too many values"
+            )));
+        }
+        for value in values {
+            validate_base64url(
+                &format!("upstream_response.selected_raw_policy_headers_b64.{name}"),
+                value,
+                0,
+                MAX_HEADER_VALUE_BYTES,
+            )?;
+        }
+    }
+    let canonical = CanonicalUpstreamResponse {
+        status: upstream.status,
+        selected_raw_policy_headers_b64: &upstream.selected_raw_policy_headers_b64,
+        body_digest: &upstream.body_digest,
+    };
+    let digest = sha256_prefixed(&canonical_json_bytes(&canonical)?);
+    if upstream.canonical_digest != digest {
+        return Err(invalid_statement(
+            "upstream_response.canonical_digest does not match the canonical upstream response binding",
+        ));
+    }
     Ok(())
 }
 
@@ -699,6 +1616,17 @@ fn validate_server_instance(instance: &ServerInstance) -> Result<(), ProtocolErr
         return Err(invalid_statement(
             "server_instance.identity_digest does not match server_instance.id",
         ));
+    }
+    Ok(())
+}
+
+fn validate_bounded_identity(name: &str, value: &str) -> Result<(), ProtocolError> {
+    if value.is_empty()
+        || value != value.trim()
+        || value.len() > 256
+        || value.chars().any(char::is_control)
+    {
+        return Err(invalid_statement(format!("{name} is invalid")));
     }
     Ok(())
 }
@@ -921,11 +1849,36 @@ pub fn write_frame(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+    use ed25519_dalek::Verifier;
     use serde_json::json;
 
+    const CONTROL_PLANE_RESPONSE_SIGNING_SEED: [u8; 32] = [19u8; 32];
+
+    fn control_plane_response_signing_key() -> SigningKey {
+        SigningKey::from_bytes(&CONTROL_PLANE_RESPONSE_SIGNING_SEED)
+    }
+
+    fn pinned_control_plane_response_verifying_key() -> VerifyingKey {
+        control_plane_response_signing_key().verifying_key()
+    }
+
     fn runtime() -> CustodyRuntime {
-        CustodyRuntime::from_secret_material([7u8; 32], [9u8; 32])
+        CustodyRuntime::from_secret_material(
+            [7u8; 32],
+            [9u8; 32],
+            Some(pinned_control_plane_response_verifying_key()),
+        )
+    }
+
+    fn unconfigured_runtime() -> CustodyRuntime {
+        CustodyRuntime::from_secret_material([7u8; 32], [9u8; 32], None)
+    }
+
+    fn validate_test_statement(statement: &ProxyResponseStatement) -> Result<(), ProtocolError> {
+        validate_response_statement_with_control_plane_response_key(
+            statement,
+            &pinned_control_plane_response_verifying_key(),
+        )
     }
 
     fn request_id(byte: u8) -> String {
@@ -937,11 +1890,40 @@ mod tests {
     }
 
     fn statement() -> ProxyResponseStatement {
+        statement_signed_by(&control_plane_response_signing_key())
+    }
+
+    fn statement_signed_by(response_signing_key: &SigningKey) -> ProxyResponseStatement {
+        let issued_at_unix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
         let client_request_digest = digest(1);
         let request_digest = digest(2);
         let operation_digest = digest(3);
         let policy_digest = digest(4);
         let body_digest = digest(5);
+        let principal_id = "agent:custody-test".to_string();
+        let route_id = "route:custody-test".to_string();
+        let attempt_id = digest(11);
+        let authorization_binding = ReleaseAuthorizationBinding {
+            attempt_id: attempt_id.clone(),
+            flow_id: attempt_id.clone(),
+            principal_id: principal_id.clone(),
+            route_id: route_id.clone(),
+            credential_id: "credential:custody-test".to_string(),
+            credential_version: 7,
+            policy_hash: policy_digest.clone(),
+            request_digest: request_digest.clone(),
+            operation_digest: Some(operation_digest.clone()),
+            operation_context: json!({"operation":"custody.test"}),
+            require_jit_grant: true,
+            shared_quotas: Vec::new(),
+        };
+        let binding_digest = sha256_prefixed(
+            &canonical_json_ensure_ascii_bytes(&authorization_binding)
+                .expect("canonical authorization binding"),
+        );
         let mut selected_headers = BTreeMap::new();
         selected_headers.insert("content-length".to_string(), "17".to_string());
         selected_headers.insert("content-type".to_string(), "application/json".to_string());
@@ -967,17 +1949,141 @@ mod tests {
         );
         let selected_headers_digest =
             sha256_prefixed(&canonical_json_bytes(&selected_headers).expect("canonical headers"));
+        let selected_raw_policy_headers_b64 = BTreeMap::from([
+            ("content-encoding".to_string(), Vec::new()),
+            (
+                "content-length".to_string(),
+                vec![general_purpose::URL_SAFE_NO_PAD.encode(b"17")],
+            ),
+            (
+                "content-type".to_string(),
+                vec![general_purpose::URL_SAFE_NO_PAD.encode(b"application/json")],
+            ),
+        ]);
+        let upstream_body_digest = digest(10);
+        let upstream_canonical_digest = sha256_prefixed(
+            &canonical_json_bytes(&CanonicalUpstreamResponse {
+                status: 200,
+                selected_raw_policy_headers_b64: &selected_raw_policy_headers_b64,
+                body_digest: &upstream_body_digest,
+            })
+            .expect("canonical upstream response"),
+        );
         let instance_id = "spiffe://dev.serverware/decision-gate/test".to_string();
+        let dispatch_started_at_epoch_ms = issued_at_unix * 1000;
+        let dispatch_expires_at_epoch_ms = dispatch_started_at_epoch_ms + 30_000;
+        let reservation_expires_at_epoch_ms = dispatch_started_at_epoch_ms + 30_000;
+        let release_authority = ReleaseAuthority {
+            authority_mode: "atomic".to_string(),
+            grant_id: Some("grant:custody-test".to_string()),
+            approval_id: Some("approval:custody-test".to_string()),
+            credential_ref: Some("credential:custody-test".to_string()),
+            credential_version: 7,
+            request_digest: request_digest.clone(),
+            operation_digest: operation_digest.clone(),
+            attempt_id,
+            consumption_identity_digest: binding_digest,
+            authorization_state_at_upstream_dispatch: "dispatching".to_string(),
+            authorization_state_observed_at_epoch_ms: dispatch_started_at_epoch_ms,
+            reservation_expires_at_epoch_ms: Some(reservation_expires_at_epoch_ms),
+            dispatch_expires_at_epoch_ms,
+        };
+        let dispatch_body = canonical_json_bytes(&json!({
+            "apiVersion":"serverware.releaseAuthorization/v1",
+            "ok":true,
+            "authorized":true,
+            "state":"dispatching",
+            "reason":"dispatching",
+            "attemptId":release_authority.attempt_id.clone(),
+            "bindingDigest":release_authority.consumption_identity_digest.clone(),
+            "idempotentReplay":false,
+            "grantId":release_authority.grant_id.clone(),
+            "approvalRequestId":release_authority.approval_id.clone(),
+            "reservationExpiresAtEpochMs":reservation_expires_at_epoch_ms,
+            "dispatchStartedAtEpochMs":dispatch_started_at_epoch_ms,
+            "dispatchExpiresAtEpochMs":dispatch_expires_at_epoch_ms,
+            "completionOutcome":null,
+            "retryAfterSeconds":0,
+            "quotas":[],
+            "store":{"backend":"sqlite","ha":false},
+        }))
+        .expect("dispatch body");
+        let response_nonce = general_purpose::URL_SAFE_NO_PAD.encode([13u8; 32]);
+        let response_signing_key_id =
+            control_plane_response_key_id(&response_signing_key.verifying_key());
+        let signed_response_statement = SignedResponseStatement {
+            version: "serverware.responseSignature/v1".to_string(),
+            issued_at_ms: dispatch_started_at_epoch_ms,
+            request: SignedResponseRequest {
+                method: "POST".to_string(),
+                path: RELEASE_AUTHORIZATION_DISPATCH_PATH.to_string(),
+                query: String::new(),
+            },
+            status_code: 200,
+            body_sha256: sha256_prefixed(&dispatch_body),
+            nonce: Some(response_nonce.clone()),
+            response_signing_key_id: response_signing_key_id.clone(),
+            context: SignedResponseContext {
+                runtime_manifest_digest: digest(15),
+                policy_bundle_digest: policy_digest.clone(),
+                provenance_digest: Some(digest(16)),
+                image_signatures_digest: Some(digest(17)),
+                source_tree_digest: Some(digest(18)),
+            },
+        };
+        let signed_response_statement =
+            canonical_json_bytes(&signed_response_statement).expect("signed response statement");
+        let signed_response_signature = response_signing_key.sign(&signed_response_statement);
+        let dispatch_request_body = canonical_json_bytes(&DispatchRequestBody {
+            api_version: "serverware.releaseAuthorizationDispatch/v1".to_string(),
+            attempt_id: release_authority.attempt_id.clone(),
+            binding_digest: release_authority.consumption_identity_digest.clone(),
+        })
+        .expect("dispatch request body");
+        let control_plane_authorization_receipt = ControlPlaneAuthorizationReceipt {
+            api_version: AUTHORIZATION_RECEIPT_API_VERSION.to_string(),
+            kind: "ControlPlaneAuthorizationReceipt".to_string(),
+            principal_id: principal_id.clone(),
+            route_id: route_id.clone(),
+            release_authority: release_authority.clone(),
+            request: ControlPlaneAuthorizationReceiptRequest {
+                method: "POST".to_string(),
+                path: RELEASE_AUTHORIZATION_DISPATCH_PATH.to_string(),
+                query: String::new(),
+                nonce: response_nonce,
+                body_b64: general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_request_body),
+                body_sha256: sha256_prefixed(&dispatch_request_body),
+            },
+            response: ControlPlaneAuthorizationReceiptResponse {
+                status: 200,
+                body_b64: general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_body),
+                body_sha256: sha256_prefixed(&dispatch_body),
+                response_signing_key_id,
+                statement_b64: general_purpose::URL_SAFE_NO_PAD.encode(&signed_response_statement),
+                statement_sha256: sha256_prefixed(&signed_response_statement),
+                signature: format!(
+                    "ed25519:{}",
+                    general_purpose::URL_SAFE_NO_PAD.encode(signed_response_signature.to_bytes())
+                ),
+            },
+        };
         ProxyResponseStatement {
             api_version: RESPONSE_STATEMENT_API_VERSION.to_string(),
-            issued_at_unix: SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("clock")
-                .as_secs(),
+            issued_at_unix,
             client_nonce: general_purpose::URL_SAFE_NO_PAD.encode([11u8; 32]),
             client_request_digest,
-            request_digest,
-            operation_digest,
+            principal_id,
+            route_id,
+            request_digest: request_digest.clone(),
+            operation_digest: operation_digest.clone(),
+            release_authority,
+            control_plane_authorization_receipt,
+            upstream_response: UpstreamResponse {
+                status: 200,
+                selected_raw_policy_headers_b64,
+                body_digest: upstream_body_digest,
+                canonical_digest: upstream_canonical_digest,
+            },
             response: ProxyResponse {
                 status: 200,
                 selected_headers,
@@ -999,16 +2105,43 @@ mod tests {
         }
     }
 
+    fn authorization_binding_for_statement(
+        statement: &ProxyResponseStatement,
+    ) -> ReleaseAuthorizationBinding {
+        ReleaseAuthorizationBinding {
+            attempt_id: statement.release_authority.attempt_id.clone(),
+            flow_id: statement.release_authority.attempt_id.clone(),
+            principal_id: statement.principal_id.clone(),
+            route_id: statement.route_id.clone(),
+            credential_id: statement
+                .release_authority
+                .credential_ref
+                .clone()
+                .unwrap_or_default(),
+            credential_version: statement.release_authority.credential_version,
+            policy_hash: statement.policy_digest.clone(),
+            request_digest: statement.request_digest.clone(),
+            operation_digest: Some(statement.operation_digest.clone()),
+            operation_context: json!({"operation":"custody.test"}),
+            require_jit_grant: statement.release_authority.grant_id.is_some(),
+            shared_quotas: Vec::new(),
+        }
+    }
+
     fn request_bytes(
         runtime: &CustodyRuntime,
         id: u8,
         statement: ProxyResponseStatement,
     ) -> Vec<u8> {
+        let authorization_binding = authorization_binding_for_statement(&statement);
         canonical_json_bytes(&json!({
             "apiVersion": PROTOCOL_API_VERSION,
             "bootId": runtime.boot_id(),
             "operation": RESPONSE_PROOF_SIGN_OPERATION,
-            "params": {"statement": statement},
+            "params": {
+                "statement": statement,
+                "authorization_binding": authorization_binding,
+            },
             "requestId": request_id(id),
         }))
         .expect("canonical request")
@@ -1062,6 +2195,42 @@ mod tests {
     }
 
     #[test]
+    fn configured_response_key_loader_rejects_oversized_and_non_utf8_files() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = env::temp_dir().join(format!(
+            "serverware-custody-response-key-{}-{unique}.pem",
+            std::process::id()
+        ));
+
+        fs::write(
+            &path,
+            vec![b'A'; MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES + 1],
+        )
+        .expect("write oversized key fixture");
+        let oversized_error = read_control_plane_response_public_key_pem(&path)
+            .expect_err("oversized key file must fail closed");
+        assert_eq!(
+            oversized_error.code,
+            "invalid_control_plane_response_key_configuration"
+        );
+        assert!(oversized_error.message.contains("exceeds 1024 bytes"));
+
+        fs::write(&path, [0xff]).expect("write non-UTF8 key fixture");
+        let encoding_error = read_control_plane_response_public_key_pem(&path)
+            .expect_err("non-UTF8 key file must fail closed");
+        assert_eq!(
+            encoding_error.code,
+            "invalid_control_plane_response_key_configuration"
+        );
+        assert!(encoding_error.message.contains("valid UTF-8"));
+
+        fs::remove_file(path).expect("remove key fixture");
+    }
+
+    #[test]
     fn sign_returns_a_verifiable_signature_over_the_exact_canonical_statement() {
         let runtime = runtime();
         let statement = statement();
@@ -1098,6 +2267,341 @@ mod tests {
                 &Signature::from_bytes(&signature_bytes),
             )
             .expect("valid signature");
+    }
+
+    #[test]
+    fn release_binding_digest_matches_control_plane_python_canonicalization() {
+        let mut binding = authorization_binding_for_statement(&statement());
+        binding.operation_context = json!({
+            "operation":"custody.test",
+            "subject":"caf\u{e9} \u{1f512}",
+        });
+        let canonical = canonical_json_ensure_ascii_bytes(&binding).expect("canonical binding");
+        assert_eq!(
+            sha256_prefixed(&canonical),
+            "sha256:64e3ba621c285782bbb596e5195aa8867030252d5fd6214d4abc22e3cc097332"
+        );
+    }
+
+    #[test]
+    fn response_proof_signing_rejects_claim_substitution_behind_a_valid_dispatch_receipt() {
+        for (index, claim) in [
+            "principal",
+            "route",
+            "credential_id",
+            "credential_version",
+            "request_digest",
+            "operation_digest",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let runtime = runtime();
+            let mut substituted = statement();
+            match claim {
+                "principal" => {
+                    substituted.principal_id = "agent:substituted".to_string();
+                    substituted.control_plane_authorization_receipt.principal_id =
+                        substituted.principal_id.clone();
+                }
+                "route" => {
+                    substituted.route_id = "route:substituted".to_string();
+                    substituted.control_plane_authorization_receipt.route_id =
+                        substituted.route_id.clone();
+                }
+                "credential_id" => {
+                    substituted.release_authority.credential_ref =
+                        Some("credential:substituted".to_string());
+                    substituted
+                        .control_plane_authorization_receipt
+                        .release_authority
+                        .credential_ref = substituted.release_authority.credential_ref.clone();
+                }
+                "credential_version" => {
+                    substituted.release_authority.credential_version = 8;
+                    substituted
+                        .control_plane_authorization_receipt
+                        .release_authority
+                        .credential_version = 8;
+                }
+                "request_digest" => {
+                    substituted.request_digest = digest(60);
+                    substituted.release_authority.request_digest =
+                        substituted.request_digest.clone();
+                    substituted
+                        .control_plane_authorization_receipt
+                        .release_authority
+                        .request_digest = substituted.request_digest.clone();
+                    substituted.response.selected_headers.insert(
+                        "x-serverware-request-digest".to_string(),
+                        substituted.request_digest.clone(),
+                    );
+                }
+                "operation_digest" => {
+                    substituted.operation_digest = digest(61);
+                    substituted.release_authority.operation_digest =
+                        substituted.operation_digest.clone();
+                    substituted
+                        .control_plane_authorization_receipt
+                        .release_authority
+                        .operation_digest = substituted.operation_digest.clone();
+                    substituted.response.selected_headers.insert(
+                        "x-serverware-operation-digest".to_string(),
+                        substituted.operation_digest.clone(),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            substituted.response.selected_headers_digest = sha256_prefixed(
+                &canonical_json_bytes(&substituted.response.selected_headers)
+                    .expect("canonical substituted headers"),
+            );
+
+            let response = response_value(
+                &runtime
+                    .handle_canonical_request(&request_bytes(
+                        &runtime,
+                        40 + index as u8,
+                        substituted,
+                    ))
+                    .expect("closed substitution response"),
+            );
+            assert_eq!(response["ok"], false, "claim {claim} reached signing");
+            assert_eq!(
+                response["error"]["code"], "invalid_response_statement",
+                "unexpected error for {claim}: {response}"
+            );
+            assert!(
+                response["error"]["message"]
+                    .as_str()
+                    .expect("substitution error")
+                    .contains("release authorization binding digest mismatch"),
+                "claim {claim} failed before the cryptographic binding check: {response}"
+            );
+        }
+    }
+
+    #[test]
+    fn response_proof_signing_rejects_a_forged_control_plane_response_signature() {
+        let runtime = runtime();
+        let mut forged = statement();
+        let encoded_signature = forged
+            .control_plane_authorization_receipt
+            .response
+            .signature
+            .strip_prefix("ed25519:")
+            .expect("signature prefix");
+        let mut signature_bytes = general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded_signature)
+            .expect("signature bytes");
+        assert_eq!(signature_bytes.len(), Signature::BYTE_SIZE);
+        signature_bytes[0] ^= 1;
+        let forged_signature = format!(
+            "ed25519:{}",
+            general_purpose::URL_SAFE_NO_PAD.encode(signature_bytes)
+        );
+        forged
+            .control_plane_authorization_receipt
+            .response
+            .signature = forged_signature;
+
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&request_bytes(&runtime, 34, forged))
+                .expect("closed error response"),
+        );
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "invalid_response_statement");
+        assert!(response["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("signature verification failed"));
+    }
+
+    #[test]
+    fn response_proof_signing_rejects_a_valid_signature_from_the_wrong_key() {
+        let runtime = runtime();
+        let wrong_response_signing_key = SigningKey::from_bytes(&[20u8; 32]);
+        let wrong_key_statement = statement_signed_by(&wrong_response_signing_key);
+
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&request_bytes(&runtime, 35, wrong_key_statement))
+                .expect("closed error response"),
+        );
+        assert_eq!(response["ok"], false);
+        assert_eq!(response["error"]["code"], "invalid_response_statement");
+        assert!(response["error"]["message"]
+            .as_str()
+            .expect("error message")
+            .contains("does not match the pinned"));
+    }
+
+    #[test]
+    fn response_proof_signing_fails_closed_without_a_pinned_response_key() {
+        let runtime = unconfigured_runtime();
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&request_bytes(&runtime, 36, statement()))
+                .expect("closed error response"),
+        );
+        assert_eq!(response["ok"], false);
+        assert_eq!(
+            response["error"]["code"],
+            "control_plane_response_key_unavailable"
+        );
+
+        let construction_error = CustodyRuntime::generate_with_control_plane_response_public_key(
+            pinned_control_plane_response_verifying_key(),
+            &digest(99),
+        )
+        .err()
+        .expect("mismatched configured key ID");
+        assert_eq!(
+            construction_error.code,
+            "invalid_control_plane_response_key_configuration"
+        );
+    }
+
+    #[test]
+    fn custody_signing_rejects_legacy_or_inconsistent_v2_authority() {
+        let mut legacy = statement();
+        legacy.api_version = "serverware.proxyResponseStatement/v1".to_string();
+        assert!(validate_test_statement(&legacy)
+            .expect_err("legacy statement must not reach signing")
+            .message
+            .contains("proxyResponseStatement/v2"));
+
+        let mut partial_grant = statement();
+        partial_grant.release_authority.approval_id = None;
+        assert!(validate_test_statement(&partial_grant)
+            .expect_err("partial grant identity must fail")
+            .message
+            .contains("must be paired"));
+
+        let mut invalid_attempt = statement();
+        invalid_attempt.release_authority.attempt_id = "attempt:not-a-digest".to_string();
+        assert!(validate_test_statement(&invalid_attempt)
+            .expect_err("attempt identity must be a digest")
+            .message
+            .contains("canonical lowercase sha256"));
+
+        let mut invalid_credential = statement();
+        invalid_credential.release_authority.credential_ref = None;
+        assert!(validate_test_statement(&invalid_credential)
+            .expect_err("credential identity and version must agree")
+            .message
+            .contains("inconsistent"));
+
+        let mut wrong_upstream_status = statement();
+        wrong_upstream_status.upstream_response.status = 201;
+        assert!(validate_test_statement(&wrong_upstream_status)
+            .expect_err("upstream and emitted statuses must agree")
+            .message
+            .contains("must match"));
+
+        let runtime = runtime();
+        let mut false_completion_statement =
+            serde_json::to_value(statement()).expect("serialize statement");
+        let authority = false_completion_statement["release_authority"]
+            .as_object_mut()
+            .expect("release authority");
+        authority.remove("authorization_state_at_upstream_dispatch");
+        authority.insert(
+            "completion_outcome".to_string(),
+            Value::String("forwarded".to_string()),
+        );
+        let request = json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": runtime.boot_id(),
+            "operation": RESPONSE_PROOF_SIGN_OPERATION,
+            "params": {"statement": false_completion_statement},
+            "requestId": request_id(31),
+        });
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&canonical_json_bytes(&request).expect("request"))
+                .expect("strict error response"),
+        );
+        assert_eq!(response["error"]["code"], "invalid_operation_params");
+        assert!(response["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("completion_outcome"));
+    }
+
+    #[test]
+    fn custody_exposes_only_response_proof_sign_v2() {
+        let runtime = runtime();
+        let hello = json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": null,
+            "operation": HELLO_OPERATION,
+            "params": {},
+            "requestId": request_id(32),
+        });
+        let hello_response = response_value(
+            &runtime
+                .handle_canonical_request(&canonical_json_bytes(&hello).expect("hello request"))
+                .expect("hello response"),
+        );
+        assert_eq!(
+            hello_response["result"]["capabilities"],
+            json!([HELLO_OPERATION, "responseProof.sign/v2"])
+        );
+
+        let legacy = json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": runtime.boot_id(),
+            "operation": "responseProof.sign/v1",
+            "params": {"statement": statement()},
+            "requestId": request_id(33),
+        });
+        let legacy_response = response_value(
+            &runtime
+                .handle_canonical_request(&canonical_json_bytes(&legacy).expect("legacy request"))
+                .expect("legacy response"),
+        );
+        assert_eq!(legacy_response["error"]["code"], "unknown_operation");
+    }
+
+    #[test]
+    fn custody_rejects_temporal_and_raw_upstream_header_tampering() {
+        let mut expired_at_observation = statement();
+        expired_at_observation
+            .release_authority
+            .reservation_expires_at_epoch_ms = Some(
+            expired_at_observation
+                .release_authority
+                .authorization_state_observed_at_epoch_ms,
+        );
+        assert!(validate_test_statement(&expired_at_observation)
+            .expect_err("expired dispatch observation")
+            .message
+            .contains("temporally invalid"));
+
+        let mut future_observation = statement();
+        future_observation
+            .release_authority
+            .authorization_state_observed_at_epoch_ms =
+            future_observation.issued_at_unix.saturating_add(2) * 1000;
+        assert!(validate_test_statement(&future_observation)
+            .expect_err("observation after statement issuance")
+            .message
+            .contains("temporally invalid"));
+
+        let mut tampered_raw_header = statement();
+        tampered_raw_header
+            .upstream_response
+            .selected_raw_policy_headers_b64
+            .insert(
+                "content-type".to_string(),
+                vec![general_purpose::URL_SAFE_NO_PAD.encode(b"text/plain")],
+            );
+        assert!(validate_test_statement(&tampered_raw_header)
+            .expect_err("raw header tamper without digest update")
+            .message
+            .contains("canonical_digest"));
     }
 
     #[test]

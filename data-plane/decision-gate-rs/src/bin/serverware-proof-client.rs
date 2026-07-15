@@ -6,6 +6,7 @@ use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
 use serde_json::{json, Map, Value};
+use serverware_decision_gate::{validate_response_statement, ProxyResponseStatement};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::env;
@@ -26,6 +27,7 @@ const MAX_RESPONSE_BODY_BYTES: usize = 16 * 1024 * 1024;
 
 struct Args {
     proxy: String,
+    method: String,
     url: Url,
     ca: PathBuf,
     out: PathBuf,
@@ -33,6 +35,7 @@ struct Args {
     verifier_key: Option<PathBuf>,
     expected_server_instance_id: Option<String>,
     client_nonce: Option<[u8; 32]>,
+    expected_principal_id: String,
     proxy_headers: Vec<(String, String)>,
     request_headers: Vec<(String, String)>,
     timeout_seconds: u64,
@@ -51,6 +54,7 @@ struct RuntimeProofExpectations<'a> {
     peer_spiffe_id: &'a str,
     peer_leaf_digest: &'a str,
     client_request_digest: &'a str,
+    principal_id: &'a str,
     max_age_seconds: u64,
 }
 
@@ -89,14 +93,24 @@ fn parse_header(raw: &str, label: &str) -> Result<(String, String), String> {
     Ok((name.to_string(), value.to_string()))
 }
 
+fn validate_proof_method(method: &str) -> Result<&'static str, String> {
+    match method {
+        "GET" => Ok("GET"),
+        "HEAD" => Err("response proof collection is GET-only; HEAD is not supported".to_string()),
+        _ => Err("response proof collection requires method GET".to_string()),
+    }
+}
+
 fn parse_args() -> Result<Args, String> {
     let mut proxy = None;
+    let mut method = "GET".to_string();
     let mut url = None;
     let mut ca = None;
     let mut out = None;
     let mut collector_key = None;
     let mut verifier_key = None;
     let mut expected_server_instance_id = None;
+    let mut expected_principal_id = None;
     let mut client_nonce = None;
     let mut proxy_headers = Vec::new();
     let mut request_headers = Vec::new();
@@ -109,12 +123,14 @@ fn parse_args() -> Result<Args, String> {
             .ok_or_else(|| format!("{flag} requires a value"))?;
         match flag.as_str() {
             "--proxy" => proxy = Some(value),
+            "--method" => method = validate_proof_method(&value)?.to_string(),
             "--url" => url = Some(Url::parse(&value).map_err(|err| format!("parse --url: {err}"))?),
             "--ca" => ca = Some(PathBuf::from(value)),
             "--out" => out = Some(PathBuf::from(value)),
             "--collector-key" => collector_key = Some(PathBuf::from(value)),
             "--verifier-key" => verifier_key = Some(PathBuf::from(value)),
             "--expected-server-instance-id" => expected_server_instance_id = Some(value),
+            "--expected-principal-id" => expected_principal_id = Some(value),
             "--nonce" => {
                 let decoded = general_purpose::URL_SAFE_NO_PAD
                     .decode(value.as_bytes())
@@ -187,6 +203,44 @@ fn parse_args() -> Result<Args, String> {
             ));
         }
     }
+    let mut has_agent_identity = false;
+    let mut normalized_proxy_headers = BTreeMap::new();
+    for (name, value) in &proxy_headers {
+        let lowered = name.to_ascii_lowercase();
+        if normalized_proxy_headers
+            .insert(lowered.clone(), value.as_str())
+            .is_some()
+        {
+            return Err(format!(
+                "--proxy-header repeats field {lowered} after case normalization"
+            ));
+        }
+        if lowered == "x-serverware-agent" {
+            if value.is_empty()
+                || value != value.trim()
+                || value.len() > 256
+                || value.chars().any(char::is_control)
+            {
+                return Err("X-Serverware-Agent proxy identity is invalid".to_string());
+            }
+            has_agent_identity = true;
+        }
+    }
+    if !has_agent_identity {
+        return Err(
+            "response proof collection requires exactly one X-Serverware-Agent --proxy-header"
+                .to_string(),
+        );
+    }
+    let expected_principal_id = expected_principal_id
+        .ok_or("response proof collection requires --expected-principal-id")?;
+    if expected_principal_id.is_empty()
+        || expected_principal_id != expected_principal_id.trim()
+        || expected_principal_id.len() > 256
+        || expected_principal_id.chars().any(char::is_control)
+    {
+        return Err("--expected-principal-id is invalid".to_string());
+    }
     if let Some(instance_id) = expected_server_instance_id.as_deref() {
         if !instance_id.starts_with("spiffe://") || instance_id.len() <= "spiffe://".len() {
             return Err("--expected-server-instance-id must be a non-empty SPIFFE ID".to_string());
@@ -194,6 +248,7 @@ fn parse_args() -> Result<Args, String> {
     }
     Ok(Args {
         proxy: proxy.ok_or("--proxy is required")?,
+        method,
         url,
         ca: ca.ok_or("--ca is required")?,
         out: out.ok_or("--out is required")?,
@@ -201,6 +256,7 @@ fn parse_args() -> Result<Args, String> {
         verifier_key,
         expected_server_instance_id,
         client_nonce,
+        expected_principal_id,
         proxy_headers,
         request_headers,
         timeout_seconds,
@@ -247,9 +303,11 @@ fn is_excluded_client_proof_header(name: &str) -> bool {
 }
 
 fn canonical_client_proof_request(
+    method: &str,
     url: &Url,
     request_headers: &[(String, String)],
 ) -> Result<Value, String> {
+    let method = validate_proof_method(method)?;
     let mut headers = BTreeMap::new();
     for (name, value) in request_headers {
         let name = name.to_ascii_lowercase();
@@ -272,7 +330,7 @@ fn canonical_client_proof_request(
     query.sort();
     Ok(json!({
         "apiVersion":"serverware.clientProofRequest/v1",
-        "method":"GET",
+        "method":method,
         "scheme":url.scheme().to_ascii_lowercase(),
         "authority":canonical_authority(url),
         "path":url.path(),
@@ -598,6 +656,222 @@ fn required_u64(value: &Value, field: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("runtime proof is missing integer {field}"))
 }
 
+fn validate_strict_response_statement(statement: &Value) -> Result<(), String> {
+    let typed: ProxyResponseStatement = serde_json::from_value(statement.clone())
+        .map_err(|err| format!("server response statement schema is invalid: {err}"))?;
+    validate_response_statement(&typed)
+        .map_err(|err| format!("server response statement contract is invalid: {err}"))
+}
+
+fn validated_control_plane_authorization_receipt(statement: &Value) -> Result<Value, String> {
+    const FIELDS: [&str; 7] = [
+        "apiVersion",
+        "kind",
+        "principal_id",
+        "route_id",
+        "release_authority",
+        "request",
+        "response",
+    ];
+    let receipt = required_object(statement, "control_plane_authorization_receipt")?;
+    if receipt.len() != FIELDS.len()
+        || receipt
+            .keys()
+            .any(|field| !FIELDS.contains(&field.as_str()))
+    {
+        return Err("control-plane authorization receipt has unexpected fields".to_string());
+    }
+    Ok(Value::Object(receipt.clone()))
+}
+
+fn optional_authority_identifier(
+    authority: &Map<String, Value>,
+    field: &str,
+) -> Result<Option<String>, String> {
+    match authority.get(field) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(value))
+            if !value.is_empty()
+                && value == value.trim()
+                && value.len() <= 256
+                && !value.chars().any(char::is_control) =>
+        {
+            Ok(Some(value.clone()))
+        }
+        _ => Err(format!(
+            "server response release authority {field} is invalid"
+        )),
+    }
+}
+
+fn validated_release_authority(statement: &Value) -> Result<Value, String> {
+    const FIELDS: [&str; 13] = [
+        "authority_mode",
+        "grant_id",
+        "approval_id",
+        "credential_ref",
+        "credential_version",
+        "request_digest",
+        "operation_digest",
+        "attempt_id",
+        "consumption_identity_digest",
+        "authorization_state_at_upstream_dispatch",
+        "authorization_state_observed_at_epoch_ms",
+        "reservation_expires_at_epoch_ms",
+        "dispatch_expires_at_epoch_ms",
+    ];
+    let authority = required_object(statement, "release_authority")?;
+    if authority.len() != FIELDS.len()
+        || authority
+            .keys()
+            .any(|field| !FIELDS.contains(&field.as_str()))
+    {
+        return Err("server response release authority has unexpected fields".to_string());
+    }
+    if authority.get("authority_mode").and_then(Value::as_str) != Some("atomic") {
+        return Err("server response release authority is not atomic".to_string());
+    }
+    let grant_id = optional_authority_identifier(authority, "grant_id")?;
+    let approval_id = optional_authority_identifier(authority, "approval_id")?;
+    if grant_id.is_some() != approval_id.is_some() {
+        return Err("server response release grant and approval IDs must be paired".to_string());
+    }
+    let credential_ref = optional_authority_identifier(authority, "credential_ref")?;
+    let authority_value = Value::Object(authority.clone());
+    let credential_version = required_u64(&authority_value, "credential_version")?;
+    if credential_ref.is_some() != (credential_version > 0) {
+        return Err("server response credential identity and version are inconsistent".to_string());
+    }
+    let request_digest = required_digest(&authority_value, "request_digest")?;
+    let operation_digest = required_digest(&authority_value, "operation_digest")?;
+    if statement.get("request_digest").and_then(Value::as_str) != Some(request_digest)
+        || statement.get("operation_digest").and_then(Value::as_str) != Some(operation_digest)
+    {
+        return Err("server response release authority digest mismatch".to_string());
+    }
+    required_digest(&authority_value, "attempt_id")?;
+    required_digest(&authority_value, "consumption_identity_digest")?;
+    if authority
+        .get("authorization_state_at_upstream_dispatch")
+        .and_then(Value::as_str)
+        != Some("dispatching")
+    {
+        return Err(
+            "server response release authorization was not dispatching at upstream dispatch"
+                .to_string(),
+        );
+    }
+    let observed_at = required_u64(&authority_value, "authorization_state_observed_at_epoch_ms")?;
+    let dispatch_expires_at = required_u64(&authority_value, "dispatch_expires_at_epoch_ms")?;
+    let reservation_expires_at = match authority.get("reservation_expires_at_epoch_ms") {
+        Some(Value::Null) => None,
+        Some(value) => Some(value.as_u64().ok_or(
+            "server response release authority reservation expiry is invalid".to_string(),
+        )?),
+        None => {
+            return Err(
+                "server response release authority reservation expiry is missing".to_string(),
+            )
+        }
+    };
+    let issued_at = required_u64(statement, "issued_at_unix")?;
+    let statement_end_epoch_ms = issued_at
+        .saturating_add(1)
+        .saturating_mul(1000)
+        .saturating_sub(1);
+    if observed_at == 0
+        || dispatch_expires_at <= observed_at
+        || observed_at > statement_end_epoch_ms
+        || reservation_expires_at.is_some_and(|expires_at| observed_at >= expires_at)
+    {
+        return Err(
+            "server response release authorization observation is temporally invalid".to_string(),
+        );
+    }
+    Ok(authority_value)
+}
+
+fn validated_upstream_response(statement: &Value) -> Result<Value, String> {
+    let upstream = required_object(statement, "upstream_response")?;
+    if upstream.len() != 4
+        || upstream.keys().any(|field| {
+            !matches!(
+                field.as_str(),
+                "status" | "selected_raw_policy_headers_b64" | "body_digest" | "canonical_digest"
+            )
+        })
+    {
+        return Err("server response upstream binding has unexpected fields".to_string());
+    }
+    let upstream_value = Value::Object(upstream.clone());
+    let status = required_u64(&upstream_value, "status")?;
+    if !(100..=599).contains(&status)
+        || required_object(statement, "response")?
+            .get("status")
+            .and_then(Value::as_u64)
+            != Some(status)
+    {
+        return Err("server response upstream status binding mismatch".to_string());
+    }
+    let body_digest = required_digest(&upstream_value, "body_digest")?;
+    required_digest(&upstream_value, "canonical_digest")?;
+    let selected = required_object(&upstream_value, "selected_raw_policy_headers_b64")?;
+    const REQUIRED_HEADERS: [&str; 3] = ["content-encoding", "content-length", "content-type"];
+    const ALLOWED_HEADERS: [&str; 9] = [
+        "cache-control",
+        "content-encoding",
+        "content-language",
+        "content-length",
+        "content-type",
+        "etag",
+        "last-modified",
+        "retry-after",
+        "www-authenticate",
+    ];
+    if REQUIRED_HEADERS
+        .iter()
+        .any(|name| !selected.contains_key(*name))
+    {
+        return Err("server response upstream raw header binding is incomplete".to_string());
+    }
+    for (name, values) in selected {
+        if !ALLOWED_HEADERS.contains(&name.as_str()) {
+            return Err(format!(
+                "server response upstream raw header binding contains unsupported header {name}"
+            ));
+        }
+        let values = values
+            .as_array()
+            .filter(|values| values.len() <= 128)
+            .ok_or_else(|| {
+                format!("server response upstream raw header {name} has invalid values")
+            })?;
+        for value in values {
+            let encoded = value.as_str().ok_or_else(|| {
+                format!("server response upstream raw header {name} is not base64url")
+            })?;
+            let decoded = decode_base64url(encoded, "server response upstream raw header", 0)?;
+            if decoded.len() > 8 * 1024
+                || general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != encoded
+            {
+                return Err(format!(
+                    "server response upstream raw header {name} is not canonical"
+                ));
+            }
+        }
+    }
+    let canonical = json!({
+        "status":status,
+        "selected_raw_policy_headers_b64":selected,
+        "body_digest":body_digest,
+    });
+    let canonical_digest = sha256_prefixed(canonical_json(&canonical).as_bytes());
+    if upstream.get("canonical_digest").and_then(Value::as_str) != Some(canonical_digest.as_str()) {
+        return Err("server response upstream canonical digest mismatch".to_string());
+    }
+    Ok(upstream_value)
+}
+
 fn verify_vendor_tee(
     proof: &Value,
     statement: &Value,
@@ -758,6 +1032,12 @@ fn verify_vendor_tee(
     }
     let response = required_object(statement, "response")?;
     let response_value = Value::Object(response.clone());
+    let release_authority = validated_release_authority(statement)?;
+    let control_plane_authorization_receipt =
+        validated_control_plane_authorization_receipt(statement)?;
+    let control_plane_authorization_receipt_sha256 =
+        sha256_prefixed(canonical_json(&control_plane_authorization_receipt).as_bytes());
+    let upstream_response = validated_upstream_response(statement)?;
     let tls_channel_binding = required_object(statement, "tls_channel_binding")?;
     let nonce = required_string(statement, "client_nonce")?;
     if general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes) != nonce {
@@ -769,12 +1049,17 @@ fn verify_vendor_tee(
     }
     let expected_claims = json!({
         "server_statement_sha256":statement_digest,
-        "server_statement_api_version":"serverware.proxyResponseStatement/v1",
+        "server_statement_api_version":"serverware.proxyResponseStatement/v2",
         "issued_at_unix":issued_at,
         "client_nonce_sha256":sha256_prefixed(nonce_bytes),
         "client_request_digest":required_digest(statement, "client_request_digest")?,
+        "principal_id":required_string(statement, "principal_id")?,
+        "route_id":required_string(statement, "route_id")?,
         "request_digest":required_digest(statement, "request_digest")?,
         "operation_digest":required_digest(statement, "operation_digest")?,
+        "release_authority":release_authority,
+        "control_plane_authorization_receipt_sha256":control_plane_authorization_receipt_sha256,
+        "upstream_response":upstream_response,
         "response_status":response.get("status").and_then(Value::as_u64).ok_or("server response status is invalid")?,
         "selected_response_headers_digest":required_digest(&response_value, "selected_headers_digest")?,
         "response_body_digest":required_digest(&response_value, "body_digest")?,
@@ -806,9 +1091,10 @@ fn verify_runtime_proof(
     let peer_spiffe_id = expectations.peer_spiffe_id;
     let peer_leaf_digest = expectations.peer_leaf_digest;
     let expected_client_request_digest = expectations.client_request_digest;
+    let expected_principal_id = expectations.principal_id;
     let max_age_seconds = expectations.max_age_seconds;
     if proof.get("apiVersion").and_then(Value::as_str)
-        != Some("serverware.proxyResponseRuntimeProof/v1")
+        != Some("serverware.proxyResponseRuntimeProof/v2")
         || proof.get("kind").and_then(Value::as_str) != Some("ServerwareProxyResponseRuntimeProof")
     {
         return Err("runtime response proof has the wrong type".to_string());
@@ -818,10 +1104,11 @@ fn verify_runtime_proof(
         .filter(|value| value.is_object())
         .ok_or("runtime proof is missing server_statement")?;
     if statement.get("apiVersion").and_then(Value::as_str)
-        != Some("serverware.proxyResponseStatement/v1")
+        != Some("serverware.proxyResponseStatement/v2")
     {
         return Err("server response statement has the wrong version".to_string());
     }
+    validate_strict_response_statement(statement)?;
     let canonical_statement = canonical_json(statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
     if required_string(proof, "server_statement_sha256")? != statement_digest {
@@ -868,8 +1155,19 @@ fn verify_runtime_proof(
     if required_digest(statement, "client_request_digest")? != expected_client_request_digest {
         return Err("server response statement client request digest mismatch".to_string());
     }
+    if required_string(statement, "principal_id")? != expected_principal_id {
+        return Err(
+            "server response statement principal does not match --expected-principal-id"
+                .to_string(),
+        );
+    }
+    let route_id = required_string(statement, "route_id")?;
     required_digest(statement, "request_digest")?;
     required_digest(statement, "operation_digest")?;
+    let release_authority = validated_release_authority(statement)?;
+    let control_plane_authorization_receipt =
+        validated_control_plane_authorization_receipt(statement)?;
+    let upstream_response = validated_upstream_response(statement)?;
     required_digest(statement, "policy_digest")?;
     required_digest(statement, "runtime_manifest_digest")?;
     required_digest(statement, "data_plane_binary_digest")?;
@@ -992,14 +1290,19 @@ fn verify_runtime_proof(
         return Err("server response statement selected-header digest mismatch".to_string());
     }
     Ok(json!({
-        "apiVersion":"serverware.proxyResponseCapture/v1",
+        "apiVersion":"serverware.proxyResponseCapture/v2",
         "environment":"production",
         "collection_mode":"external-client-capture",
         "captured_at_unix":now_unix(),
         "client_nonce":nonce,
         "client_request_digest":expected_client_request_digest,
+        "principal_id":expected_principal_id,
+        "route_id":route_id,
         "request_digest":required_string(statement, "request_digest")?,
         "operation_digest":required_string(statement, "operation_digest")?,
+        "release_authority":release_authority,
+        "control_plane_authorization_receipt":control_plane_authorization_receipt,
+        "upstream_response":upstream_response,
         "response":{
             "status":response.status,
             "selected_headers":captured_headers,
@@ -1019,8 +1322,9 @@ fn verify_runtime_proof(
 }
 
 fn collect(args: Args) -> Result<Value, String> {
+    let method = validate_proof_method(&args.method)?;
     let canonical_client_request =
-        canonical_client_proof_request(&args.url, &args.request_headers)?;
+        canonical_client_proof_request(method, &args.url, &args.request_headers)?;
     let expected_client_request_digest =
         sha256_prefixed(canonical_json(&canonical_client_request).as_bytes());
     let host = args.url.host_str().ok_or("--url has no host")?.to_string();
@@ -1085,7 +1389,7 @@ fn collect(args: Args) -> Result<Value, String> {
         authority.clone()
     };
     let mut request = format!(
-        "GET {target} HTTP/1.1\r\nHost: {host_header}\r\nX-Serverware-Proof-Nonce: {nonce}\r\n"
+        "{method} {target} HTTP/1.1\r\nHost: {host_header}\r\nX-Serverware-Proof-Nonce: {nonce}\r\n"
     );
     for (name, value) in &args.request_headers {
         request.push_str(&format!("{name}: {value}\r\n"));
@@ -1127,6 +1431,7 @@ fn collect(args: Args) -> Result<Value, String> {
             peer_spiffe_id: &peer_spiffe_id,
             peer_leaf_digest: &peer_leaf_digest,
             client_request_digest: &expected_client_request_digest,
+            principal_id: &args.expected_principal_id,
             max_age_seconds: args.max_age_seconds,
         },
     )?;
@@ -1149,7 +1454,7 @@ fn collect(args: Args) -> Result<Value, String> {
     let (collector_public_key_pem, collector_key_id) = public_key_material(&collector_key);
     let collector_signature = collector_key.sign(canonical_json(&external_capture).as_bytes());
     let proof = json!({
-        "apiVersion":"serverware.proxyResponseProof/v2",
+        "apiVersion":"serverware.proxyResponseProof/v3",
         "kind":"ServerwareProxyResponseProof",
         "external_capture":external_capture,
         "collector_signature":{
@@ -1175,8 +1480,11 @@ fn collect(args: Args) -> Result<Value, String> {
         "proof_sha256":sha256_prefixed(&fs::read(&args.out).map_err(|err| format!("read proof output: {err}"))?),
         "client_nonce":capture.get("client_nonce"),
         "client_request_digest":capture.get("client_request_digest"),
+        "principal_id":capture.get("principal_id"),
+        "route_id":capture.get("route_id"),
         "request_digest":capture.get("request_digest"),
         "operation_digest":capture.get("operation_digest"),
+        "release_authority":capture.get("release_authority"),
         "tls_channel_binding":capture.get("tls_channel_binding").and_then(Value::as_object).and_then(|value| value.get("value")),
         "response_status":response.status,
         "response_body_digest":sha256_prefixed(&response.body),
@@ -1209,6 +1517,7 @@ mod tests {
     fn client_request_digest_is_computed_from_client_observable_material() {
         let url = Url::parse("https://EXAMPLE.com.:443/a%20b?z=2&a=one%20two&a=one").unwrap();
         let canonical = canonical_client_proof_request(
+            "GET",
             &url,
             &[
                 ("X-Custom".to_string(), "  value  ".to_string()),
@@ -1233,13 +1542,25 @@ mod tests {
         assert!(sha256_prefixed(canonical_json(&canonical).as_bytes()).starts_with("sha256:"));
     }
 
-    fn production_proof(verifier_key: &SigningKey) -> (Value, [u8; 32]) {
+    #[test]
+    fn proof_collection_is_explicitly_get_only() {
+        let url = Url::parse("https://example.test/resource").unwrap();
+        assert_eq!(
+            canonical_client_proof_request("GET", &url, &[]).unwrap()["method"],
+            "GET"
+        );
+        assert!(canonical_client_proof_request("HEAD", &url, &[])
+            .expect_err("HEAD must be rejected")
+            .contains("GET-only"));
+    }
+
+    fn production_proof(verifier_key: &SigningKey) -> (Value, [u8; 32], SigningKey) {
         let nonce_bytes = [7u8; 32];
         let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
         let instance_id = "spiffe://prod.serverware/decision-gate/test";
         let identity_digest = sha256_prefixed(instance_id.as_bytes());
         let selected_headers = json!({
-            "content-length":"2",
+            "content-length":"32",
             "x-serverware-client-request-digest":digest(0),
             "x-serverware-operation-digest":digest(2),
             "x-serverware-policy-hash":digest(3),
@@ -1252,15 +1573,132 @@ mod tests {
             "value":general_purpose::URL_SAFE_NO_PAD.encode([8u8; 32]),
         });
         let response_key = SigningKey::from_bytes(&[9u8; 32]);
-        let (_, response_key_id) = public_key_material(&response_key);
+        let (response_public_key_pem, response_key_id) = public_key_material(&response_key);
         let issued_at = now_unix();
+        let dispatch_started_at_epoch_ms = issued_at * 1000;
+        let dispatch_expires_at_epoch_ms = dispatch_started_at_epoch_ms + 30_000;
+        let reservation_expires_at_epoch_ms = dispatch_started_at_epoch_ms + 30_000;
+        let release_authority = json!({
+            "authority_mode":"atomic",
+            "grant_id":"grant:proof-test",
+            "approval_id":"approval:proof-test",
+            "credential_ref":"credential:proof-test",
+            "credential_version":7,
+            "request_digest":digest(1),
+            "operation_digest":digest(2),
+            "attempt_id":digest(12),
+            "consumption_identity_digest":digest(8),
+            "authorization_state_at_upstream_dispatch":"dispatching",
+            "authorization_state_observed_at_epoch_ms":dispatch_started_at_epoch_ms,
+            "reservation_expires_at_epoch_ms":reservation_expires_at_epoch_ms,
+            "dispatch_expires_at_epoch_ms":dispatch_expires_at_epoch_ms,
+        });
+        let dispatch_body = canonical_json(&json!({
+            "apiVersion":"serverware.releaseAuthorization/v1",
+            "ok":true,
+            "authorized":true,
+            "state":"dispatching",
+            "reason":"dispatching",
+            "attemptId":digest(12),
+            "bindingDigest":digest(8),
+            "idempotentReplay":false,
+            "grantId":"grant:proof-test",
+            "approvalRequestId":"approval:proof-test",
+            "reservationExpiresAtEpochMs":reservation_expires_at_epoch_ms,
+            "dispatchStartedAtEpochMs":dispatch_started_at_epoch_ms,
+            "dispatchExpiresAtEpochMs":dispatch_expires_at_epoch_ms,
+            "completionOutcome":null,
+            "retryAfterSeconds":0,
+            "quotas":[],
+            "store":{"backend":"postgres","ha":true},
+        }))
+        .into_bytes();
+        let control_plane_nonce = general_purpose::URL_SAFE_NO_PAD.encode([20u8; 32]);
+        let control_plane_key_id = digest(21);
+        let control_plane_response_statement = json!({
+            "version":"serverware.responseSignature/v1",
+            "issued_at_ms":dispatch_started_at_epoch_ms,
+            "request":{
+                "method":"POST",
+                "path":"/api/data-plane/release-authorizations/dispatch",
+                "query":"",
+            },
+            "status_code":200,
+            "body_sha256":sha256_prefixed(&dispatch_body),
+            "nonce":control_plane_nonce,
+            "response_signing_key_id":control_plane_key_id,
+            "context":{
+                "runtime_manifest_digest":digest(22),
+                "policy_bundle_digest":digest(3),
+                "provenance_digest":digest(23),
+                "image_signatures_digest":digest(24),
+                "source_tree_digest":digest(25),
+            },
+        });
+        let control_plane_response_statement =
+            canonical_json(&control_plane_response_statement).into_bytes();
+        let dispatch_request_body = canonical_json(&json!({
+            "apiVersion":"serverware.releaseAuthorizationDispatch/v1",
+            "attemptId":digest(12),
+            "bindingDigest":digest(8),
+        }))
+        .into_bytes();
+        let control_plane_authorization_receipt = json!({
+            "apiVersion":"serverware.controlPlaneAuthorizationReceipt/v1",
+            "kind":"ControlPlaneAuthorizationReceipt",
+            "principal_id":"demo-agent",
+            "route_id":"route:proof-test",
+            "release_authority":release_authority,
+            "request":{
+                "method":"POST",
+                "path":"/api/data-plane/release-authorizations/dispatch",
+                "query":"",
+                "nonce":control_plane_nonce,
+                "body_b64":general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_request_body),
+                "body_sha256":sha256_prefixed(&dispatch_request_body),
+            },
+            "response":{
+                "status":200,
+                "body_b64":general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_body),
+                "body_sha256":sha256_prefixed(&dispatch_body),
+                "response_signing_key_id":control_plane_key_id,
+                "statement_b64":general_purpose::URL_SAFE_NO_PAD.encode(&control_plane_response_statement),
+                "statement_sha256":sha256_prefixed(&control_plane_response_statement),
+                "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode([26u8; 64])),
+            },
+        });
+        let selected_raw_policy_headers_b64 = json!({
+            "content-encoding":[],
+            "content-length":[general_purpose::URL_SAFE_NO_PAD.encode(b"32")],
+            "content-type":[general_purpose::URL_SAFE_NO_PAD.encode(b"application/json")],
+        });
+        let upstream_body_digest = digest(11);
+        let upstream_canonical_digest = sha256_prefixed(
+            canonical_json(&json!({
+                "status":200,
+                "selected_raw_policy_headers_b64":selected_raw_policy_headers_b64,
+                "body_digest":upstream_body_digest,
+            }))
+            .as_bytes(),
+        );
+        let upstream_response = json!({
+            "status":200,
+            "selected_raw_policy_headers_b64":selected_raw_policy_headers_b64,
+            "body_digest":upstream_body_digest,
+            "canonical_digest":upstream_canonical_digest,
+        });
         let statement = json!({
-            "apiVersion":"serverware.proxyResponseStatement/v1",
+            "apiVersion":"serverware.proxyResponseStatement/v2",
             "issued_at_unix":issued_at,
             "client_nonce":nonce,
             "client_request_digest":digest(0),
+            "principal_id":"demo-agent",
+            "route_id":"route:proof-test",
             "request_digest":digest(1),
             "operation_digest":digest(2),
+            "release_authority":release_authority,
+            "control_plane_authorization_receipt":control_plane_authorization_receipt,
+            "upstream_response":upstream_response,
             "response":{
                 "status":200,
                 "selected_headers":selected_headers,
@@ -1275,14 +1713,20 @@ mod tests {
             "tls_channel_binding":tls_channel_binding,
         });
         let statement_digest = sha256_prefixed(canonical_json(&statement).as_bytes());
+        let response_signature = response_key.sign(canonical_json(&statement).as_bytes());
         let attested_claims = json!({
             "server_statement_sha256":statement_digest,
-            "server_statement_api_version":"serverware.proxyResponseStatement/v1",
+            "server_statement_api_version":"serverware.proxyResponseStatement/v2",
             "issued_at_unix":issued_at,
             "client_nonce_sha256":sha256_prefixed(&nonce_bytes),
             "client_request_digest":digest(0),
+            "principal_id":"demo-agent",
+            "route_id":"route:proof-test",
             "request_digest":digest(1),
             "operation_digest":digest(2),
+            "release_authority":release_authority,
+            "control_plane_authorization_receipt_sha256":sha256_prefixed(canonical_json(&control_plane_authorization_receipt).as_bytes()),
+            "upstream_response":upstream_response,
             "response_status":200,
             "selected_response_headers_digest":selected_headers_digest,
             "response_body_digest":digest(4),
@@ -1322,8 +1766,16 @@ mod tests {
         let verifier_signature = verifier_key.sign(canonical_json(&verifier_statement).as_bytes());
         (
             json!({
+                "apiVersion":"serverware.proxyResponseRuntimeProof/v2",
+                "kind":"ServerwareProxyResponseRuntimeProof",
                 "server_statement":statement,
-                "server_signature":{"key_id":response_key_id},
+                "server_statement_sha256":statement_digest,
+                "server_signature":{
+                    "algorithm":"Ed25519",
+                    "key_id":response_key_id,
+                    "public_key_pem":response_public_key_pem,
+                    "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode(response_signature.to_bytes())),
+                },
                 "vendor_tee":{
                     "platform":"aws-nitro",
                     "provider":"aws-nitro-enclaves",
@@ -1338,7 +1790,19 @@ mod tests {
                 },
             }),
             nonce_bytes,
+            response_key,
         )
+    }
+
+    fn resign_server_statement(proof: &mut Value, response_key: &SigningKey) {
+        let statement = proof["server_statement"].clone();
+        let canonical = canonical_json(&statement);
+        proof["server_statement_sha256"] = Value::String(sha256_prefixed(canonical.as_bytes()));
+        proof["server_signature"]["signature"] = Value::String(format!(
+            "ed25519:{}",
+            general_purpose::URL_SAFE_NO_PAD
+                .encode(response_key.sign(canonical.as_bytes()).to_bytes())
+        ));
     }
 
     #[test]
@@ -1351,7 +1815,7 @@ mod tests {
             now_unix()
         ));
         fs::write(&key_path, verifier_pem).expect("write test verifier key");
-        let (proof, nonce_bytes) = production_proof(&verifier_key);
+        let (proof, nonce_bytes, _) = production_proof(&verifier_key);
         let statement = proof.get("server_statement").expect("statement");
         assert_eq!(
             verify_vendor_tee(
@@ -1396,5 +1860,152 @@ mod tests {
         .expect_err("signed but false attested claims")
         .contains("do not exactly match"));
         fs::remove_file(key_path).expect("remove test verifier key");
+    }
+
+    #[test]
+    fn runtime_v2_requires_exact_atomic_release_authority() {
+        let verifier_key = SigningKey::from_bytes(&[11u8; 32]);
+        let (proof, nonce_bytes, response_key) = production_proof(&verifier_key);
+        let selected = proof["server_statement"]["response"]["selected_headers"]
+            .as_object()
+            .expect("selected headers");
+        let response = HttpResponse {
+            status: 200,
+            headers: selected
+                .iter()
+                .map(|(name, value)| {
+                    (
+                        name.clone(),
+                        value.as_str().expect("header value").to_string(),
+                    )
+                })
+                .collect(),
+            body: vec![4; 32],
+        };
+        let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+        let tls_exporter = general_purpose::URL_SAFE_NO_PAD.encode([8u8; 32]);
+        let expectations = RuntimeProofExpectations {
+            nonce: &nonce,
+            tls_exporter: &tls_exporter,
+            peer_spiffe_id: "spiffe://prod.serverware/decision-gate/test",
+            peer_leaf_digest: &digest(9),
+            client_request_digest: &digest(0),
+            principal_id: "demo-agent",
+            max_age_seconds: 300,
+        };
+        let capture = verify_runtime_proof(&proof, &response, &expectations)
+            .expect("valid authority-bound runtime proof");
+        assert_eq!(capture["apiVersion"], "serverware.proxyResponseCapture/v2");
+        assert_eq!(
+            capture["release_authority"],
+            proof["server_statement"]["release_authority"]
+        );
+        assert_eq!(
+            capture["upstream_response"],
+            proof["server_statement"]["upstream_response"]
+        );
+
+        let mut missing = proof.clone();
+        missing["server_statement"]
+            .as_object_mut()
+            .expect("statement")
+            .remove("release_authority");
+        resign_server_statement(&mut missing, &response_key);
+        assert!(verify_runtime_proof(&missing, &response, &expectations)
+            .expect_err("missing v3 authority must fail closed")
+            .contains("release_authority"));
+
+        let mut mismatched = proof.clone();
+        let substituted_request_digest = Value::String(digest(10));
+        mismatched["server_statement"]["request_digest"] = substituted_request_digest.clone();
+        mismatched["server_statement"]["release_authority"]["request_digest"] =
+            substituted_request_digest;
+        resign_server_statement(&mut mismatched, &response_key);
+        assert!(verify_runtime_proof(&mismatched, &response, &expectations)
+            .expect_err("mismatched v3 authority must fail closed")
+            .contains("control-plane authorization receipt authority substitution"));
+
+        let mut partial_grant = proof.clone();
+        partial_grant["server_statement"]["release_authority"]["approval_id"] = Value::Null;
+        resign_server_statement(&mut partial_grant, &response_key);
+        assert!(
+            verify_runtime_proof(&partial_grant, &response, &expectations)
+                .expect_err("partial grant identity must fail closed")
+                .contains("must be paired")
+        );
+
+        let mut invalid_credential = proof.clone();
+        invalid_credential["server_statement"]["release_authority"]["credential_ref"] = Value::Null;
+        resign_server_statement(&mut invalid_credential, &response_key);
+        assert!(
+            verify_runtime_proof(&invalid_credential, &response, &expectations)
+                .expect_err("credential identity and version mismatch must fail closed")
+                .contains("inconsistent")
+        );
+
+        let mut invalid_attempt = proof.clone();
+        invalid_attempt["server_statement"]["release_authority"]["attempt_id"] =
+            Value::String("attempt:not-a-digest".to_string());
+        resign_server_statement(&mut invalid_attempt, &response_key);
+        assert!(
+            verify_runtime_proof(&invalid_attempt, &response, &expectations)
+                .expect_err("non-digest attempt identity must fail closed")
+                .contains("must be canonical lowercase sha256")
+        );
+
+        let mut invalid_time = proof.clone();
+        let issued_at = invalid_time["server_statement"]["issued_at_unix"]
+            .as_u64()
+            .expect("issued at");
+        invalid_time["server_statement"]["release_authority"]
+            ["authorization_state_observed_at_epoch_ms"] = json!((issued_at + 2) * 1000);
+        resign_server_statement(&mut invalid_time, &response_key);
+        assert!(
+            verify_runtime_proof(&invalid_time, &response, &expectations)
+                .expect_err("post-statement authorization observation must fail closed")
+                .contains("temporally invalid")
+        );
+
+        let mut raw_header_tamper = proof.clone();
+        raw_header_tamper["server_statement"]["upstream_response"]
+            ["selected_raw_policy_headers_b64"]["content-type"] =
+            json!([general_purpose::URL_SAFE_NO_PAD.encode(b"text/plain")]);
+        resign_server_statement(&mut raw_header_tamper, &response_key);
+        assert!(
+            verify_runtime_proof(&raw_header_tamper, &response, &expectations)
+                .expect_err("raw upstream header tamper must fail closed")
+                .contains("canonical upstream response binding")
+        );
+
+        let mut false_completion_claim = proof.clone();
+        let authority = false_completion_claim["server_statement"]["release_authority"]
+            .as_object_mut()
+            .expect("release authority");
+        authority.remove("authorization_state_at_upstream_dispatch");
+        authority.insert(
+            "completion_outcome".to_string(),
+            Value::String("forwarded".to_string()),
+        );
+        resign_server_statement(&mut false_completion_claim, &response_key);
+        assert!(
+            verify_runtime_proof(&false_completion_claim, &response, &expectations)
+                .expect_err("inline proof must reject a forwarded completion claim")
+                .contains("completion_outcome")
+        );
+
+        let mut mismatched_upstream_status = proof.clone();
+        mismatched_upstream_status["server_statement"]["upstream_response"]["status"] = json!(201);
+        resign_server_statement(&mut mismatched_upstream_status, &response_key);
+        assert!(
+            verify_runtime_proof(&mismatched_upstream_status, &response, &expectations)
+                .expect_err("mismatched upstream status must fail closed")
+                .contains("upstream_response.status must match response.status")
+        );
+
+        let mut legacy = proof;
+        legacy["apiVersion"] = Value::String("serverware.proxyResponseRuntimeProof/v1".to_string());
+        assert!(verify_runtime_proof(&legacy, &response, &expectations)
+            .expect_err("legacy runtime proofs must not satisfy v3 collection")
+            .contains("wrong type"));
     }
 }

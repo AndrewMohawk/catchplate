@@ -227,6 +227,29 @@ def assert_policy_rejected(bundle: dict, message: str, *, validate_schema: bool)
         raise AssertionError(f"{message}; validate_schema={use_schema}")
 
 
+def assert_signed_policy_rejected_reason(
+    bundle: dict,
+    expected_reason: str,
+    *,
+    validate_schema: bool,
+) -> None:
+    signed = sign_policy_bundle(bundle)
+    for use_schema in ((False, True) if validate_schema else (False,)):
+        try:
+            compile_policy_bundle(
+                signed,
+                verify_signature=True,
+                validate_schema=use_schema,
+            )
+        except PolicyBundleError as exc:
+            assert str(exc) == expected_reason, str(exc)
+            continue
+        raise AssertionError(
+            f"compiler accepted signed policy expected to fail with: {expected_reason}; "
+            f"validate_schema={use_schema}"
+        )
+
+
 def assert_policy_rejected_reason(
     bundle: dict,
     expected_reason: str,
@@ -1493,6 +1516,103 @@ def main() -> None:
         "requireHardwareAttestation"
     ] = False
     assert_policy_rejected(invalid, "compiler accepted npm writes without hardware attestation", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])
+    invalid_npm["constraints"] = [
+        constraint
+        for constraint in invalid_npm["constraints"]
+        if constraint["type"] != "responseBinding"
+    ]
+    assert_signed_policy_rejected_reason(
+        invalid,
+        f"route {npm_route_raw['id']} signed npm.publish requires a responseBinding scoped only to npm.publish",
+        validate_schema=validate_schema,
+    )
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])
+    invalid_npm["constraints"] = [
+        constraint
+        for constraint in invalid_npm["constraints"]
+        if constraint["type"] != "responseJson"
+    ]
+    assert_signed_policy_rejected_reason(
+        invalid,
+        f"route {npm_route_raw['id']} signed npm.publish requires a responseJson success constraint scoped only to npm.publish",
+        validate_schema=validate_schema,
+    )
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])
+    response_json = next(
+        constraint for constraint in invalid_npm["constraints"] if constraint["type"] == "responseJson"
+    )
+    response_json["fields"]["published"]["equals"] = False
+    assert_signed_policy_rejected_reason(
+        invalid,
+        f"route {npm_route_raw['id']} signed npm.publish responseJson success constraint must require published to equal true",
+        validate_schema=validate_schema,
+    )
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])
+    response_binding = next(
+        constraint for constraint in invalid_npm["constraints"] if constraint["type"] == "responseBinding"
+    )
+    response_binding["bindings"] = [
+        binding for binding in response_binding["bindings"] if binding["operationField"] != "packageVersion"
+    ]
+    assert_signed_policy_rejected_reason(
+        invalid,
+        f"route {npm_route_raw['id']} responseBinding {response_binding['id']} must bind npm.publish packageName and packageVersion",
+        validate_schema=validate_schema,
+    )
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])
+    response_binding = next(
+        constraint for constraint in invalid_npm["constraints"] if constraint["type"] == "responseBinding"
+    )
+    response_binding["operations"] = ["npm.distTagWrite"]
+    assert_signed_policy_rejected_reason(
+        invalid,
+        f"route {npm_route_raw['id']} responseBinding {response_binding['id']} must be scoped only to configured npm.publish",
+        validate_schema=validate_schema,
+    )
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])
+    response_binding = next(
+        constraint for constraint in invalid_npm["constraints"] if constraint["type"] == "responseBinding"
+    )
+    response_binding["successStatusCodes"] = [202]
+    assert_signed_policy_rejected_reason(
+        invalid,
+        f"route {npm_route_raw['id']} responseBinding {response_binding['id']} npm.publish successStatusCodes may contain only 200 or 201",
+        validate_schema=validate_schema,
+    )
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])
+    response_binding = next(
+        constraint for constraint in invalid_npm["constraints"] if constraint["type"] == "responseBinding"
+    )
+    response_binding["contentTypes"] = ["application/problem+json"]
+    assert_signed_policy_rejected_reason(
+        invalid,
+        f"route {npm_route_raw['id']} responseBinding {response_binding['id']} npm.publish contentTypes must be exactly application/json",
+        validate_schema=validate_schema,
+    )
+
+    invalid = copy.deepcopy(demo_bundle)
+    invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])
+    invalid_npm["adapter"]["config"]["response"]["maxBodyBytes"] = 65537
+    assert_signed_policy_rejected_reason(
+        invalid,
+        f"route {npm_route_raw['id']} responseBinding requires a buffered JSON response capped at 65536 bytes",
+        validate_schema=validate_schema,
+    )
 
     x_read_route_raw = next(item for item in demo_bundle["routes"] if item["id"] == "demo.x.readonly")
     invalid = copy.deepcopy(demo_bundle)
@@ -3726,6 +3846,39 @@ def main() -> None:
     npm_error.response.status_code = 403
     npm_adapter = get_adapter(route(demo, "demo.npm.publish.jit").adapter_type)
     npm_demo_route = route(demo, "demo.npm.publish.jit")
+    npm_demo_request = flow(
+        "PUT",
+        "https://demo-upstream:8443/npm/@scope%2fexample",
+        npm_document,
+    )
+    npm_demo_fields = npm_adapter.operation_fields(
+        npm_demo_request,
+        npm_demo_route,
+        {"package": "@scope%2fexample"},
+    )
+    npm_demo_success = flow(
+        "PUT",
+        "https://demo-upstream:8443/npm/@scope%2fexample",
+        response={
+            "package": "@scope/example",
+            "version": "1.2.3",
+            "published": True,
+        },
+    )
+    npm_demo_success.metadata["serverware_operation"] = npm_demo_fields
+    assert evaluate_response_constraints(npm_demo_success, npm_demo_route).allowed
+    npm_demo_wrong_version = copy.deepcopy(npm_demo_success)
+    npm_demo_wrong_version.response.raw_content = json.dumps(
+        {
+            "package": "@scope/example",
+            "version": "9.9.9",
+            "published": True,
+        }
+    ).encode("utf-8")
+    assert_denied(
+        evaluate_response_constraints(npm_demo_wrong_version, npm_demo_route),
+        "response_binding_mismatch",
+    )
     assert npm_adapter.validate_response(npm_error, npm_demo_route, {"package": "@scope%2fexample"}).allowed
     assert json.loads(npm_error.response.get_text()) == {"error": "denied", "reason": "policy"}
 

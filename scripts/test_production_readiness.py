@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -26,6 +27,12 @@ import verify_production_readiness as readiness  # noqa: E402
 
 OAUTH_SECRET_TEMP_DIR = tempfile.TemporaryDirectory(prefix="serverware-oauth-readiness-")
 EVIDENCE_ISSUED_AT = int(time.time())
+TEST_CONTROL_PLANE_UID = (
+    readiness.CONTROL_PLANE_RUNTIME_UID if os.geteuid() == 0 else os.getuid()
+)
+TEST_CONTROL_PLANE_GID = (
+    readiness.CONTROL_PLANE_RUNTIME_GID if os.geteuid() == 0 else os.getgid()
+)
 
 
 def oauth_secret_file(name: str, value: str, mode: int = 0o600) -> Path:
@@ -68,6 +75,23 @@ def trusted_public_key_id(name: str) -> str:
         serialization.PublicFormat.SubjectPublicKeyInfo,
     )
     return "sha256:" + hashlib.sha256(public_key_der).hexdigest()
+
+
+def trusted_private_key_file(
+    filename: str, key_name: str = "response-online-signing.pub.pem"
+) -> Path:
+    path = Path(OAUTH_SECRET_TEMP_DIR.name) / filename
+    path.write_bytes(
+        trusted_ed25519_private_key(key_name).private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    path.chmod(0o600)
+    if os.geteuid() == 0:
+        path.chown(TEST_CONTROL_PLANE_UID, TEST_CONTROL_PLANE_GID)
+    return path
 
 
 def digest(character: str) -> str:
@@ -269,9 +293,23 @@ def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def readiness_command(*extra: str) -> list[str]:
+    return [
+        sys.executable,
+        "scripts/verify_production_readiness.py",
+        "--mode",
+        "config",
+        "--expected-control-plane-uid",
+        str(TEST_CONTROL_PLANE_UID),
+        "--expected-control-plane-gid",
+        str(TEST_CONTROL_PLANE_GID),
+        *extra,
+    ]
+
+
 def run_readiness(env: dict[str, str]) -> dict[str, Any]:
     result = subprocess.run(
-        [sys.executable, "scripts/verify_production_readiness.py", "--mode", "config"],
+        readiness_command(),
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -291,14 +329,7 @@ def run_readiness_output(env: dict[str, str]) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         output_path = Path(tmp) / "production-readiness.json"
         result = subprocess.run(
-            [
-                sys.executable,
-                "scripts/verify_production_readiness.py",
-                "--mode",
-                "config",
-                "--out",
-                str(output_path),
-            ],
+            readiness_command("--out", str(output_path)),
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -320,14 +351,7 @@ def run_failure_output(env: dict[str, str], expected: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         output_path = Path(tmp) / "production-readiness-failure.json"
         result = subprocess.run(
-            [
-                sys.executable,
-                "scripts/verify_production_readiness.py",
-                "--mode",
-                "config",
-                "--out",
-                str(output_path),
-            ],
+            readiness_command("--out", str(output_path)),
             cwd=ROOT,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -351,7 +375,7 @@ def run_failure_output(env: dict[str, str], expected: str) -> None:
 
 def expect_failure(env: dict[str, str], expected: str) -> None:
     result = subprocess.run(
-        [sys.executable, "scripts/verify_production_readiness.py", "--mode", "config"],
+        readiness_command(),
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -367,7 +391,7 @@ def expect_failure(env: dict[str, str], expected: str) -> None:
 
 def expect_failure_without_secret(env: dict[str, str], expected: str, secret: str) -> None:
     result = subprocess.run(
-        [sys.executable, "scripts/verify_production_readiness.py", "--mode", "config"],
+        readiness_command(),
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -402,6 +426,12 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
             "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(
                 trusted_public_key_file("external-checkpoint.pub.pem")
+            ),
+            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY": str(
+                trusted_public_key_file("response-online-signing.pub.pem")
+            ),
+            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID": trusted_public_key_id(
+                "response-online-signing.pub.pem"
             ),
             "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
             "SERVERWARE_AUDIT_ANCHOR_TOKEN": "prod-anchor-token-32-bytes-minimum-value",
@@ -469,6 +499,35 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_OIDC_TOKEN_AUTH_METHOD": "client_secret_basic",
             "SERVERWARE_OIDC_LOGIN_STATE_TTL_SECONDS": "300",
             "SERVERWARE_OIDC_SESSION_TTL_SECONDS": "3600",
+            "SERVERWARE_OIDC_SESSION_WEBAUTHN_REQUIRED": "1",
+            "SERVERWARE_OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS": "120",
+            "SERVERWARE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS": "300",
+            "SERVERWARE_WEBAUTHN_RECOVERY_ENABLED": "1",
+            "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY": str(
+                trusted_public_key_file("webauthn-recovery-root.pub.pem")
+            ),
+            "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_KEY_ID": trusted_public_key_id(
+                "webauthn-recovery-root.pub.pem"
+            ),
+            "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PROVIDER": "offline-recovery-authority",
+            "SERVERWARE_WEBAUTHN_RECOVERY_AUDIENCE": "https://serverware.prod.acme-corp.net",
+            "SERVERWARE_WEBAUTHN_RECOVERY_TTL_SECONDS": "180",
+            "SERVERWARE_WEBAUTHN_RECOVERY_MAX_LIVE": "100",
+            "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_BACKEND": "postgres",
+            "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN": "postgresql://serverware:serverware@recovery-witness-store/serverware",
+            "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_FAULT_DOMAIN_ID": "recovery-account:us-east-1b",
+            "SERVERWARE_POLICY_SIGNING_PUBLIC_KEY": str(
+                trusted_public_key_file("policy-online-signing.pub.pem")
+            ),
+            "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY": str(
+                trusted_public_key_file("response-online-signing.pub.pem")
+            ),
+            "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(
+                trusted_private_key_file("response-online-signing.pem")
+            ),
+            "SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY": str(
+                trusted_public_key_file("webauthn-trust-online-signing.pub.pem")
+            ),
             "SERVERWARE_WEBAUTHN_ORIGIN": "https://serverware.prod.acme-corp.net",
             "SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "1",
             "SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION": "1",
@@ -508,6 +567,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
             "SERVERWARE_PROXY_PROOF_CA_BUNDLE": "/etc/serverware/proxy-ca.pem",
             "SERVERWARE_PROXY_PROOF_AGENT_ID": "production-proof-agent",
+            "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID": "agent:production-proof",
             "SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY": "/etc/serverware/proof-collector.key.pem",
             "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY": "/etc/serverware/proof-collector.pub.pem",
             "SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID": "sha256:" + "a" * 64,
@@ -544,6 +604,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_APPARMOR_EXPECTED_PROFILE": "serverware-docker",
             "SERVERWARE_METADATA_STORE_BACKEND": "postgres",
             "SERVERWARE_METADATA_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@metadata-store/serverware",
+            "SERVERWARE_METADATA_STORE_FAULT_DOMAIN_ID": "control-plane-account:us-east-1a",
             "SERVERWARE_GRANT_STORE_BACKEND": "postgres",
             "SERVERWARE_GRANT_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@metadata-store/serverware",
             "SERVERWARE_AUDIT_STORE_BACKEND": "postgres",
@@ -730,7 +791,17 @@ def run_shared_store_probe_helper() -> None:
 
     def fake_postgres_table_probe(label: str, dsn: str, required_tables: tuple[str, ...]) -> dict[str, Any]:
         calls.append((label, dsn, required_tables))
-        return {"ok": True, "database": f"{label}_db", "user": "serverware", "tables": list(required_tables)}
+        server_address = "witness-db" if label == "recovery_witness" else "metadata-db"
+        system_identifier = 222 if label == "recovery_witness" else 111
+        return {
+            "ok": True,
+            "database": f"{label}_db",
+            "user": "serverware",
+            "server_address": server_address,
+            "server_port": 5432,
+            "system_identifier": system_identifier,
+            "tables": list(required_tables),
+        }
 
     readiness.postgres_table_probe = fake_postgres_table_probe
     try:
@@ -744,12 +815,64 @@ def run_shared_store_probe_helper() -> None:
                 raise AssertionError(f"shared-store probe failed for the wrong reason: {exc}") from exc
         else:
             raise AssertionError("shared-store probe accepted a missing audit Postgres DSN")
+
+        def colocated_postgres_table_probe(
+            label: str, dsn: str, required_tables: tuple[str, ...]
+        ) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "database": f"{label}_db",
+                "user": "serverware",
+                "server_address": "shared-postgres-host",
+                "server_port": 5432,
+                "system_identifier": 111,
+                "tables": list(required_tables),
+            }
+
+        readiness.postgres_table_probe = colocated_postgres_table_probe
+        try:
+            readiness.run_shared_store_probe(good_env())
+        except RuntimeError as exc:
+            if "non-colocated Postgres server" not in str(exc):
+                raise AssertionError(
+                    f"colocated witness probe failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(
+                "shared-store probe accepted metadata and witness DSNs on one server"
+            )
+
+        def aliased_cluster_probe(
+            label: str, dsn: str, required_tables: tuple[str, ...]
+        ) -> dict[str, Any]:
+            return {
+                "ok": True,
+                "database": f"{label}_db",
+                "user": "serverware",
+                "server_address": f"{label}-listener",
+                "server_port": 5432,
+                "system_identifier": 333,
+                "tables": list(required_tables),
+            }
+
+        readiness.postgres_table_probe = aliased_cluster_probe
+        try:
+            readiness.run_shared_store_probe(good_env())
+        except RuntimeError as exc:
+            if "independent Postgres cluster" not in str(exc):
+                raise AssertionError(
+                    f"aliased-cluster witness probe failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(
+                "shared-store probe accepted metadata and witness listeners on one cluster"
+            )
     finally:
         readiness.postgres_table_probe = original
     if result.get("ok") is not True:
         raise AssertionError(f"shared-store probe returned invalid result: {result}")
     labels = {label for label, _, _ in calls}
-    if labels != {"metadata", "grant", "audit"}:
+    if labels != {"metadata", "grant", "audit", "recovery_witness"}:
         raise AssertionError(f"shared-store probe did not cover all stores: {calls}")
     required_by_label = {label: set(tables) for label, _, tables in calls}
     if "rate_limit_counters" not in required_by_label.get("metadata", set()):
@@ -771,6 +894,10 @@ def run_shared_store_probe_helper() -> None:
         raise AssertionError(f"grant probe did not require consumption outbox table: {calls}")
     if "serverware_audit_events" not in required_by_label.get("audit", set()):
         raise AssertionError(f"audit probe did not require HA audit table: {calls}")
+    if "serverware_recovery_authorization_claims" not in required_by_label.get(
+        "recovery_witness", set()
+    ):
+        raise AssertionError(f"witness probe did not require authorization claims: {calls}")
 
 
 def assert_atomic_release_compose_gate() -> None:
@@ -812,10 +939,117 @@ def assert_atomic_release_compose_gate() -> None:
                 raise AssertionError(
                     f"{compose_name} {service_name} does not enable atomic release authorization"
                 )
+        if compose_name == "docker-compose.production.yml":
+            serverware = model["services"]["serverware"]
+            if (
+                (serverware.get("environment") or {}).get(
+                    "SERVERWARE_RESPONSE_SIGNING_KEY"
+                )
+                != "/run/secrets/serverware-response-signing-key"
+            ):
+                raise AssertionError(
+                    "production Compose does not select the mounted response-signing key"
+                )
+            response_key_mounts = [
+                volume
+                for volume in serverware.get("volumes") or []
+                if volume.get("target")
+                == "/run/secrets/serverware-response-signing-key"
+            ]
+            if len(response_key_mounts) != 1 or response_key_mounts[0].get(
+                "read_only"
+            ) is not True:
+                raise AssertionError(
+                    "production Compose must mount one read-only response-signing key"
+                )
+
+
+def verify_response_key_runtime_readability() -> None:
+    def file_stat(mode: int, uid: int, gid: int) -> os.stat_result:
+        return os.stat_result(
+            (stat.S_IFREG | mode, 1, 1, 1, uid, gid, 128, 0, 0, 0)
+        )
+
+    root_owned_owner_only = file_stat(0o600, 0, 0)
+    if readiness.file_readable_by_identity(
+        root_owned_owner_only,
+        uid=readiness.CONTROL_PLANE_RUNTIME_UID,
+        gid=readiness.CONTROL_PLANE_RUNTIME_GID,
+    ):
+        raise AssertionError(
+            "root-owned mode 0600 response key was readable by the production identity"
+        )
+
+    production_owned_owner_only = file_stat(
+        0o600,
+        readiness.CONTROL_PLANE_RUNTIME_UID,
+        readiness.CONTROL_PLANE_RUNTIME_GID,
+    )
+    if not readiness.file_readable_by_identity(
+        production_owned_owner_only,
+        uid=readiness.CONTROL_PLANE_RUNTIME_UID,
+        gid=readiness.CONTROL_PLANE_RUNTIME_GID,
+    ):
+        raise AssertionError(
+            "production-owned mode 0600 response key was not readable by its owner"
+        )
+
+    production_group_readable = file_stat(
+        0o640,
+        0,
+        readiness.CONTROL_PLANE_RUNTIME_GID,
+    )
+    if not readiness.file_readable_by_identity(
+        production_group_readable,
+        uid=readiness.CONTROL_PLANE_RUNTIME_UID,
+        gid=readiness.CONTROL_PLANE_RUNTIME_GID,
+    ):
+        raise AssertionError(
+            "response key with production group read permission was not readable"
+        )
+
+    runtime_key = trusted_private_key_file("runtime-readable-response-key.pem")
+    failures: list[str] = []
+    payload = readiness.read_bounded_regular_file(
+        {"TEST_RESPONSE_KEY": str(runtime_key)},
+        "TEST_RESPONSE_KEY",
+        failures,
+        file_label="response-signing private-key",
+        max_bytes=readiness.MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES,
+        allowed_modes={0o600},
+        required_read_uid=TEST_CONTROL_PLANE_UID,
+        required_read_gid=TEST_CONTROL_PLANE_GID,
+    )
+    if payload is None or failures:
+        raise AssertionError(
+            f"runtime-readable response key failed descriptor validation: {failures}"
+        )
+
+    unreadable_uid = 1 if TEST_CONTROL_PLANE_UID != 1 else 2
+    unreadable_gid = 1 if TEST_CONTROL_PLANE_GID != 1 else 2
+    failures = []
+    payload = readiness.read_bounded_regular_file(
+        {"TEST_RESPONSE_KEY": str(runtime_key)},
+        "TEST_RESPONSE_KEY",
+        failures,
+        file_label="response-signing private-key",
+        max_bytes=readiness.MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES,
+        allowed_modes={0o600},
+        required_read_uid=unreadable_uid,
+        required_read_gid=unreadable_gid,
+    )
+    if payload is not None or not any(
+        "must be readable by production control-plane" in failure
+        for failure in failures
+    ):
+        raise AssertionError(
+            f"runtime-unreadable response key passed descriptor validation: {failures}"
+        )
 
 
 def main() -> None:
     assert_atomic_release_compose_gate()
+    verify_response_key_runtime_readability()
     passed = run_readiness(good_env())
     if passed.get("mode") != "config":
         raise AssertionError(f"unexpected readiness mode: {passed}")
@@ -856,10 +1090,68 @@ def main() -> None:
         "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
         "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
         "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER",
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY",
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID",
     ):
         missing_trust_env = good_env()
         missing_trust_env.pop(trust_setting, None)
         expect_failure(missing_trust_env, trust_setting)
+
+    mismatched_response_key_id_env = good_env()
+    mismatched_response_key_id_env[
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID"
+    ] = "sha256:" + "0" * 64
+    expect_failure(
+        mismatched_response_key_id_env,
+        "SPKI identity must match",
+    )
+
+    substituted_response_key_env = good_env()
+    substituted_response_key_env[
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY"
+    ] = str(trusted_public_key_file("alternate-control-plane-response.pub.pem"))
+    substituted_response_key_env[
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID"
+    ] = trusted_public_key_id("alternate-control-plane-response.pub.pem")
+    expect_failure(
+        substituted_response_key_env,
+        "must match the online response-signing public identity",
+    )
+
+    missing_response_private_key_env = good_env()
+    missing_response_private_key_env.pop(
+        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE", None
+    )
+    expect_failure(
+        missing_response_private_key_env,
+        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE must be configured",
+    )
+
+    substituted_response_private_key_env = good_env()
+    substituted_response_private_key_env[
+        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"
+    ] = str(
+        trusted_private_key_file(
+            "alternate-response-signing.pem",
+            "alternate-control-plane-response.pub.pem",
+        )
+    )
+    expect_failure(
+        substituted_response_private_key_env,
+        "provisioned response-signing private key must match",
+    )
+
+    permissive_response_private_key_env = good_env()
+    permissive_response_private_key_path = Path(
+        permissive_response_private_key_env[
+            "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"
+        ]
+    )
+    permissive_response_private_key_path.chmod(0o644)
+    expect_failure(
+        permissive_response_private_key_env,
+        "must use mode 0400 or 0600",
+    )
 
     mismatched_checkpoint_provider_env = good_env()
     mismatched_checkpoint_provider_env["SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER"] = "different-provider"
@@ -1393,6 +1685,67 @@ def main() -> None:
     no_browser_oidc_env = good_env()
     no_browser_oidc_env["SERVERWARE_OIDC_BROWSER_LOGIN_ENABLED"] = "0"
     expect_failure(no_browser_oidc_env, "browser OIDC login")
+
+    no_oidc_session_webauthn_env = good_env()
+    no_oidc_session_webauthn_env.pop(
+        "SERVERWARE_OIDC_SESSION_WEBAUTHN_REQUIRED", None
+    )
+    expect_failure(
+        no_oidc_session_webauthn_env, "OIDC browser sessions must require WebAuthn"
+    )
+
+    weak_oidc_session_webauthn_ttl_env = good_env()
+    weak_oidc_session_webauthn_ttl_env[
+        "SERVERWARE_OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS"
+    ] = "301"
+    expect_failure(
+        weak_oidc_session_webauthn_ttl_env,
+        "OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS",
+    )
+
+    weak_oidc_session_pending_ttl_env = good_env()
+    weak_oidc_session_pending_ttl_env[
+        "SERVERWARE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS"
+    ] = "301"
+    expect_failure(
+        weak_oidc_session_pending_ttl_env,
+        "OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS",
+    )
+
+    recovery_disabled_env = good_env()
+    recovery_disabled_env["SERVERWARE_WEBAUTHN_RECOVERY_ENABLED"] = "0"
+    expect_failure(recovery_disabled_env, "offline WebAuthn recovery")
+
+    missing_recovery_root_env = good_env()
+    missing_recovery_root_env.pop(
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY", None
+    )
+    expect_failure(missing_recovery_root_env, "RECOVERY_ROOT_PUBLIC_KEY")
+
+    wrong_recovery_root_id_env = good_env()
+    wrong_recovery_root_id_env[
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_KEY_ID"
+    ] = "sha256:" + "f" * 64
+    expect_failure(wrong_recovery_root_id_env, "RECOVERY_ROOT_KEY_ID")
+
+    long_recovery_ttl_env = good_env()
+    long_recovery_ttl_env["SERVERWARE_WEBAUTHN_RECOVERY_TTL_SECONDS"] = "301"
+    expect_failure(long_recovery_ttl_env, "RECOVERY_TTL_SECONDS")
+
+    placeholder_recovery_audience_env = good_env()
+    placeholder_recovery_audience_env[
+        "SERVERWARE_WEBAUTHN_RECOVERY_AUDIENCE"
+    ] = "https://serverware.example"
+    expect_failure(placeholder_recovery_audience_env, "RECOVERY_AUDIENCE")
+
+    reused_recovery_root_env = good_env()
+    reused_recovery_root_env[
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY"
+    ] = reused_recovery_root_env["SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY"]
+    reused_recovery_root_env[
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_KEY_ID"
+    ] = reused_recovery_root_env["SERVERWARE_SETUP_FINAL_AUTHORITY_KEY_ID"]
+    expect_failure(reused_recovery_root_env, "cross-domain trust key reuse")
 
     cross_origin_oidc_token_env = good_env()
     cross_origin_oidc_token_env["SERVERWARE_OIDC_TOKEN_ENDPOINT"] = "https://tokens.prod.acme-corp.net/token"

@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import time
 from dataclasses import dataclass
@@ -33,6 +34,9 @@ from serverware.config import (
     OIDC_LEEWAY_SECONDS,
     OIDC_ROLE_CLAIM,
     OIDC_SUBJECT_CLAIM,
+    OIDC_SESSION_WEBAUTHN_REQUIRED,
+    CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES,
+    CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION,
     OIDC_TOKEN_ENDPOINT,
     RELEASE_CHANNEL,
     ensure_data_dirs,
@@ -44,6 +48,8 @@ CSRF_HEADER_NAME = "X-Serverware-CSRF-Token"
 OIDC_SESSION_COOKIE_NAME = "serverware_oidc_session"
 UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 MAX_OIDC_BEARER_TOKEN_BYTES = 64 * 1024
+MAX_OIDC_SESSION_TOKEN_BYTES = 512
+_OIDC_SESSION_TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{64}")
 
 
 class OIDCAuthError(ValueError):
@@ -308,6 +314,135 @@ def oidc_identity_from_token(
     return AdminIdentity(user_id, _authoritative_oidc_roles(user_id, roles), auth_method)
 
 
+def oidc_session_token_digest(token: str) -> str:
+    return "sha256:" + hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def oidc_session_token_is_well_formed(token: str | None) -> bool:
+    return bool(
+        isinstance(token, str)
+        and _OIDC_SESSION_TOKEN_PATTERN.fullmatch(token) is not None
+    )
+
+
+def oidc_browser_session_from_token(token: str | None) -> dict[str, object] | None:
+    if not OIDC_ENABLED or not OIDC_BROWSER_LOGIN_ENABLED or not token:
+        return None
+    if not oidc_session_token_is_well_formed(token):
+        raise OIDCAuthError("OIDC browser session token is malformed")
+    try:
+        return db.get_oidc_browser_session(oidc_session_token_digest(token))
+    except db.MetadataStoreError as exc:
+        raise OIDCAuthoritativeStateError(
+            "OIDC browser session state is unavailable"
+        ) from exc
+
+
+def oidc_browser_session_for_request(request: Request) -> dict[str, object] | None:
+    cache = getattr(request, "_serverware_auth_cache", None)
+    if cache is None:
+        cache = {}
+        setattr(request, "_serverware_auth_cache", cache)
+    if "oidc_browser_session" not in cache:
+        cache["oidc_browser_session"] = oidc_browser_session_from_token(
+            request.cookies.get(OIDC_SESSION_COOKIE_NAME)
+        )
+    return cache["oidc_browser_session"]
+
+
+def oidc_identity_from_session_token(token: str | None) -> AdminIdentity | None:
+    if not OIDC_ENABLED or not OIDC_BROWSER_LOGIN_ENABLED or not token:
+        return None
+    if not oidc_session_token_is_well_formed(token):
+        raise OIDCAuthError("OIDC browser session token is malformed")
+    try:
+        session = db.get_active_oidc_browser_session(oidc_session_token_digest(token))
+    except db.MetadataStoreError as exc:
+        raise OIDCAuthoritativeStateError(
+            "OIDC browser session state is unavailable"
+        ) from exc
+    if session is None:
+        raise OIDCAuthError("OIDC browser session is invalid, expired, or revoked")
+    return oidc_identity_from_browser_session(session)
+
+
+def oidc_identity_from_browser_session(
+    session: dict[str, object],
+) -> AdminIdentity | None:
+    if session.get("status") != "active":
+        return None
+    credential_record_id = session.get("bound_webauthn_credential_id")
+    if OIDC_SESSION_WEBAUTHN_REQUIRED and not credential_record_id:
+        raise OIDCAuthError("OIDC browser session is not bound to WebAuthn")
+    if credential_record_id:
+        credential = session.get("_bound_credential")
+        if "_bound_credential" not in session:
+            credential = db.get_webauthn_credential_by_record_id(
+                str(credential_record_id)
+            )
+        if credential is None or credential.get("user_id") != session.get("user_id"):
+            raise OIDCAuthError("OIDC browser session WebAuthn binding is invalid")
+        try:
+            from serverware.webauthn import credential_trust_status
+            from serverware.webauthn_trust import WebAuthnTrustError
+
+            trust = credential_trust_status(credential)
+        except WebAuthnTrustError as exc:
+            raise OIDCAuthoritativeStateError(
+                "WebAuthn attestation trust state is unavailable"
+            ) from exc
+        if (
+            CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION
+            and not trust.get("currently_trusted")
+        ):
+            raise OIDCAuthError("OIDC browser session WebAuthn trust is no longer valid")
+        current_digest = trust.get("current_trust_bundle_digest")
+        current_sequence = trust.get("current_trust_bundle_sequence")
+        if (
+            session.get("activation_trust_bundle_digest") != current_digest
+            or session.get("activation_trust_bundle_sequence") != current_sequence
+        ):
+            raise OIDCAuthError(
+                "OIDC browser session WebAuthn trust generation changed; sign in again"
+            )
+        effective_class = str(trust.get("effective_authenticator_class") or "unknown")
+        activation_class = str(
+            session.get("activation_authenticator_class") or "unknown"
+        )
+        if activation_class != effective_class:
+            raise OIDCAuthError("OIDC browser session authenticator class changed")
+        allowed_classes = set(CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES)
+        credential_classes = {effective_class}
+        if effective_class != "platform":
+            credential_classes.add("hardware")
+        if allowed_classes and not allowed_classes.intersection(credential_classes):
+            raise OIDCAuthError("OIDC browser session authenticator is no longer allowed")
+    user_id = str(session["user_id"])
+    roles = frozenset(str(role) for role in session.get("roles", []))
+    if not roles:
+        raise OIDCAuthError("OIDC browser session has no RBAC roles")
+    return AdminIdentity(
+        user_id,
+        _authoritative_oidc_roles(user_id, roles),
+        "oidc-session",
+    )
+
+
+def oidc_pending_session_identity(session: dict[str, object]) -> AdminIdentity:
+    if session.get("status") != "pending_webauthn":
+        raise OIDCAuthError("OIDC browser session is not awaiting WebAuthn")
+    user_id = str(session.get("user_id") or "")
+    stored_roles = frozenset(str(role) for role in session.get("roles", []))
+    if not user_id or not stored_roles:
+        raise OIDCAuthError("OIDC browser session identity is invalid")
+    current_roles = _authoritative_oidc_roles(user_id, stored_roles)
+    if current_roles != stored_roles:
+        raise OIDCAuthError(
+            "OIDC browser session roles changed; sign in again before WebAuthn"
+        )
+    return AdminIdentity(user_id, current_roles, "oidc-pending-session")
+
+
 def require_admin(
     request: Request,
     x_serverware_admin_token: str | None = Header(default=None, alias="X-Serverware-Admin-Token"),
@@ -333,9 +468,13 @@ def require_admin(
     if check_admin_token(cookie_token):
         return AdminIdentity(ADMIN_USER_ID, frozenset(ADMIN_ROLES), "admin-cookie")
     try:
-        oidc_cookie_identity = oidc_identity_from_token(
-            oidc_cookie_token,
-            auth_method="oidc-session",
+        oidc_session = oidc_browser_session_for_request(request)
+        if oidc_cookie_token and oidc_session is None:
+            raise OIDCAuthError("OIDC browser session is invalid, expired, or revoked")
+        oidc_cookie_identity = (
+            oidc_identity_from_browser_session(oidc_session)
+            if oidc_session is not None
+            else None
         )
     except OIDCAuthoritativeStateError as exc:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
@@ -394,12 +533,10 @@ def validate_csrf_request(request: Request) -> None:
         return
     cookie_admin_token = request.cookies.get("serverware_admin")
     oidc_cookie_token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
-    oidc_cookie_valid = False
+    oidc_cookie_valid = oidc_session_token_is_well_formed(oidc_cookie_token)
     try:
-        oidc_cookie_valid = oidc_identity_from_token(
-            oidc_cookie_token,
-            auth_method="oidc-session",
-        ) is not None
+        if oidc_cookie_valid:
+            oidc_browser_session_for_request(request)
     except (OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError):
         oidc_cookie_valid = False
     if not check_admin_token(cookie_admin_token) and not oidc_cookie_valid:
@@ -445,6 +582,7 @@ def admin_status() -> dict[str, object]:
             "subject_claim": OIDC_SUBJECT_CLAIM,
             "allowed_algorithms": list(OIDC_ALLOWED_ALGORITHMS),
             "browser_login_enabled": OIDC_BROWSER_LOGIN_ENABLED,
+            "browser_session_webauthn_required": OIDC_SESSION_WEBAUTHN_REQUIRED,
             "browser_login_configured": bool(
                 OIDC_ENABLED
                 and OIDC_BROWSER_LOGIN_ENABLED

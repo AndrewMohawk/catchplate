@@ -18,6 +18,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
@@ -29,6 +30,7 @@ import merge_production_images_env
 import production_release_input_preflight
 import run_production_readiness
 import verify_production_policy_identity
+from serverware.policy_bundle import PolicySnapshot, compile_policy_bundle
 
 
 REQUIRED_READINESS_CHECKS = {
@@ -52,6 +54,9 @@ IMAGE_REF_RE = re.compile(r"^(?P<repo>[^@,\s]+)@(?P<digest>sha256:[0-9a-f]{64})$
 BASE64URL_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 PROXY_PROOF_MAX_AGE_LIMIT_SECONDS = 900
 PROXY_PROOF_FUTURE_SKEW_SECONDS = 30
+CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION = "serverware.controlPlaneAuthorizationReceipt/v1"
+CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION = "serverware.responseSignature/v1"
+CONTROL_PLANE_DISPATCH_PATH = "/api/data-plane/release-authorizations/dispatch"
 HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
 HARDWARE_PROOF_MAX_AGE_SECONDS = 900
 HARDWARE_PROOF_FUTURE_SKEW_SECONDS = 30
@@ -76,6 +81,13 @@ SIGSTORE_TRUST_ROOT_ENV_KEY = "SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY"
 REKOR_TRUST_ROOT_ENV_KEY = "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY"
 EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY = "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY"
 EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY = "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER"
+CONTROL_PLANE_RESPONSE_SIGNING_KEY_ENV_KEY = (
+    "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY"
+)
+CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY = (
+    "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID"
+)
+PROXY_PRINCIPAL_ENV_KEY = "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID"
 RELEASE_IDENTITY_FIELDS = {
     "source_tree_digest",
     "provenance_digest",
@@ -117,6 +129,7 @@ SECRET_FIELD_NAMES = {
 }
 FINAL_EVIDENCE_MAX_BYTES = 4 * 1024 * 1024
 FINAL_TRUST_ROOT_MAX_BYTES = 64 * 1024
+POLICY_BUNDLE_MAX_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -436,8 +449,46 @@ def snapshot_final_verification_files(
     *,
     include_hardware_assurance: bool,
     include_final_receipt: bool,
+    include_proxy_security: bool = False,
+    include_policy: bool = False,
 ) -> dict[str, FileSnapshot]:
     requested: list[tuple[str, str, int]] = []
+    if include_proxy_security:
+        requested.extend(
+            [
+                (
+                    "proxy_response_proof",
+                    "production proxy response proof",
+                    FINAL_EVIDENCE_MAX_BYTES,
+                ),
+                (
+                    "proxy_collector_public_key",
+                    "proxy response collector trust root",
+                    FINAL_TRUST_ROOT_MAX_BYTES,
+                ),
+                (
+                    "proxy_proof_verifier_public_key",
+                    "proxy proof vendor verifier trust root",
+                    FINAL_TRUST_ROOT_MAX_BYTES,
+                ),
+                (
+                    "control_plane_response_signing_public_key",
+                    "control-plane response signing trust root",
+                    FINAL_TRUST_ROOT_MAX_BYTES,
+                ),
+            ]
+        )
+    if include_policy:
+        requested.extend(
+            [
+                ("policy_bundle", "signed production policy bundle", POLICY_BUNDLE_MAX_BYTES),
+                (
+                    "policy_trusted_public_key",
+                    "production policy signing trust root",
+                    FINAL_TRUST_ROOT_MAX_BYTES,
+                ),
+            ]
+        )
     if include_hardware_assurance:
         requested.extend(
             [
@@ -2723,6 +2774,14 @@ def verify_current_production_env_binding(
         production_env.get("SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID"),
         "production readiness response-proof verifier key id",
     )
+    expected_proxy_principal_id = production_env.get(PROXY_PRINCIPAL_ENV_KEY)
+    require(
+        isinstance(expected_proxy_principal_id, str)
+        and expected_proxy_principal_id == expected_proxy_principal_id.strip()
+        and 1 <= len(expected_proxy_principal_id) <= 256
+        and all(character.isprintable() for character in expected_proxy_principal_id),
+        "production readiness expected proxy principal ID is invalid",
+    )
     runtime_trust = preflight_summary["runtime_trust_materials"]
     require(
         runtime_trust.get("proof_collector_key_id") == expected_collector_key_id,
@@ -2763,6 +2822,14 @@ def verify_current_production_env_binding(
         (REKOR_TRUST_ROOT_ENV_KEY, "Rekor trust root"),
         (EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY, "external checkpoint trust root"),
         (EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY, "external checkpoint provider"),
+        (
+            CONTROL_PLANE_RESPONSE_SIGNING_KEY_ENV_KEY,
+            "control-plane response signing trust root",
+        ),
+        (
+            CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY,
+            "control-plane response signing expected SPKI identity",
+        ),
     ):
         selected = release_trust_inputs.get(env_name)
         require(isinstance(selected, str) and bool(selected), f"release completion is missing the selected {label}")
@@ -2785,6 +2852,48 @@ def verify_current_production_env_binding(
         )
     except Exception as exc:
         raise ValueError(f"production readiness env release trust root is unreadable or invalid: {exc}") from exc
+    require(
+        final_file_snapshots is not None,
+        "release completion is missing immutable control-plane response signing snapshots",
+    )
+    try:
+        control_plane_response_signing_public_key_pem = snapshot_text(
+            final_file_snapshots[
+                "control_plane_response_signing_public_key"
+            ],
+            "control-plane response signing trust root",
+            encoding="ascii",
+        )
+    except KeyError as exc:
+        raise ValueError(
+            f"release completion is missing immutable control-plane response signing trust-root snapshot: {exc}"
+        ) from exc
+    control_plane_response_signing_key_id = ed25519_public_key_id(
+        control_plane_response_signing_public_key_pem,
+        "control-plane response signing trust root",
+    )
+    expected_control_plane_response_signing_key_id = require_sha256(
+        production_env.get(CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY),
+        "production readiness expected control-plane response signing SPKI identity",
+    )
+    require(
+        hmac.compare_digest(
+            control_plane_response_signing_key_id,
+            expected_control_plane_response_signing_key_id,
+        ),
+        "control-plane response signing trust root does not match the independently configured SPKI identity",
+    )
+    existing_release_trust_root_ids = {
+        release_provenance_trust_root_id,
+        sigstore_trust_root_id,
+        rekor_trust_root_id,
+        external_checkpoint_trust_root_id,
+    }
+    require(
+        control_plane_response_signing_key_id
+        not in existing_release_trust_root_ids,
+        "control-plane responses must use an independent signing public key",
+    )
     release_trust_binding = {
         "release_trust_roots_env_bound": True,
         "release_provenance_trusted_public_key_id": release_provenance_trust_root_id,
@@ -2792,6 +2901,9 @@ def verify_current_production_env_binding(
         "rekor_trusted_public_key_id": rekor_trust_root_id,
         "external_checkpoint_trusted_public_key_id": external_checkpoint_trust_root_id,
         "external_checkpoint_provider": production_env[EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY],
+        "control_plane_response_signing_public_key_id": (
+            control_plane_response_signing_key_id
+        ),
     }
 
     final_trust_binding: dict[str, Any] = {
@@ -2883,6 +2995,9 @@ def verify_current_production_env_binding(
             release_trust_binding["sigstore_trusted_public_key_id"],
             release_trust_binding["rekor_trusted_public_key_id"],
             release_trust_binding["external_checkpoint_trusted_public_key_id"],
+            release_trust_binding[
+                "control_plane_response_signing_public_key_id"
+            ],
         }
         require(
             hardware_trust_root_id not in release_role_ids,
@@ -2915,6 +3030,7 @@ def verify_current_production_env_binding(
         "production_image_digests": digests,
         "expected_data_plane_binary_digest": expected_binary_digest,
         "expected_server_instance_id": expected_server_instance_id,
+        "expected_proxy_principal_id": expected_proxy_principal_id,
         "expected_proxy_collector_key_id": expected_collector_key_id,
         "expected_proxy_verifier_key_id": expected_verifier_key_id,
     }
@@ -3067,11 +3183,733 @@ def require_exact_object_fields(value: dict[str, Any], expected_fields: set[str]
     )
 
 
+def verify_proxy_release_authority(
+    value: Any,
+    *,
+    expected_request_digest: str,
+    expected_operation_digest: str,
+    latest_observation_at_unix: int,
+) -> dict[str, Any]:
+    label = "proxy response release authority"
+    require(isinstance(value, dict), f"{label} must be an object")
+    authority = dict(value)
+    require_exact_object_fields(
+        authority,
+        {
+            "authority_mode",
+            "grant_id",
+            "approval_id",
+            "credential_ref",
+            "credential_version",
+            "request_digest",
+            "operation_digest",
+            "attempt_id",
+            "consumption_identity_digest",
+            "authorization_state_at_upstream_dispatch",
+            "authorization_state_observed_at_epoch_ms",
+            "reservation_expires_at_epoch_ms",
+            "dispatch_expires_at_epoch_ms",
+        },
+        label,
+    )
+    require(
+        authority.get("authority_mode") == "atomic",
+        f"{label} did not use atomic release authorization",
+    )
+    grant_id = authority.get("grant_id")
+    approval_id = authority.get("approval_id")
+    for field, identifier in (("grant_id", grant_id), ("approval_id", approval_id)):
+        require(
+            identifier is None
+            or (
+                isinstance(identifier, str)
+                and identifier == identifier.strip()
+                and 1 <= len(identifier) <= 256
+                and all(character.isprintable() for character in identifier)
+            ),
+            f"{label} {field} is invalid",
+        )
+    require(
+        (grant_id is None and approval_id is None)
+        or (isinstance(grant_id, str) and isinstance(approval_id, str)),
+        f"{label} grant and approval identities are inconsistent",
+    )
+    credential_ref = authority.get("credential_ref")
+    credential_version = authority.get("credential_version")
+    require(
+        credential_ref is None
+        or (
+            isinstance(credential_ref, str)
+            and credential_ref == credential_ref.strip()
+            and 1 <= len(credential_ref) <= 256
+            and all(character.isprintable() for character in credential_ref)
+        ),
+        f"{label} credential_ref is invalid",
+    )
+    require(
+        isinstance(credential_version, int)
+        and not isinstance(credential_version, bool)
+        and 0 <= credential_version <= 2**63 - 1,
+        f"{label} credential_version is invalid",
+    )
+    require(
+        (credential_ref is None and credential_version == 0)
+        or (isinstance(credential_ref, str) and credential_version > 0),
+        f"{label} credential identity and version are inconsistent",
+    )
+    request_digest = require_sha256(
+        authority.get("request_digest"),
+        f"{label} request digest",
+    )
+    operation_digest = require_sha256(
+        authority.get("operation_digest"),
+        f"{label} operation digest",
+    )
+    require(
+        request_digest == expected_request_digest,
+        f"{label} request digest mismatch",
+    )
+    require(
+        operation_digest == expected_operation_digest,
+        f"{label} operation digest mismatch",
+    )
+    require_sha256(authority.get("attempt_id"), f"{label} attempt ID")
+    require_sha256(
+        authority.get("consumption_identity_digest"),
+        f"{label} consumption identity digest",
+    )
+    require(
+        authority.get("authorization_state_at_upstream_dispatch") == "dispatching",
+        f"{label} does not prove historical dispatch authorization",
+    )
+    observed_at_epoch_ms = authority.get("authorization_state_observed_at_epoch_ms")
+    require(
+        isinstance(observed_at_epoch_ms, int)
+        and not isinstance(observed_at_epoch_ms, bool)
+        and 0 < observed_at_epoch_ms <= 2**63 - 1,
+        f"{label} dispatch observation timestamp is invalid",
+    )
+    require(
+        observed_at_epoch_ms <= latest_observation_at_unix * 1000 + 999,
+        f"{label} dispatch observation postdates the enclosing proof event",
+    )
+    reservation_expires_at_epoch_ms = authority.get("reservation_expires_at_epoch_ms")
+    require(
+        reservation_expires_at_epoch_ms is None
+        or (
+            isinstance(reservation_expires_at_epoch_ms, int)
+            and not isinstance(reservation_expires_at_epoch_ms, bool)
+            and 0 < reservation_expires_at_epoch_ms <= 2**63 - 1
+            and observed_at_epoch_ms < reservation_expires_at_epoch_ms
+        ),
+        f"{label} reservation expiry is invalid",
+    )
+    dispatch_expires_at_epoch_ms = authority.get("dispatch_expires_at_epoch_ms")
+    require(
+        isinstance(dispatch_expires_at_epoch_ms, int)
+        and not isinstance(dispatch_expires_at_epoch_ms, bool)
+        and observed_at_epoch_ms < dispatch_expires_at_epoch_ms <= 2**63 - 1,
+        f"{label} dispatch expiry is invalid",
+    )
+    require(
+        "completion_outcome" not in authority,
+        f"{label} must not claim response completion before downstream release",
+    )
+    return authority
+
+
+def verify_control_plane_authorization_receipt(
+    document: Any,
+    *,
+    trusted_public_key_pem: str,
+    expected_trusted_public_key_id: str,
+    expected_release_authority: dict[str, Any],
+    expected_principal_id: str,
+    expected_route_id: str,
+    expected_runtime_manifest_digest: str,
+    expected_policy_digest: str,
+    expected_provenance_digest: str,
+    expected_image_signatures_digest: str,
+    expected_source_tree_digest: str,
+) -> dict[str, Any]:
+    label = "control-plane authorization receipt"
+    require(isinstance(document, dict), f"{label} must be an object")
+    assert_no_secret_fields(document)
+    require_exact_object_fields(
+        document,
+        {
+            "apiVersion",
+            "kind",
+            "principal_id",
+            "route_id",
+            "release_authority",
+            "request",
+            "response",
+        },
+        label,
+    )
+    require(
+        document.get("apiVersion")
+        == CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION,
+        f"{label} apiVersion mismatch",
+    )
+    require(
+        document.get("kind") == "ControlPlaneAuthorizationReceipt",
+        f"{label} kind mismatch",
+    )
+    require(
+        document.get("principal_id") == expected_principal_id,
+        f"{label} principal ID mismatch",
+    )
+    require(
+        document.get("route_id") == expected_route_id,
+        f"{label} route ID mismatch",
+    )
+    require(
+        document.get("release_authority") == expected_release_authority,
+        f"{label} release authority mismatch",
+    )
+
+    request = document.get("request")
+    require(isinstance(request, dict), f"{label} request must be an object")
+    require_exact_object_fields(
+        request,
+        {"method", "path", "query", "nonce", "body_b64", "body_sha256"},
+        f"{label} request",
+    )
+    require(
+        request.get("method") == "POST"
+        and request.get("path") == CONTROL_PLANE_DISPATCH_PATH
+        and request.get("query") == "",
+        f"{label} request context mismatch",
+    )
+    request_nonce = request.get("nonce")
+    request_nonce_bytes = require_base64url_bytes(
+        request_nonce,
+        f"{label} request nonce",
+        minimum_bytes=32,
+    )
+    request_body_bytes = decode_canonical_base64url(
+        request.get("body_b64"),
+        f"{label} request body",
+    )
+    require(
+        0 < len(request_body_bytes) <= 4 * 1024,
+        f"{label} request body size is invalid",
+    )
+    request_body_sha256 = require_sha256(
+        request.get("body_sha256"),
+        f"{label} request body digest",
+    )
+    require(
+        request_body_sha256 == sha256_prefixed_bytes(request_body_bytes),
+        f"{label} request body digest mismatch",
+    )
+    request_body = load_json_bytes(
+        request_body_bytes,
+        Path("<embedded-control-plane-dispatch-request>"),
+        f"{label} request body",
+    )
+    require(isinstance(request_body, dict), f"{label} request body must be an object")
+    require_exact_object_fields(
+        request_body,
+        {"apiVersion", "attemptId", "bindingDigest"},
+        f"{label} request body",
+    )
+    require(
+        canonical_json(request_body).encode("utf-8") == request_body_bytes,
+        f"{label} request body is not canonical JSON",
+    )
+    require(
+        request_body
+        == {
+            "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+            "attemptId": expected_release_authority["attempt_id"],
+            "bindingDigest": expected_release_authority[
+                "consumption_identity_digest"
+            ],
+        },
+        f"{label} dispatch request body mismatch",
+    )
+
+    response = document.get("response")
+    require(isinstance(response, dict), f"{label} response must be an object")
+    require_exact_object_fields(
+        response,
+        {
+            "status",
+            "body_b64",
+            "body_sha256",
+            "response_signing_key_id",
+            "statement_b64",
+            "statement_sha256",
+            "signature",
+        },
+        f"{label} response",
+    )
+    response_status = response.get("status")
+    require(
+        isinstance(response_status, int)
+        and not isinstance(response_status, bool)
+        and response_status == 200,
+        f"{label} response status is not an exact successful dispatch status",
+    )
+
+    response_body_bytes = decode_canonical_base64url(
+        response.get("body_b64"),
+        f"{label} response body",
+    )
+    require(
+        0 < len(response_body_bytes) <= 64 * 1024,
+        f"{label} response body size is invalid",
+    )
+    response_body_sha256 = require_sha256(
+        response.get("body_sha256"),
+        f"{label} response body digest",
+    )
+    require(
+        response_body_sha256 == sha256_prefixed_bytes(response_body_bytes),
+        f"{label} response body digest mismatch",
+    )
+    response_body = load_json_bytes(
+        response_body_bytes,
+        Path("<embedded-control-plane-dispatch-response>"),
+        f"{label} response body",
+    )
+    assert_no_secret_fields(response_body)
+    require_exact_object_fields(
+        response_body,
+        {
+            "apiVersion",
+            "ok",
+            "authorized",
+            "state",
+            "reason",
+            "attemptId",
+            "bindingDigest",
+            "idempotentReplay",
+            "grantId",
+            "approvalRequestId",
+            "reservationExpiresAtEpochMs",
+            "dispatchStartedAtEpochMs",
+            "dispatchExpiresAtEpochMs",
+            "completionOutcome",
+            "retryAfterSeconds",
+            "quotas",
+            "store",
+        },
+        f"{label} response body",
+    )
+    exact_dispatch_fields = {
+        "apiVersion": "serverware.releaseAuthorization/v1",
+        "ok": True,
+        "authorized": True,
+        "state": "dispatching",
+        "reason": "dispatching",
+        "attemptId": expected_release_authority["attempt_id"],
+        "bindingDigest": expected_release_authority["consumption_identity_digest"],
+        "grantId": expected_release_authority["grant_id"],
+        "approvalRequestId": expected_release_authority["approval_id"],
+        "reservationExpiresAtEpochMs": expected_release_authority[
+            "reservation_expires_at_epoch_ms"
+        ],
+        "dispatchStartedAtEpochMs": expected_release_authority[
+            "authorization_state_observed_at_epoch_ms"
+        ],
+        "dispatchExpiresAtEpochMs": expected_release_authority[
+            "dispatch_expires_at_epoch_ms"
+        ],
+        "completionOutcome": None,
+        "retryAfterSeconds": 0,
+    }
+    for field, expected in exact_dispatch_fields.items():
+        require(
+            response_body.get(field) == expected,
+            f"{label} response body {field} does not match release authority",
+        )
+    require(
+        isinstance(response_body.get("idempotentReplay"), bool),
+        f"{label} response body idempotentReplay is invalid",
+    )
+    quotas = response_body.get("quotas")
+    require(
+        isinstance(quotas, list) and all(isinstance(item, dict) for item in quotas),
+        f"{label} response body quotas are invalid",
+    )
+    quota_fields = {
+        "counterKey",
+        "constraintId",
+        "operation",
+        "windowStartEpochMs",
+        "windowSeconds",
+        "max",
+        "count",
+        "remaining",
+        "reservationState",
+    }
+    for index, quota in enumerate(quotas):
+        require_exact_object_fields(quota, quota_fields, f"{label} response body quota {index}")
+    store = response_body.get("store")
+    require(isinstance(store, dict), f"{label} response body store is invalid")
+    require_exact_object_fields(store, {"backend", "ha"}, f"{label} response body store")
+    require(
+        isinstance(store.get("backend"), str)
+        and bool(store["backend"])
+        and store.get("ha") is True,
+        f"{label} response body does not prove an HA authorization store",
+    )
+
+    dispatch_started_at_epoch_ms = response_body["dispatchStartedAtEpochMs"]
+    dispatch_expires_at_epoch_ms = response_body["dispatchExpiresAtEpochMs"]
+    reservation_expires_at_epoch_ms = response_body["reservationExpiresAtEpochMs"]
+    for field, value in (
+        ("dispatch start", dispatch_started_at_epoch_ms),
+        ("dispatch expiry", dispatch_expires_at_epoch_ms),
+        ("reservation expiry", reservation_expires_at_epoch_ms),
+    ):
+        require(
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 0 < value <= 2**63 - 1,
+            f"{label} {field} is invalid",
+        )
+    require(dispatch_started_at_epoch_ms < dispatch_expires_at_epoch_ms, f"{label} dispatch window is invalid")
+    require(dispatch_started_at_epoch_ms < reservation_expires_at_epoch_ms, f"{label} reservation expired before dispatch")
+
+    response_statement_bytes = decode_canonical_base64url(
+        response.get("statement_b64"),
+        f"{label} response statement",
+    )
+    require(
+        0 < len(response_statement_bytes) <= 64 * 1024,
+        f"{label} response statement size is invalid",
+    )
+    response_statement = load_json_bytes(
+        response_statement_bytes,
+        Path("<embedded-control-plane-response-statement>"),
+        f"{label} response statement",
+    )
+    require(
+        canonical_json(response_statement).encode("utf-8") == response_statement_bytes,
+        f"{label} response statement is not canonical JSON",
+    )
+    require_exact_object_fields(
+        response_statement,
+        {
+            "version",
+            "issued_at_ms",
+            "request",
+            "status_code",
+            "body_sha256",
+            "nonce",
+            "response_signing_key_id",
+            "context",
+        },
+        f"{label} response statement",
+    )
+    require(
+        response_statement.get("version") == CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION,
+        f"{label} response statement version mismatch",
+    )
+    issued_at_ms = response_statement.get("issued_at_ms")
+    require(
+        isinstance(issued_at_ms, int)
+        and not isinstance(issued_at_ms, bool)
+        and 0 < issued_at_ms <= 2**63 - 1,
+        f"{label} signed response issue time is invalid",
+    )
+    require(
+        dispatch_started_at_epoch_ms <= issued_at_ms,
+        f"{label} signed response predates dispatch start",
+    )
+    require(
+        issued_at_ms < dispatch_expires_at_epoch_ms,
+        f"{label} signed response was issued at or after dispatch expiry",
+    )
+    require(
+        issued_at_ms < reservation_expires_at_epoch_ms,
+        f"{label} signed response was issued at or after reservation expiry",
+    )
+
+    signed_request = response_statement.get("request")
+    require(isinstance(signed_request, dict), f"{label} signed request must be an object")
+    require_exact_object_fields(signed_request, {"method", "path", "query"}, f"{label} signed request")
+    require(
+        signed_request
+        == {
+            "method": request["method"],
+            "path": request["path"],
+            "query": request["query"],
+        },
+        f"{label} signed request context mismatch",
+    )
+    require(response_statement.get("status_code") == response_status, f"{label} signed response status mismatch")
+    require(response_statement.get("body_sha256") == response_body_sha256, f"{label} signed response body digest mismatch")
+    require(response_statement.get("nonce") == request_nonce, f"{label} signed response nonce mismatch")
+
+    expected_context = {
+        "runtime_manifest_digest": require_sha256(
+            expected_runtime_manifest_digest,
+            f"expected {label} runtime manifest digest",
+        ),
+        "policy_bundle_digest": require_sha256(expected_policy_digest, f"expected {label} policy digest"),
+        "provenance_digest": require_sha256(expected_provenance_digest, f"expected {label} provenance digest"),
+        "image_signatures_digest": require_sha256(
+            expected_image_signatures_digest,
+            f"expected {label} image signatures digest",
+        ),
+        "source_tree_digest": require_sha256(expected_source_tree_digest, f"expected {label} source tree digest"),
+    }
+    require(
+        response_statement.get("context") == expected_context,
+        f"{label} signed response attested context mismatch",
+    )
+
+    trusted_key_id = ed25519_public_key_id(
+        trusted_public_key_pem,
+        f"{label} trust root",
+    )
+    require(
+        hmac.compare_digest(
+            trusted_key_id,
+            require_sha256(
+                expected_trusted_public_key_id,
+                f"expected {label} trust-root identity",
+            ),
+        ),
+        f"{label} trust root does not match the independently configured key ID",
+    )
+    require(
+        response.get("response_signing_key_id") == trusted_key_id,
+        f"{label} is not signed by the independently trusted control-plane response key",
+    )
+    require(
+        response_statement.get("response_signing_key_id") == trusted_key_id,
+        f"{label} signed response statement key ID mismatch",
+    )
+    response_statement_sha256 = require_sha256(
+        response.get("statement_sha256"),
+        f"{label} response statement digest",
+    )
+    require(
+        response_statement_sha256 == sha256_prefixed_bytes(response_statement_bytes),
+        f"{label} response statement digest mismatch",
+    )
+    verify_ed25519(
+        trusted_public_key_pem,
+        str(response.get("signature") or ""),
+        response_statement_bytes,
+        label,
+    )
+    return {
+        "apiVersion": document["apiVersion"],
+        "signing_key_id": trusted_key_id,
+        "principal_id": expected_principal_id,
+        "route_id": expected_route_id,
+        "request_nonce_sha256": sha256_prefixed_bytes(request_nonce_bytes),
+        "request_body_sha256": request_body_sha256,
+        "response_body_sha256": response_body_sha256,
+        "response_statement_sha256": response_statement_sha256,
+        "dispatch_started_at_epoch_ms": dispatch_started_at_epoch_ms,
+        "dispatch_expires_at_epoch_ms": dispatch_expires_at_epoch_ms,
+        "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
+        "issued_at_ms": issued_at_ms,
+        "canonical_signature_verified": True,
+        "dispatch_body_exact_match": True,
+        "attested_context_exact_match": True,
+        "secret_values_included": False,
+    }
+
+
+def verify_and_compile_policy_snapshot(
+    bundle_snapshot: FileSnapshot,
+    trusted_key_snapshot: FileSnapshot,
+    *,
+    expected_policy_digest: str,
+) -> PolicySnapshot:
+    bundle = load_json_snapshot(bundle_snapshot, "signed production policy bundle")
+    trusted_public_key_pem = snapshot_text(
+        trusted_key_snapshot,
+        "production policy signing trust root",
+        encoding="ascii",
+    )
+    trusted_key_id = ed25519_public_key_id(
+        trusted_public_key_pem,
+        "production policy signing trust root",
+    )
+    verification = verify_production_policy_identity.verify_production_policy_identity(
+        bundle,
+        trusted_public_key_pem,
+        trusted_public_key_hash=trusted_key_id,
+    )
+    require(
+        verification.get("ok") is True,
+        "snapshotted production policy bundle failed pinned Ed25519 verification",
+    )
+    try:
+        compiled = compile_policy_bundle(
+            bundle,
+            validate_schema=True,
+            verify_signature=False,
+        )
+    except Exception as exc:
+        raise ValueError(f"snapshotted production policy bundle could not be compiled: {exc}") from exc
+    expected_digest = require_sha256(expected_policy_digest, "expected production policy digest")
+    require(compiled.hash == expected_digest, "snapshotted production policy bundle digest mismatch")
+    require(
+        (verification.get("policy") or {}).get("hash") == compiled.hash,
+        "compiled production policy hash differs from signature verification",
+    )
+    return compiled
+
+
+def match_proxy_policy_route(
+    policy: PolicySnapshot,
+    *,
+    principal_id: str,
+    client_request: dict[str, Any],
+) -> tuple[str, set[str]]:
+    label = "proxy response independently matched policy route"
+    require(
+        isinstance(principal_id, str)
+        and principal_id == principal_id.strip()
+        and 1 <= len(principal_id) <= 256
+        and all(character.isprintable() for character in principal_id),
+        f"{label} principal ID is invalid",
+    )
+    require(principal_id in policy.principals, f"{label} principal is absent from the signed policy")
+    scheme = client_request.get("scheme")
+    authority = client_request.get("authority")
+    method = client_request.get("method")
+    path = client_request.get("path")
+    try:
+        parsed = urlsplit(f"{scheme}://{authority}{path}")
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"{label} authority is invalid") from exc
+    require(
+        parsed.scheme == scheme
+        and isinstance(hostname, str)
+        and bool(hostname)
+        and parsed.username is None
+        and parsed.password is None
+        and parsed.path == path
+        and not parsed.query
+        and not parsed.fragment,
+        f"{label} request target is invalid",
+    )
+    if port is None:
+        port = 443 if scheme == "https" else 80
+    matched = policy.match_route(
+        str(scheme),
+        hostname,
+        port,
+        str(method),
+        str(path),
+        principal_id,
+    )
+    require(matched is not None, f"{label} did not match exactly one signed route")
+    response_profile = matched.route.adapter_config.get("response")
+    require(isinstance(response_profile, dict), f"{label} success response profile is missing")
+    raw_allowed_headers = response_profile.get("allowedHeaders", [])
+    require(
+        isinstance(raw_allowed_headers, list)
+        and all(
+            isinstance(name, str)
+            and name == name.lower()
+            and re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) is not None
+            for name in raw_allowed_headers
+        )
+        and len(raw_allowed_headers) == len(set(raw_allowed_headers)),
+        f"{label} success allowedHeaders are invalid",
+    )
+    return matched.route.id, {
+        "content-encoding",
+        "content-length",
+        "content-type",
+        *raw_allowed_headers,
+    }
+
+
+def verify_proxy_upstream_response(
+    value: Any,
+    *,
+    expected_status: int,
+    expected_header_names: set[str],
+) -> dict[str, Any]:
+    label = "proxy upstream response"
+    require(isinstance(value, dict), f"{label} must be an object")
+    upstream = dict(value)
+    require_exact_object_fields(
+        upstream,
+        {
+            "status",
+            "selected_raw_policy_headers_b64",
+            "body_digest",
+            "canonical_digest",
+        },
+        label,
+    )
+    status = upstream.get("status")
+    require(
+        isinstance(status, int)
+        and not isinstance(status, bool)
+        and 100 <= status <= 599,
+        f"{label} status is invalid",
+    )
+    require(status == expected_status, f"{label} status mismatch")
+    body_digest = require_sha256(upstream.get("body_digest"), f"{label} body digest")
+    selected = upstream.get("selected_raw_policy_headers_b64")
+    require(isinstance(selected, dict), f"{label} raw policy headers must be an object")
+    require(
+        set(selected) == expected_header_names,
+        f"{label} raw policy header names do not exactly match the signed route success profile",
+    )
+    for name, values in selected.items():
+        require(
+            isinstance(name, str)
+            and re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) is not None
+            and isinstance(values, list)
+            and len(values) <= 128,
+            f"{label} raw policy header {name!r} is invalid",
+        )
+        for index, encoded in enumerate(values):
+            decoded = decode_canonical_base64url(
+                encoded,
+                f"{label} raw policy header {name}[{index}]",
+            )
+            require(
+                len(decoded) <= 8 * 1024,
+                f"{label} raw policy header {name}[{index}] is too large",
+            )
+    canonical_digest = require_sha256(
+        upstream.get("canonical_digest"),
+        f"{label} canonical digest",
+    )
+    require(
+        canonical_digest
+        == sha256_prefixed_json(
+            {
+                "status": status,
+                "selected_raw_policy_headers_b64": selected,
+                "body_digest": body_digest,
+            }
+        ),
+        f"{label} canonical digest mismatch",
+    )
+    return upstream
+
+
 def verify_production_proxy_response_proof(
     document: dict[str, Any],
     *,
     trusted_verifier_public_key_pem: str,
     trusted_collector_public_key_pem: str,
+    trusted_control_plane_response_signing_public_key_pem: str,
+    expected_control_plane_response_signing_public_key_id: str,
+    policy_snapshot: PolicySnapshot,
+    expected_principal_id: str,
     expected_server_instance_id: str,
     expected_client_nonce: str,
     expected_request_digest: str,
@@ -3081,6 +3919,8 @@ def verify_production_proxy_response_proof(
     expected_runtime_manifest_digest: str,
     expected_binary_digest: str,
     expected_release_digest: str,
+    expected_image_signatures_digest: str,
+    expected_source_tree_digest: str,
     expected_response_signing_key_id: str,
     expected_tee_platform: str,
     expected_quote_provider: str,
@@ -3091,7 +3931,7 @@ def verify_production_proxy_response_proof(
         1 <= max_age_seconds <= PROXY_PROOF_MAX_AGE_LIMIT_SECONDS,
         f"proxy proof max age must be between 1 and {PROXY_PROOF_MAX_AGE_LIMIT_SECONDS} seconds",
     )
-    require(document.get("apiVersion") == "serverware.proxyResponseProof/v2", "proxy response proof has wrong apiVersion")
+    require(document.get("apiVersion") == "serverware.proxyResponseProof/v3", "proxy response proof has wrong apiVersion")
     require(document.get("kind") == "ServerwareProxyResponseProof", "proxy response proof has wrong kind")
     require_exact_object_fields(
         document,
@@ -3138,7 +3978,7 @@ def verify_production_proxy_response_proof(
 
     external_capture = document.get("external_capture") if isinstance(document.get("external_capture"), dict) else {}
     require(
-        external_capture.get("apiVersion") == "serverware.proxyResponseCapture/v1",
+        external_capture.get("apiVersion") == "serverware.proxyResponseCapture/v2",
         "proxy response external capture has wrong apiVersion",
     )
     require_exact_object_fields(
@@ -3151,8 +3991,13 @@ def verify_production_proxy_response_proof(
             "client_nonce",
             "client_request",
             "client_request_digest",
+            "principal_id",
+            "route_id",
             "request_digest",
             "operation_digest",
+            "release_authority",
+            "control_plane_authorization_receipt",
+            "upstream_response",
             "response",
             "tls_channel_binding",
             "tls_peer",
@@ -3196,7 +4041,7 @@ def verify_production_proxy_response_proof(
         client_request.get("apiVersion") == "serverware.clientProofRequest/v1",
         "proxy response external client request has wrong apiVersion",
     )
-    require(client_request.get("method") in {"GET", "HEAD"}, "proxy response proof request method is not safe")
+    require(client_request.get("method") == "GET", "proxy response proof request method is not GET")
     require(client_request.get("scheme") == "https", "proxy response proof request scheme is not HTTPS")
     require(
         isinstance(client_request.get("authority"), str)
@@ -3257,6 +4102,19 @@ def verify_production_proxy_response_proof(
         client_request.get("body_sha256") == sha256_prefixed_bytes(b""),
         "proxy response proof request did not bind an empty body",
     )
+    require(
+        external_capture.get("principal_id") == expected_principal_id,
+        "proxy response external capture principal ID does not match the independently configured expected proxy principal",
+    )
+    matched_route_id, expected_raw_policy_header_names = match_proxy_policy_route(
+        policy_snapshot,
+        principal_id=expected_principal_id,
+        client_request=client_request,
+    )
+    require(
+        external_capture.get("route_id") == matched_route_id,
+        "proxy response external capture route ID does not match the independently matched signed policy route",
+    )
     client_request_digest = require_sha256(
         external_capture.get("client_request_digest"),
         "proxy response external client request digest",
@@ -3275,6 +4133,12 @@ def verify_production_proxy_response_proof(
     )
     require(request_digest == expected_request_digest, "proxy response external capture canonical request digest mismatch")
     require(operation_digest == expected_operation_digest, "proxy response external capture operation digest mismatch")
+    release_authority = verify_proxy_release_authority(
+        external_capture.get("release_authority"),
+        expected_request_digest=request_digest,
+        expected_operation_digest=operation_digest,
+        latest_observation_at_unix=captured_at,
+    )
 
     response = external_capture.get("response") if isinstance(external_capture.get("response"), dict) else {}
     require_exact_object_fields(
@@ -3285,6 +4149,11 @@ def verify_production_proxy_response_proof(
     status = response.get("status")
     require(isinstance(status, int) and not isinstance(status, bool), "proxy response external capture status must be an integer")
     require(200 <= status < 300, "proxy response external capture did not bind a successful production response status")
+    upstream_response = verify_proxy_upstream_response(
+        external_capture.get("upstream_response"),
+        expected_status=status,
+        expected_header_names=expected_raw_policy_header_names,
+    )
     selected_headers = response.get("selected_headers")
     require(
         isinstance(selected_headers, dict) and bool(selected_headers),
@@ -3446,7 +4315,7 @@ def verify_production_proxy_response_proof(
 
     server_statement = document.get("server_statement") if isinstance(document.get("server_statement"), dict) else {}
     require(
-        server_statement.get("apiVersion") == "serverware.proxyResponseStatement/v1",
+        server_statement.get("apiVersion") == "serverware.proxyResponseStatement/v2",
         "proxy response server statement has wrong apiVersion",
     )
     require_exact_object_fields(
@@ -3456,8 +4325,13 @@ def verify_production_proxy_response_proof(
             "issued_at_unix",
             "client_nonce",
             "client_request_digest",
+            "principal_id",
+            "route_id",
             "request_digest",
             "operation_digest",
+            "release_authority",
+            "control_plane_authorization_receipt",
+            "upstream_response",
             "response",
             "tls_channel_binding",
             "policy_digest",
@@ -3533,6 +4407,14 @@ def verify_production_proxy_response_proof(
         statement_nonce == nonce,
         "proxy response external capture client_nonce does not match server statement",
     )
+    require(
+        server_statement.get("principal_id") == expected_principal_id,
+        "proxy response server statement principal ID does not match the independently configured expected proxy principal",
+    )
+    require(
+        server_statement.get("route_id") == matched_route_id,
+        "proxy response server statement route ID does not match the independently matched signed policy route",
+    )
     statement_request_digest = require_sha256(
         server_statement.get("request_digest"),
         "proxy response server statement canonical request digest",
@@ -3556,6 +4438,33 @@ def verify_production_proxy_response_proof(
     require(
         statement_operation_digest == operation_digest,
         "proxy response external capture operation_digest does not match server statement",
+    )
+    statement_release_authority = verify_proxy_release_authority(
+        server_statement.get("release_authority"),
+        expected_request_digest=statement_request_digest,
+        expected_operation_digest=statement_operation_digest,
+        latest_observation_at_unix=issued_at,
+    )
+    require(
+        statement_release_authority == release_authority,
+        "proxy response external capture release authority does not match server statement",
+    )
+    statement_upstream_response = verify_proxy_upstream_response(
+        server_statement.get("upstream_response"),
+        expected_status=status,
+        expected_header_names=expected_raw_policy_header_names,
+    )
+    require(
+        statement_upstream_response == upstream_response,
+        "proxy response external capture upstream response does not match server statement",
+    )
+    embedded_control_plane_authorization_receipt = server_statement.get(
+        "control_plane_authorization_receipt"
+    )
+    require(
+        external_capture.get("control_plane_authorization_receipt")
+        == embedded_control_plane_authorization_receipt,
+        "proxy response external capture control-plane authorization receipt does not match server statement",
     )
 
     statement_response = (
@@ -3731,8 +4640,15 @@ def verify_production_proxy_response_proof(
         "issued_at_unix": issued_at,
         "client_nonce_sha256": sha256_prefixed_bytes(nonce_bytes),
         "client_request_digest": client_request_digest,
+        "principal_id": expected_principal_id,
+        "route_id": matched_route_id,
         "request_digest": request_digest,
         "operation_digest": operation_digest,
+        "release_authority": release_authority,
+        "control_plane_authorization_receipt_sha256": (
+            sha256_prefixed_json(embedded_control_plane_authorization_receipt)
+        ),
+        "upstream_response": upstream_response,
         "response_status": status,
         "selected_response_headers_digest": selected_headers_digest,
         "response_body_digest": body_digest,
@@ -3749,6 +4665,36 @@ def verify_production_proxy_response_proof(
         set(attested_claims) == set(expected_attested_claims),
         "proxy response vendor TEE attested claims do not exactly match the server statement",
     )
+    control_plane_authorization = verify_control_plane_authorization_receipt(
+        embedded_control_plane_authorization_receipt,
+        trusted_public_key_pem=trusted_control_plane_response_signing_public_key_pem,
+        expected_trusted_public_key_id=(
+            expected_control_plane_response_signing_public_key_id
+        ),
+        expected_release_authority=release_authority,
+        expected_principal_id=expected_principal_id,
+        expected_route_id=matched_route_id,
+        expected_runtime_manifest_digest=expected_runtime_manifest_digest,
+        expected_policy_digest=expected_policy_digest,
+        expected_provenance_digest=expected_release_digest,
+        expected_image_signatures_digest=expected_image_signatures_digest,
+        expected_source_tree_digest=expected_source_tree_digest,
+    )
+    control_plane_authorization_key_id = control_plane_authorization[
+        "signing_key_id"
+    ]
+    for proof_role, proof_key_id in (
+        ("external collector", collector_signing_key_id),
+        ("response statement signer", response_signing_key_id),
+        ("vendor TEE verifier", trusted_verifier_key_id),
+    ):
+        require(
+            not hmac.compare_digest(
+                control_plane_authorization_key_id, proof_key_id
+            ),
+            "control-plane response signing trust root must be independent "
+            f"from the proxy proof {proof_role} key",
+        )
 
     return {
         "apiVersion": document.get("apiVersion"),
@@ -3758,6 +4704,11 @@ def verify_production_proxy_response_proof(
         "client_request_digest": client_request_digest,
         "request_digest": request_digest,
         "operation_digest": operation_digest,
+        "principal_id": expected_principal_id,
+        "route_id": matched_route_id,
+        "release_authority": release_authority,
+        "control_plane_authorization_receipt": control_plane_authorization,
+        "upstream_response": upstream_response,
         "status": status,
         "selected_response_headers_digest": selected_headers_digest,
         "emitted_body_digest": body_digest,
@@ -3779,6 +4730,11 @@ def verify_production_proxy_response_proof(
         "server_statement_signature_verified": True,
         "fresh_client_nonce_bound": True,
         "authenticated_external_client_capture_bound": True,
+        "release_authority_bound": True,
+        "embedded_control_plane_authorization_receipt_bound": True,
+        "signed_policy_route_bound": True,
+        "signed_policy_response_headers_bound": True,
+        "upstream_response_bound": True,
         "release_artifacts_bound": True,
     }
 
@@ -4285,6 +5241,14 @@ def main() -> None:
     parser.add_argument("--reproducible-build-signature", required=True)
     parser.add_argument("--reproducible-build-trusted-public-key", required=True)
     parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
+    parser.add_argument(
+        "--control-plane-response-signing-public-key",
+        default=None,
+    )
+    parser.add_argument(
+        "--control-plane-response-signing-public-key-id",
+        default=None,
+    )
     parser.add_argument("--proxy-response-proof", default=None)
     parser.add_argument("--proxy-proof-verifier-public-key", default=None)
     parser.add_argument("--proxy-collector-public-key", default=None)
@@ -4354,6 +5318,14 @@ def main() -> None:
             ),
             "final challenge receipt options are only valid with --verification-mode final",
         )
+    require(
+        bool(args.control_plane_response_signing_public_key),
+        "production completion requires --control-plane-response-signing-public-key",
+    )
+    require(
+        bool(args.control_plane_response_signing_public_key_id),
+        "production completion requires --control-plane-response-signing-public-key-id",
+    )
     require(bool(args.proxy_response_proof), "production completion requires --proxy-response-proof")
     require(
         bool(args.proxy_proof_verifier_public_key),
@@ -4397,6 +5369,9 @@ def main() -> None:
         "reproducible_build_signature": Path(args.reproducible_build_signature),
         "reproducible_build_trusted_public_key": Path(args.reproducible_build_trusted_public_key),
         "kms_materials": Path(args.kms_materials),
+        "control_plane_response_signing_public_key": Path(
+            args.control_plane_response_signing_public_key
+        ),
         "proxy_response_proof": Path(args.proxy_response_proof),
         "proxy_proof_verifier_public_key": Path(args.proxy_proof_verifier_public_key),
         "proxy_collector_public_key": Path(args.proxy_collector_public_key),
@@ -4412,6 +5387,8 @@ def main() -> None:
         paths,
         include_hardware_assurance=bool(args.hardware_assurance),
         include_final_receipt=args.verification_mode == "final",
+        include_proxy_security=True,
+        include_policy=True,
     )
 
     readiness = load_json(paths["production_readiness"], "production readiness")
@@ -4425,9 +5402,27 @@ def main() -> None:
     image_summary = load_json(paths["image_signatures_summary"], "image signatures summary")
     image_document = load_json(paths["image_signatures"], "image signatures")
     bench = load_json(paths["bench"], "decision-gate benchmark")
-    proxy_response_proof = load_json(paths["proxy_response_proof"], "production proxy response proof")
-    trusted_proxy_verifier_public_key_pem = paths["proxy_proof_verifier_public_key"].read_text(encoding="ascii")
-    trusted_proxy_collector_public_key_pem = paths["proxy_collector_public_key"].read_text(encoding="ascii")
+    proxy_response_proof = load_json_snapshot(
+        final_file_snapshots["proxy_response_proof"],
+        "production proxy response proof",
+    )
+    trusted_control_plane_response_signing_public_key_pem = snapshot_text(
+        final_file_snapshots[
+            "control_plane_response_signing_public_key"
+        ],
+        "control-plane response signing trust root",
+        encoding="ascii",
+    )
+    trusted_proxy_verifier_public_key_pem = snapshot_text(
+        final_file_snapshots["proxy_proof_verifier_public_key"],
+        "proxy proof vendor verifier trust root",
+        encoding="ascii",
+    )
+    trusted_proxy_collector_public_key_pem = snapshot_text(
+        final_file_snapshots["proxy_collector_public_key"],
+        "proxy response collector trust root",
+        encoding="ascii",
+    )
 
     readiness_summary = verify_readiness(readiness)
     preflight_summary = verify_production_host_preflight(production_host_preflight, paths, readiness_summary)
@@ -4448,6 +5443,12 @@ def main() -> None:
             REKOR_TRUST_ROOT_ENV_KEY: args.rekor_trusted_public_key,
             EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY: args.external_checkpoint_trusted_public_key,
             EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY: args.external_checkpoint_provider,
+            CONTROL_PLANE_RESPONSE_SIGNING_KEY_ENV_KEY: (
+                args.control_plane_response_signing_public_key
+            ),
+            CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY: (
+                args.control_plane_response_signing_public_key_id
+            ),
         },
         final_inputs={
             FINAL_HARDWARE_ASSURANCE_ENV_KEY: args.hardware_assurance,
@@ -4474,6 +5475,18 @@ def main() -> None:
     require(
         readiness_summary["external_transparency_log_id"] == trusted_external_log_id,
         "live readiness external transparency log does not match the independently trusted key",
+    )
+    require(
+        hmac.compare_digest(
+            ed25519_public_key_id(
+                trusted_control_plane_response_signing_public_key_pem,
+                "control-plane response signing trust root",
+            ),
+            production_env_binding[
+                "control_plane_response_signing_public_key_id"
+            ],
+        ),
+        "loaded control-plane response signing trust root identity differs from the hashed production readiness env binding",
     )
     for loaded_key_pem, binding_key, label in (
         (
@@ -4660,10 +5673,25 @@ def main() -> None:
         attested_runtime=attested_runtime,
         preflight=preflight_summary,
     )
+    policy_snapshot = verify_and_compile_policy_snapshot(
+        final_file_snapshots["policy_bundle"],
+        final_file_snapshots["policy_trusted_public_key"],
+        expected_policy_digest=str(attested_runtime["policy_digest"]),
+    )
     proxy_response_summary = verify_production_proxy_response_proof(
         proxy_response_proof,
         trusted_verifier_public_key_pem=trusted_proxy_verifier_public_key_pem,
         trusted_collector_public_key_pem=trusted_proxy_collector_public_key_pem,
+        trusted_control_plane_response_signing_public_key_pem=(
+            trusted_control_plane_response_signing_public_key_pem
+        ),
+        expected_control_plane_response_signing_public_key_id=(
+            args.control_plane_response_signing_public_key_id
+        ),
+        policy_snapshot=policy_snapshot,
+        expected_principal_id=production_env_binding[
+            "expected_proxy_principal_id"
+        ],
         expected_server_instance_id=str(args.proxy_server_instance_id),
         expected_client_nonce=str(args.proxy_client_nonce),
         expected_request_digest=str(args.proxy_request_digest),
@@ -4673,6 +5701,10 @@ def main() -> None:
         expected_runtime_manifest_digest=str(attested_runtime["runtime_manifest_digest"]),
         expected_binary_digest=str(attested_runtime["data_plane_binary_digest"]),
         expected_release_digest=str(attested_runtime["provenance_digest"]),
+        expected_image_signatures_digest=str(
+            image_summary_out["image_signature_bundle_digest"]
+        ),
+        expected_source_tree_digest=str(attested_runtime["source_tree_digest"]),
         expected_response_signing_key_id=str(attested_runtime["response_signing_key_id"]),
         expected_tee_platform=str(nitro_summary["tee_platform"]),
         expected_quote_provider=str(nitro_summary["provider"]),

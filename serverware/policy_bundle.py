@@ -1622,11 +1622,10 @@ def _validate_response_binding_sources(
     ]
     if not response_bindings:
         return
-    if adapter_type != "generic.rest":
+    if adapter_type not in {"generic.rest", "npm.registry"}:
         raise PolicyBundleError(
-            f"route {route_id} responseBinding is currently supported only for generic.rest"
+            f"route {route_id} responseBinding is currently supported only for generic.rest and npm.registry"
         )
-    request = adapter_config.get("request") or {}
     response = adapter_config.get("response") or {}
     if (
         response.get("mode") != "json"
@@ -1635,6 +1634,43 @@ def _validate_response_binding_sources(
         raise PolicyBundleError(
             f"route {route_id} responseBinding requires a buffered JSON response capped at 65536 bytes"
         )
+    if adapter_type == "npm.registry":
+        configured_operations = {
+            f"npm.{operation}" for operation in adapter_config.get("operations") or []
+        }
+        for constraint in response_bindings:
+            constraint_id = str(constraint.get("id") or "unnamed")
+            operations = constraint.get("operations") or []
+            if operations != ["npm.publish"] or "npm.publish" not in configured_operations:
+                raise PolicyBundleError(
+                    f"route {route_id} responseBinding {constraint_id} must be scoped only to configured npm.publish"
+                )
+            bound_sources: set[str] = set()
+            for binding in constraint.get("bindings") or []:
+                source = str(binding.get("operationField") or "")
+                if source not in {
+                    "packageName",
+                    "packageVersion",
+                    "tarballIntegrity",
+                }:
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} source {source} "
+                        "is not a captured npm.publish field"
+                    )
+                if binding.get("comparison") != "exactString":
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} npm.publish source {source} "
+                        "must use exactString"
+                    )
+                bound_sources.add(source)
+            if not {"packageName", "packageVersion"}.issubset(bound_sources):
+                raise PolicyBundleError(
+                    f"route {route_id} responseBinding {constraint_id} must bind npm.publish "
+                    "packageName and packageVersion"
+                )
+        return
+
+    request = adapter_config.get("request") or {}
     operation = request.get("operation") or {}
     operation_name = operation.get("name")
     if not isinstance(operation_name, str) or not operation_name:
@@ -1768,6 +1804,72 @@ def _validate_optional_response_release_contract(
     _validate_response_headers(route_id, error, f"{adapter_name} error response")
 
 
+def _validate_signed_npm_publish_response_contract(
+    route_id: str,
+    response: dict[str, Any],
+    constraints: tuple[dict[str, Any], ...],
+) -> None:
+    max_body_bytes = response.get("maxBodyBytes")
+    if (
+        response.get("mode") != "json"
+        or not isinstance(max_body_bytes, int)
+        or isinstance(max_body_bytes, bool)
+        or not 1 <= max_body_bytes <= 65536
+    ):
+        raise PolicyBundleError(
+            f"route {route_id} signed npm.publish response contract requires buffered JSON "
+            "capped at 65536 bytes"
+        )
+
+    response_bindings = [
+        constraint
+        for constraint in constraints
+        if constraint.get("type") == "responseBinding"
+        and constraint.get("operations") == ["npm.publish"]
+    ]
+    if not response_bindings:
+        raise PolicyBundleError(
+            f"route {route_id} signed npm.publish requires a responseBinding scoped only to npm.publish"
+        )
+    for constraint in response_bindings:
+        constraint_id = str(constraint.get("id") or "unnamed")
+        success_status_codes = constraint.get("successStatusCodes") or []
+        if any(status not in {200, 201} for status in success_status_codes):
+            raise PolicyBundleError(
+                f"route {route_id} responseBinding {constraint_id} npm.publish "
+                "successStatusCodes may contain only 200 or 201"
+            )
+        if constraint.get("contentTypes") != ["application/json"]:
+            raise PolicyBundleError(
+                f"route {route_id} responseBinding {constraint_id} npm.publish "
+                "contentTypes must be exactly application/json"
+            )
+
+    response_json_constraints = [
+        constraint
+        for constraint in constraints
+        if constraint.get("type") == "responseJson"
+        and constraint.get("operations") == ["npm.publish"]
+    ]
+    if not response_json_constraints:
+        raise PolicyBundleError(
+            f"route {route_id} signed npm.publish requires a responseJson success constraint "
+            "scoped only to npm.publish"
+        )
+    if not any(
+        constraint.get("required") is True
+        and isinstance((constraint.get("fields") or {}).get("published"), dict)
+        and (constraint.get("fields") or {})["published"].get("required") is True
+        and (constraint.get("fields") or {})["published"].get("type") == "boolean"
+        and (constraint.get("fields") or {})["published"].get("equals") is True
+        for constraint in response_json_constraints
+    ):
+        raise PolicyBundleError(
+            f"route {route_id} signed npm.publish responseJson success constraint must require "
+            "published to equal true"
+        )
+
+
 def _validate_adapter_security_invariants(
     route_id: str,
     adapter_type: str,
@@ -1777,6 +1879,7 @@ def _validate_adapter_security_invariants(
     methods: frozenset[str],
     paths: tuple[str, ...],
     constraints: tuple[dict[str, Any], ...],
+    signed_policy: bool,
 ) -> None:
     if adapter_type == "gmail.v1":
         if not credential_ref:
@@ -1884,6 +1987,8 @@ def _validate_adapter_security_invariants(
         assert isinstance(response, dict)
         if response.get("mode") != "json":
             raise PolicyBundleError(f"route {route_id} npm writes require a bounded json success response")
+        if signed_policy and "publish" in operations:
+            _validate_signed_npm_publish_response_contract(route_id, response, constraints)
         authn = ((jit.get("approvers") or {}).get("authn") or {}) if isinstance(jit, dict) else {}
         authenticator_classes = set(authn.get("allowedAuthenticatorClasses") or [])
         if (
@@ -1914,6 +2019,9 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
         raise PolicyBundleError("kind must be PolicyBundle")
 
     metadata = raw.get("metadata") or {}
+    signed_policy = isinstance(metadata.get("signature"), str) and metadata["signature"].startswith(
+        "ed25519:"
+    )
     if "validFrom" in metadata:
         raise PolicyBundleError("metadata.validFrom is unsupported until activation-time enforcement is implemented")
     defaults = raw.get("defaults")
@@ -2226,6 +2334,7 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             methods,
             paths,
             constraints,
+            signed_policy,
         )
         response_mode = str((adapter_config.get("response") or {}).get("mode") or "")
         if response_mode in STREAMING_RESPONSE_MODES and any(
@@ -3049,6 +3158,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                             "maxBodyBytes": 65536,
                             "allowedFields": [
                                 "package",
+                                "version",
                                 "published",
                                 "tag",
                                 "dist_tag_written",
@@ -3073,6 +3183,42 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "description": "Only publish and dist-tag writes may reach this JIT-protected npm route.",
                         "allowedOperations": ["npm.publish", "npm.distTagWrite"],
                         "deniedOperations": ["npm.tokenWrite", "npm.metadataWrite"],
+                    },
+                    {
+                        "id": "npm-publish-identity-binding",
+                        "type": "responseBinding",
+                        "phase": "response",
+                        "operations": ["npm.publish"],
+                        "successStatusCodes": [200],
+                        "contentTypes": ["application/json"],
+                        "bindings": [
+                            {
+                                "id": "package-name",
+                                "operationField": "packageName",
+                                "responseField": "package",
+                                "comparison": "exactString",
+                            },
+                            {
+                                "id": "package-version",
+                                "operationField": "packageVersion",
+                                "responseField": "version",
+                                "comparison": "exactString",
+                            },
+                        ],
+                    },
+                    {
+                        "id": "npm-publish-success",
+                        "type": "responseJson",
+                        "phase": "response",
+                        "operations": ["npm.publish"],
+                        "required": True,
+                        "fields": {
+                            "published": {
+                                "required": True,
+                                "type": "boolean",
+                                "equals": True,
+                            }
+                        },
                     },
                 ],
                 "jit": {

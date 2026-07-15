@@ -423,12 +423,13 @@ def main() -> None:
         os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
         os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
         os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
+        os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
         os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
         os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
         os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
 
         from serverware import app as app_module
-        from serverware import db, policy_bundle, runtime
+        from serverware import db, policy_bundle, runtime, webauthn
         from serverware.auth import AdminIdentity
 
         exercise_python_release_lifecycle_contracts(
@@ -437,6 +438,7 @@ def main() -> None:
         )
         exercise_python_atomic_reserve_contract(runtime, policy_bundle.canonical_json)
         db.init_db()
+        webauthn.create_dev_credential("user:demo", "Approval review test authenticator")
         snapshot = policy_bundle.write_policy_bundle(policy_bundle.demo_policy_bundle("cred-demo-bearer"))
         db.upsert_route_with_id(
             "demo.npm.publish.jit",

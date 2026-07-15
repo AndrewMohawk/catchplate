@@ -26,8 +26,10 @@ from serverware.config import (
     DB_PATH,
     METADATA_STORE_BACKEND,
     METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
+    METADATA_STORE_FAULT_DOMAIN_ID,
     METADATA_STORE_POSTGRES_DSN,
     OAUTH_PENDING_CREDENTIAL_MAX_COUNT,
+    OIDC_SESSION_ACTIVATION_RETRY_TTL_SECONDS,
     RBAC_BINDINGS_PATH,
     SETUP_SESSION_AUDIT_CLAIM_TTL_SECONDS,
     SETUP_SESSION_AUDIT_OUTBOX_MAX_PENDING,
@@ -39,9 +41,27 @@ from serverware.config import (
     SETUP_SESSION_MAX_RETAINED,
     SETUP_SESSION_RETENTION_SECONDS,
     SETUP_SESSION_TTL_SECONDS,
+    WEBAUTHN_CHALLENGE_GLOBAL_LIVE_MAX,
+    WEBAUTHN_CHALLENGE_GLOBAL_RATE_MAX,
+    WEBAUTHN_CHALLENGE_MAX_RETAINED,
+    WEBAUTHN_CHALLENGE_RATE_WINDOW_SECONDS,
+    WEBAUTHN_CHALLENGE_TERMINAL_RETENTION_SECONDS,
+    WEBAUTHN_CHALLENGE_USER_LIVE_MAX,
+    WEBAUTHN_CHALLENGE_USER_RATE_MAX,
+    WEBAUTHN_RECOVERY_CREDENTIAL_HISTORY_MAX_BYTES,
+    WEBAUTHN_RECOVERY_CREDENTIAL_HISTORY_MAX_COUNT,
+    WEBAUTHN_RECOVERY_MAX_LIVE,
+    WEBAUTHN_RECOVERY_MAX_RETAINED,
+    WEBAUTHN_RECOVERY_TERMINAL_RETENTION_SECONDS,
+    WEBAUTHN_RECOVERY_WITNESS_BACKEND,
+    WEBAUTHN_RECOVERY_WITNESS_CONNECT_TIMEOUT_SECONDS,
+    WEBAUTHN_RECOVERY_WITNESS_FAULT_DOMAIN_ID,
+    WEBAUTHN_RECOVERY_WITNESS_PATH,
+    WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN,
     ensure_data_dirs,
 )
 from serverware.crypto import (
+    decrypt_secret,
     decrypt_secret_envelope,
     encrypt_secret_envelope,
     load_master_key,
@@ -142,6 +162,14 @@ class MetadataStoreError(RuntimeError):
     pass
 
 
+class WebAuthnRecoveryError(MetadataStoreError, ValueError):
+    pass
+
+
+class RecoveryWitnessError(RuntimeError):
+    pass
+
+
 class RateLimitStoreError(RuntimeError):
     pass
 
@@ -158,6 +186,12 @@ class _ReleaseAuthorizationDenied(Exception):
     def __init__(self, result: dict[str, Any]):
         self.result = result
         super().__init__(str(result.get("reason") or "release authorization denied"))
+
+
+class _OIDCBrowserSessionActivationDenied(Exception):
+    def __init__(self, result: dict[str, Any]):
+        self.result = result
+        super().__init__(str(result.get("reason") or "OIDC session activation denied"))
 
 
 class RBACBindingStoreError(RuntimeError):
@@ -221,6 +255,20 @@ _OIDC_LOGIN_RATE_WINDOW_SECONDS = 60
 _OIDC_LOGIN_GLOBAL_RATE_MAX = 600
 _OIDC_LOGIN_SOURCE_RATE_MAX = 20
 _OIDC_LOGIN_RATE_BUCKET_RETENTION_SECONDS = 180
+_OIDC_BROWSER_SESSION_GLOBAL_LIVE_MAX = 10_000
+_OIDC_BROWSER_SESSION_USER_LIVE_MAX = 20
+_OIDC_BROWSER_SESSION_ROLE_MAX_COUNT = 32
+_OIDC_BROWSER_SESSION_ROLE_MAX_BYTES = 128
+_OIDC_BROWSER_SESSION_ROLES_JSON_MAX_BYTES = 4 * 1024
+_OIDC_BROWSER_SESSION_TTL_MIN_SECONDS = 1
+_OIDC_BROWSER_SESSION_TTL_MAX_SECONDS = 24 * 60 * 60
+_OIDC_BROWSER_SESSION_PENDING_TTL_MAX_SECONDS = 15 * 60
+_OIDC_BROWSER_SESSION_TERMINAL_RETENTION_SECONDS = 7 * 24 * 60 * 60
+_OIDC_BINDING_CHALLENGE_GLOBAL_LIVE_MAX = 10_000
+_OIDC_BINDING_CHALLENGE_USER_LIVE_MAX = 4
+_OIDC_BINDING_CHALLENGE_USER_RATE_MAX = 30
+_OIDC_BINDING_CHALLENGE_RATE_WINDOW_SECONDS = 60
+_OIDC_BINDING_CHALLENGE_TERMINAL_RETENTION_SECONDS = 10 * 60
 _OAUTH_REVOCATION_BACKLOG_MAX_COUNT = max(1_000, OAUTH_PENDING_CREDENTIAL_MAX_COUNT * 4)
 _OAUTH_REVOCATION_LEASE_SECONDS = 60
 _OAUTH_REVOCATION_HELD_SECONDS = 10 * 60
@@ -520,6 +568,21 @@ def audit_uses_postgres() -> bool:
     return audit_store_backend_name() == "postgres"
 
 
+def recovery_witness_backend_name() -> str:
+    if WEBAUTHN_RECOVERY_WITNESS_BACKEND in {"sqlite", "local"}:
+        return "sqlite"
+    if WEBAUTHN_RECOVERY_WITNESS_BACKEND in {"postgres", "postgresql"}:
+        return "postgres"
+    raise RecoveryWitnessError(
+        "unsupported WebAuthn recovery witness backend: "
+        f"{WEBAUTHN_RECOVERY_WITNESS_BACKEND}"
+    )
+
+
+def recovery_witness_uses_postgres() -> bool:
+    return recovery_witness_backend_name() == "postgres"
+
+
 def metadata_store_backend_name() -> str:
     if METADATA_STORE_BACKEND in {"", "sqlite", "local"}:
         return "sqlite"
@@ -620,6 +683,46 @@ def _audit_pg_connect():
     )
 
 
+def _recovery_witness_pg_connect():
+    if not WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN:
+        raise RecoveryWitnessError(
+            "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN is required "
+            "for the PostgreSQL recovery witness"
+        )
+    try:
+        psycopg, dict_row = _audit_psycopg()
+        return psycopg.connect(
+            WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN,
+            connect_timeout=WEBAUTHN_RECOVERY_WITNESS_CONNECT_TIMEOUT_SECONDS,
+            row_factory=dict_row,
+        )
+    except AuditStoreError as exc:
+        raise RecoveryWitnessError(str(exc)) from exc
+    except Exception as exc:
+        raise RecoveryWitnessError("WebAuthn recovery witness is unavailable") from exc
+
+
+def _recovery_witness_sqlite_connect() -> sqlite3.Connection:
+    ensure_data_dirs()
+    try:
+        if WEBAUTHN_RECOVERY_WITNESS_PATH.resolve() == DB_PATH.resolve():
+            raise RecoveryWitnessError(
+                "WebAuthn recovery witness must not reuse the metadata database file"
+            )
+        WEBAUTHN_RECOVERY_WITNESS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(WEBAUTHN_RECOVERY_WITNESS_PATH, timeout=10)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=FULL")
+        return conn
+    except RecoveryWitnessError:
+        raise
+    except OSError as exc:
+        raise RecoveryWitnessError(
+            "WebAuthn recovery witness file is unavailable"
+        ) from exc
+
+
 def _metadata_pg_connect_raw():
     if not METADATA_STORE_POSTGRES_DSN:
         raise MetadataStoreError(
@@ -631,6 +734,369 @@ def _metadata_pg_connect_raw():
         connect_timeout=METADATA_STORE_CONNECT_TIMEOUT_SECONDS,
         row_factory=dict_row,
     )
+
+
+def init_recovery_witness_store() -> None:
+    if recovery_witness_uses_postgres():
+        with _recovery_witness_pg_connect() as conn:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS
+                            serverware_recovery_authorization_claims (
+                                authorization_digest TEXT PRIMARY KEY,
+                                signature_digest TEXT NOT NULL UNIQUE,
+                                statement_digest TEXT NOT NULL UNIQUE,
+                                recovery_id TEXT NOT NULL UNIQUE,
+                                ceremony_type TEXT NOT NULL,
+                                user_id TEXT NOT NULL,
+                                root_key_id TEXT NOT NULL,
+                                root_sequence BIGINT NOT NULL,
+                                claimed_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+                                CHECK (root_sequence > 0),
+                                CHECK (
+                                    ceremony_type IN (
+                                        'replacement-registration',
+                                        'lost-active-key-decommission'
+                                    )
+                                )
+                            );
+                        CREATE TABLE IF NOT EXISTS
+                            serverware_recovery_witness_heads (
+                                root_key_id TEXT NOT NULL,
+                                user_id TEXT NOT NULL,
+                                last_sequence BIGINT NOT NULL,
+                                updated_at TIMESTAMPTZ NOT NULL
+                                    DEFAULT clock_timestamp(),
+                                PRIMARY KEY (root_key_id, user_id),
+                                CHECK (last_sequence > 0)
+                            );
+                        CREATE INDEX IF NOT EXISTS
+                            serverware_recovery_claims_user_sequence
+                            ON serverware_recovery_authorization_claims
+                                (root_key_id, user_id, root_sequence);
+                        """
+                    )
+        return
+    with _recovery_witness_sqlite_connect() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS recovery_authorization_claims (
+                authorization_digest TEXT PRIMARY KEY,
+                signature_digest TEXT NOT NULL UNIQUE,
+                statement_digest TEXT NOT NULL UNIQUE,
+                recovery_id TEXT NOT NULL UNIQUE,
+                ceremony_type TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                root_key_id TEXT NOT NULL,
+                root_sequence INTEGER NOT NULL,
+                claimed_at TEXT NOT NULL,
+                CHECK (root_sequence > 0),
+                CHECK (
+                    ceremony_type IN (
+                        'replacement-registration',
+                        'lost-active-key-decommission'
+                    )
+                )
+            );
+            CREATE TABLE IF NOT EXISTS recovery_witness_heads (
+                root_key_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                last_sequence INTEGER NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (root_key_id, user_id),
+                CHECK (last_sequence > 0)
+            );
+            CREATE INDEX IF NOT EXISTS recovery_claims_user_sequence
+                ON recovery_authorization_claims
+                    (root_key_id, user_id, root_sequence);
+            """
+        )
+
+
+def claim_webauthn_recovery_authorization(
+    *,
+    authorization_digest: str,
+    signature_digest: str,
+    statement_digest: str,
+    recovery_id: str,
+    ceremony_type: str,
+    user_id: str,
+    root_key_id: str,
+    root_sequence: int,
+) -> dict[str, Any]:
+    for label, value in (
+        ("authorization digest", authorization_digest),
+        ("signature digest", signature_digest),
+        ("statement digest", statement_digest),
+        ("root key ID", root_key_id),
+    ):
+        if not isinstance(value, str) or re.fullmatch(
+            r"sha256:[0-9a-f]{64}", value
+        ) is None:
+            raise RecoveryWitnessError(f"recovery witness {label} is invalid")
+    if ceremony_type not in {
+        "replacement-registration",
+        "lost-active-key-decommission",
+    }:
+        raise RecoveryWitnessError("recovery witness ceremony type is invalid")
+    if not isinstance(recovery_id, str) or not 1 <= len(recovery_id) <= 128:
+        raise RecoveryWitnessError("recovery witness ceremony ID is invalid")
+    if not isinstance(user_id, str) or not 1 <= len(user_id.encode("utf-8")) <= 512:
+        raise RecoveryWitnessError("recovery witness user ID is invalid")
+    if isinstance(root_sequence, bool) or not isinstance(root_sequence, int) or root_sequence < 1:
+        raise RecoveryWitnessError("recovery witness root sequence is invalid")
+    if recovery_witness_uses_postgres():
+        try:
+            with _recovery_witness_pg_connect() as conn:
+                with conn.transaction():
+                    head = conn.execute(
+                        "SELECT last_sequence FROM serverware_recovery_witness_heads "
+                        "WHERE root_key_id = %s AND user_id = %s FOR UPDATE",
+                        (root_key_id, user_id),
+                    ).fetchone()
+                    if head is None:
+                        conn.execute(
+                            "INSERT INTO serverware_recovery_witness_heads "
+                            "(root_key_id, user_id, last_sequence) VALUES (%s, %s, %s)",
+                            (root_key_id, user_id, root_sequence),
+                        )
+                    elif int(head["last_sequence"]) + 1 != root_sequence:
+                        raise RecoveryWitnessError(
+                            "recovery witness root sequence is stale or non-monotonic"
+                        )
+                    else:
+                        updated = conn.execute(
+                            "UPDATE serverware_recovery_witness_heads "
+                            "SET last_sequence = %s, updated_at = clock_timestamp() "
+                            "WHERE root_key_id = %s AND user_id = %s "
+                            "AND last_sequence = %s",
+                            (
+                                root_sequence,
+                                root_key_id,
+                                user_id,
+                                root_sequence - 1,
+                            ),
+                        )
+                        if updated.rowcount != 1:
+                            raise RecoveryWitnessError(
+                                "recovery witness root sequence claim raced"
+                            )
+                    row = conn.execute(
+                        """
+                        INSERT INTO serverware_recovery_authorization_claims (
+                            authorization_digest, signature_digest,
+                            statement_digest, recovery_id, ceremony_type,
+                            user_id, root_key_id, root_sequence
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                        RETURNING claimed_at
+                        """,
+                        (
+                            authorization_digest,
+                            signature_digest,
+                            statement_digest,
+                            recovery_id,
+                            ceremony_type,
+                            user_id,
+                            root_key_id,
+                            root_sequence,
+                        ),
+                    ).fetchone()
+        except Exception as exc:
+            if getattr(exc, "sqlstate", None) == "23505":
+                raise RecoveryWitnessError(
+                    "recovery authorization was already claimed by the independent witness"
+                ) from exc
+            if isinstance(exc, RecoveryWitnessError):
+                raise
+            raise RecoveryWitnessError(
+                "WebAuthn recovery witness claim failed closed"
+            ) from exc
+        return {"ok": True, "claimed_at": str(row["claimed_at"])}
+    try:
+        with _recovery_witness_sqlite_connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            claimed_at = conn.execute(
+                "SELECT strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now') AS now"
+            ).fetchone()["now"]
+            head = conn.execute(
+                "SELECT last_sequence FROM recovery_witness_heads "
+                "WHERE root_key_id = ? AND user_id = ?",
+                (root_key_id, user_id),
+            ).fetchone()
+            if head is None:
+                conn.execute(
+                    "INSERT INTO recovery_witness_heads "
+                    "(root_key_id, user_id, last_sequence, updated_at) "
+                    "VALUES (?, ?, ?, ?)",
+                    (root_key_id, user_id, root_sequence, claimed_at),
+                )
+            elif int(head["last_sequence"]) + 1 != root_sequence:
+                raise RecoveryWitnessError(
+                    "recovery witness root sequence is stale or non-monotonic"
+                )
+            else:
+                updated = conn.execute(
+                    "UPDATE recovery_witness_heads "
+                    "SET last_sequence = ?, updated_at = ? "
+                    "WHERE root_key_id = ? AND user_id = ? AND last_sequence = ?",
+                    (
+                        root_sequence,
+                        claimed_at,
+                        root_key_id,
+                        user_id,
+                        root_sequence - 1,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise RecoveryWitnessError(
+                        "recovery witness root sequence claim raced"
+                    )
+            conn.execute(
+                """
+                INSERT INTO recovery_authorization_claims (
+                    authorization_digest, signature_digest, statement_digest,
+                    recovery_id, ceremony_type, user_id, root_key_id,
+                    root_sequence, claimed_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    authorization_digest,
+                    signature_digest,
+                    statement_digest,
+                    recovery_id,
+                    ceremony_type,
+                    user_id,
+                    root_key_id,
+                    root_sequence,
+                    claimed_at,
+                ),
+            )
+    except sqlite3.IntegrityError as exc:
+        raise RecoveryWitnessError(
+            "recovery authorization was already claimed by the independent witness"
+        ) from exc
+    except RecoveryWitnessError:
+        raise
+    except sqlite3.Error as exc:
+        raise RecoveryWitnessError(
+            "WebAuthn recovery witness claim failed closed"
+        ) from exc
+    return {"ok": True, "claimed_at": str(claimed_at)}
+
+
+def get_webauthn_recovery_witness_sequence(
+    *, root_key_id: str, user_id: str
+) -> int:
+    if recovery_witness_uses_postgres():
+        try:
+            with _recovery_witness_pg_connect() as conn:
+                row = conn.execute(
+                    "SELECT last_sequence FROM serverware_recovery_witness_heads "
+                    "WHERE root_key_id = %s AND user_id = %s",
+                    (root_key_id, user_id),
+                ).fetchone()
+        except Exception as exc:
+            raise RecoveryWitnessError(
+                "WebAuthn recovery witness head is unavailable"
+            ) from exc
+    else:
+        try:
+            with _recovery_witness_sqlite_connect() as conn:
+                row = conn.execute(
+                    "SELECT last_sequence FROM recovery_witness_heads "
+                    "WHERE root_key_id = ? AND user_id = ?",
+                    (root_key_id, user_id),
+                ).fetchone()
+        except sqlite3.Error as exc:
+            raise RecoveryWitnessError(
+                "WebAuthn recovery witness head is unavailable"
+            ) from exc
+    return int(row["last_sequence"]) if row else 0
+
+
+def _postgres_server_identity(conn: Any) -> tuple[str, int, int]:
+    row = conn.execute(
+        "SELECT COALESCE(inet_server_addr()::text, '') AS address, "
+        "COALESCE(inet_server_port(), 0) AS port, "
+        "system_identifier FROM pg_control_system()"
+    ).fetchone()
+    if row is None:
+        raise RecoveryWitnessError("PostgreSQL cluster identity is unavailable")
+    address = str(row["address"] or "")
+    port = int(row["port"] or 0)
+    try:
+        system_identifier = int(row["system_identifier"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RecoveryWitnessError(
+            "PostgreSQL cluster system_identifier is unavailable"
+        ) from exc
+    if system_identifier <= 0:
+        raise RecoveryWitnessError(
+            "PostgreSQL cluster system_identifier is unavailable"
+        )
+    info = getattr(conn, "info", None)
+    if not address and info is not None:
+        address = str(getattr(info, "host", "") or "")
+    if port == 0 and info is not None:
+        port = int(getattr(info, "port", 0) or 0)
+    return address, port, system_identifier
+
+
+def _require_fault_domain_identity(label: str, value: str) -> str:
+    if (
+        not value
+        or len(value) > 256
+        or not value.isascii()
+        or any(character.isspace() or not character.isprintable() for character in value)
+    ):
+        raise RecoveryWitnessError(
+            f"production {label} fault-domain identity is missing or invalid"
+        )
+    return value
+
+
+def require_independent_recovery_witness(*, production: bool) -> None:
+    if not production:
+        init_recovery_witness_store()
+        return
+    if not recovery_witness_uses_postgres() or not metadata_uses_postgres():
+        raise RecoveryWitnessError(
+            "production recovery witness and metadata stores must use PostgreSQL"
+        )
+    metadata_fault_domain = _require_fault_domain_identity(
+        "metadata store", METADATA_STORE_FAULT_DOMAIN_ID
+    )
+    witness_fault_domain = _require_fault_domain_identity(
+        "recovery witness", WEBAUTHN_RECOVERY_WITNESS_FAULT_DOMAIN_ID
+    )
+    if hmac.compare_digest(metadata_fault_domain, witness_fault_domain):
+        raise RecoveryWitnessError(
+            "production recovery witness and metadata stores must use different "
+            "declared fault domains"
+        )
+    try:
+        with _metadata_pg_connect_raw() as metadata_conn:
+            metadata_identity = _postgres_server_identity(metadata_conn)
+        with _recovery_witness_pg_connect() as witness_conn:
+            witness_identity = _postgres_server_identity(witness_conn)
+    except (MetadataStoreError, RecoveryWitnessError):
+        raise
+    except Exception as exc:
+        raise RecoveryWitnessError(
+            "production recovery witness separation could not be verified"
+        ) from exc
+    if metadata_identity[2] == witness_identity[2]:
+        raise RecoveryWitnessError(
+            "production recovery witness and metadata stores must use different "
+            "PostgreSQL clusters"
+        )
+    if metadata_identity[:2] == witness_identity[:2]:
+        raise RecoveryWitnessError(
+            "production recovery witness must use a non-colocated PostgreSQL server"
+        )
+    init_recovery_witness_store()
 
 
 def _pg_sql(sql: str) -> str:
@@ -1486,6 +1952,7 @@ def init_db(path: Path = DB_PATH) -> None:
     ensure_data_dirs()
     grants.init_grant_store()
     init_audit_store()
+    init_recovery_witness_store()
     with connect() as conn:
         if isinstance(conn, PostgresMetadataConnection):
             conn.execute(
@@ -2079,17 +2546,236 @@ def init_db(path: Path = DB_PATH) -> None:
                 revocation_source TEXT
             );
 
+            CREATE TABLE IF NOT EXISTS oidc_browser_sessions (
+                id TEXT PRIMARY KEY,
+                token_digest TEXT NOT NULL UNIQUE,
+                oidc_token_digest TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                roles_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                provider_expires_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                pending_expires_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                activated_at TEXT,
+                revoked_at TEXT,
+                bound_webauthn_credential_id TEXT
+                    REFERENCES webauthn_credentials(id),
+                activation_trust_bundle_digest TEXT,
+                activation_trust_bundle_sequence BIGINT,
+                activation_authenticator_class TEXT,
+                revocation_reason TEXT,
+                CHECK (
+                    length(token_digest) = 71
+                    AND substr(token_digest, 1, 7) = 'sha256:'
+                ),
+                CHECK (
+                    length(oidc_token_digest) = 71
+                    AND substr(oidc_token_digest, 1, 7) = 'sha256:'
+                ),
+                CHECK (status IN ('pending_webauthn', 'active', 'revoked')),
+                CHECK (length(roles_json) <= 4096),
+                CHECK (
+                    (status = 'pending_webauthn'
+                        AND pending_expires_at IS NOT NULL
+                        AND activated_at IS NULL
+                        AND revoked_at IS NULL
+                        AND bound_webauthn_credential_id IS NULL)
+                    OR (status = 'active'
+                        AND pending_expires_at IS NULL
+                        AND activated_at IS NOT NULL
+                        AND revoked_at IS NULL)
+                    OR (status = 'revoked' AND revoked_at IS NOT NULL)
+                )
+            );
+
+            CREATE INDEX IF NOT EXISTS oidc_browser_sessions_status_expiry
+                ON oidc_browser_sessions (status, expires_at);
+
+            CREATE INDEX IF NOT EXISTS oidc_browser_sessions_user_live
+                ON oidc_browser_sessions (user_id, status, expires_at);
+
+            CREATE INDEX IF NOT EXISTS oidc_browser_sessions_webauthn_binding
+                ON oidc_browser_sessions (bound_webauthn_credential_id, status);
+
+            CREATE TABLE IF NOT EXISTS oidc_session_activation_deliveries (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL UNIQUE
+                    REFERENCES oidc_browser_sessions(id) ON DELETE CASCADE,
+                old_token_digest TEXT NOT NULL UNIQUE,
+                new_token_digest TEXT NOT NULL UNIQUE,
+                assertion_digest TEXT NOT NULL UNIQUE,
+                challenge_id TEXT NOT NULL UNIQUE,
+                credential_record_id TEXT NOT NULL
+                    REFERENCES webauthn_credentials(id),
+                encrypted_active_token TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                CHECK (
+                    length(old_token_digest) = 71
+                    AND substr(old_token_digest, 1, 7) = 'sha256:'
+                ),
+                CHECK (
+                    length(new_token_digest) = 71
+                    AND substr(new_token_digest, 1, 7) = 'sha256:'
+                ),
+                CHECK (
+                    length(assertion_digest) = 71
+                    AND substr(assertion_digest, 1, 7) = 'sha256:'
+                ),
+                CHECK (length(encrypted_active_token) <= 4096)
+            );
+
+            CREATE INDEX IF NOT EXISTS oidc_activation_delivery_live
+                ON oidc_session_activation_deliveries
+                    (old_token_digest, assertion_digest, consumed_at, expires_at);
+
+            CREATE INDEX IF NOT EXISTS oidc_activation_delivery_expiry
+                ON oidc_session_activation_deliveries (expires_at, consumed_at);
+
             CREATE TABLE IF NOT EXISTS webauthn_challenges (
                 id TEXT PRIMARY KEY,
                 challenge TEXT NOT NULL UNIQUE,
                 challenge_type TEXT NOT NULL,
                 user_id TEXT NOT NULL,
+                scope_key TEXT,
                 approval_request_id TEXT,
                 payload_json TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
                 used_at TEXT,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS webauthn_recovery_root_state (
+                signing_key_id TEXT NOT NULL,
+                user_id TEXT NOT NULL,
+                last_consumed_sequence BIGINT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (last_consumed_sequence >= 0),
+                PRIMARY KEY (signing_key_id, user_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS webauthn_recovery_ceremonies (
+                id TEXT PRIMARY KEY,
+                nonce TEXT NOT NULL UNIQUE,
+                user_id TEXT NOT NULL,
+                oidc_session_id TEXT NOT NULL,
+                pending_token_digest TEXT NOT NULL,
+                oidc_token_digest TEXT NOT NULL,
+                roles_json TEXT NOT NULL,
+                identity_digest TEXT NOT NULL,
+                session_expires_at TEXT NOT NULL,
+                pending_expires_at TEXT NOT NULL,
+                label TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                challenge_id TEXT NOT NULL UNIQUE
+                    REFERENCES webauthn_challenges(id),
+                challenge_digest TEXT NOT NULL UNIQUE,
+                credential_history_digest TEXT NOT NULL,
+                credential_history_count BIGINT NOT NULL,
+                active_credential_count BIGINT NOT NULL,
+                trust_bundle_digest TEXT NOT NULL,
+                trust_bundle_sequence BIGINT NOT NULL,
+                trust_bundle_rollback_epoch BIGINT NOT NULL,
+                trust_signing_key_id TEXT NOT NULL,
+                auth_policy_digest TEXT NOT NULL,
+                recovery_root_key_id TEXT NOT NULL,
+                recovery_root_provider TEXT NOT NULL,
+                recovery_audience TEXT NOT NULL,
+                rp_id TEXT NOT NULL,
+                origin TEXT NOT NULL,
+                root_sequence BIGINT,
+                status TEXT NOT NULL,
+                candidate_json TEXT,
+                candidate_digest TEXT UNIQUE,
+                statement_json TEXT,
+                statement_digest TEXT UNIQUE,
+                authorization_json TEXT,
+                authorization_digest TEXT UNIQUE,
+                signature_digest TEXT UNIQUE,
+                replacement_record_id TEXT UNIQUE
+                    REFERENCES webauthn_credentials(id),
+                created_at TEXT NOT NULL,
+                prepared_at TEXT,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                invalidated_at TEXT,
+                CHECK (
+                    status IN (
+                        'pending_candidate', 'prepared', 'consumed',
+                        'expired', 'invalidated'
+                    )
+                ),
+                CHECK (credential_history_count > 0),
+                CHECK (active_credential_count = 0),
+                CHECK (root_sequence IS NULL OR root_sequence > 0),
+                CHECK (length(roles_json) <= 4096)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS webauthn_recovery_one_live_subject
+                ON webauthn_recovery_ceremonies (user_id)
+                WHERE status IN ('pending_candidate', 'prepared');
+
+            CREATE UNIQUE INDEX IF NOT EXISTS webauthn_recovery_one_live_session
+                ON webauthn_recovery_ceremonies (oidc_session_id)
+                WHERE status IN ('pending_candidate', 'prepared');
+
+            CREATE INDEX IF NOT EXISTS webauthn_recovery_status_expiry
+                ON webauthn_recovery_ceremonies (status, expires_at);
+
+            CREATE TABLE IF NOT EXISTS webauthn_recovery_revocations (
+                id TEXT PRIMARY KEY,
+                nonce TEXT NOT NULL UNIQUE,
+                user_id TEXT NOT NULL,
+                oidc_session_id TEXT NOT NULL,
+                pending_token_digest TEXT NOT NULL,
+                oidc_token_digest TEXT NOT NULL,
+                roles_json TEXT NOT NULL,
+                identity_digest TEXT NOT NULL,
+                session_expires_at TEXT NOT NULL,
+                pending_expires_at TEXT NOT NULL,
+                reason TEXT NOT NULL,
+                credential_history_digest TEXT NOT NULL,
+                credential_history_count BIGINT NOT NULL,
+                active_credential_count BIGINT NOT NULL,
+                active_credential_record_id TEXT NOT NULL,
+                active_credential_id_digest TEXT NOT NULL,
+                trust_bundle_digest TEXT NOT NULL,
+                trust_bundle_sequence BIGINT NOT NULL,
+                trust_bundle_rollback_epoch BIGINT NOT NULL,
+                trust_signing_key_id TEXT NOT NULL,
+                auth_policy_digest TEXT NOT NULL,
+                recovery_root_key_id TEXT NOT NULL,
+                recovery_root_provider TEXT NOT NULL,
+                recovery_audience TEXT NOT NULL,
+                root_sequence BIGINT NOT NULL,
+                statement_json TEXT NOT NULL,
+                statement_digest TEXT NOT NULL UNIQUE,
+                authorization_json TEXT,
+                authorization_digest TEXT UNIQUE,
+                signature_digest TEXT UNIQUE,
+                status TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                consumed_at TEXT,
+                CHECK (active_credential_count = 1),
+                CHECK (credential_history_count > 0),
+                CHECK (root_sequence > 0),
+                CHECK (status IN ('prepared', 'consumed', 'expired'))
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS webauthn_recovery_revocation_one_live_subject
+                ON webauthn_recovery_revocations (user_id)
+                WHERE status = 'prepared';
+
+            CREATE UNIQUE INDEX IF NOT EXISTS webauthn_recovery_revocation_one_live_session
+                ON webauthn_recovery_revocations (oidc_session_id)
+                WHERE status = 'prepared';
+
+            CREATE INDEX IF NOT EXISTS webauthn_recovery_revocation_status_expiry
+                ON webauthn_recovery_revocations (status, expires_at);
             """
         )
         if not isinstance(conn, PostgresMetadataConnection):
@@ -2249,6 +2935,63 @@ def init_db(path: Path = DB_PATH) -> None:
         )
         _ensure_column(
             conn, "oidc_login_states", "source_key", "TEXT NOT NULL DEFAULT 'internal'"
+        )
+        _ensure_column(conn, "oidc_browser_sessions", "pending_expires_at", "TEXT")
+        _ensure_column(conn, "oidc_browser_sessions", "provider_expires_at", "TEXT")
+        _ensure_column(
+            conn, "oidc_browser_sessions", "activation_trust_bundle_digest", "TEXT"
+        )
+        _ensure_column(
+            conn,
+            "oidc_browser_sessions",
+            "activation_trust_bundle_sequence",
+            "BIGINT",
+        )
+        _ensure_column(
+            conn, "oidc_browser_sessions", "activation_authenticator_class", "TEXT"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS oidc_browser_sessions_pending_expiry "
+            "ON oidc_browser_sessions (status, pending_expires_at)"
+        )
+        _ensure_column(conn, "webauthn_challenges", "scope_key", "TEXT")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS webauthn_challenges_type_user_state "
+            "ON webauthn_challenges "
+            "(challenge_type, user_id, used_at, expires_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS webauthn_challenges_type_scope_state "
+            "ON webauthn_challenges "
+            "(challenge_type, scope_key, used_at, expires_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS webauthn_challenges_live_expiry "
+            "ON webauthn_challenges (used_at, expires_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS webauthn_challenges_user_created "
+            "ON webauthn_challenges (user_id, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS webauthn_challenges_created "
+            "ON webauthn_challenges (created_at)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS "
+            "webauthn_challenges_one_live_oidc_binding "
+            "ON webauthn_challenges (challenge_type, user_id, scope_key) "
+            "WHERE challenge_type = 'oidc-session-binding' "
+            "AND used_at IS NULL AND scope_key IS NOT NULL"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS webauthn_credentials_user_active "
+            "ON webauthn_credentials (user_id, revoked_at, created_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS webauthn_credentials_user_class_active "
+            "ON webauthn_credentials "
+            "(user_id, authenticator_class, revoked_at)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS oidc_login_states_source_expiry "
@@ -4904,6 +5647,1128 @@ def consume_oidc_login_state(*, state: str, browser_nonce: str) -> dict[str, str
         "state_hash": item_id,
         "code_verifier": code_verifier,
         "oidc_nonce": oidc_nonce,
+    }
+
+
+def _oidc_browser_session_digest(label: str, value: Any) -> str:
+    if (
+        not isinstance(value, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None
+    ):
+        raise MetadataStoreError(
+            f"OIDC browser session {label} must be a lowercase sha256 digest"
+        )
+    return value
+
+
+def _oidc_browser_session_text(
+    label: str, value: Any, *, maximum_bytes: int = 512
+) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value.encode("utf-8")) > maximum_bytes
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise MetadataStoreError(
+            f"OIDC browser session {label} must be a non-empty trimmed string "
+            f"of at most {maximum_bytes} bytes"
+        )
+    return value
+
+
+def _oidc_browser_session_timestamp(label: str, value: Any) -> str:
+    timestamp = _oidc_browser_session_text(label, value, maximum_bytes=64)
+    try:
+        parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise MetadataStoreError(
+            f"OIDC browser session {label} must be an ISO-8601 timestamp"
+        ) from exc
+    if parsed.tzinfo is None:
+        raise MetadataStoreError(
+            f"OIDC browser session {label} must include a timezone"
+        )
+    canonical = parsed.astimezone(timezone.utc).isoformat()
+    if timestamp != canonical:
+        raise MetadataStoreError(
+            f"OIDC browser session {label} must be a canonical UTC timestamp"
+        )
+    return canonical
+
+
+def _oidc_browser_session_roles(roles: Any) -> tuple[list[str], str]:
+    if (
+        not isinstance(roles, list)
+        or not roles
+        or len(roles) > _OIDC_BROWSER_SESSION_ROLE_MAX_COUNT
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session roles must be a non-empty bounded list"
+        )
+    normalized: list[str] = []
+    for role in roles:
+        normalized.append(
+            _oidc_browser_session_text(
+                "role",
+                role,
+                maximum_bytes=_OIDC_BROWSER_SESSION_ROLE_MAX_BYTES,
+            )
+        )
+    normalized = sorted(set(normalized))
+    roles_json = dumps(normalized)
+    if len(roles_json.encode("utf-8")) > _OIDC_BROWSER_SESSION_ROLES_JSON_MAX_BYTES:
+        raise MetadataStoreError("OIDC browser session roles exceed 4 KiB")
+    return normalized, roles_json
+
+
+def _prune_oidc_browser_sessions(conn: Any, now: datetime) -> int:
+    _prune_oidc_activation_deliveries(conn, now)
+    deleted = conn.execute(
+        """
+        DELETE FROM oidc_browser_sessions
+        WHERE (
+                status = 'pending_webauthn'
+                AND COALESCE(pending_expires_at, expires_at) <= ?
+              )
+           OR (status != 'pending_webauthn' AND expires_at <= ?)
+           OR (
+                status = 'revoked'
+                AND revoked_at <= ?
+           )
+        """,
+        (
+            now.isoformat(),
+            now.isoformat(),
+            (
+                now
+                - timedelta(seconds=_OIDC_BROWSER_SESSION_TERMINAL_RETENTION_SECONDS)
+            ).isoformat(),
+        ),
+    )
+    return max(0, int(deleted.rowcount))
+
+
+def row_to_oidc_browser_session(row: Any) -> dict[str, Any]:
+    roles = loads(row["roles_json"], None)
+    if not isinstance(roles, list) or any(not isinstance(role, str) for role in roles):
+        raise MetadataStoreError("stored OIDC browser session roles are invalid")
+    return {
+        "id": str(row["id"]),
+        "token_digest": str(row["token_digest"]),
+        "oidc_token_digest": str(row["oidc_token_digest"]),
+        "user_id": str(row["user_id"]),
+        "roles": roles,
+        "status": str(row["status"]),
+        "provider_expires_at": (
+            str(row["provider_expires_at"])
+            if row["provider_expires_at"]
+            else str(row["expires_at"])
+        ),
+        "expires_at": str(row["expires_at"]),
+        "pending_expires_at": (
+            str(row["pending_expires_at"]) if row["pending_expires_at"] else None
+        ),
+        "created_at": str(row["created_at"]),
+        "updated_at": str(row["updated_at"]),
+        "activated_at": (str(row["activated_at"]) if row["activated_at"] else None),
+        "revoked_at": str(row["revoked_at"]) if row["revoked_at"] else None,
+        "bound_webauthn_credential_id": (
+            str(row["bound_webauthn_credential_id"])
+            if row["bound_webauthn_credential_id"]
+            else None
+        ),
+        "activation_trust_bundle_digest": (
+            str(row["activation_trust_bundle_digest"])
+            if row["activation_trust_bundle_digest"]
+            else None
+        ),
+        "activation_trust_bundle_sequence": (
+            int(row["activation_trust_bundle_sequence"])
+            if row["activation_trust_bundle_sequence"] is not None
+            else None
+        ),
+        "activation_authenticator_class": (
+            str(row["activation_authenticator_class"])
+            if row["activation_authenticator_class"]
+            else None
+        ),
+        "revocation_reason": (
+            str(row["revocation_reason"]) if row["revocation_reason"] else None
+        ),
+    }
+
+
+_OIDC_BOUND_CREDENTIAL_COLUMNS = (
+    "id",
+    "credential_id",
+    "user_id",
+    "label",
+    "public_key_cose",
+    "sign_count",
+    "aaguid",
+    "authenticator_class",
+    "attestation_fmt",
+    "attestation_trusted",
+    "attestation_trust_path",
+    "attestation_leaf_sha256",
+    "attestation_root_sha256",
+    "attestation_trust_bundle_digest",
+    "attestation_trust_bundle_sequence",
+    "attestation_verified_at",
+    "transports",
+    "dev_private_key_pem",
+    "created_at",
+    "updated_at",
+    "last_used_at",
+    "revoked_at",
+    "revoked_by",
+    "revocation_reason",
+    "revocation_source",
+)
+
+
+def _oidc_session_with_bound_credential(row: Any) -> dict[str, Any]:
+    session = row_to_oidc_browser_session(row)
+    if row["bound_credential_row_id"] is None:
+        session["_bound_credential"] = None
+        return session
+    credential_row = {
+        column: row[f"bound_credential_{column}"]
+        for column in _OIDC_BOUND_CREDENTIAL_COLUMNS
+    }
+    session["_bound_credential"] = row_to_webauthn_credential(credential_row)
+    return session
+
+
+def _oidc_session_bound_credential_projection() -> str:
+    return ", ".join(
+        f"credential.{column} AS bound_credential_{column}"
+        for column in _OIDC_BOUND_CREDENTIAL_COLUMNS
+    )
+
+
+def create_oidc_browser_session(
+    *,
+    token_digest: str,
+    oidc_token_digest: str,
+    user_id: str,
+    roles: list[str],
+    ttl_seconds: int,
+    provider_expires_at_epoch: int,
+    require_webauthn: bool,
+    pending_ttl_seconds: int | None = None,
+) -> dict[str, Any]:
+    token_hash = _oidc_browser_session_digest("token_digest", token_digest)
+    oidc_hash = _oidc_browser_session_digest("oidc_token_digest", oidc_token_digest)
+    identity_id = _oidc_browser_session_text("user_id", user_id)
+    _, roles_json = _oidc_browser_session_roles(roles)
+    if not isinstance(require_webauthn, bool):
+        raise MetadataStoreError(
+            "OIDC browser session require_webauthn must be a boolean"
+        )
+    if (
+        isinstance(ttl_seconds, bool)
+        or not isinstance(ttl_seconds, int)
+        or not _OIDC_BROWSER_SESSION_TTL_MIN_SECONDS
+        <= ttl_seconds
+        <= _OIDC_BROWSER_SESSION_TTL_MAX_SECONDS
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session ttl_seconds must be between "
+            f"{_OIDC_BROWSER_SESSION_TTL_MIN_SECONDS} and "
+            f"{_OIDC_BROWSER_SESSION_TTL_MAX_SECONDS}"
+        )
+    if pending_ttl_seconds is not None and (
+        isinstance(pending_ttl_seconds, bool)
+        or not isinstance(pending_ttl_seconds, int)
+        or not _OIDC_BROWSER_SESSION_TTL_MIN_SECONDS
+        <= pending_ttl_seconds
+        <= _OIDC_BROWSER_SESSION_PENDING_TTL_MAX_SECONDS
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session pending_ttl_seconds must be between "
+            f"{_OIDC_BROWSER_SESSION_TTL_MIN_SECONDS} and "
+            f"{_OIDC_BROWSER_SESSION_PENDING_TTL_MAX_SECONDS}"
+        )
+    if (
+        isinstance(provider_expires_at_epoch, bool)
+        or not isinstance(provider_expires_at_epoch, int)
+        or provider_expires_at_epoch <= 0
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session provider expiry must be an absolute epoch"
+        )
+    session_id = str(uuid.uuid4())
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        _prune_oidc_browser_sessions(conn, now)
+        existing = conn.execute(
+            "SELECT id FROM oidc_browser_sessions WHERE token_digest = ?",
+            (token_hash,),
+        ).fetchone()
+        if existing is not None:
+            raise MetadataStoreError(
+                "OIDC browser session token digest is already registered"
+            )
+        global_count = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM oidc_browser_sessions
+            WHERE (status = 'active' AND expires_at > ?)
+               OR (
+                    status = 'pending_webauthn'
+                    AND COALESCE(pending_expires_at, expires_at) > ?
+               )
+            """,
+            (now_s, now_s),
+        ).fetchone()
+        if int(global_count["count"] if global_count else 0) >= (
+            _OIDC_BROWSER_SESSION_GLOBAL_LIVE_MAX
+        ):
+            raise MetadataStoreError(
+                "OIDC browser session global live capacity has been reached"
+            )
+        user_count = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM oidc_browser_sessions
+            WHERE user_id = ?
+              AND (
+                    (status = 'active' AND expires_at > ?)
+                    OR (
+                        status = 'pending_webauthn'
+                        AND COALESCE(pending_expires_at, expires_at) > ?
+                    )
+              )
+            """,
+            (identity_id, now_s, now_s),
+        ).fetchone()
+        if int(user_count["count"] if user_count else 0) >= (
+            _OIDC_BROWSER_SESSION_USER_LIVE_MAX
+        ):
+            raise MetadataStoreError(
+                "OIDC browser session user live capacity has been reached"
+            )
+        status = "pending_webauthn" if require_webauthn else "active"
+        activated_at = None if require_webauthn else now_s
+        provider_expires_at = datetime.fromtimestamp(
+            provider_expires_at_epoch, tz=timezone.utc
+        )
+        if provider_expires_at <= now:
+            raise MetadataStoreError("OIDC provider token is already expired")
+        expires_at = min(
+            now + timedelta(seconds=ttl_seconds), provider_expires_at
+        ).isoformat()
+        effective_pending_ttl = min(
+            ttl_seconds,
+            pending_ttl_seconds
+            if pending_ttl_seconds is not None
+            else _OIDC_BROWSER_SESSION_PENDING_TTL_MAX_SECONDS,
+        )
+        pending_expires_at = (
+            min(
+                now + timedelta(seconds=effective_pending_ttl),
+                datetime.fromisoformat(expires_at),
+            ).isoformat()
+            if require_webauthn
+            else None
+        )
+        conn.execute(
+            """
+            INSERT INTO oidc_browser_sessions (
+                id, token_digest, oidc_token_digest, user_id, roles_json, status,
+                provider_expires_at, expires_at, pending_expires_at,
+                created_at, updated_at, activated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                token_hash,
+                oidc_hash,
+                identity_id,
+                roles_json,
+                status,
+                provider_expires_at.isoformat(),
+                expires_at,
+                pending_expires_at,
+                now_s,
+                now_s,
+                activated_at,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ?", (session_id,)
+        ).fetchone()
+    return row_to_oidc_browser_session(row)
+
+
+def get_oidc_browser_session(token_digest: str) -> dict[str, Any] | None:
+    token_hash = _oidc_browser_session_digest("token_digest", token_digest)
+    with connect() as conn:
+        now_s = _metadata_utcnow(conn).isoformat()
+        row = conn.execute(
+            f"""
+            SELECT session.*, credential.id AS bound_credential_row_id,
+                   {_oidc_session_bound_credential_projection()}
+            FROM oidc_browser_sessions AS session
+            LEFT JOIN webauthn_credentials AS credential
+              ON credential.id = session.bound_webauthn_credential_id
+             AND credential.user_id = session.user_id
+             AND credential.revoked_at IS NULL
+            WHERE session.token_digest = ?
+              AND (
+                    (
+                        session.status = 'pending_webauthn'
+                        AND session.expires_at > ?
+                        AND session.pending_expires_at > ?
+                    )
+                    OR (
+                        session.status = 'active'
+                        AND session.expires_at > ?
+                        AND (
+                            session.bound_webauthn_credential_id IS NULL
+                            OR credential.id IS NOT NULL
+                        )
+                    )
+              )
+            """,
+            (token_hash, now_s, now_s, now_s),
+        ).fetchone()
+    return _oidc_session_with_bound_credential(row) if row else None
+
+
+def get_active_oidc_browser_session(token_digest: str) -> dict[str, Any] | None:
+    token_hash = _oidc_browser_session_digest("token_digest", token_digest)
+    with connect() as conn:
+        now_s = _metadata_utcnow(conn).isoformat()
+        row = conn.execute(
+            f"""
+            SELECT session.*, credential.id AS bound_credential_row_id,
+                   {_oidc_session_bound_credential_projection()}
+            FROM oidc_browser_sessions AS session
+            LEFT JOIN webauthn_credentials AS credential
+              ON credential.id = session.bound_webauthn_credential_id
+             AND credential.user_id = session.user_id
+             AND credential.revoked_at IS NULL
+            WHERE session.token_digest = ?
+              AND session.status = 'active'
+              AND session.expires_at > ?
+              AND (
+                    session.bound_webauthn_credential_id IS NULL
+                    OR credential.id IS NOT NULL
+              )
+            """,
+            (token_hash, now_s),
+        ).fetchone()
+    return _oidc_session_with_bound_credential(row) if row else None
+
+
+def _prune_oidc_activation_deliveries(conn: Any, now: datetime) -> None:
+    conn.execute(
+        "DELETE FROM oidc_session_activation_deliveries "
+        "WHERE expires_at <= ? OR (consumed_at IS NOT NULL AND consumed_at <= ?)",
+        (now.isoformat(), (now - timedelta(minutes=10)).isoformat()),
+    )
+
+
+def finalize_oidc_browser_session_activation(
+    *,
+    old_token_digest: str,
+    new_token_digest: str,
+    session_id: str,
+    user_id: str,
+    expires_at: str,
+    pending_expires_at: str,
+    challenge: str,
+    credential_id: str,
+    credential_record_id: str,
+    expected_sign_count: int,
+    new_sign_count: int,
+    assertion_digest: str,
+    encrypted_active_token: str,
+    trust_bundle_digest: str | None,
+    trust_bundle_sequence: int | None,
+    authenticator_class: str,
+) -> dict[str, Any]:
+    old_token_hash = _oidc_browser_session_digest(
+        "old_token_digest", old_token_digest
+    )
+    new_token_hash = _oidc_browser_session_digest(
+        "new_token_digest", new_token_digest
+    )
+    if hmac.compare_digest(old_token_hash, new_token_hash):
+        raise MetadataStoreError(
+            "OIDC browser session activation must rotate the session token digest"
+        )
+    expected_session_id = _oidc_browser_session_text(
+        "session_id", session_id, maximum_bytes=128
+    )
+    expected_user_id = _oidc_browser_session_text("user_id", user_id)
+    expected_expires_at = _oidc_browser_session_timestamp("expires_at", expires_at)
+    expected_pending_expires_at = _oidc_browser_session_timestamp(
+        "pending_expires_at", pending_expires_at
+    )
+    if expected_pending_expires_at > expected_expires_at:
+        raise MetadataStoreError(
+            "OIDC browser session pending expiry exceeds the active expiry"
+        )
+    challenge_value = _oidc_browser_session_text(
+        "challenge", challenge, maximum_bytes=128
+    )
+    if re.fullmatch(r"[A-Za-z0-9_-]{43}", challenge_value) is None:
+        raise MetadataStoreError("OIDC browser session challenge is invalid")
+    expected_credential_id = _oidc_browser_session_text(
+        "credential_id", credential_id, maximum_bytes=2048
+    )
+    expected_credential_record_id = _oidc_browser_session_text(
+        "credential_record_id", credential_record_id
+    )
+    if (
+        isinstance(expected_sign_count, bool)
+        or not isinstance(expected_sign_count, int)
+        or expected_sign_count < 0
+        or isinstance(new_sign_count, bool)
+        or not isinstance(new_sign_count, int)
+        or new_sign_count < 0
+        or not (
+            (expected_sign_count == 0 and new_sign_count == 0)
+            or new_sign_count > expected_sign_count
+        )
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session authenticator sign counter transition is invalid"
+        )
+    if (trust_bundle_digest is None) != (trust_bundle_sequence is None):
+        raise MetadataStoreError(
+            "OIDC browser session activation trust bundle binding is incomplete"
+        )
+    activation_trust_digest = (
+        _oidc_browser_session_digest("trust_bundle_digest", trust_bundle_digest)
+        if trust_bundle_digest is not None
+        else None
+    )
+    if trust_bundle_sequence is not None and (
+        isinstance(trust_bundle_sequence, bool)
+        or not isinstance(trust_bundle_sequence, int)
+        or trust_bundle_sequence < 1
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session activation trust bundle sequence is invalid"
+        )
+    activation_authenticator_class = _oidc_browser_session_text(
+        "authenticator_class", authenticator_class, maximum_bytes=128
+    )
+    activation_assertion_digest = _oidc_browser_session_digest(
+        "assertion_digest", assertion_digest
+    )
+    if (
+        not isinstance(encrypted_active_token, str)
+        or not encrypted_active_token.startswith("v1:")
+        or len(encrypted_active_token.encode("utf-8")) > 4096
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session activation token envelope is invalid"
+        )
+    try:
+        active_token = decrypt_secret(encrypted_active_token)
+    except (ValueError, TypeError) as exc:
+        raise MetadataStoreError(
+            "OIDC browser session activation token envelope is invalid"
+        ) from exc
+    if (
+        re.fullmatch(r"[A-Za-z0-9_-]{64}", active_token) is None
+        or not hmac.compare_digest(
+            "sha256:" + hashlib.sha256(active_token.encode("ascii")).hexdigest(),
+            new_token_hash,
+        )
+    ):
+        raise MetadataStoreError(
+            "OIDC browser session activation token envelope does not match its digest"
+        )
+
+    def deny(reason: str, session: dict[str, Any] | None = None) -> None:
+        raise _OIDCBrowserSessionActivationDenied(
+            {"ok": False, "reason": reason, "session": session}
+        )
+
+    try:
+        with connect() as conn:
+            _lock_webauthn_authority(conn)
+            now = _metadata_utcnow(conn)
+            now_s = now.isoformat()
+            _prune_oidc_activation_deliveries(conn, now)
+            row = conn.execute(
+                "SELECT * FROM oidc_browser_sessions WHERE token_digest = ?",
+                (old_token_hash,),
+            ).fetchone()
+            if row is None:
+                deny("session_not_found")
+            session = row_to_oidc_browser_session(row)
+            if str(row["id"]) != expected_session_id:
+                deny("session_id_mismatch", session)
+            if str(row["user_id"]) != expected_user_id:
+                deny("session_user_mismatch", session)
+            if str(row["expires_at"]) != expected_expires_at:
+                deny("session_expiry_mismatch", session)
+            if str(row["pending_expires_at"] or "") != expected_pending_expires_at:
+                deny("session_pending_expiry_mismatch", session)
+            if row["status"] != "pending_webauthn":
+                deny("session_not_pending", session)
+            if row["expires_at"] <= now_s:
+                deny("session_expired", session)
+            if row["pending_expires_at"] <= now_s:
+                deny("session_pending_expired", session)
+            duplicate = conn.execute(
+                "SELECT id FROM oidc_browser_sessions WHERE token_digest = ?",
+                (new_token_hash,),
+            ).fetchone()
+            if duplicate is not None:
+                deny("new_token_digest_in_use", session)
+
+            challenge_row = conn.execute(
+                """
+                SELECT * FROM webauthn_challenges
+                WHERE challenge = ?
+                  AND challenge_type = 'oidc-session-binding'
+                  AND user_id = ?
+                  AND approval_request_id IS NULL
+                  AND used_at IS NULL
+                  AND expires_at > ?
+                """,
+                (challenge_value, expected_user_id, now_s),
+            ).fetchone()
+            if challenge_row is None:
+                deny("challenge_not_found_or_expired", session)
+            challenge_payload = loads(challenge_row["payload_json"], None)
+            expected_payload_keys = {
+                "v",
+                "type",
+                "session_id",
+                "user_id",
+                "session_expires_at",
+                "pending_expires_at",
+                "nonce",
+            }
+            if not isinstance(challenge_payload, dict) or set(
+                challenge_payload
+            ) != expected_payload_keys:
+                deny("challenge_payload_mismatch", session)
+            nonce = challenge_payload.get("nonce")
+            if (
+                challenge_payload.get("v") != 1
+                or challenge_payload.get("type")
+                != "serverware.oidc_session_binding"
+                or challenge_payload.get("session_id") != expected_session_id
+                or challenge_payload.get("user_id") != expected_user_id
+                or challenge_payload.get("session_expires_at")
+                != expected_expires_at
+                or challenge_payload.get("pending_expires_at")
+                != expected_pending_expires_at
+                or not isinstance(nonce, str)
+                or re.fullmatch(r"[A-Za-z0-9_-]{32}", nonce) is None
+            ):
+                deny("challenge_payload_mismatch", session)
+            expected_challenge = (
+                base64.urlsafe_b64encode(
+                    hashlib.sha256(dumps(challenge_payload).encode("utf-8")).digest()
+                )
+                .decode("ascii")
+                .rstrip("=")
+            )
+            if not hmac.compare_digest(challenge_value, expected_challenge):
+                deny("challenge_payload_mismatch", session)
+
+            credential = conn.execute(
+                "SELECT * FROM webauthn_credentials WHERE id = ?",
+                (expected_credential_record_id,),
+            ).fetchone()
+            if credential is None:
+                deny("credential_not_found", session)
+            if str(credential["credential_id"]) != expected_credential_id:
+                deny("credential_id_mismatch", session)
+            if str(credential["user_id"]) != expected_user_id:
+                deny("credential_user_mismatch", session)
+            if credential["revoked_at"] is not None:
+                deny("credential_revoked", session)
+            if int(credential["sign_count"]) != expected_sign_count:
+                deny("credential_sign_count_mismatch", session)
+
+            claimed = conn.execute(
+                """
+                UPDATE webauthn_challenges
+                SET used_at = ?
+                WHERE id = ?
+                  AND challenge = ?
+                  AND challenge_type = 'oidc-session-binding'
+                  AND user_id = ?
+                  AND approval_request_id IS NULL
+                  AND payload_json = ?
+                  AND used_at IS NULL
+                  AND expires_at > ?
+                """,
+                (
+                    now_s,
+                    challenge_row["id"],
+                    challenge_value,
+                    expected_user_id,
+                    dumps(challenge_payload),
+                    now_s,
+                ),
+            )
+            if claimed.rowcount != 1:
+                deny("challenge_state_changed", session)
+            counter_updated = conn.execute(
+                """
+                UPDATE webauthn_credentials
+                SET sign_count = ?, last_used_at = ?, updated_at = ?
+                WHERE id = ?
+                  AND credential_id = ?
+                  AND user_id = ?
+                  AND revoked_at IS NULL
+                  AND sign_count = ?
+                """,
+                (
+                    new_sign_count,
+                    now_s,
+                    now_s,
+                    expected_credential_record_id,
+                    expected_credential_id,
+                    expected_user_id,
+                    expected_sign_count,
+                ),
+            )
+            if counter_updated.rowcount != 1:
+                deny("credential_sign_count_changed", session)
+            activated_update = conn.execute(
+                """
+                UPDATE oidc_browser_sessions
+                SET token_digest = ?, status = 'active',
+                    bound_webauthn_credential_id = ?, activated_at = ?,
+                    updated_at = ?, pending_expires_at = NULL,
+                    activation_trust_bundle_digest = ?,
+                    activation_trust_bundle_sequence = ?,
+                    activation_authenticator_class = ?
+                WHERE id = ?
+                  AND token_digest = ?
+                  AND user_id = ?
+                  AND status = 'pending_webauthn'
+                  AND expires_at = ?
+                  AND pending_expires_at = ?
+                  AND expires_at > ?
+                  AND pending_expires_at > ?
+                  AND EXISTS (
+                        SELECT 1
+                        FROM webauthn_credentials AS credential
+                        WHERE credential.id = ?
+                          AND credential.credential_id = ?
+                          AND credential.user_id = oidc_browser_sessions.user_id
+                          AND credential.revoked_at IS NULL
+                          AND credential.sign_count = ?
+                  )
+                """,
+                (
+                    new_token_hash,
+                    expected_credential_record_id,
+                    now_s,
+                    now_s,
+                    activation_trust_digest,
+                    trust_bundle_sequence,
+                    activation_authenticator_class,
+                    expected_session_id,
+                    old_token_hash,
+                    expected_user_id,
+                    expected_expires_at,
+                    expected_pending_expires_at,
+                    now_s,
+                    now_s,
+                    expected_credential_record_id,
+                    expected_credential_id,
+                    new_sign_count,
+                ),
+            )
+            if activated_update.rowcount != 1:
+                deny("session_state_changed", session)
+            activated_row = conn.execute(
+                "SELECT * FROM oidc_browser_sessions WHERE id = ?",
+                (expected_session_id,),
+            ).fetchone()
+            delivery_expiry = min(
+                now
+                + timedelta(seconds=OIDC_SESSION_ACTIVATION_RETRY_TTL_SECONDS),
+                datetime.fromisoformat(expected_expires_at),
+            ).isoformat()
+            conn.execute(
+                """
+                INSERT INTO oidc_session_activation_deliveries (
+                    id, session_id, old_token_digest, new_token_digest,
+                    assertion_digest, challenge_id, credential_record_id,
+                    encrypted_active_token, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    expected_session_id,
+                    old_token_hash,
+                    new_token_hash,
+                    activation_assertion_digest,
+                    str(challenge_row["id"]),
+                    expected_credential_record_id,
+                    encrypted_active_token,
+                    now_s,
+                    delivery_expiry,
+                ),
+            )
+            append_audit_event(
+                conn,
+                event_type="oidc.browser_session.activated",
+                actor_type="admin",
+                actor_id=expected_user_id,
+                event={
+                    "session_id": expected_session_id,
+                    "user_id": expected_user_id,
+                    "challenge_id": str(challenge_row["id"]),
+                    "expires_at": expected_expires_at,
+                    "authenticator_class": activation_authenticator_class,
+                    "trust_bundle_digest": activation_trust_digest,
+                    "trust_bundle_sequence": trust_bundle_sequence,
+                },
+                idempotency_key=(
+                    f"oidc-browser-session-activation:{expected_session_id}"
+                ),
+            )
+    except _OIDCBrowserSessionActivationDenied as exc:
+        return exc.result
+    return {
+        "ok": True,
+        "reason": "activated",
+        "session": row_to_oidc_browser_session(activated_row),
+        "challenge_id": str(challenge_row["id"]),
+        "assertion_digest": activation_assertion_digest,
+    }
+
+
+def recover_oidc_session_activation_delivery(
+    *, old_token_digest: str, assertion_digest: str, challenge: str
+) -> dict[str, Any]:
+    old_token_hash = _oidc_browser_session_digest(
+        "old_token_digest", old_token_digest
+    )
+    expected_assertion_digest = _oidc_browser_session_digest(
+        "assertion_digest", assertion_digest
+    )
+    expected_challenge = _oidc_browser_session_text(
+        "challenge", challenge, maximum_bytes=128
+    )
+    if re.fullmatch(r"[A-Za-z0-9_-]{43}", expected_challenge) is None:
+        raise MetadataStoreError("OIDC browser session challenge is invalid")
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        _prune_oidc_activation_deliveries(conn, now)
+        row = conn.execute(
+            """
+            SELECT delivery.*
+            FROM oidc_session_activation_deliveries AS delivery
+            JOIN oidc_browser_sessions AS session
+              ON session.id = delivery.session_id
+             AND session.token_digest = delivery.new_token_digest
+             AND session.status = 'active'
+             AND session.expires_at > ?
+            JOIN webauthn_credentials AS credential
+              ON credential.id = delivery.credential_record_id
+             AND credential.id = session.bound_webauthn_credential_id
+             AND credential.user_id = session.user_id
+             AND credential.revoked_at IS NULL
+            JOIN webauthn_challenges AS challenge
+              ON challenge.id = delivery.challenge_id
+             AND challenge.challenge = ?
+             AND challenge.challenge_type = 'oidc-session-binding'
+             AND challenge.user_id = session.user_id
+             AND challenge.scope_key = session.id
+             AND challenge.used_at IS NOT NULL
+            WHERE delivery.old_token_digest = ?
+              AND delivery.assertion_digest = ?
+              AND delivery.consumed_at IS NULL
+              AND delivery.expires_at > ?
+            """,
+            (
+                now_s,
+                expected_challenge,
+                old_token_hash,
+                expected_assertion_digest,
+                now_s,
+            ),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "reason": "activation_delivery_not_available"}
+        try:
+            active_token = decrypt_secret(str(row["encrypted_active_token"]))
+        except (TypeError, ValueError):
+            return {"ok": False, "reason": "activation_delivery_envelope_invalid"}
+        if (
+            re.fullmatch(r"[A-Za-z0-9_-]{64}", active_token) is None
+            or not hmac.compare_digest(
+                "sha256:"
+                + hashlib.sha256(active_token.encode("ascii")).hexdigest(),
+                str(row["new_token_digest"]),
+            )
+        ):
+            return {"ok": False, "reason": "activation_delivery_envelope_mismatch"}
+        claimed = conn.execute(
+            """
+            UPDATE oidc_session_activation_deliveries
+            SET consumed_at = ?
+            WHERE id = ? AND old_token_digest = ? AND assertion_digest = ?
+              AND consumed_at IS NULL AND expires_at > ?
+            """,
+            (now_s, row["id"], old_token_hash, expected_assertion_digest, now_s),
+        )
+        if claimed.rowcount != 1:
+            return {"ok": False, "reason": "activation_delivery_claim_raced"}
+        session = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ?",
+            (row["session_id"],),
+        ).fetchone()
+        append_audit_event(
+            conn,
+            event_type="oidc.browser_session.activation_delivery_recovered",
+            actor_type="admin",
+            actor_id=str(session["user_id"]),
+            event={
+                "session_id": str(row["session_id"]),
+                "challenge_id": str(row["challenge_id"]),
+                "assertion_digest": expected_assertion_digest,
+                "delivery_id": str(row["id"]),
+            },
+            idempotency_key=f"oidc-activation-delivery:{row['id']}",
+        )
+    return {
+        "ok": True,
+        "encrypted_active_token": str(row["encrypted_active_token"]),
+        "session": row_to_oidc_browser_session(session),
+        "challenge_id": str(row["challenge_id"]),
+    }
+
+
+def activate_oidc_browser_session(
+    *, token_digest: str, credential_record_id: str
+) -> dict[str, Any]:
+    token_hash = _oidc_browser_session_digest("token_digest", token_digest)
+    credential_id = _oidc_browser_session_text(
+        "credential_record_id", credential_record_id
+    )
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        row = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE token_digest = ?",
+            (token_hash,),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "reason": "session_not_found", "session": None}
+        session = row_to_oidc_browser_session(row)
+        if row["status"] == "active":
+            return {
+                "ok": False,
+                "reason": "session_already_active",
+                "session": session,
+            }
+        if row["status"] == "revoked":
+            return {"ok": False, "reason": "session_revoked", "session": session}
+        if row["expires_at"] <= now_s:
+            return {"ok": False, "reason": "session_expired", "session": session}
+        if (
+            row["pending_expires_at"] is not None
+            and row["pending_expires_at"] <= now_s
+        ):
+            return {
+                "ok": False,
+                "reason": "session_pending_expired",
+                "session": session,
+            }
+        credential = conn.execute(
+            "SELECT user_id, revoked_at FROM webauthn_credentials WHERE id = ?",
+            (credential_id,),
+        ).fetchone()
+        if credential is None:
+            return {
+                "ok": False,
+                "reason": "credential_not_found",
+                "session": session,
+            }
+        if credential["revoked_at"] is not None:
+            return {
+                "ok": False,
+                "reason": "credential_revoked",
+                "session": session,
+            }
+        if credential["user_id"] != row["user_id"]:
+            return {
+                "ok": False,
+                "reason": "credential_user_mismatch",
+                "session": session,
+            }
+        updated = conn.execute(
+            """
+            UPDATE oidc_browser_sessions
+            SET status = 'active', bound_webauthn_credential_id = ?,
+                activated_at = ?, updated_at = ?, pending_expires_at = NULL
+            WHERE id = ?
+              AND status = 'pending_webauthn'
+              AND expires_at > ?
+              AND COALESCE(pending_expires_at, expires_at) > ?
+              AND EXISTS (
+                    SELECT 1
+                    FROM webauthn_credentials AS credential
+                    WHERE credential.id = ?
+                      AND credential.user_id = oidc_browser_sessions.user_id
+                      AND credential.revoked_at IS NULL
+              )
+            """,
+            (
+                credential_id,
+                now_s,
+                now_s,
+                row["id"],
+                now_s,
+                now_s,
+                credential_id,
+            ),
+        )
+        if updated.rowcount != 1:
+            current = conn.execute(
+                "SELECT * FROM oidc_browser_sessions WHERE id = ?", (row["id"],)
+            ).fetchone()
+            return {
+                "ok": False,
+                "reason": "session_state_changed",
+                "session": (row_to_oidc_browser_session(current) if current else None),
+            }
+        activated = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ?", (row["id"],)
+        ).fetchone()
+    return {
+        "ok": True,
+        "reason": "activated",
+        "session": row_to_oidc_browser_session(activated),
+    }
+
+
+def revoke_oidc_browser_session(
+    *, token_digest: str, actor_id: str, reason: str
+) -> dict[str, Any]:
+    token_hash = _oidc_browser_session_digest("token_digest", token_digest)
+    actor = _oidc_browser_session_text("actor_id", actor_id)
+    revocation_reason = _oidc_browser_session_text("revocation reason", reason)
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        row = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE token_digest = ?",
+            (token_hash,),
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "reason": "session_not_found", "session": None}
+        session = row_to_oidc_browser_session(row)
+        if row["status"] == "revoked":
+            return {"ok": True, "reason": "already_revoked", "session": session}
+        updated = conn.execute(
+            """
+            UPDATE oidc_browser_sessions
+            SET status = 'revoked', revoked_at = ?, revocation_reason = ?,
+                updated_at = ?
+            WHERE id = ? AND status IN ('pending_webauthn', 'active')
+            """,
+            (now_s, revocation_reason, now_s, row["id"]),
+        )
+        if updated.rowcount != 1:
+            current = conn.execute(
+                "SELECT * FROM oidc_browser_sessions WHERE id = ?", (row["id"],)
+            ).fetchone()
+            return {
+                "ok": False,
+                "reason": "session_state_changed",
+                "session": (row_to_oidc_browser_session(current) if current else None),
+            }
+        revoked = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ?", (row["id"],)
+        ).fetchone()
+        append_audit_event(
+            conn,
+            event_type="oidc.browser_session.revoked",
+            actor_type="admin",
+            actor_id=actor,
+            event={
+                "session_id": str(row["id"]),
+                "user_id": str(row["user_id"]),
+                "revoked_at": now_s,
+                "revocation_reason_recorded": True,
+            },
+            idempotency_key=f"oidc-browser-session-revoked:{row['id']}",
+        )
+    return {
+        "ok": True,
+        "reason": "revoked",
+        "session": row_to_oidc_browser_session(revoked),
+    }
+
+
+def revoke_unbound_oidc_browser_sessions(
+    *, actor_id: str, reason: str
+) -> dict[str, Any]:
+    actor = _oidc_browser_session_text("actor_id", actor_id)
+    revocation_reason = _oidc_browser_session_text("revocation reason", reason)
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM oidc_browser_sessions
+            WHERE status = 'active'
+              AND bound_webauthn_credential_id IS NULL
+            ORDER BY id ASC
+            """
+        ).fetchall()
+        session_ids = [str(row["id"]) for row in rows]
+        revoked = conn.execute(
+            """
+            UPDATE oidc_browser_sessions
+            SET status = 'revoked', revoked_at = ?, updated_at = ?,
+                revocation_reason = ?
+            WHERE status = 'active'
+              AND bound_webauthn_credential_id IS NULL
+            """,
+            (now_s, now_s, revocation_reason),
+        )
+        if revoked.rowcount != len(session_ids):
+            raise MetadataStoreError(
+                "unbound OIDC browser session revocation state changed"
+            )
+        if session_ids:
+            append_audit_event(
+                conn,
+                event_type="oidc.browser_sessions.unbound_revoked",
+                actor_type="admin",
+                actor_id=actor,
+                event={
+                    "session_ids": session_ids,
+                    "revoked_session_count": len(session_ids),
+                    "revoked_at": now_s,
+                    "revocation_reason_recorded": True,
+                },
+            )
+    return {
+        "ok": True,
+        "reason": "revoked",
+        "revoked_session_count": len(session_ids),
+        "session_ids": session_ids,
     }
 
 
@@ -10560,6 +12425,72 @@ def finalize_webauthn_registration(
         ).fetchone()
         if challenge_row is None:
             return None
+        challenge_payload = loads(challenge_row["payload_json"], {})
+        authorization = (
+            challenge_payload.get("authorization")
+            if isinstance(challenge_payload, dict)
+            else None
+        )
+        first_oidc_enrollment = (
+            isinstance(authorization, dict)
+            and authorization.get("mode") == "oidc-session-first-enrollment"
+        )
+        if first_oidc_enrollment:
+            authorization_session_id = authorization.get("session_id")
+            authorization_user_id = authorization.get("user_id")
+            authorization_pending_expires_at = authorization.get(
+                "pending_expires_at"
+            )
+            if (
+                challenge_payload.get("type") != "registration"
+                or challenge_payload.get("user_id") != user_id
+                or challenge_payload.get("label") != label
+                or not isinstance(authorization_session_id, str)
+                or not authorization_session_id
+                or authorization_user_id != challenge_payload.get("user_id")
+                or authorization_user_id != user_id
+                or not isinstance(authorization_pending_expires_at, str)
+                or authorization.get("existing_credential_count") != 0
+                or re.fullmatch(
+                    r"sha256:[0-9a-f]{64}",
+                    str(authorization.get("payload_digest") or ""),
+                )
+                is None
+            ):
+                raise ValueError(
+                    "OIDC first-enrollment registration authorization is invalid"
+                )
+            authorized_session = conn.execute(
+                """
+                SELECT id
+                FROM oidc_browser_sessions
+                WHERE id = ?
+                  AND user_id = ?
+                  AND status = 'pending_webauthn'
+                  AND pending_expires_at = ?
+                  AND expires_at > ?
+                  AND pending_expires_at > ?
+                """,
+                (
+                    authorization_session_id,
+                    authorization_user_id,
+                    authorization_pending_expires_at,
+                    now_s,
+                    now_s,
+                ),
+            ).fetchone()
+            if authorized_session is None:
+                raise ValueError(
+                    "OIDC first-enrollment registration session is invalid or expired"
+                )
+            credential_history = conn.execute(
+                "SELECT 1 FROM webauthn_credentials WHERE user_id = ? LIMIT 1",
+                (user_id,),
+            ).fetchone()
+            if credential_history is not None:
+                raise ValueError(
+                    "OIDC first enrollment is closed because credential history exists"
+                )
         consumed = conn.execute(
             """
             UPDATE webauthn_challenges
@@ -10592,7 +12523,21 @@ def finalize_webauthn_registration(
             transports=transports,
             dev_private_key_pem=None,
         )
-        challenge_payload = loads(challenge_row["payload_json"], {})
+        invalidated_sibling_challenge_count = 0
+        if first_oidc_enrollment:
+            invalidated_siblings = conn.execute(
+                """
+                UPDATE webauthn_challenges
+                SET used_at = ?
+                WHERE challenge_type = 'registration'
+                  AND user_id = ?
+                  AND id != ?
+                  AND used_at IS NULL
+                  AND expires_at > ?
+                """,
+                (now_s, user_id, challenge_row["id"], now_s),
+            )
+            invalidated_sibling_challenge_count = invalidated_siblings.rowcount
         append_audit_event(
             conn,
             event_type="webauthn.credential_registered",
@@ -10607,16 +12552,30 @@ def finalize_webauthn_registration(
                 "attestation_trusted": attestation_trusted,
                 "attestation_root_sha256": attestation_root_sha256,
                 "registration_authorization": challenge_payload.get("authorization"),
+                **(
+                    {
+                        "invalidated_sibling_registration_challenge_count": (
+                            invalidated_sibling_challenge_count
+                        )
+                    }
+                    if first_oidc_enrollment
+                    else {}
+                ),
             },
         )
         claimed = conn.execute(
             "SELECT * FROM webauthn_challenges WHERE id = ?",
             (challenge_row["id"],),
         ).fetchone()
-        return {
+        result = {
             "challenge": row_to_webauthn_challenge(claimed),
             "credential": credential,
         }
+        if first_oidc_enrollment:
+            result["invalidated_sibling_registration_challenge_count"] = (
+                invalidated_sibling_challenge_count
+            )
+        return result
 
 
 def get_webauthn_credential(
@@ -10644,7 +12603,10 @@ def get_webauthn_credential_by_record_id(
 
 
 def list_webauthn_credentials(
-    user_id: str | None = None, *, include_revoked: bool = False
+    user_id: str | None = None,
+    *,
+    include_revoked: bool = False,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     args: list[Any] = []
     clauses: list[str] = []
@@ -10653,13 +12615,1378 @@ def list_webauthn_credentials(
     if user_id:
         clauses.append("user_id = ?")
         args.append(user_id)
+    if limit is not None and (
+        isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100_000
+    ):
+        raise MetadataStoreError("WebAuthn credential list limit is invalid")
     where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    limit_clause = " LIMIT ?" if limit is not None else ""
+    if limit is not None:
+        args.append(limit)
     with connect() as conn:
         rows = conn.execute(
-            f"SELECT * FROM webauthn_credentials {where} ORDER BY created_at DESC",
+            f"SELECT * FROM webauthn_credentials {where} "
+            f"ORDER BY created_at DESC{limit_clause}",
             args,
         ).fetchall()
     return [row_to_webauthn_credential(row) for row in rows]
+
+
+def _webauthn_recovery_digest(label: str, value: str) -> str:
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", value or "") is None:
+        raise WebAuthnRecoveryError(f"{label} must be a lowercase SHA-256 digest")
+    return value
+
+
+def _webauthn_credential_history_snapshot(
+    conn: Any, user_id: str
+) -> dict[str, Any]:
+    rows = conn.execute(
+        "SELECT * FROM webauthn_credentials WHERE user_id = ? "
+        "ORDER BY created_at ASC, id ASC LIMIT ?",
+        (user_id, WEBAUTHN_RECOVERY_CREDENTIAL_HISTORY_MAX_COUNT + 1),
+    ).fetchall()
+    if len(rows) > WEBAUTHN_RECOVERY_CREDENTIAL_HISTORY_MAX_COUNT:
+        raise WebAuthnRecoveryError(
+            "WebAuthn credential history count exceeds the recovery limit"
+        )
+    history: list[dict[str, Any]] = []
+    active_count = 0
+    for row in rows:
+        if row["revoked_at"] is None:
+            active_count += 1
+        history.append(
+            {
+                "record_id": str(row["id"]),
+                "credential_id_digest": "sha256:"
+                + hashlib.sha256(str(row["credential_id"]).encode("utf-8")).hexdigest(),
+                "public_key_cose_digest": "sha256:"
+                + hashlib.sha256(str(row["public_key_cose"]).encode("ascii")).hexdigest(),
+                "sign_count": int(row["sign_count"]),
+                "aaguid": row["aaguid"],
+                "authenticator_class": str(row["authenticator_class"]),
+                "attestation_fmt": row["attestation_fmt"],
+                "attestation_trusted": bool(row["attestation_trusted"]),
+                "attestation_trust_path": loads(
+                    row["attestation_trust_path"], []
+                ),
+                "attestation_leaf_sha256": row["attestation_leaf_sha256"],
+                "attestation_root_sha256": row["attestation_root_sha256"],
+                "attestation_trust_bundle_digest": row[
+                    "attestation_trust_bundle_digest"
+                ],
+                "attestation_trust_bundle_sequence": row[
+                    "attestation_trust_bundle_sequence"
+                ],
+                "attestation_verified_at": row["attestation_verified_at"],
+                "transports": loads(row["transports"], []),
+                "development_material_digest": (
+                    "sha256:"
+                    + hashlib.sha256(
+                        str(row["dev_private_key_pem"]).encode("utf-8")
+                    ).hexdigest()
+                    if row["dev_private_key_pem"] is not None
+                    else None
+                ),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+                "last_used_at": row["last_used_at"],
+                "revoked_at": row["revoked_at"],
+                "revoked_by": row["revoked_by"],
+                "revocation_reason": row["revocation_reason"],
+                "revocation_source": row["revocation_source"],
+            }
+        )
+    canonical = dumps(history)
+    if len(canonical.encode("utf-8")) > WEBAUTHN_RECOVERY_CREDENTIAL_HISTORY_MAX_BYTES:
+        raise WebAuthnRecoveryError(
+            "WebAuthn credential history size exceeds the recovery limit"
+        )
+    return {
+        "digest": "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        "count": len(history),
+        "active_count": active_count,
+    }
+
+
+def _row_to_webauthn_recovery(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    item["roles"] = loads(item.pop("roles_json"), [])
+    item["candidate"] = loads(item.pop("candidate_json"), None)
+    item["statement"] = loads(item.pop("statement_json"), None)
+    for field in (
+        "credential_history_count",
+        "active_credential_count",
+        "trust_bundle_sequence",
+        "trust_bundle_rollback_epoch",
+        "root_sequence",
+    ):
+        if item.get(field) is not None:
+            item[field] = int(item[field])
+    return item
+
+
+def get_webauthn_recovery_ceremony(recovery_id: str) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM webauthn_recovery_ceremonies WHERE id = ?",
+            (recovery_id,),
+        ).fetchone()
+    return _row_to_webauthn_recovery(row) if row else None
+
+
+def invalidate_witnessed_webauthn_recovery(
+    *,
+    recovery_id: str,
+    ceremony_type: str,
+    authorization: dict[str, Any],
+    authorization_digest: str,
+    signature_digest: str,
+) -> None:
+    authorization_json = dumps(authorization)
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        if ceremony_type == "replacement-registration":
+            row = conn.execute(
+                "SELECT user_id, challenge_id FROM webauthn_recovery_ceremonies "
+                "WHERE id = ? AND status IN ('pending_candidate', 'prepared')",
+                (recovery_id,),
+            ).fetchone()
+            if row is None:
+                return
+            conn.execute(
+                "UPDATE webauthn_challenges SET used_at = COALESCE(used_at, ?) "
+                "WHERE id = ?",
+                (now_s, row["challenge_id"]),
+            )
+            updated = conn.execute(
+                "UPDATE webauthn_recovery_ceremonies SET status = 'invalidated', "
+                "authorization_json = ?, authorization_digest = ?, "
+                "signature_digest = ?, invalidated_at = ? "
+                "WHERE id = ? AND status IN ('pending_candidate', 'prepared')",
+                (
+                    authorization_json,
+                    authorization_digest,
+                    signature_digest,
+                    now_s,
+                    recovery_id,
+                ),
+            )
+            user_id = str(row["user_id"])
+        elif ceremony_type == "lost-active-key-decommission":
+            row = conn.execute(
+                "SELECT user_id FROM webauthn_recovery_revocations "
+                "WHERE id = ? AND status = 'prepared'",
+                (recovery_id,),
+            ).fetchone()
+            if row is None:
+                return
+            updated = conn.execute(
+                "UPDATE webauthn_recovery_revocations SET status = 'expired', "
+                "authorization_json = ?, authorization_digest = ?, "
+                "signature_digest = ?, consumed_at = ? "
+                "WHERE id = ? AND status = 'prepared'",
+                (
+                    authorization_json,
+                    authorization_digest,
+                    signature_digest,
+                    now_s,
+                    recovery_id,
+                ),
+            )
+            user_id = str(row["user_id"])
+        else:
+            raise WebAuthnRecoveryError("recovery witness ceremony type is invalid")
+        if updated.rowcount != 1:
+            return
+        append_audit_event(
+            conn,
+            event_type="webauthn.recovery.authorization_burned",
+            actor_type="system",
+            actor_id=user_id,
+            event={
+                "recovery_id": recovery_id,
+                "ceremony_type": ceremony_type,
+                "authorization_digest": authorization_digest,
+                "signature_digest": signature_digest,
+                "witness_claim_preserved": True,
+            },
+            idempotency_key=f"webauthn-recovery-burned:{recovery_id}",
+        )
+
+
+def _expire_webauthn_recovery_ceremonies(conn: Any, now_s: str) -> int:
+    rows = conn.execute(
+        "SELECT id, challenge_id FROM webauthn_recovery_ceremonies "
+        "WHERE status IN ('pending_candidate', 'prepared') AND expires_at <= ?",
+        (now_s,),
+    ).fetchall()
+    for row in rows:
+        conn.execute(
+            "UPDATE webauthn_challenges SET used_at = COALESCE(used_at, ?) WHERE id = ?",
+            (now_s, row["challenge_id"]),
+        )
+    if rows:
+        conn.execute(
+            "UPDATE webauthn_recovery_ceremonies "
+            "SET status = 'expired', invalidated_at = ? "
+            "WHERE status IN ('pending_candidate', 'prepared') AND expires_at <= ?",
+            (now_s, now_s),
+        )
+    return len(rows)
+
+
+def _prune_webauthn_recovery_terminal(conn: Any, now: datetime) -> int:
+    cutoff = (
+        now - timedelta(seconds=WEBAUTHN_RECOVERY_TERMINAL_RETENTION_SECONDS)
+    ).isoformat()
+    deleted = 0
+    for table, terminal_time in (
+        (
+            "webauthn_recovery_ceremonies",
+            "COALESCE(consumed_at, invalidated_at, expires_at)",
+        ),
+        (
+            "webauthn_recovery_revocations",
+            "COALESCE(consumed_at, expires_at)",
+        ),
+    ):
+        removed_old = conn.execute(
+            f"DELETE FROM {table} WHERE status IN ('consumed', 'expired', 'invalidated') "
+            f"AND {terminal_time} <= ?",
+            (cutoff,),
+        )
+        removed_overflow = conn.execute(
+            f"DELETE FROM {table} WHERE id IN ("
+            f"SELECT id FROM (SELECT id, ROW_NUMBER() OVER ("
+            f"ORDER BY {terminal_time} DESC, id DESC) AS ordinal FROM {table} "
+            "WHERE status IN ('consumed', 'expired', 'invalidated')) AS ranked "
+            "WHERE ordinal > ?)",
+            (WEBAUTHN_RECOVERY_MAX_RETAINED,),
+        )
+        deleted += max(0, int(removed_old.rowcount))
+        deleted += max(0, int(removed_overflow.rowcount))
+    return deleted
+
+
+def expire_webauthn_recovery_ceremonies() -> int:
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        return _expire_webauthn_recovery_ceremonies(
+            conn, _metadata_utcnow(conn).isoformat()
+        )
+
+
+def _webauthn_recovery_live_count(conn: Any, now_s: str) -> int:
+    row = conn.execute(
+        "SELECT ("
+        "(SELECT COUNT(*) FROM webauthn_recovery_ceremonies "
+        "WHERE status IN ('pending_candidate', 'prepared') AND expires_at > ?) + "
+        "(SELECT COUNT(*) FROM webauthn_recovery_revocations "
+        "WHERE status = 'prepared' AND expires_at > ?)"
+        ") AS count",
+        (now_s, now_s),
+    ).fetchone()
+    return int(row["count"] if row else 0)
+
+
+def create_webauthn_recovery_ceremony(
+    *,
+    recovery_id: str,
+    nonce: str,
+    pending_token_digest: str,
+    oidc_session_id: str,
+    user_id: str,
+    label: str,
+    reason: str,
+    trust_bundle_digest: str,
+    trust_bundle_sequence: int,
+    trust_bundle_rollback_epoch: int,
+    trust_signing_key_id: str,
+    auth_policy_digest: str,
+    recovery_root_key_id: str,
+    recovery_root_provider: str,
+    recovery_audience: str,
+    rp_id: str,
+    origin: str,
+    ttl_seconds: int,
+) -> dict[str, Any]:
+    token_digest = _webauthn_recovery_digest(
+        "pending token digest", pending_token_digest
+    )
+    for field_name, value in (
+        ("trust bundle digest", trust_bundle_digest),
+        ("trust signing key ID", trust_signing_key_id),
+        ("authorization policy digest", auth_policy_digest),
+        ("recovery root key ID", recovery_root_key_id),
+    ):
+        _webauthn_recovery_digest(field_name, value)
+    if not 1 <= ttl_seconds <= 300:
+        raise WebAuthnRecoveryError("recovery TTL is outside the supported range")
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        _expire_webauthn_recovery_ceremonies(conn, now_s)
+        _prune_webauthn_recovery_terminal(conn, now)
+        if conn.execute(
+            "SELECT 1 FROM webauthn_trust_publications "
+            "WHERE status = 'pending' LIMIT 1"
+        ).fetchone() is not None:
+            raise WebAuthnRecoveryError(
+                "WebAuthn recovery is unavailable while trust publication is pending"
+            )
+        session = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ? AND token_digest = ?",
+            (oidc_session_id, token_digest),
+        ).fetchone()
+        if (
+            session is None
+            or str(session["user_id"]) != user_id
+            or session["status"] != "pending_webauthn"
+            or session["expires_at"] <= now_s
+            or session["pending_expires_at"] is None
+            or session["pending_expires_at"] <= now_s
+        ):
+            raise WebAuthnRecoveryError(
+                "pending OIDC browser session is invalid or expired"
+            )
+        history = _webauthn_credential_history_snapshot(conn, user_id)
+        if history["count"] == 0:
+            raise WebAuthnRecoveryError(
+                "credential history is empty; first enrollment bootstrap is required"
+            )
+        if history["active_count"] != 0:
+            raise WebAuthnRecoveryError(
+                "an active WebAuthn credential still exists; ordinary WebAuthn is required"
+            )
+        if _webauthn_recovery_live_count(conn, now_s) >= WEBAUTHN_RECOVERY_MAX_LIVE:
+            raise WebAuthnRecoveryError("WebAuthn recovery live capacity reached")
+        pending_expiry = datetime.fromisoformat(str(session["pending_expires_at"]))
+        ceremony_expiry = min(
+            now + timedelta(seconds=ttl_seconds), pending_expiry
+        ).isoformat()
+        roles = loads(session["roles_json"], [])
+        roles_json = dumps(sorted(str(role) for role in roles))
+        identity_digest = "sha256:" + hashlib.sha256(
+            dumps(
+                {
+                    "user_id": user_id,
+                    "roles": loads(roles_json, []),
+                    "oidc_token_digest": str(session["oidc_token_digest"]),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        challenge_payload = {
+            "v": 1,
+            "type": "serverware.webauthn_recovery_registration",
+            "recovery_id": recovery_id,
+            "nonce": nonce,
+            "user_id": user_id,
+            "oidc_session_id": oidc_session_id,
+            "pending_expires_at": str(session["pending_expires_at"]),
+            "credential_history_digest": history["digest"],
+            "trust_bundle_digest": trust_bundle_digest,
+            "auth_policy_digest": auth_policy_digest,
+        }
+        challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(dumps(challenge_payload).encode("utf-8")).digest()
+        ).decode("ascii").rstrip("=")
+        challenge_id = str(uuid.uuid4())
+        challenge_digest = "sha256:" + hashlib.sha256(
+            challenge.encode("ascii")
+        ).hexdigest()
+        _admit_webauthn_challenge(
+            conn,
+            now=now,
+            challenge_type="recovery-registration",
+            user_id=user_id,
+            scope_key=recovery_id,
+            replace_scope=True,
+        )
+        conn.execute(
+            """
+            INSERT INTO webauthn_challenges (
+                id, challenge, challenge_type, user_id, scope_key,
+                approval_request_id,
+                payload_json, expires_at, created_at
+            ) VALUES (?, ?, 'recovery-registration', ?, ?, NULL, ?, ?, ?)
+            """,
+            (
+                challenge_id,
+                challenge,
+                user_id,
+                recovery_id,
+                dumps(challenge_payload),
+                ceremony_expiry,
+                now_s,
+            ),
+        )
+        try:
+            conn.execute(
+                """
+                INSERT INTO webauthn_recovery_ceremonies (
+                    id, nonce, user_id, oidc_session_id, pending_token_digest,
+                    oidc_token_digest, roles_json, identity_digest,
+                    session_expires_at, pending_expires_at, label, reason,
+                    challenge_id, challenge_digest, credential_history_digest,
+                    credential_history_count, active_credential_count,
+                    trust_bundle_digest, trust_bundle_sequence,
+                    trust_bundle_rollback_epoch, trust_signing_key_id,
+                    auth_policy_digest, recovery_root_key_id,
+                    recovery_root_provider, recovery_audience, rp_id, origin,
+                    status, created_at, expires_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending_candidate', ?, ?
+                )
+                """,
+                (
+                    recovery_id,
+                    nonce,
+                    user_id,
+                    oidc_session_id,
+                    token_digest,
+                    str(session["oidc_token_digest"]),
+                    roles_json,
+                    identity_digest,
+                    str(session["expires_at"]),
+                    str(session["pending_expires_at"]),
+                    label,
+                    reason,
+                    challenge_id,
+                    challenge_digest,
+                    history["digest"],
+                    history["count"],
+                    history["active_count"],
+                    trust_bundle_digest,
+                    trust_bundle_sequence,
+                    trust_bundle_rollback_epoch,
+                    trust_signing_key_id,
+                    auth_policy_digest,
+                    recovery_root_key_id,
+                    recovery_root_provider,
+                    recovery_audience,
+                    rp_id,
+                    origin,
+                    now_s,
+                    ceremony_expiry,
+                ),
+            )
+        except Exception as exc:
+            raise WebAuthnRecoveryError(
+                "a live WebAuthn recovery ceremony already exists"
+            ) from exc
+        append_audit_event(
+            conn,
+            event_type="webauthn.recovery.started",
+            actor_type="admin",
+            actor_id=user_id,
+            event={
+                "recovery_id": recovery_id,
+                "oidc_session_id": oidc_session_id,
+                "credential_history_digest": history["digest"],
+                "credential_history_count": history["count"],
+                "trust_bundle_digest": trust_bundle_digest,
+                "trust_bundle_sequence": trust_bundle_sequence,
+                "recovery_root_key_id": recovery_root_key_id,
+                "expires_at": ceremony_expiry,
+            },
+            idempotency_key=f"webauthn-recovery-started:{recovery_id}",
+        )
+        row = conn.execute(
+            "SELECT * FROM webauthn_recovery_ceremonies WHERE id = ?",
+            (recovery_id,),
+        ).fetchone()
+        challenge_row = conn.execute(
+            "SELECT * FROM webauthn_challenges WHERE id = ?", (challenge_id,)
+        ).fetchone()
+    result = _row_to_webauthn_recovery(row)
+    result["challenge"] = row_to_webauthn_challenge(challenge_row)
+    return result
+
+
+def prepare_webauthn_recovery_candidate(
+    *,
+    recovery_id: str,
+    pending_token_digest: str,
+    candidate: dict[str, Any],
+    witness_last_sequence: int,
+) -> dict[str, Any]:
+    token_digest = _webauthn_recovery_digest(
+        "pending token digest", pending_token_digest
+    )
+    candidate_json = dumps(candidate)
+    if len(candidate_json.encode("utf-8")) > 64 * 1024:
+        raise WebAuthnRecoveryError("recovery candidate exceeds 64 KiB")
+    candidate_digest = "sha256:" + hashlib.sha256(
+        candidate_json.encode("utf-8")
+    ).hexdigest()
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        _prune_webauthn_recovery_terminal(conn, now)
+        _expire_webauthn_recovery_ceremonies(conn, now_s)
+        row = conn.execute(
+            "SELECT * FROM webauthn_recovery_ceremonies WHERE id = ?",
+            (recovery_id,),
+        ).fetchone()
+        if row is None or row["status"] != "pending_candidate":
+            raise WebAuthnRecoveryError(
+                "recovery ceremony is not awaiting a candidate"
+            )
+        if row["expires_at"] <= now_s:
+            raise WebAuthnRecoveryError("recovery ceremony expired")
+        if not hmac.compare_digest(str(row["pending_token_digest"]), token_digest):
+            raise WebAuthnRecoveryError("recovery pending session mismatch")
+        session = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ? AND token_digest = ?",
+            (row["oidc_session_id"], token_digest),
+        ).fetchone()
+        if (
+            session is None
+            or session["status"] != "pending_webauthn"
+            or session["pending_expires_at"] <= now_s
+            or str(session["user_id"]) != str(row["user_id"])
+            or str(session["oidc_token_digest"]) != str(row["oidc_token_digest"])
+            or str(session["roles_json"]) != str(row["roles_json"])
+            or str(session["expires_at"]) != str(row["session_expires_at"])
+            or str(session["pending_expires_at"]) != str(row["pending_expires_at"])
+        ):
+            raise WebAuthnRecoveryError("recovery OIDC session state changed")
+        history = _webauthn_credential_history_snapshot(conn, str(row["user_id"]))
+        if (
+            history["digest"] != row["credential_history_digest"]
+            or history["count"] != int(row["credential_history_count"])
+            or history["active_count"] != 0
+        ):
+            raise WebAuthnRecoveryError("WebAuthn credential history changed")
+        if conn.execute(
+            "SELECT 1 FROM webauthn_trust_publications "
+            "WHERE status = 'pending' LIMIT 1"
+        ).fetchone() is not None:
+            raise WebAuthnRecoveryError(
+                "WebAuthn recovery is unavailable while trust publication is pending"
+            )
+        challenge = conn.execute(
+            "SELECT * FROM webauthn_challenges WHERE id = ?",
+            (row["challenge_id"],),
+        ).fetchone()
+        if (
+            challenge is None
+            or challenge["used_at"] is not None
+            or challenge["expires_at"] <= now_s
+        ):
+            raise WebAuthnRecoveryError("recovery challenge is invalid or expired")
+        root_state = conn.execute(
+            "SELECT last_consumed_sequence FROM webauthn_recovery_root_state "
+            "WHERE signing_key_id = ? AND user_id = ?",
+            (row["recovery_root_key_id"], row["user_id"]),
+        ).fetchone()
+        metadata_last_sequence = int(
+            root_state["last_consumed_sequence"] if root_state else 0
+        )
+        root_sequence = max(metadata_last_sequence, witness_last_sequence) + 1
+        statement_expiry = min(
+            datetime.fromisoformat(str(row["expires_at"])),
+            datetime.fromisoformat(str(row["pending_expires_at"])),
+        ).isoformat()
+        statement = {
+            "apiVersion": "serverware.webauthnRecoveryAuthorization/v1",
+            "type": "serverware.webauthn_last_key_recovery",
+            "recoveryId": str(row["id"]),
+            "nonce": str(row["nonce"]),
+            "audience": str(row["recovery_audience"]),
+            "root": {
+                "provider": str(row["recovery_root_provider"]),
+                "keyId": str(row["recovery_root_key_id"]),
+                "sequence": root_sequence,
+            },
+            "deployment": {
+                "rpId": str(row["rp_id"]),
+                "origin": str(row["origin"]),
+            },
+            "subject": {
+                "userId": str(row["user_id"]),
+                "oidcSessionId": str(row["oidc_session_id"]),
+                "pendingTokenDigest": token_digest,
+                "oidcTokenDigest": str(row["oidc_token_digest"]),
+                "roles": loads(row["roles_json"], []),
+                "identityDigest": str(row["identity_digest"]),
+                "sessionExpiresAt": str(row["session_expires_at"]),
+                "pendingExpiresAt": str(row["pending_expires_at"]),
+            },
+            "request": {
+                "label": str(row["label"]),
+                "reason": str(row["reason"]),
+                "challengeId": str(row["challenge_id"]),
+                "challenge": str(challenge["challenge"]),
+                "challengeDigest": str(row["challenge_digest"]),
+            },
+            "credentialHistory": {
+                "digest": str(row["credential_history_digest"]),
+                "count": int(row["credential_history_count"]),
+                "activeCredentialCount": 0,
+            },
+            "trust": {
+                "bundleDigest": str(row["trust_bundle_digest"]),
+                "bundleSequence": int(row["trust_bundle_sequence"]),
+                "rollbackEpoch": int(row["trust_bundle_rollback_epoch"]),
+                "signingKeyId": str(row["trust_signing_key_id"]),
+            },
+            "authorizationPolicyDigest": str(row["auth_policy_digest"]),
+            "candidate": candidate,
+            "signedAt": now_s,
+            "notBefore": now_s,
+            "expiresAt": statement_expiry,
+        }
+        statement_json = dumps(statement)
+        statement_digest = "sha256:" + hashlib.sha256(
+            statement_json.encode("utf-8")
+        ).hexdigest()
+        updated = conn.execute(
+            """
+            UPDATE webauthn_recovery_ceremonies
+            SET status = 'prepared', candidate_json = ?, candidate_digest = ?,
+                statement_json = ?, statement_digest = ?, root_sequence = ?,
+                prepared_at = ?
+            WHERE id = ? AND status = 'pending_candidate' AND expires_at > ?
+            """,
+            (
+                candidate_json,
+                candidate_digest,
+                statement_json,
+                statement_digest,
+                root_sequence,
+                now_s,
+                recovery_id,
+                now_s,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise WebAuthnRecoveryError("recovery candidate state changed")
+        append_audit_event(
+            conn,
+            event_type="webauthn.recovery.prepared",
+            actor_type="admin",
+            actor_id=str(row["user_id"]),
+            event={
+                "recovery_id": recovery_id,
+                "candidate_digest": candidate_digest,
+                "statement_digest": statement_digest,
+                "root_sequence": root_sequence,
+                "expires_at": statement_expiry,
+            },
+            idempotency_key=f"webauthn-recovery-prepared:{recovery_id}",
+        )
+        prepared = conn.execute(
+            "SELECT * FROM webauthn_recovery_ceremonies WHERE id = ?",
+            (recovery_id,),
+        ).fetchone()
+    return _row_to_webauthn_recovery(prepared)
+
+
+def finalize_webauthn_recovery_registration(
+    *,
+    recovery_id: str,
+    pending_token_digest: str,
+    candidate: dict[str, Any],
+    statement: dict[str, Any],
+    authorization: dict[str, Any],
+    authorization_digest: str,
+    signature_digest: str,
+    current_trust: dict[str, Any],
+    auth_policy_digest: str,
+) -> dict[str, Any]:
+    token_digest = _webauthn_recovery_digest(
+        "pending token digest", pending_token_digest
+    )
+    authorization_digest = _webauthn_recovery_digest(
+        "authorization digest", authorization_digest
+    )
+    signature_digest = _webauthn_recovery_digest(
+        "signature digest", signature_digest
+    )
+    candidate_json = dumps(candidate)
+    candidate_digest = "sha256:" + hashlib.sha256(
+        candidate_json.encode("utf-8")
+    ).hexdigest()
+    statement_json = dumps(statement)
+    statement_digest = "sha256:" + hashlib.sha256(
+        statement_json.encode("utf-8")
+    ).hexdigest()
+    authorization_json = dumps(authorization)
+    if len(authorization_json.encode("utf-8")) > 128 * 1024:
+        raise WebAuthnRecoveryError("recovery authorization exceeds 128 KiB")
+    item_id = str(uuid.uuid4())
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        _expire_webauthn_recovery_ceremonies(conn, now_s)
+        row = conn.execute(
+            "SELECT * FROM webauthn_recovery_ceremonies WHERE id = ?",
+            (recovery_id,),
+        ).fetchone()
+        if row is None or row["status"] != "prepared":
+            raise WebAuthnRecoveryError("recovery ceremony is not prepared")
+        if row["expires_at"] <= now_s:
+            raise WebAuthnRecoveryError("recovery ceremony expired")
+        exact_values = (
+            ("pending_token_digest", token_digest),
+            ("candidate_digest", candidate_digest),
+            ("candidate_json", candidate_json),
+            ("statement_digest", statement_digest),
+            ("statement_json", statement_json),
+            ("auth_policy_digest", auth_policy_digest),
+            ("trust_bundle_digest", current_trust.get("digest")),
+            ("trust_bundle_sequence", current_trust.get("sequence")),
+            ("trust_bundle_rollback_epoch", current_trust.get("rollback_epoch")),
+            ("trust_signing_key_id", current_trust.get("signing_key_id")),
+        )
+        for field, expected in exact_values:
+            actual = row[field]
+            if isinstance(actual, int):
+                try:
+                    expected = int(expected)
+                except (TypeError, ValueError) as exc:
+                    raise WebAuthnRecoveryError(
+                        f"recovery {field} binding is invalid"
+                    ) from exc
+            if actual != expected:
+                raise WebAuthnRecoveryError(f"recovery {field} binding changed")
+        if conn.execute(
+            "SELECT 1 FROM webauthn_trust_publications "
+            "WHERE status = 'pending' LIMIT 1"
+        ).fetchone() is not None:
+            raise WebAuthnRecoveryError(
+                "WebAuthn recovery is unavailable while trust publication is pending"
+            )
+        session = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ? AND token_digest = ?",
+            (row["oidc_session_id"], token_digest),
+        ).fetchone()
+        if (
+            session is None
+            or session["status"] != "pending_webauthn"
+            or session["pending_expires_at"] <= now_s
+            or str(session["user_id"]) != str(row["user_id"])
+            or str(session["oidc_token_digest"]) != str(row["oidc_token_digest"])
+            or str(session["roles_json"]) != str(row["roles_json"])
+            or str(session["expires_at"]) != str(row["session_expires_at"])
+            or str(session["pending_expires_at"]) != str(row["pending_expires_at"])
+        ):
+            raise WebAuthnRecoveryError("recovery OIDC session state changed")
+        history = _webauthn_credential_history_snapshot(conn, str(row["user_id"]))
+        if (
+            history["digest"] != row["credential_history_digest"]
+            or history["count"] != int(row["credential_history_count"])
+            or history["active_count"] != 0
+        ):
+            raise WebAuthnRecoveryError("WebAuthn credential history changed")
+        challenge = conn.execute(
+            "SELECT * FROM webauthn_challenges WHERE id = ?",
+            (row["challenge_id"],),
+        ).fetchone()
+        if (
+            challenge is None
+            or challenge["used_at"] is not None
+            or challenge["expires_at"] <= now_s
+        ):
+            raise WebAuthnRecoveryError("recovery challenge is invalid or expired")
+        if conn.execute(
+            "SELECT 1 FROM webauthn_recovery_ceremonies "
+            "WHERE id != ? AND (authorization_digest = ? OR signature_digest = ?) "
+            "LIMIT 1",
+            (recovery_id, authorization_digest, signature_digest),
+        ).fetchone() is not None:
+            raise WebAuthnRecoveryError("recovery authorization was already used")
+        root_sequence = int(row["root_sequence"])
+        root_state = conn.execute(
+            "SELECT last_consumed_sequence FROM webauthn_recovery_root_state "
+            "WHERE signing_key_id = ? AND user_id = ?",
+            (row["recovery_root_key_id"], row["user_id"]),
+        ).fetchone()
+        previous_root_sequence = int(
+            root_state["last_consumed_sequence"] if root_state else 0
+        )
+        if root_sequence <= previous_root_sequence:
+            raise WebAuthnRecoveryError("recovery root sequence is stale or replayed")
+        claim_webauthn_recovery_authorization(
+            authorization_digest=authorization_digest,
+            signature_digest=signature_digest,
+            statement_digest=statement_digest,
+            recovery_id=recovery_id,
+            ceremony_type="replacement-registration",
+            user_id=str(row["user_id"]),
+            root_key_id=str(row["recovery_root_key_id"]),
+            root_sequence=root_sequence,
+        )
+        if root_state is None:
+            conn.execute(
+                "INSERT INTO webauthn_recovery_root_state "
+                "(signing_key_id, user_id, last_consumed_sequence, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (row["recovery_root_key_id"], row["user_id"], root_sequence, now_s),
+            )
+        else:
+            advanced = conn.execute(
+                "UPDATE webauthn_recovery_root_state "
+                "SET last_consumed_sequence = ?, updated_at = ? "
+                "WHERE signing_key_id = ? AND user_id = ? "
+                "AND last_consumed_sequence = ?",
+                (
+                    root_sequence,
+                    now_s,
+                    row["recovery_root_key_id"],
+                    row["user_id"],
+                    previous_root_sequence,
+                ),
+            )
+            if advanced.rowcount != 1:
+                raise WebAuthnRecoveryError("recovery root sequence changed")
+        claimed = conn.execute(
+            "UPDATE webauthn_challenges SET used_at = ? "
+            "WHERE id = ? AND used_at IS NULL AND expires_at > ?",
+            (now_s, row["challenge_id"], now_s),
+        )
+        if claimed.rowcount != 1:
+            raise WebAuthnRecoveryError("recovery challenge state changed")
+        credential = _insert_webauthn_credential(
+            conn,
+            item_id=item_id,
+            now_s=now_s,
+            credential_id=str(candidate["credentialId"]),
+            user_id=str(row["user_id"]),
+            label=str(row["label"]),
+            public_key_cose=str(candidate["publicKeyCose"]),
+            sign_count=int(candidate["signCount"]),
+            aaguid=candidate.get("aaguid"),
+            authenticator_class=str(candidate["authenticatorClass"]),
+            attestation_fmt=str(candidate["attestationFormat"]),
+            attestation_trusted=bool(candidate["attestationTrusted"]),
+            attestation_trust_path=list(candidate.get("attestationTrustPath") or []),
+            attestation_leaf_sha256=candidate.get("attestationLeafSha256"),
+            attestation_root_sha256=candidate.get("attestationRootSha256"),
+            attestation_trust_bundle_digest=candidate.get("trustBundleDigest"),
+            attestation_trust_bundle_sequence=candidate.get("trustBundleSequence"),
+            attestation_verified_at=str(row["prepared_at"]),
+            transports=list(candidate.get("transports") or []),
+            dev_private_key_pem=None,
+        )
+        invalidated = conn.execute(
+            "UPDATE webauthn_challenges SET used_at = ? "
+            "WHERE user_id = ? AND id != ? "
+            "AND challenge_type IN ('registration', 'recovery-registration') "
+            "AND used_at IS NULL AND expires_at > ?",
+            (now_s, row["user_id"], row["challenge_id"], now_s),
+        )
+        consumed = conn.execute(
+            """
+            UPDATE webauthn_recovery_ceremonies
+            SET status = 'consumed', authorization_json = ?, authorization_digest = ?,
+                signature_digest = ?, replacement_record_id = ?, consumed_at = ?
+            WHERE id = ? AND status = 'prepared'
+            """,
+            (
+                authorization_json,
+                authorization_digest,
+                signature_digest,
+                credential["id"],
+                now_s,
+                recovery_id,
+            ),
+        )
+        if consumed.rowcount != 1:
+            raise WebAuthnRecoveryError("recovery ceremony state changed")
+        append_audit_event(
+            conn,
+            event_type="webauthn.credential_registered",
+            actor_type="admin",
+            actor_id=str(row["user_id"]),
+            event={
+                "user_id": str(row["user_id"]),
+                "credential_id": str(candidate["credentialId"]),
+                "authenticator_class": str(candidate["authenticatorClass"]),
+                "aaguid": candidate.get("aaguid"),
+                "attestation_fmt": candidate.get("attestationFormat"),
+                "attestation_trusted": True,
+                "attestation_root_sha256": candidate.get(
+                    "attestationRootSha256"
+                ),
+                "registration_authorization": {
+                    "mode": "offline-last-key-recovery",
+                    "recovery_id": recovery_id,
+                    "authorization_digest": authorization_digest,
+                    "root_sequence": root_sequence,
+                },
+            },
+            idempotency_key=f"webauthn-recovery-credential:{recovery_id}",
+        )
+        append_audit_event(
+            conn,
+            event_type="webauthn.recovery.consumed",
+            actor_type="admin",
+            actor_id=str(row["user_id"]),
+            event={
+                "recovery_id": recovery_id,
+                "oidc_session_id": str(row["oidc_session_id"]),
+                "credential_record_id": credential["id"],
+                "credential_id_digest": "sha256:"
+                + hashlib.sha256(
+                    str(candidate["credentialId"]).encode("utf-8")
+                ).hexdigest(),
+                "candidate_digest": candidate_digest,
+                "statement_digest": statement_digest,
+                "authorization_digest": authorization_digest,
+                "signature_digest": signature_digest,
+                "root_key_id": str(row["recovery_root_key_id"]),
+                "root_sequence": root_sequence,
+                "invalidated_sibling_challenge_count": invalidated.rowcount,
+            },
+            idempotency_key=f"webauthn-recovery-consumed:{recovery_id}",
+        )
+        completed = conn.execute(
+            "SELECT * FROM webauthn_recovery_ceremonies WHERE id = ?",
+            (recovery_id,),
+        ).fetchone()
+    return {
+        "ceremony": _row_to_webauthn_recovery(completed),
+        "credential": credential,
+        "invalidated_sibling_challenge_count": invalidated.rowcount,
+    }
+
+
+def _row_to_webauthn_recovery_revocation(row: Any) -> dict[str, Any]:
+    item = dict(row)
+    item["roles"] = loads(item.pop("roles_json"), [])
+    item["statement"] = loads(item.pop("statement_json"), {})
+    item["authorization"] = loads(item.pop("authorization_json"), None)
+    for field in (
+        "credential_history_count",
+        "active_credential_count",
+        "trust_bundle_sequence",
+        "trust_bundle_rollback_epoch",
+        "root_sequence",
+    ):
+        item[field] = int(item[field])
+    return item
+
+
+def get_webauthn_recovery_revocation(revocation_id: str) -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM webauthn_recovery_revocations WHERE id = ?",
+            (revocation_id,),
+        ).fetchone()
+    return _row_to_webauthn_recovery_revocation(row) if row else None
+
+
+def create_webauthn_recovery_revocation(
+    *,
+    revocation_id: str,
+    nonce: str,
+    pending_token_digest: str,
+    oidc_session_id: str,
+    user_id: str,
+    reason: str,
+    trust: dict[str, Any],
+    auth_policy_digest: str,
+    recovery_root_key_id: str,
+    recovery_root_provider: str,
+    recovery_audience: str,
+    rp_id: str,
+    origin: str,
+    ttl_seconds: int,
+    witness_last_sequence: int,
+) -> dict[str, Any]:
+    token_digest = _webauthn_recovery_digest(
+        "pending token digest", pending_token_digest
+    )
+    for field_name, value in (
+        ("trust bundle digest", trust.get("digest")),
+        ("trust signing key ID", trust.get("signing_key_id")),
+        ("authorization policy digest", auth_policy_digest),
+        ("recovery root key ID", recovery_root_key_id),
+    ):
+        _webauthn_recovery_digest(field_name, str(value or ""))
+    if not 1 <= ttl_seconds <= 300:
+        raise WebAuthnRecoveryError("recovery TTL is outside the supported range")
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        _prune_webauthn_recovery_terminal(conn, now)
+        conn.execute(
+            "UPDATE webauthn_recovery_revocations SET status = 'expired' "
+            "WHERE status = 'prepared' AND expires_at <= ?",
+            (now_s,),
+        )
+        if _webauthn_recovery_live_count(conn, now_s) >= WEBAUTHN_RECOVERY_MAX_LIVE:
+            raise WebAuthnRecoveryError("WebAuthn recovery live capacity reached")
+        if conn.execute(
+            "SELECT 1 FROM webauthn_trust_publications WHERE status = 'pending' LIMIT 1"
+        ).fetchone() is not None:
+            raise WebAuthnRecoveryError(
+                "WebAuthn recovery is unavailable while trust publication is pending"
+            )
+        session = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ? AND token_digest = ?",
+            (oidc_session_id, token_digest),
+        ).fetchone()
+        if (
+            session is None
+            or session["status"] != "pending_webauthn"
+            or str(session["user_id"]) != user_id
+            or session["expires_at"] <= now_s
+            or session["pending_expires_at"] <= now_s
+        ):
+            raise WebAuthnRecoveryError(
+                "pending OIDC browser session is invalid or expired"
+            )
+        history = _webauthn_credential_history_snapshot(conn, user_id)
+        if history["active_count"] != 1:
+            raise WebAuthnRecoveryError(
+                "lost-key decommission requires exactly one active WebAuthn credential"
+            )
+        active = conn.execute(
+            "SELECT * FROM webauthn_credentials "
+            "WHERE user_id = ? AND revoked_at IS NULL",
+            (user_id,),
+        ).fetchone()
+        if active is None:
+            raise WebAuthnRecoveryError("active WebAuthn credential disappeared")
+        root_state = conn.execute(
+            "SELECT last_consumed_sequence FROM webauthn_recovery_root_state "
+            "WHERE signing_key_id = ? AND user_id = ?",
+            (recovery_root_key_id, user_id),
+        ).fetchone()
+        metadata_last_sequence = int(
+            root_state["last_consumed_sequence"] if root_state else 0
+        )
+        root_sequence = max(metadata_last_sequence, witness_last_sequence) + 1
+        roles = sorted(loads(session["roles_json"], []))
+        identity_digest = "sha256:" + hashlib.sha256(
+            dumps(
+                {
+                    "user_id": user_id,
+                    "roles": roles,
+                    "oidc_token_digest": str(session["oidc_token_digest"]),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+        expires_at = min(
+            now + timedelta(seconds=ttl_seconds),
+            datetime.fromisoformat(str(session["pending_expires_at"])),
+        ).isoformat()
+        credential_id_digest = "sha256:" + hashlib.sha256(
+            str(active["credential_id"]).encode("utf-8")
+        ).hexdigest()
+        statement = {
+            "apiVersion": "serverware.webauthnRecoveryRevocation/v1",
+            "type": "serverware.webauthn_lost_active_key_decommission",
+            "revocationId": revocation_id,
+            "nonce": nonce,
+            "audience": recovery_audience,
+            "root": {
+                "provider": recovery_root_provider,
+                "keyId": recovery_root_key_id,
+                "sequence": root_sequence,
+            },
+            "deployment": {"rpId": rp_id, "origin": origin},
+            "subject": {
+                "userId": user_id,
+                "oidcSessionId": oidc_session_id,
+                "pendingTokenDigest": token_digest,
+                "oidcTokenDigest": str(session["oidc_token_digest"]),
+                "roles": roles,
+                "identityDigest": identity_digest,
+                "sessionExpiresAt": str(session["expires_at"]),
+                "pendingExpiresAt": str(session["pending_expires_at"]),
+            },
+            "decommission": {
+                "reason": reason,
+                "credentialRecordId": str(active["id"]),
+                "credentialIdDigest": credential_id_digest,
+                "credentialHistoryDigest": history["digest"],
+                "credentialHistoryCount": history["count"],
+                "activeCredentialCount": 1,
+            },
+            "trust": {
+                "bundleDigest": str(trust["digest"]),
+                "bundleSequence": int(trust["sequence"]),
+                "rollbackEpoch": int(trust["rollback_epoch"]),
+                "signingKeyId": str(trust["signing_key_id"]),
+            },
+            "authorizationPolicyDigest": auth_policy_digest,
+            "signedAt": now_s,
+            "notBefore": now_s,
+            "expiresAt": expires_at,
+        }
+        statement_json = dumps(statement)
+        statement_digest = "sha256:" + hashlib.sha256(
+            statement_json.encode("utf-8")
+        ).hexdigest()
+        try:
+            conn.execute(
+                """
+                INSERT INTO webauthn_recovery_revocations (
+                    id, nonce, user_id, oidc_session_id, pending_token_digest,
+                    oidc_token_digest, roles_json, identity_digest,
+                    session_expires_at, pending_expires_at, reason,
+                    credential_history_digest, credential_history_count,
+                    active_credential_count, active_credential_record_id,
+                    active_credential_id_digest, trust_bundle_digest,
+                    trust_bundle_sequence, trust_bundle_rollback_epoch,
+                    trust_signing_key_id, auth_policy_digest,
+                    recovery_root_key_id, recovery_root_provider,
+                    recovery_audience, root_sequence, statement_json,
+                    statement_digest, status, created_at, expires_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prepared', ?, ?
+                )
+                """,
+                (
+                    revocation_id, nonce, user_id, oidc_session_id, token_digest,
+                    session["oidc_token_digest"], dumps(roles), identity_digest,
+                    session["expires_at"], session["pending_expires_at"], reason,
+                    history["digest"], history["count"], history["active_count"],
+                    active["id"], credential_id_digest, trust["digest"],
+                    trust["sequence"], trust["rollback_epoch"],
+                    trust["signing_key_id"], auth_policy_digest,
+                    recovery_root_key_id, recovery_root_provider,
+                    recovery_audience, root_sequence, statement_json,
+                    statement_digest, now_s, expires_at,
+                ),
+            )
+        except Exception as exc:
+            raise WebAuthnRecoveryError(
+                "a live lost-key decommission ceremony already exists"
+            ) from exc
+        append_audit_event(
+            conn,
+            event_type="webauthn.recovery_revocation.prepared",
+            actor_type="admin",
+            actor_id=user_id,
+            event={
+                "revocation_id": revocation_id,
+                "credential_record_id": str(active["id"]),
+                "credential_history_digest": history["digest"],
+                "statement_digest": statement_digest,
+                "root_sequence": root_sequence,
+                "expires_at": expires_at,
+            },
+            idempotency_key=f"webauthn-recovery-revocation-prepared:{revocation_id}",
+        )
+        stored = conn.execute(
+            "SELECT * FROM webauthn_recovery_revocations WHERE id = ?",
+            (revocation_id,),
+        ).fetchone()
+    return _row_to_webauthn_recovery_revocation(stored)
+
+
+def finalize_webauthn_recovery_revocation(
+    *,
+    revocation_id: str,
+    pending_token_digest: str,
+    statement: dict[str, Any],
+    authorization: dict[str, Any],
+    authorization_digest: str,
+    signature_digest: str,
+    current_trust: dict[str, Any],
+    auth_policy_digest: str,
+) -> dict[str, Any]:
+    token_digest = _webauthn_recovery_digest(
+        "pending token digest", pending_token_digest
+    )
+    authorization_digest = _webauthn_recovery_digest(
+        "authorization digest", authorization_digest
+    )
+    signature_digest = _webauthn_recovery_digest(
+        "signature digest", signature_digest
+    )
+    authorization_json = dumps(authorization)
+    if len(authorization_json.encode("utf-8")) > 128 * 1024:
+        raise WebAuthnRecoveryError("recovery authorization exceeds 128 KiB")
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        row = conn.execute(
+            "SELECT * FROM webauthn_recovery_revocations WHERE id = ?",
+            (revocation_id,),
+        ).fetchone()
+        if row is None or row["status"] != "prepared" or row["expires_at"] <= now_s:
+            raise WebAuthnRecoveryError(
+                "lost-key decommission ceremony is not live"
+            )
+        if conn.execute(
+            "SELECT 1 FROM webauthn_trust_publications "
+            "WHERE status = 'pending' LIMIT 1"
+        ).fetchone() is not None:
+            raise WebAuthnRecoveryError(
+                "WebAuthn recovery is unavailable while trust publication is pending"
+            )
+        bindings = {
+            "pending_token_digest": token_digest,
+            "statement_json": dumps(statement),
+            "statement_digest": "sha256:"
+            + hashlib.sha256(dumps(statement).encode("utf-8")).hexdigest(),
+            "auth_policy_digest": auth_policy_digest,
+            "trust_bundle_digest": current_trust["digest"],
+            "trust_bundle_sequence": int(current_trust["sequence"]),
+            "trust_bundle_rollback_epoch": int(current_trust["rollback_epoch"]),
+            "trust_signing_key_id": current_trust["signing_key_id"],
+        }
+        for field, expected in bindings.items():
+            actual = int(row[field]) if field in {
+                "trust_bundle_sequence", "trust_bundle_rollback_epoch"
+            } else row[field]
+            if actual != expected:
+                raise WebAuthnRecoveryError(
+                    f"lost-key decommission {field} binding changed"
+                )
+        session = conn.execute(
+            "SELECT * FROM oidc_browser_sessions WHERE id = ? AND token_digest = ?",
+            (row["oidc_session_id"], token_digest),
+        ).fetchone()
+        if (
+            session is None
+            or session["status"] != "pending_webauthn"
+            or session["expires_at"] <= now_s
+            or session["pending_expires_at"] <= now_s
+            or str(session["user_id"]) != str(row["user_id"])
+            or session["roles_json"] != row["roles_json"]
+            or session["oidc_token_digest"] != row["oidc_token_digest"]
+            or session["expires_at"] != row["session_expires_at"]
+            or session["pending_expires_at"] != row["pending_expires_at"]
+        ):
+            raise WebAuthnRecoveryError("lost-key decommission session changed")
+        history = _webauthn_credential_history_snapshot(conn, str(row["user_id"]))
+        if (
+            history["digest"] != row["credential_history_digest"]
+            or history["count"] != int(row["credential_history_count"])
+            or history["active_count"] != 1
+        ):
+            raise WebAuthnRecoveryError(
+                "lost-key decommission credential history changed"
+            )
+        active = conn.execute(
+            "SELECT credential_id FROM webauthn_credentials "
+            "WHERE id = ? AND user_id = ? AND revoked_at IS NULL",
+            (row["active_credential_record_id"], row["user_id"]),
+        ).fetchone()
+        if active is None or not hmac.compare_digest(
+            "sha256:" + hashlib.sha256(
+                str(active["credential_id"]).encode("utf-8")
+            ).hexdigest(),
+            str(row["active_credential_id_digest"]),
+        ):
+            raise WebAuthnRecoveryError("lost active credential changed")
+        if conn.execute(
+            "SELECT 1 FROM webauthn_recovery_revocations "
+            "WHERE id != ? AND (authorization_digest = ? OR signature_digest = ?) "
+            "UNION ALL "
+            "SELECT 1 FROM webauthn_recovery_ceremonies "
+            "WHERE authorization_digest = ? OR signature_digest = ? LIMIT 1",
+            (
+                revocation_id,
+                authorization_digest,
+                signature_digest,
+                authorization_digest,
+                signature_digest,
+            ),
+        ).fetchone() is not None:
+            raise WebAuthnRecoveryError("recovery authorization was already used")
+        root_state = conn.execute(
+            "SELECT last_consumed_sequence FROM webauthn_recovery_root_state "
+            "WHERE signing_key_id = ? AND user_id = ?",
+            (row["recovery_root_key_id"], row["user_id"]),
+        ).fetchone()
+        previous_root_sequence = int(
+            root_state["last_consumed_sequence"] if root_state else 0
+        )
+        root_sequence = int(row["root_sequence"])
+        if root_sequence <= previous_root_sequence:
+            raise WebAuthnRecoveryError("recovery root sequence is stale or replayed")
+        claim_webauthn_recovery_authorization(
+            authorization_digest=authorization_digest,
+            signature_digest=signature_digest,
+            statement_digest=str(row["statement_digest"]),
+            recovery_id=revocation_id,
+            ceremony_type="lost-active-key-decommission",
+            user_id=str(row["user_id"]),
+            root_key_id=str(row["recovery_root_key_id"]),
+            root_sequence=root_sequence,
+        )
+        if root_state is None:
+            conn.execute(
+                "INSERT INTO webauthn_recovery_root_state "
+                "(signing_key_id, user_id, last_consumed_sequence, updated_at) "
+                "VALUES (?, ?, ?, ?)",
+                (row["recovery_root_key_id"], row["user_id"], root_sequence, now_s),
+            )
+        else:
+            advanced = conn.execute(
+                "UPDATE webauthn_recovery_root_state "
+                "SET last_consumed_sequence = ?, updated_at = ? "
+                "WHERE signing_key_id = ? AND user_id = ? "
+                "AND last_consumed_sequence = ?",
+                (
+                    root_sequence,
+                    now_s,
+                    row["recovery_root_key_id"],
+                    row["user_id"],
+                    previous_root_sequence,
+                ),
+            )
+            if advanced.rowcount != 1:
+                raise WebAuthnRecoveryError("recovery root sequence changed")
+        revoked = revoke_webauthn_credential(
+            str(row["active_credential_record_id"]),
+            actor_id=f"offline-recovery:{revocation_id}",
+            reason=str(row["reason"]),
+            source="offline-last-key-decommission",
+            audit_event={
+                "user_id": str(row["user_id"]),
+                "credential_record_id": str(row["active_credential_record_id"]),
+                "credential_id_digest": str(row["active_credential_id_digest"]),
+                "reason": str(row["reason"]),
+                "revocation_authorization": {
+                    "mode": "offline-last-key-decommission",
+                    "revocation_id": revocation_id,
+                    "authorization_digest": authorization_digest,
+                    "root_sequence": root_sequence,
+                },
+            },
+            _connection=conn,
+        )
+        if not revoked.get("ok"):
+            raise WebAuthnRecoveryError("lost active credential revocation raced")
+        updated = conn.execute(
+            "UPDATE webauthn_recovery_revocations SET status = 'consumed', "
+            "authorization_json = ?, authorization_digest = ?, signature_digest = ?, consumed_at = ? "
+            "WHERE id = ? AND status = 'prepared'",
+            (authorization_json, authorization_digest, signature_digest, now_s, revocation_id),
+        )
+        if updated.rowcount != 1:
+            raise WebAuthnRecoveryError("lost-key decommission state changed")
+        append_audit_event(
+            conn,
+            event_type="webauthn.recovery_revocation.consumed",
+            actor_type="admin",
+            actor_id=str(row["user_id"]),
+            event={
+                "revocation_id": revocation_id,
+                "credential_record_id": str(row["active_credential_record_id"]),
+                "authorization_digest": authorization_digest,
+                "signature_digest": signature_digest,
+                "root_sequence": root_sequence,
+            },
+            idempotency_key=f"webauthn-recovery-revocation-consumed:{revocation_id}",
+        )
+    return {"ok": True, "revoked": revoked, "revocationId": revocation_id}
 
 
 def _invalidate_live_webauthn_registration_challenges(
@@ -10709,12 +14036,17 @@ def revoke_webauthn_credential(
             "SELECT * FROM webauthn_credentials WHERE id = ?", (record_id,)
         ).fetchone()
         if row is None:
-            return {"ok": False, "reason": "credential_not_found"}
+            return {
+                "ok": False,
+                "reason": "credential_not_found",
+                "revoked_oidc_browser_session_count": 0,
+            }
         if row["revoked_at"] is not None:
             return {
                 "ok": False,
                 "reason": "credential_already_revoked",
                 "credential": row_to_webauthn_credential(row),
+                "revoked_oidc_browser_session_count": 0,
             }
         cur = conn.execute(
             """
@@ -10726,7 +14058,21 @@ def revoke_webauthn_credential(
             (now_s, actor_id, reason, source, now_s, record_id),
         )
         if cur.rowcount != 1:
-            return {"ok": False, "reason": "credential_revocation_raced"}
+            return {
+                "ok": False,
+                "reason": "credential_revocation_raced",
+                "revoked_oidc_browser_session_count": 0,
+            }
+        revoked_oidc_browser_sessions = conn.execute(
+            """
+            UPDATE oidc_browser_sessions
+            SET status = 'revoked', revoked_at = ?, updated_at = ?,
+                revocation_reason = 'bound_webauthn_credential_revoked'
+            WHERE bound_webauthn_credential_id = ?
+              AND status IN ('pending_webauthn', 'active')
+            """,
+            (now_s, now_s, record_id),
+        )
         revoked_grants = conn.execute(
             """
             UPDATE approval_grants
@@ -10792,6 +14138,9 @@ def revoke_webauthn_credential(
                     "revoked_control_plane_approval_count": (
                         revoked_control_plane_approvals.rowcount
                     ),
+                    "revoked_oidc_browser_session_count": (
+                        revoked_oidc_browser_sessions.rowcount
+                    ),
                     "invalidated_registration_challenge_count": (
                         invalidated_registration_challenge_count
                     ),
@@ -10802,6 +14151,9 @@ def revoke_webauthn_credential(
         "credential": row_to_webauthn_credential(updated),
         "revoked_grant_count": revoked_grants.rowcount,
         "revoked_control_plane_approval_count": revoked_control_plane_approvals.rowcount,
+        "revoked_oidc_browser_session_count": (
+            revoked_oidc_browser_sessions.rowcount
+        ),
         "invalidated_registration_challenge_count": (
             invalidated_registration_challenge_count
         ),
@@ -10854,6 +14206,191 @@ def compare_and_swap_webauthn_sign_count(
     return cur.rowcount == 1
 
 
+def _prune_webauthn_challenges(conn: Any, now: datetime) -> dict[str, int]:
+    now_s = now.isoformat()
+    expired = conn.execute(
+        "UPDATE webauthn_challenges SET used_at = ? "
+        "WHERE used_at IS NULL AND expires_at <= ?",
+        (now_s, now_s),
+    )
+    cutoff = (
+        now - timedelta(seconds=WEBAUTHN_CHALLENGE_TERMINAL_RETENTION_SECONDS)
+    ).isoformat()
+    retained_reference = (
+        "id NOT IN (SELECT challenge_id FROM webauthn_recovery_ceremonies)"
+    )
+    deleted_old = conn.execute(
+        "DELETE FROM webauthn_challenges WHERE used_at IS NOT NULL "
+        "AND used_at <= ? AND " + retained_reference,
+        (cutoff,),
+    )
+    deleted_overflow = conn.execute(
+        "DELETE FROM webauthn_challenges WHERE id IN ("
+        "SELECT id FROM ("
+        "SELECT id, ROW_NUMBER() OVER (ORDER BY used_at DESC, id DESC) AS ordinal "
+        "FROM webauthn_challenges WHERE used_at IS NOT NULL AND "
+        + retained_reference
+        + ") AS ranked WHERE ordinal > ?) ",
+        (WEBAUTHN_CHALLENGE_MAX_RETAINED - 1,),
+    )
+    return {
+        "expired": max(0, int(expired.rowcount)),
+        "deleted": max(0, int(deleted_old.rowcount))
+        + max(0, int(deleted_overflow.rowcount)),
+    }
+
+
+def _admit_webauthn_challenge(
+    conn: Any,
+    *,
+    now: datetime,
+    challenge_type: str,
+    user_id: str,
+    scope_key: str | None,
+    replace_scope: bool,
+) -> None:
+    _prune_webauthn_challenges(conn, now)
+    now_s = now.isoformat()
+    rate_start = (
+        now - timedelta(seconds=WEBAUTHN_CHALLENGE_RATE_WINDOW_SECONDS)
+    ).isoformat()
+    recent = conn.execute(
+        "SELECT COUNT(*) AS count FROM webauthn_challenges "
+        "WHERE user_id = ? AND created_at > ?",
+        (user_id, rate_start),
+    ).fetchone()
+    if int(recent["count"] if recent else 0) >= WEBAUTHN_CHALLENGE_USER_RATE_MAX:
+        raise MetadataStoreError("WebAuthn challenge user rate limit reached")
+    global_recent = conn.execute(
+        "SELECT COUNT(*) AS count FROM webauthn_challenges WHERE created_at > ?",
+        (rate_start,),
+    ).fetchone()
+    if int(global_recent["count"] if global_recent else 0) >= (
+        WEBAUTHN_CHALLENGE_GLOBAL_RATE_MAX
+    ):
+        raise MetadataStoreError("WebAuthn challenge global rate limit reached")
+    if replace_scope and scope_key is not None:
+        conn.execute(
+            "UPDATE webauthn_challenges SET used_at = ? "
+            "WHERE challenge_type = ? AND user_id = ? AND scope_key = ? "
+            "AND used_at IS NULL",
+            (now_s, challenge_type, user_id, scope_key),
+        )
+    global_live = conn.execute(
+        "SELECT COUNT(*) AS count FROM webauthn_challenges "
+        "WHERE used_at IS NULL AND expires_at > ?",
+        (now_s,),
+    ).fetchone()
+    user_live = conn.execute(
+        "SELECT COUNT(*) AS count FROM webauthn_challenges "
+        "WHERE user_id = ? AND used_at IS NULL AND expires_at > ?",
+        (user_id, now_s),
+    ).fetchone()
+    if int(global_live["count"] if global_live else 0) >= (
+        WEBAUTHN_CHALLENGE_GLOBAL_LIVE_MAX
+    ):
+        raise MetadataStoreError("WebAuthn challenge global live capacity reached")
+    if int(user_live["count"] if user_live else 0) >= (
+        WEBAUTHN_CHALLENGE_USER_LIVE_MAX
+    ):
+        raise MetadataStoreError("WebAuthn challenge user live capacity reached")
+    retained = conn.execute(
+        "SELECT COUNT(*) AS count FROM webauthn_challenges WHERE used_at IS NOT NULL"
+    ).fetchone()
+    if int(retained["count"] if retained else 0) >= WEBAUTHN_CHALLENGE_MAX_RETAINED:
+        raise MetadataStoreError("WebAuthn challenge terminal capacity reached")
+
+
+def create_oidc_session_binding_challenge(
+    *,
+    challenge: str,
+    user_id: str,
+    session_id: str,
+    payload: dict[str, Any],
+    ttl_seconds: int,
+) -> dict[str, Any]:
+    item_id = str(uuid.uuid4())
+    if not 30 <= ttl_seconds <= 300:
+        raise MetadataStoreError(
+            "OIDC binding challenge TTL must be between 30 and 300 seconds"
+        )
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        session = conn.execute(
+            "SELECT id FROM oidc_browser_sessions "
+            "WHERE id = ? AND user_id = ? AND status = 'pending_webauthn' "
+            "AND expires_at > ? AND pending_expires_at > ?",
+            (session_id, user_id, now_s, now_s),
+        ).fetchone()
+        if session is None:
+            raise MetadataStoreError(
+                "OIDC browser session is not eligible for a binding challenge"
+            )
+        _admit_webauthn_challenge(
+            conn,
+            now=now,
+            challenge_type="oidc-session-binding",
+            user_id=user_id,
+            scope_key=session_id,
+            replace_scope=True,
+        )
+        rate_window = (
+            now - timedelta(seconds=_OIDC_BINDING_CHALLENGE_RATE_WINDOW_SECONDS)
+        ).isoformat()
+        recent = conn.execute(
+            "SELECT COUNT(*) AS count FROM webauthn_challenges "
+            "WHERE challenge_type = 'oidc-session-binding' "
+            "AND user_id = ? AND created_at > ?",
+            (user_id, rate_window),
+        ).fetchone()
+        if int(recent["count"] if recent else 0) >= _OIDC_BINDING_CHALLENGE_USER_RATE_MAX:
+            raise MetadataStoreError("OIDC binding challenge rate limit reached")
+        global_live = conn.execute(
+            "SELECT COUNT(*) AS count FROM webauthn_challenges "
+            "WHERE challenge_type = 'oidc-session-binding' "
+            "AND used_at IS NULL AND expires_at > ?",
+            (now_s,),
+        ).fetchone()
+        user_live = conn.execute(
+            "SELECT COUNT(*) AS count FROM webauthn_challenges "
+            "WHERE challenge_type = 'oidc-session-binding' AND user_id = ? "
+            "AND used_at IS NULL AND expires_at > ?",
+            (user_id, now_s),
+        ).fetchone()
+        if int(global_live["count"] if global_live else 0) >= (
+            _OIDC_BINDING_CHALLENGE_GLOBAL_LIVE_MAX
+        ):
+            raise MetadataStoreError("OIDC binding challenge global capacity reached")
+        if int(user_live["count"] if user_live else 0) >= (
+            _OIDC_BINDING_CHALLENGE_USER_LIVE_MAX
+        ):
+            raise MetadataStoreError("OIDC binding challenge user capacity reached")
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
+        conn.execute(
+            """
+            INSERT INTO webauthn_challenges (
+                id, challenge, challenge_type, user_id, scope_key,
+                approval_request_id, payload_json, expires_at, created_at
+            ) VALUES (?, ?, 'oidc-session-binding', ?, ?, NULL, ?, ?, ?)
+            """,
+            (
+                item_id,
+                challenge,
+                user_id,
+                session_id,
+                dumps(payload),
+                expires_at,
+                now_s,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM webauthn_challenges WHERE id = ?", (item_id,)
+        ).fetchone()
+    return row_to_webauthn_challenge(row)
+
+
 def create_webauthn_challenge(
     *,
     challenge: str,
@@ -10861,32 +14398,60 @@ def create_webauthn_challenge(
     user_id: str,
     payload: dict[str, Any],
     approval_request_id: str | None = None,
+    scope_key: str | None = None,
     ttl_seconds: int = 300,
 ) -> dict[str, Any]:
     item_id = str(uuid.uuid4())
+    if not 30 <= ttl_seconds <= 300:
+        raise MetadataStoreError(
+            "WebAuthn challenge TTL must be between 30 and 300 seconds"
+        )
+    if (
+        not isinstance(challenge, str)
+        or re.fullmatch(r"[A-Za-z0-9_-]{32,128}", challenge) is None
+    ):
+        raise MetadataStoreError("WebAuthn challenge value is invalid")
+    if not isinstance(challenge_type, str) or not 1 <= len(challenge_type) <= 64:
+        raise MetadataStoreError("WebAuthn challenge type is invalid")
+    if not isinstance(user_id, str) or not 1 <= len(user_id.encode("utf-8")) <= 512:
+        raise MetadataStoreError("WebAuthn challenge user is invalid")
+    if scope_key is not None and (
+        not isinstance(scope_key, str)
+        or not 1 <= len(scope_key.encode("utf-8")) <= 512
+    ):
+        raise MetadataStoreError("WebAuthn challenge scope is invalid")
+    payload_json = dumps(payload)
+    if len(payload_json.encode("utf-8")) > 64 * 1024:
+        raise MetadataStoreError("WebAuthn challenge payload exceeds 64 KiB")
     with connect() as conn:
-        if challenge_type == "registration":
-            _lock_webauthn_authority(conn)
-            now = _metadata_utcnow(conn)
-        else:
-            now = utcnow()
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
         now_s = now.isoformat()
+        _admit_webauthn_challenge(
+            conn,
+            now=now,
+            challenge_type=challenge_type,
+            user_id=user_id,
+            scope_key=scope_key,
+            replace_scope=scope_key is not None,
+        )
         expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
         conn.execute(
             """
             INSERT INTO webauthn_challenges (
-                id, challenge, challenge_type, user_id, approval_request_id,
-                payload_json, expires_at, created_at
+                id, challenge, challenge_type, user_id, scope_key,
+                approval_request_id, payload_json, expires_at, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 item_id,
                 challenge,
                 challenge_type,
                 user_id,
+                scope_key,
                 approval_request_id,
-                dumps(payload),
+                payload_json,
                 expires_at,
                 now_s,
             ),
@@ -10909,16 +14474,18 @@ def get_unused_webauthn_challenge(
     challenge_type: str | None = None,
     user_id: str | None = None,
 ) -> dict[str, Any] | None:
-    now_s = iso_now()
     clauses = ["challenge = ?", "used_at IS NULL", "expires_at > ?"]
-    params: list[Any] = [challenge, now_s]
     if challenge_type is not None:
         clauses.append("challenge_type = ?")
-        params.append(challenge_type)
     if user_id is not None:
         clauses.append("user_id = ?")
-        params.append(user_id)
     with connect() as conn:
+        now_s = _metadata_utcnow(conn).isoformat()
+        params: list[Any] = [challenge, now_s]
+        if challenge_type is not None:
+            params.append(challenge_type)
+        if user_id is not None:
+            params.append(user_id)
         row = conn.execute(
             f"SELECT * FROM webauthn_challenges WHERE {' AND '.join(clauses)}",
             params,
@@ -10933,17 +14500,17 @@ def claim_webauthn_challenge(
     user_id: str,
     approval_request_id: str | None = None,
 ) -> dict[str, Any] | None:
-    now_s = iso_now()
-    params = (
-        now_s,
-        challenge,
-        challenge_type,
-        user_id,
-        approval_request_id,
-        approval_request_id,
-        now_s,
-    )
     with connect() as conn:
+        now_s = _metadata_utcnow(conn).isoformat()
+        params = (
+            now_s,
+            challenge,
+            challenge_type,
+            user_id,
+            approval_request_id,
+            approval_request_id,
+            now_s,
+        )
         if isinstance(conn, PostgresMetadataConnection):
             row = conn.execute(
                 """
@@ -11006,9 +14573,10 @@ def claim_webauthn_challenge(
 
 def mark_webauthn_challenge_used(challenge_id: str) -> None:
     with connect() as conn:
+        now_s = _metadata_utcnow(conn).isoformat()
         conn.execute(
             "UPDATE webauthn_challenges SET used_at = ? WHERE id = ? AND used_at IS NULL",
-            (iso_now(), challenge_id),
+            (now_s, challenge_id),
         )
 
 
@@ -11711,6 +15279,7 @@ def metadata_store_status() -> dict[str, Any]:
         "metadata_audit_outbox",
         "webauthn_trust_publications",
         "oidc_login_states",
+        "oidc_browser_sessions",
         "oauth_revocation_work",
         "routes",
         "approval_requests",
@@ -11718,6 +15287,9 @@ def metadata_store_status() -> dict[str, Any]:
         "control_plane_approvals",
         "webauthn_credentials",
         "webauthn_challenges",
+        "webauthn_recovery_ceremonies",
+        "webauthn_recovery_root_state",
+        "webauthn_recovery_revocations",
         "gmail_message_cache",
         "request_logs",
         "rate_limit_counters",

@@ -4,23 +4,53 @@ import base64
 import hashlib
 import json
 import os
+import re
+import stat
+import threading
 import uuid
+from collections import OrderedDict
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
+from urllib.parse import urlparse
 
 import cbor2
 from cryptography import x509
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, padding, rsa
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.x509.oid import ExtensionOID, ObjectIdentifier
 
 from serverware import db
 from serverware.config import (
     DEV_AUTHENTICATOR_ENABLED,
+    POLICY_SIGNING_KEY_PATH,
+    POLICY_SIGNING_PUBLIC_KEY_PATH,
+    RESPONSE_SIGNING_KEY_PATH,
+    SETUP_ENROLLMENT_VERIFIER_KEY_ID,
+    SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY_PATH,
+    SETUP_FINAL_AUTHORITY_KEY_ID,
+    SETUP_FINAL_AUTHORITY_PUBLIC_KEY_PATH,
+    SETUP_HARDWARE_VERIFIER_KEY_ID,
+    SETUP_HARDWARE_VERIFIER_PUBLIC_KEY_PATH,
+    TEE_QUOTE_SIGNING_KEY_PATH,
     WEBAUTHN_ORIGIN,
+    WEBAUTHN_RECOVERY_AUDIENCE,
+    WEBAUTHN_RECOVERY_ENABLED,
+    WEBAUTHN_RECOVERY_EXCLUDE_CREDENTIALS_MAX_BYTES,
+    WEBAUTHN_RECOVERY_EXCLUDE_CREDENTIALS_MAX_COUNT,
+    WEBAUTHN_RECOVERY_ROOT_KEY_ID,
+    WEBAUTHN_RECOVERY_ROOT_PROVIDER,
+    WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY_PATH,
+    WEBAUTHN_RECOVERY_TTL_SECONDS,
     WEBAUTHN_RP_ID,
     WEBAUTHN_RP_NAME,
+    WEBAUTHN_TRUST_BUNDLE_PATH,
+    WEBAUTHN_TRUST_BUNDLE_STATE_PATH,
+    WEBAUTHN_TRUST_SIGNING_KEY_PATH,
+    WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY_PATH,
 )
 from serverware.policy_bundle import canonical_json
 from serverware.webauthn_trust import (
@@ -28,6 +58,8 @@ from serverware.webauthn_trust import (
     WebAuthnTrustError,
     load_trust_roots,
     trust_read_locked,
+    trust_roots_from_bundle,
+    verify_trust_bundle,
 )
 
 
@@ -44,18 +76,350 @@ YUBIKEY_AAGUIDS = {
     "cb69481e-8ff7-4039-93ec-0a2729a154a8",
 }
 FIDO_AAGUID_EXTENSION = ObjectIdentifier("1.3.6.1.4.1.45724.1.1.4")
+MAX_CLIENT_DATA_JSON_BYTES = 16 * 1024
+MAX_AUTHENTICATOR_DATA_BYTES = 64 * 1024
+MAX_ATTESTATION_OBJECT_BYTES = 256 * 1024
+MAX_COSE_PUBLIC_KEY_BYTES = 4 * 1024
+MAX_CREDENTIAL_ID_BYTES = 1024
+MAX_ATTESTATION_CHAIN_CERTIFICATES = 5
+MAX_ATTESTATION_CERTIFICATE_BYTES = 64 * 1024
+MAX_ATTESTATION_CHAIN_BYTES = 256 * 1024
+MAX_TRUST_BUNDLE_BYTES = 2 * 1024 * 1024
+MAX_TRUST_STATE_BYTES = 64 * 1024
+MAX_TRUST_PUBLIC_KEY_BYTES = 16 * 1024
+_TRUST_ROOT_CACHE_MAX_ENTRIES = 4
+_TRUST_ROOT_CACHE_LOCK = threading.RLock()
+_TRUST_ROOT_CACHE: OrderedDict[tuple[str, str, str], tuple[dict[str, Any], ...]] = (
+    OrderedDict()
+)
 
 
 class WebAuthnError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class WebAuthnRecoveryRoot:
+    provider: str
+    key_id: str
+    public_key: Ed25519PublicKey
+
+
+def _read_recovery_public_key_file() -> bytes:
+    path = WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY_PATH
+    if path is None or not path.is_absolute():
+        raise WebAuthnError(
+            "WebAuthn recovery root public key must use an absolute path"
+        )
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise WebAuthnError(
+            "WebAuthn recovery root must be a readable non-symlink file"
+        ) from exc
+    try:
+        before = os.fstat(descriptor)
+        mode = stat.S_IMODE(before.st_mode)
+        if not stat.S_ISREG(before.st_mode):
+            raise WebAuthnError("WebAuthn recovery root must be a regular file")
+        if not 1 <= before.st_size <= 16 * 1024:
+            raise WebAuthnError(
+                "WebAuthn recovery root must contain between 1 and 16384 bytes"
+            )
+        if mode & 0o022 or (before.st_uid == os.geteuid() and mode & 0o200):
+            raise WebAuthnError(
+                "WebAuthn recovery root must not be mutable by the runtime identity"
+            )
+        chunks: list[bytes] = []
+        remaining = 16 * 1024 + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            or len(payload) != before.st_size
+        ):
+            raise WebAuthnError("WebAuthn recovery root changed while being read")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+@lru_cache(maxsize=1)
+def webauthn_recovery_root() -> WebAuthnRecoveryRoot:
+    if not WEBAUTHN_RECOVERY_ENABLED:
+        raise WebAuthnError("WebAuthn recovery is disabled")
+    if (
+        re.fullmatch(r"sha256:[0-9a-f]{64}", WEBAUTHN_RECOVERY_ROOT_KEY_ID)
+        is None
+    ):
+        raise WebAuthnError(
+            "WebAuthn recovery root key ID must be a lowercase SHA-256 digest"
+        )
+    if not 3 <= len(WEBAUTHN_RECOVERY_ROOT_PROVIDER) <= 128:
+        raise WebAuthnError("WebAuthn recovery root provider is invalid")
+    if not WEBAUTHN_RECOVERY_AUDIENCE or len(WEBAUTHN_RECOVERY_AUDIENCE) > 512:
+        raise WebAuthnError("WebAuthn recovery audience is invalid")
+    try:
+        public_key = serialization.load_pem_public_key(
+            _read_recovery_public_key_file()
+        )
+    except (TypeError, ValueError) as exc:
+        raise WebAuthnError(
+            "WebAuthn recovery root is not a valid PEM public key"
+        ) from exc
+    if not isinstance(public_key, Ed25519PublicKey):
+        raise WebAuthnError("WebAuthn recovery root must be Ed25519")
+    key_der = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    actual_key_id = _sha256_prefixed(key_der)
+    if not secrets_compare(actual_key_id, WEBAUTHN_RECOVERY_ROOT_KEY_ID):
+        raise WebAuthnError(
+            "WebAuthn recovery root does not match its configured key ID"
+        )
+    return WebAuthnRecoveryRoot(
+        provider=WEBAUTHN_RECOVERY_ROOT_PROVIDER,
+        key_id=actual_key_id,
+        public_key=public_key,
+    )
+
+
+def secrets_compare(left: str, right: str) -> bool:
+    import hmac
+
+    return hmac.compare_digest(left, right)
+
+
+def _read_bounded_trust_file(path: Any, maximum_bytes: int) -> bytes:
+    if not path.exists():
+        return b""
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(maximum_bytes + 1)
+    except OSError as exc:
+        raise WebAuthnTrustError(f"WebAuthn trust file is unreadable: {path}") from exc
+    if len(raw) > maximum_bytes:
+        raise WebAuthnTrustError(f"WebAuthn trust file exceeds its size limit: {path}")
+    return raw
+
+
+def _trust_cache_material() -> tuple[tuple[str, str, str], bytes]:
+    bundle_raw = _read_bounded_trust_file(
+        WEBAUTHN_TRUST_BUNDLE_PATH, MAX_TRUST_BUNDLE_BYTES
+    )
+    state_raw = _read_bounded_trust_file(
+        WEBAUTHN_TRUST_BUNDLE_STATE_PATH, MAX_TRUST_STATE_BYTES
+    )
+    public_key_raw = _read_bounded_trust_file(
+        WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY_PATH, MAX_TRUST_PUBLIC_KEY_BYTES
+    )
+    return (
+        (
+            _sha256_prefixed(bundle_raw),
+            _sha256_prefixed(state_raw),
+            _sha256_prefixed(public_key_raw),
+        ),
+        bundle_raw,
+    )
+
+
+def _validate_cached_trust_time(bundle_raw: bytes) -> None:
+    try:
+        bundle = json.loads(bundle_raw)
+        metadata = bundle.get("metadata") or {}
+        valid_from_raw = metadata.get("validFrom")
+        valid_until_raw = metadata.get("validUntil")
+        valid_from = (
+            datetime.fromisoformat(str(valid_from_raw).replace("Z", "+00:00"))
+            if valid_from_raw
+            else None
+        )
+        valid_until = (
+            datetime.fromisoformat(str(valid_until_raw).replace("Z", "+00:00"))
+            if valid_until_raw
+            else None
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise WebAuthnTrustError("WebAuthn trust bundle time window is invalid") from exc
+    now = datetime.now(timezone.utc)
+    if valid_from is not None and (
+        valid_from.tzinfo is None or now < valid_from.astimezone(timezone.utc)
+    ):
+        raise WebAuthnTrustError("WebAuthn trust bundle is not valid yet")
+    if valid_until is not None and (
+        valid_until.tzinfo is None or now > valid_until.astimezone(timezone.utc)
+    ):
+        raise WebAuthnTrustError("WebAuthn trust bundle is expired")
+
+
+def _load_trust_roots_cached() -> list[TrustRoot]:
+    if not WEBAUTHN_TRUST_BUNDLE_PATH.exists():
+        return load_trust_roots()
+    try:
+        for _ in range(2):
+            before_key, before_bundle = _trust_cache_material()
+            with _TRUST_ROOT_CACHE_LOCK:
+                cached = _TRUST_ROOT_CACHE.get(before_key)
+                if cached is not None:
+                    _validate_cached_trust_time(before_bundle)
+                    _TRUST_ROOT_CACHE.move_to_end(before_key)
+                    return list(cached)
+            roots = load_trust_roots()
+            after_key, after_bundle = _trust_cache_material()
+            if before_bundle != after_bundle or before_key[2] != after_key[2]:
+                continue
+            _validate_cached_trust_time(after_bundle)
+            with _TRUST_ROOT_CACHE_LOCK:
+                _TRUST_ROOT_CACHE[after_key] = tuple(roots)
+                _TRUST_ROOT_CACHE.move_to_end(after_key)
+                while len(_TRUST_ROOT_CACHE) > _TRUST_ROOT_CACHE_MAX_ENTRIES:
+                    _TRUST_ROOT_CACHE.popitem(last=False)
+            return list(roots)
+    except Exception:
+        with _TRUST_ROOT_CACHE_LOCK:
+            _TRUST_ROOT_CACHE.clear()
+        raise
+    raise WebAuthnTrustError("WebAuthn trust bundle changed during verification")
+
+
+def _public_key_id_from_file(path: Any) -> str | None:
+    try:
+        if path is None or not path.exists():
+            return None
+        raw = path.read_bytes()
+        try:
+            key = serialization.load_pem_public_key(raw)
+        except ValueError:
+            private_key = serialization.load_pem_private_key(raw, password=None)
+            key = private_key.public_key()
+        der = key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        return _sha256_prefixed(der)
+    except (OSError, TypeError, ValueError) as exc:
+        raise WebAuthnError(f"online signing key is unreadable or invalid: {path}") from exc
+
+
+def validate_webauthn_recovery_configuration(
+    *, production: bool, additional_online_key_ids: dict[str, str] | None = None
+) -> None:
+    if not WEBAUTHN_RECOVERY_ENABLED:
+        if production:
+            raise WebAuthnError("production requires offline WebAuthn recovery")
+        return
+    root = webauthn_recovery_root()
+    online_identities = {
+        "setup enrollment verifier": SETUP_ENROLLMENT_VERIFIER_KEY_ID,
+        "setup hardware verifier": SETUP_HARDWARE_VERIFIER_KEY_ID,
+        "setup final authority": SETUP_FINAL_AUTHORITY_KEY_ID,
+        "setup enrollment verifier public key": _public_key_id_from_file(
+            SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY_PATH
+        ),
+        "setup hardware verifier public key": _public_key_id_from_file(
+            SETUP_HARDWARE_VERIFIER_PUBLIC_KEY_PATH
+        ),
+        "setup final authority public key": _public_key_id_from_file(
+            SETUP_FINAL_AUTHORITY_PUBLIC_KEY_PATH
+        ),
+        "response signing key": _public_key_id_from_file(RESPONSE_SIGNING_KEY_PATH),
+        "policy signing key": _public_key_id_from_file(POLICY_SIGNING_KEY_PATH),
+        "policy signing public key": _public_key_id_from_file(
+            POLICY_SIGNING_PUBLIC_KEY_PATH
+        ),
+        "development quote signing key": _public_key_id_from_file(
+            TEE_QUOTE_SIGNING_KEY_PATH
+        ),
+        "WebAuthn trust signing key": _public_key_id_from_file(
+            WEBAUTHN_TRUST_SIGNING_KEY_PATH
+        ),
+        "WebAuthn trust signing public key": _public_key_id_from_file(
+            WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY_PATH
+        ),
+    }
+    online_identities.update(additional_online_key_ids or {})
+    collision = next(
+        (
+            name
+            for name, key_id in online_identities.items()
+            if key_id and secrets_compare(root.key_id, key_id)
+        ),
+        None,
+    )
+    if collision is not None:
+        raise WebAuthnError(
+            "WebAuthn recovery root must not reuse the online "
+            f"{collision} identity"
+        )
+    if production:
+        audience = urlparse(WEBAUTHN_RECOVERY_AUDIENCE)
+        if (
+            audience.scheme != "https"
+            or not audience.hostname
+            or audience.hostname in {"localhost", "127.0.0.1", "::1"}
+            or audience.hostname.endswith(".example")
+        ):
+            raise WebAuthnError(
+                "production WebAuthn recovery audience must be a non-placeholder HTTPS deployment URL"
+            )
+
+
+def _current_webauthn_recovery_trust() -> dict[str, Any]:
+    if db.get_pending_webauthn_trust_publication() is not None:
+        raise WebAuthnError(
+            "WebAuthn recovery is unavailable while trust publication is pending"
+        )
+    if not WEBAUTHN_TRUST_BUNDLE_PATH.exists():
+        raise WebAuthnError(
+            "WebAuthn recovery requires an installed signed trust bundle"
+        )
+    try:
+        bundle = json.loads(WEBAUTHN_TRUST_BUNDLE_PATH.read_text(encoding="utf-8"))
+        info = verify_trust_bundle(bundle, update_state=False)
+        roots = trust_roots_from_bundle(bundle, update_state=False)
+    except (OSError, json.JSONDecodeError, WebAuthnTrustError) as exc:
+        raise WebAuthnError("WebAuthn recovery trust bundle is unhealthy") from exc
+    if (
+        not roots
+        or info["sequence"] < 1
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", str(info["digest"])) is None
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}", str(info["signing_key_id"] or "")
+        )
+        is None
+    ):
+        raise WebAuthnError("WebAuthn recovery trust bundle is incomplete")
+    return info
+
+
 def b64u(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
-def b64ud(value: str) -> bytes:
-    return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+def b64ud(value: str, *, maximum_bytes: int = 1024 * 1024) -> bytes:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > ((maximum_bytes + 2) // 3) * 4
+        or re.fullmatch(r"[A-Za-z0-9_-]+", value) is None
+    ):
+        raise WebAuthnError("WebAuthn base64url input is invalid or oversized")
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (ValueError, TypeError) as exc:
+        raise WebAuthnError("WebAuthn base64url input is invalid") from exc
+    if len(decoded) > maximum_bytes or b64u(decoded) != value:
+        raise WebAuthnError("WebAuthn base64url input is non-canonical or oversized")
+    return decoded
 
 
 def _sha256(value: bytes) -> bytes:
@@ -75,7 +439,7 @@ def _rp_hash() -> bytes:
 
 
 def _parse_client_data(client_data_b64: str, expected_type: str) -> tuple[dict[str, Any], bytes]:
-    raw = b64ud(client_data_b64)
+    raw = b64ud(client_data_b64, maximum_bytes=MAX_CLIENT_DATA_JSON_BYTES)
     try:
         client_data = json.loads(raw)
     except json.JSONDecodeError as exc:
@@ -90,7 +454,7 @@ def _parse_client_data(client_data_b64: str, expected_type: str) -> tuple[dict[s
 
 
 def _parse_authenticator_data(auth_data: bytes) -> dict[str, Any]:
-    if len(auth_data) < 37:
+    if not isinstance(auth_data, bytes) or not 37 <= len(auth_data) <= MAX_AUTHENTICATOR_DATA_BYTES:
         raise WebAuthnError("authenticatorData is too short")
     if auth_data[:32] != _rp_hash():
         raise WebAuthnError("WebAuthn RP ID hash mismatch")
@@ -121,6 +485,8 @@ def _classify_authenticator(aaguid: str | None, attestation_trusted: bool, trust
 
 
 def _public_key_from_cose(public_key_cose: bytes) -> ec.EllipticCurvePublicKey:
+    if not 1 <= len(public_key_cose) <= MAX_COSE_PUBLIC_KEY_BYTES:
+        raise WebAuthnError("WebAuthn COSE public key is oversized")
     key = cbor2.loads(public_key_cose)
     if key.get(1) != EC2_KTY or key.get(3) != ES256_ALG or key.get(-1) != P256_CRV:
         raise WebAuthnError("only ES256/P-256 WebAuthn credentials are supported")
@@ -296,12 +662,19 @@ def _verify_x5c_chain(certs: list[x509.Certificate], aaguid: bytes) -> dict[str,
 
 
 def _certs_from_x5c(x5c: Any) -> list[x509.Certificate]:
-    if not isinstance(x5c, list):
+    if (
+        not isinstance(x5c, list)
+        or not 1 <= len(x5c) <= MAX_ATTESTATION_CHAIN_CERTIFICATES
+    ):
         raise WebAuthnError("WebAuthn attestation x5c must be a certificate list")
     certs: list[x509.Certificate] = []
+    total_bytes = 0
     for item in x5c:
-        if not isinstance(item, bytes):
+        if not isinstance(item, bytes) or not 1 <= len(item) <= MAX_ATTESTATION_CERTIFICATE_BYTES:
             raise WebAuthnError("WebAuthn attestation x5c contains a non-certificate item")
+        total_bytes += len(item)
+        if total_bytes > MAX_ATTESTATION_CHAIN_BYTES:
+            raise WebAuthnError("WebAuthn attestation certificate chain is oversized")
         certs.append(x509.load_der_x509_certificate(item))
     return certs
 
@@ -455,6 +828,15 @@ def registration_options(
             "nonce": nonce,
             "authorization": authorization,
         },
+        scope_key=_sha256_prefixed(
+            canonical_json(
+                {
+                    "authorization": authorization,
+                    "label": label,
+                    "user_id": user_id,
+                }
+            ).encode("utf-8")
+        ),
         ttl_seconds=300,
     )
     return {
@@ -479,17 +861,605 @@ def registration_options(
 
 
 @trust_read_locked
+def recovery_registration_options(
+    *,
+    pending_token_digest: str,
+    oidc_session_id: str,
+    user_id: str,
+    label: str,
+    reason: str,
+    auth_policy_digest: str,
+) -> dict[str, Any]:
+    root = webauthn_recovery_root()
+    trust = _current_webauthn_recovery_trust()
+    history = db.list_webauthn_credentials(
+        user_id,
+        include_revoked=True,
+        limit=WEBAUTHN_RECOVERY_EXCLUDE_CREDENTIALS_MAX_COUNT + 1,
+    )
+    if len(history) > WEBAUTHN_RECOVERY_EXCLUDE_CREDENTIALS_MAX_COUNT:
+        raise WebAuthnError(
+            "credential history exceeds the recovery excludeCredentials count limit"
+        )
+    exclude_credentials = [
+        {
+            "id": str(item["credential_id"]),
+            "type": "public-key",
+            "transports": item.get("transports") or [],
+        }
+        for item in history
+    ]
+    if (
+        len(canonical_json(exclude_credentials).encode("utf-8"))
+        > WEBAUTHN_RECOVERY_EXCLUDE_CREDENTIALS_MAX_BYTES
+    ):
+        raise WebAuthnError(
+            "credential history exceeds the recovery excludeCredentials size limit"
+        )
+    try:
+        ceremony = db.create_webauthn_recovery_ceremony(
+            recovery_id=str(uuid.uuid4()),
+            nonce=b64u(os.urandom(32)),
+            pending_token_digest=pending_token_digest,
+            oidc_session_id=oidc_session_id,
+            user_id=user_id,
+            label=label,
+            reason=reason,
+            trust_bundle_digest=str(trust["digest"]),
+            trust_bundle_sequence=int(trust["sequence"]),
+            trust_bundle_rollback_epoch=int(trust["rollback_epoch"]),
+            trust_signing_key_id=str(trust["signing_key_id"]),
+            auth_policy_digest=auth_policy_digest,
+            recovery_root_key_id=root.key_id,
+            recovery_root_provider=root.provider,
+            recovery_audience=WEBAUTHN_RECOVERY_AUDIENCE,
+            rp_id=WEBAUTHN_RP_ID,
+            origin=WEBAUTHN_ORIGIN,
+            ttl_seconds=WEBAUTHN_RECOVERY_TTL_SECONDS,
+        )
+    except db.WebAuthnRecoveryError as exc:
+        raise WebAuthnError(str(exc)) from exc
+    challenge = ceremony["challenge"]
+    timeout_ms = max(
+        1,
+        int(
+            (
+                datetime.fromisoformat(str(ceremony["expires_at"]))
+                - datetime.now(timezone.utc)
+            ).total_seconds()
+            * 1000
+        ),
+    )
+    return {
+        "recoveryId": ceremony["id"],
+        "publicKey": {
+            "rp": {"name": WEBAUTHN_RP_NAME, "id": WEBAUTHN_RP_ID},
+            "user": {
+                "id": b64u(user_id.encode("utf-8")),
+                "name": user_id,
+                "displayName": user_id,
+            },
+            "challenge": challenge["challenge"],
+            "pubKeyCredParams": [{"type": "public-key", "alg": ES256_ALG}],
+            "timeout": timeout_ms,
+            "attestation": "direct",
+            "excludeCredentials": exclude_credentials,
+            "authenticatorSelection": {
+                "residentKey": "discouraged",
+                "userVerification": "required",
+                "authenticatorAttachment": "cross-platform",
+            },
+        },
+        "serverware": {
+            "recoveryId": ceremony["id"],
+            "challengeId": ceremony["challenge_id"],
+            "expiresAt": ceremony["expires_at"],
+            "rootKeyId": root.key_id,
+            "rootProvider": root.provider,
+            "audience": WEBAUTHN_RECOVERY_AUDIENCE,
+            "trustBundleDigest": trust["digest"],
+            "trustBundleSequence": trust["sequence"],
+        },
+    }
+
+
+def _verify_recovery_registration_candidate(
+    *,
+    recovery_id: str,
+    user_id: str,
+    response: dict[str, Any],
+    current_trust: dict[str, Any],
+    allowed_authenticator_classes: tuple[str, ...],
+) -> dict[str, Any]:
+    ceremony = db.get_webauthn_recovery_ceremony(recovery_id)
+    if ceremony is None or ceremony["status"] not in {
+        "pending_candidate",
+        "prepared",
+    }:
+        raise WebAuthnError("recovery ceremony is not live")
+    if ceremony["user_id"] != user_id:
+        raise WebAuthnError("recovery subject mismatch")
+    nested = response.get("response")
+    if not isinstance(nested, dict):
+        raise WebAuthnError("registration response is invalid")
+    credential_id = response.get("id") or response.get("rawId")
+    if not isinstance(credential_id, str):
+        raise WebAuthnError("registration response missing credential id")
+    try:
+        attestation_raw = b64ud(
+            nested["attestationObject"],
+            maximum_bytes=MAX_ATTESTATION_OBJECT_BYTES,
+        )
+        client_data_b64 = nested["clientDataJSON"]
+        attestation = cbor2.loads(attestation_raw)
+        client_data, client_data_raw = _parse_client_data(
+            client_data_b64, "webauthn.create"
+        )
+    except (KeyError, TypeError, ValueError, cbor2.CBORDecodeError) as exc:
+        if isinstance(exc, WebAuthnError):
+            raise
+        raise WebAuthnError("recovery registration response is invalid") from exc
+    challenge_value = client_data.get("challenge")
+    if not isinstance(challenge_value, str):
+        raise WebAuthnError("recovery registration challenge is invalid")
+    challenge = db.get_unused_webauthn_challenge(
+        challenge_value,
+        challenge_type="recovery-registration",
+        user_id=user_id,
+    )
+    if (
+        not challenge
+        or challenge.get("approval_request_id") is not None
+        or challenge["id"] != ceremony["challenge_id"]
+    ):
+        raise WebAuthnError("recovery registration challenge not found or expired")
+    challenge_payload = challenge.get("payload")
+    if not isinstance(challenge_payload, dict) or set(challenge_payload) != {
+        "v",
+        "type",
+        "recovery_id",
+        "nonce",
+        "user_id",
+        "oidc_session_id",
+        "pending_expires_at",
+        "credential_history_digest",
+        "trust_bundle_digest",
+        "auth_policy_digest",
+    }:
+        raise WebAuthnError("recovery registration challenge payload is invalid")
+    if (
+        challenge_payload["v"] != 1
+        or challenge_payload["type"]
+        != "serverware.webauthn_recovery_registration"
+        or challenge_payload["recovery_id"] != recovery_id
+        or challenge_payload["nonce"] != ceremony["nonce"]
+        or challenge_payload["user_id"] != user_id
+        or challenge_payload["oidc_session_id"] != ceremony["oidc_session_id"]
+        or challenge_payload["pending_expires_at"]
+        != ceremony["pending_expires_at"]
+        or challenge_payload["credential_history_digest"]
+        != ceremony["credential_history_digest"]
+        or challenge_payload["trust_bundle_digest"] != current_trust["digest"]
+        or challenge_payload["auth_policy_digest"]
+        != ceremony["auth_policy_digest"]
+    ):
+        raise WebAuthnError("recovery registration challenge scope mismatch")
+    auth_data = attestation.get("authData")
+    if not isinstance(auth_data, bytes):
+        raise WebAuthnError("recovery registration authenticator data is invalid")
+    parsed = _parse_authenticator_data(auth_data)
+    if not parsed["attested_credential_data"]:
+        raise WebAuthnError("recovery registration lacks attested credential data")
+    if not parsed["user_verified"]:
+        raise WebAuthnError("recovery registration requires user verification")
+    cursor = 37
+    if len(auth_data) < cursor + 18:
+        raise WebAuthnError("recovery registration authenticator data is truncated")
+    aaguid_raw = auth_data[cursor : cursor + 16]
+    aaguid = _aaguid_to_text(aaguid_raw)
+    cursor += 16
+    credential_len = int.from_bytes(auth_data[cursor : cursor + 2], "big")
+    cursor += 2
+    if (
+        credential_len <= 0
+        or credential_len > MAX_CREDENTIAL_ID_BYTES
+        or len(auth_data) <= cursor + credential_len
+    ):
+        raise WebAuthnError("recovery registration credential data is truncated")
+    credential_id_raw = auth_data[cursor : cursor + credential_len]
+    registered_credential_id = b64u(credential_id_raw)
+    if credential_id != registered_credential_id:
+        raise WebAuthnError(
+            "registration response credential id does not match attested credential id"
+        )
+    if db.get_webauthn_credential(
+        registered_credential_id, include_revoked=True
+    ) is not None:
+        raise WebAuthnError(
+            "WebAuthn credential ID was already registered and cannot be reused"
+        )
+    cursor += credential_len
+    public_key_cose = auth_data[cursor:]
+    attestation_result = _verify_attestation_statement(
+        attestation,
+        auth_data,
+        client_data_raw,
+        aaguid_raw,
+        credential_id_raw,
+        public_key_cose,
+    )
+    attestation_trusted = bool(attestation_result["trusted"])
+    authenticator_class = _classify_authenticator(
+        aaguid,
+        attestation_trusted,
+        attestation_result.get("trust_class"),
+    )
+    allowed = set(allowed_authenticator_classes) or {"yubikey", "hardware"}
+    if (
+        not attestation_trusted
+        or authenticator_class not in allowed
+        or authenticator_class not in {"yubikey", "hardware"}
+    ):
+        raise WebAuthnError(
+            "recovery registration requires currently trusted hardware attestation"
+        )
+    if (
+        attestation_result.get("trust_bundle_digest") != current_trust["digest"]
+        or int(attestation_result.get("trust_bundle_sequence") or 0)
+        != int(current_trust["sequence"])
+    ):
+        raise WebAuthnError("recovery registration attestation trust generation changed")
+    transports = response.get("transports") or nested.get("transports") or []
+    if (
+        not isinstance(transports, list)
+        or any(not isinstance(item, str) or len(item) > 64 for item in transports)
+        or len(transports) > 16
+    ):
+        raise WebAuthnError("recovery registration transports are invalid")
+    public_key_cose_b64 = b64u(public_key_cose)
+    return {
+        "credentialId": registered_credential_id,
+        "credentialIdDigest": _sha256_prefixed(
+            registered_credential_id.encode("utf-8")
+        ),
+        "publicKeyCose": public_key_cose_b64,
+        "publicKeyCoseDigest": _sha256_prefixed(public_key_cose),
+        "signCount": int(parsed["sign_count"]),
+        "userVerified": True,
+        "aaguid": aaguid,
+        "authenticatorClass": authenticator_class,
+        "attestationFormat": str(attestation_result["fmt"]),
+        "attestationTrusted": True,
+        "attestationTrustPath": list(attestation_result["trust_path"]),
+        "attestationLeafSha256": attestation_result["leaf_sha256"],
+        "attestationRootSha256": attestation_result["root_sha256"],
+        "attestationObjectDigest": _sha256_prefixed(attestation_raw),
+        "clientDataJsonDigest": _sha256_prefixed(client_data_raw),
+        "responseDigest": _sha256_prefixed(
+            canonical_json(response).encode("utf-8")
+        ),
+        "trustBundleDigest": str(current_trust["digest"]),
+        "trustBundleSequence": int(current_trust["sequence"]),
+        "trustBundleRollbackEpoch": int(current_trust["rollback_epoch"]),
+        "trustSigningKeyId": str(current_trust["signing_key_id"]),
+        "transports": sorted(set(transports)),
+    }
+
+
+@trust_read_locked
+def prepare_recovery_registration(
+    *,
+    recovery_id: str,
+    pending_token_digest: str,
+    user_id: str,
+    response: dict[str, Any],
+    allowed_authenticator_classes: tuple[str, ...],
+) -> dict[str, Any]:
+    webauthn_recovery_root()
+    trust = _current_webauthn_recovery_trust()
+    candidate = _verify_recovery_registration_candidate(
+        recovery_id=recovery_id,
+        user_id=user_id,
+        response=response,
+        current_trust=trust,
+        allowed_authenticator_classes=allowed_authenticator_classes,
+    )
+    try:
+        witness_last_sequence = db.get_webauthn_recovery_witness_sequence(
+            root_key_id=WEBAUTHN_RECOVERY_ROOT_KEY_ID,
+            user_id=user_id,
+        )
+        ceremony = db.prepare_webauthn_recovery_candidate(
+            recovery_id=recovery_id,
+            pending_token_digest=pending_token_digest,
+            candidate=candidate,
+            witness_last_sequence=witness_last_sequence,
+        )
+    except (db.WebAuthnRecoveryError, db.RecoveryWitnessError) as exc:
+        raise WebAuthnError(str(exc)) from exc
+    return {
+        "recoveryId": recovery_id,
+        "statement": ceremony["statement"],
+        "canonicalStatement": canonical_json(ceremony["statement"]),
+        "statementDigest": ceremony["statement_digest"],
+        "expiresAt": ceremony["statement"]["expiresAt"],
+        "root": ceremony["statement"]["root"],
+    }
+
+
+def _verify_offline_recovery_authorization(
+    *,
+    expected_statement: dict[str, Any],
+    expected_statement_digest: str,
+    authorization: dict[str, Any],
+    root: WebAuthnRecoveryRoot,
+) -> tuple[dict[str, Any], dict[str, Any], str, str]:
+    if set(authorization) != {"statement", "signature"}:
+        raise WebAuthnError("recovery authorization fields are invalid")
+    statement = authorization.get("statement")
+    signature_value = authorization.get("signature")
+    if not isinstance(statement, dict) or statement != expected_statement:
+        raise WebAuthnError("recovery authorization statement mismatch")
+    if not isinstance(signature_value, str) or not signature_value.startswith(
+        "ed25519:"
+    ):
+        raise WebAuthnError("recovery authorization signature must use Ed25519")
+    canonical_statement = canonical_json(statement).encode("ascii")
+    if _sha256_prefixed(canonical_statement) != expected_statement_digest:
+        raise WebAuthnError("recovery authorization statement is not canonical")
+    try:
+        not_before = datetime.fromisoformat(str(statement["notBefore"]))
+        expires_at = datetime.fromisoformat(str(statement["expiresAt"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise WebAuthnError("recovery authorization time window is invalid") from exc
+    now = datetime.now(timezone.utc)
+    if (
+        not_before.tzinfo is None
+        or expires_at.tzinfo is None
+        or now < not_before.astimezone(timezone.utc)
+        or now >= expires_at.astimezone(timezone.utc)
+    ):
+        raise WebAuthnError("recovery authorization is not currently valid")
+    signature_text = signature_value.split(":", 1)[1]
+    try:
+        signature = b64ud(signature_text)
+    except (ValueError, TypeError) as exc:
+        raise WebAuthnError("recovery authorization signature is invalid") from exc
+    if len(signature) != 64 or b64u(signature) != signature_text:
+        raise WebAuthnError("recovery authorization signature encoding is invalid")
+    try:
+        root.public_key.verify(signature, canonical_statement)
+    except InvalidSignature as exc:
+        raise WebAuthnError(
+            "recovery authorization signature verification failed"
+        ) from exc
+    normalized_authorization = {
+        "statement": statement,
+        "signature": signature_value,
+    }
+    return (
+        statement,
+        normalized_authorization,
+        _sha256_prefixed(
+            canonical_json(normalized_authorization).encode("ascii")
+        ),
+        _sha256_prefixed(signature),
+    )
+
+
+@trust_read_locked
+def verify_recovery_registration(
+    *,
+    recovery_id: str,
+    pending_token_digest: str,
+    user_id: str,
+    response: dict[str, Any],
+    authorization: dict[str, Any],
+    auth_policy_digest: str,
+    allowed_authenticator_classes: tuple[str, ...],
+) -> dict[str, Any]:
+    root = webauthn_recovery_root()
+    trust = _current_webauthn_recovery_trust()
+    ceremony = db.get_webauthn_recovery_ceremony(recovery_id)
+    if ceremony is None or ceremony["status"] != "prepared":
+        raise WebAuthnError("recovery ceremony is not prepared")
+    candidate = _verify_recovery_registration_candidate(
+        recovery_id=recovery_id,
+        user_id=user_id,
+        response=response,
+        current_trust=trust,
+        allowed_authenticator_classes=allowed_authenticator_classes,
+    )
+    if candidate != ceremony.get("candidate"):
+        raise WebAuthnError("recovery candidate changed after offline preparation")
+    statement_subject = (ceremony.get("statement") or {}).get("subject") or {}
+    if not secrets_compare(
+        str(statement_subject.get("pendingTokenDigest") or ""),
+        pending_token_digest,
+    ):
+        raise WebAuthnError("recovery pending_token_digest binding changed")
+    if ceremony.get("auth_policy_digest") != auth_policy_digest:
+        raise WebAuthnError("recovery authorization policy binding changed")
+    (
+        statement,
+        normalized_authorization,
+        authorization_digest,
+        signature_digest,
+    ) = _verify_offline_recovery_authorization(
+        expected_statement=ceremony["statement"],
+        expected_statement_digest=ceremony["statement_digest"],
+        authorization=authorization,
+        root=root,
+    )
+    try:
+        finalized = db.finalize_webauthn_recovery_registration(
+            recovery_id=recovery_id,
+            pending_token_digest=pending_token_digest,
+            candidate=candidate,
+            statement=statement,
+            authorization=normalized_authorization,
+            authorization_digest=authorization_digest,
+            signature_digest=signature_digest,
+            current_trust=trust,
+            auth_policy_digest=auth_policy_digest,
+        )
+    except Exception as exc:
+        db.invalidate_witnessed_webauthn_recovery(
+            recovery_id=recovery_id,
+            ceremony_type="replacement-registration",
+            authorization=normalized_authorization,
+            authorization_digest=authorization_digest,
+            signature_digest=signature_digest,
+        )
+        if not isinstance(
+            exc, (db.WebAuthnRecoveryError, db.RecoveryWitnessError, ValueError)
+        ):
+            raise
+        raise WebAuthnError(str(exc)) from exc
+    return {
+        "recoveryId": recovery_id,
+        "credential": _redact_credential(finalized["credential"]),
+        "rootSequence": finalized["ceremony"]["root_sequence"],
+        "sessionState": "pending_webauthn",
+        "ordinaryAssertionRequired": True,
+    }
+
+
+@trust_read_locked
+def prepare_lost_active_key_revocation(
+    *,
+    pending_token_digest: str,
+    oidc_session_id: str,
+    user_id: str,
+    reason: str,
+    auth_policy_digest: str,
+) -> dict[str, Any]:
+    root = webauthn_recovery_root()
+    trust = _current_webauthn_recovery_trust()
+    if not 1 <= len(reason) <= 500:
+        raise WebAuthnError("lost-key decommission reason is invalid")
+    try:
+        witness_last_sequence = db.get_webauthn_recovery_witness_sequence(
+            root_key_id=root.key_id,
+            user_id=user_id,
+        )
+        ceremony = db.create_webauthn_recovery_revocation(
+            revocation_id=str(uuid.uuid4()),
+            nonce=b64u(os.urandom(32)),
+            pending_token_digest=pending_token_digest,
+            oidc_session_id=oidc_session_id,
+            user_id=user_id,
+            reason=reason,
+            trust=trust,
+            auth_policy_digest=auth_policy_digest,
+            recovery_root_key_id=root.key_id,
+            recovery_root_provider=root.provider,
+            recovery_audience=WEBAUTHN_RECOVERY_AUDIENCE,
+            rp_id=WEBAUTHN_RP_ID,
+            origin=WEBAUTHN_ORIGIN,
+            ttl_seconds=WEBAUTHN_RECOVERY_TTL_SECONDS,
+            witness_last_sequence=witness_last_sequence,
+        )
+    except (db.WebAuthnRecoveryError, db.RecoveryWitnessError) as exc:
+        raise WebAuthnError(str(exc)) from exc
+    return {
+        "revocationId": ceremony["id"],
+        "statement": ceremony["statement"],
+        "canonicalStatement": canonical_json(ceremony["statement"]),
+        "statementDigest": ceremony["statement_digest"],
+        "expiresAt": ceremony["expires_at"],
+        "root": ceremony["statement"]["root"],
+    }
+
+
+@trust_read_locked
+def verify_lost_active_key_revocation(
+    *,
+    revocation_id: str,
+    pending_token_digest: str,
+    user_id: str,
+    authorization: dict[str, Any],
+    auth_policy_digest: str,
+) -> dict[str, Any]:
+    root = webauthn_recovery_root()
+    trust = _current_webauthn_recovery_trust()
+    ceremony = db.get_webauthn_recovery_revocation(revocation_id)
+    if (
+        ceremony is None
+        or ceremony["status"] != "prepared"
+        or ceremony["user_id"] != user_id
+    ):
+        raise WebAuthnError("lost-key decommission ceremony is not live")
+    statement_subject = (ceremony.get("statement") or {}).get("subject") or {}
+    if not secrets_compare(
+        str(statement_subject.get("pendingTokenDigest") or ""),
+        pending_token_digest,
+    ):
+        raise WebAuthnError("recovery pending_token_digest binding changed")
+    if ceremony.get("auth_policy_digest") != auth_policy_digest:
+        raise WebAuthnError("recovery authorization policy binding changed")
+    (
+        statement,
+        normalized_authorization,
+        authorization_digest,
+        signature_digest,
+    ) = _verify_offline_recovery_authorization(
+        expected_statement=ceremony["statement"],
+        expected_statement_digest=ceremony["statement_digest"],
+        authorization=authorization,
+        root=root,
+    )
+    try:
+        finalized = db.finalize_webauthn_recovery_revocation(
+            revocation_id=revocation_id,
+            pending_token_digest=pending_token_digest,
+            statement=statement,
+            authorization=normalized_authorization,
+            authorization_digest=authorization_digest,
+            signature_digest=signature_digest,
+            current_trust=trust,
+            auth_policy_digest=auth_policy_digest,
+        )
+    except Exception as exc:
+        db.invalidate_witnessed_webauthn_recovery(
+            recovery_id=revocation_id,
+            ceremony_type="lost-active-key-decommission",
+            authorization=normalized_authorization,
+            authorization_digest=authorization_digest,
+            signature_digest=signature_digest,
+        )
+        if not isinstance(
+            exc, (db.WebAuthnRecoveryError, db.RecoveryWitnessError, ValueError)
+        ):
+            raise
+        raise WebAuthnError(str(exc)) from exc
+    return {
+        "revocationId": revocation_id,
+        "revokedCredential": _redact_credential(finalized["revoked"]["credential"]),
+        "rootSequence": int(ceremony["root_sequence"]),
+        "sessionState": "pending_webauthn",
+        "recoveryRequired": True,
+    }
+
+
+@trust_read_locked
 def verify_registration(
     user_id: str,
     label: str,
     response: dict[str, Any],
     *,
     require_authorization: bool = False,
+    expected_authorization: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     credential_id = response.get("id") or response.get("rawId")
     if not isinstance(credential_id, str):
         raise WebAuthnError("registration response missing credential id")
-    attestation = cbor2.loads(b64ud(response["response"]["attestationObject"]))
+    attestation = cbor2.loads(
+        b64ud(
+            response["response"]["attestationObject"],
+            maximum_bytes=MAX_ATTESTATION_OBJECT_BYTES,
+        )
+    )
     client_data, client_data_raw = _parse_client_data(response["response"]["clientDataJSON"], "webauthn.create")
     challenge_value = client_data.get("challenge")
     if not isinstance(challenge_value, str):
@@ -514,10 +1484,19 @@ def verify_registration(
             "bootstrap-token",
             "development-bootstrap",
             "existing-webauthn",
+            "oidc-session-first-enrollment",
         }:
             raise WebAuthnError("registration challenge lacks enrollment authorization")
         if not isinstance(authorization.get("payload_digest"), str):
             raise WebAuthnError("registration challenge authorization is not digest-bound")
+    if expected_authorization is not None:
+        if not isinstance(authorization, dict):
+            raise WebAuthnError("registration challenge lacks expected authorization")
+        for field, expected_value in expected_authorization.items():
+            if authorization.get(field) != expected_value:
+                raise WebAuthnError(
+                    f"registration challenge authorization {field} mismatch"
+                )
     auth_data = attestation.get("authData")
     parsed = _parse_authenticator_data(auth_data)
     if not parsed["attested_credential_data"]:
@@ -527,6 +1506,8 @@ def verify_registration(
     aaguid = _aaguid_to_text(aaguid_raw)
     cursor += 16
     credential_len = int.from_bytes(auth_data[cursor:cursor + 2], "big")
+    if credential_len <= 0 or credential_len > MAX_CREDENTIAL_ID_BYTES:
+        raise WebAuthnError("registration credential ID is oversized")
     cursor += 2
     credential_id_raw = auth_data[cursor:cursor + credential_len]
     registered_credential_id = b64u(credential_id_raw)
@@ -617,6 +1598,9 @@ def approval_options(
     authn_policy: dict[str, Any],
     review_receipt: dict[str, Any],
 ) -> dict[str, Any]:
+    credentials = _credential_descriptors_for_policy(user_id, authn_policy)
+    if not credentials:
+        raise WebAuthnError("no currently eligible WebAuthn credential is available")
     payload = _approval_challenge_payload(approval, user_id, review_receipt)
     challenge = b64u(_sha256(canonical_json(payload).encode("utf-8")))
     challenge_row = db.create_webauthn_challenge(
@@ -624,10 +1608,10 @@ def approval_options(
         challenge_type="approval",
         user_id=user_id,
         approval_request_id=approval["id"],
+        scope_key=str(approval["id"]),
         payload=payload,
         ttl_seconds=120,
     )
-    credentials = _credential_descriptors_for_policy(user_id, authn_policy)
     return {
         "publicKey": {
             "challenge": challenge,
@@ -653,6 +1637,9 @@ def control_plane_mutation_options(
     authn_policy: dict[str, Any],
     approval_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    credentials = _credential_descriptors_for_policy(user_id, authn_policy)
+    if not credentials:
+        raise WebAuthnError("no currently eligible WebAuthn credential is available")
     payload = {
         "v": 2 if approval_context else 1,
         "type": "serverware.control_plane_mutation",
@@ -677,9 +1664,21 @@ def control_plane_mutation_options(
         challenge_type="control-plane-mutation",
         user_id=user_id,
         payload=payload,
+        scope_key=_sha256_prefixed(
+            canonical_json(
+                {
+                    "action": action,
+                    "approval_id": (
+                        approval_context.get("id") if approval_context else None
+                    ),
+                    "payload_digest": payload_digest,
+                    "resource_id": resource_id,
+                    "user_id": user_id,
+                }
+            ).encode("utf-8")
+        ),
         ttl_seconds=120,
     )
-    credentials = _credential_descriptors_for_policy(user_id, authn_policy)
     return {
         "publicKey": {
             "challenge": challenge,
@@ -692,6 +1691,57 @@ def control_plane_mutation_options(
             "challenge_id": challenge_row["id"],
             "payload": payload,
             "payload_digest": "sha256:" + hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest(),
+        },
+    }
+
+
+def oidc_session_binding_options(
+    *,
+    session_id: str,
+    user_id: str,
+    session_expires_at: str,
+    pending_expires_at: str,
+    authn_policy: dict[str, Any],
+    ttl_seconds: int,
+) -> dict[str, Any]:
+    credentials = _credential_descriptors_for_policy(user_id, authn_policy)
+    if not credentials:
+        raise WebAuthnError(
+            "no currently eligible WebAuthn credential is available for session binding"
+        )
+    payload = {
+        "v": 1,
+        "type": "serverware.oidc_session_binding",
+        "session_id": session_id,
+        "user_id": user_id,
+        "session_expires_at": session_expires_at,
+        "pending_expires_at": pending_expires_at,
+        "nonce": b64u(os.urandom(24)),
+    }
+    challenge = b64u(_sha256(canonical_json(payload).encode("utf-8")))
+    try:
+        challenge_row = db.create_oidc_session_binding_challenge(
+            challenge=challenge,
+            user_id=user_id,
+            session_id=session_id,
+            payload=payload,
+            ttl_seconds=ttl_seconds,
+        )
+    except db.MetadataStoreError as exc:
+        raise WebAuthnError(str(exc)) from exc
+    return {
+        "publicKey": {
+            "challenge": challenge,
+            "rpId": WEBAUTHN_RP_ID,
+            "allowCredentials": credentials,
+            "timeout": ttl_seconds * 1000,
+            "userVerification": authn_policy.get("userVerification", "required"),
+        },
+        "serverware": {
+            "challenge_id": challenge_row["id"],
+            "payload_digest": _sha256_prefixed(
+                canonical_json(payload).encode("utf-8")
+            ),
         },
     }
 
@@ -737,7 +1787,7 @@ def credential_trust_status(
             "current_trust_bundle_digest": None,
             "current_trust_bundle_sequence": None,
         }
-    roots = load_trust_roots() if trust_roots is None else trust_roots
+    roots = _load_trust_roots_cached() if trust_roots is None else trust_roots
     root = next(
         (item for item in roots if item.certificate_sha256 == root_digest), None
     )
@@ -796,7 +1846,7 @@ def _credential_descriptors_for_policy(
         for item in credentials
     ):
         try:
-            roots = load_trust_roots()
+            roots = _load_trust_roots_cached()
         except WebAuthnTrustError:
             return []
     eligible: list[dict[str, Any]] = []
@@ -1035,6 +2085,95 @@ def verify_control_plane_mutation_assertion(
             }
         )
     return evidence
+
+
+@trust_read_locked
+def verify_oidc_session_binding_assertion(
+    *,
+    old_token_digest: str,
+    new_token_digest: str,
+    session_id: str,
+    user_id: str,
+    session_expires_at: str,
+    pending_expires_at: str,
+    authn_policy: dict[str, Any],
+    assertion: dict[str, Any],
+    encrypted_active_token: str,
+) -> dict[str, Any]:
+    credential_id = assertion.get("id") or assertion.get("rawId")
+    credential = db.get_webauthn_credential(credential_id)
+    if not credential:
+        raise WebAuthnError("registered WebAuthn credential not found")
+    if credential["user_id"] != user_id:
+        raise WebAuthnError("WebAuthn credential belongs to a different user")
+    trust = _allowed_authenticator(credential, authn_policy)
+    response = assertion.get("response") or {}
+    verified = _verify_assertion_signature(credential, response, authn_policy)
+    client_data = verified["client_data"]
+    parsed = verified["parsed"]
+    assertion_digest = _sha256_prefixed(
+        canonical_json(assertion).encode("utf-8")
+    )
+    activation = db.finalize_oidc_browser_session_activation(
+        old_token_digest=old_token_digest,
+        new_token_digest=new_token_digest,
+        session_id=session_id,
+        user_id=user_id,
+        expires_at=session_expires_at,
+        pending_expires_at=pending_expires_at,
+        challenge=client_data["challenge"],
+        credential_id=credential_id,
+        credential_record_id=credential["id"],
+        expected_sign_count=credential["sign_count"],
+        new_sign_count=parsed["sign_count"],
+        assertion_digest=assertion_digest,
+        encrypted_active_token=encrypted_active_token,
+        trust_bundle_digest=trust.get("current_trust_bundle_digest"),
+        trust_bundle_sequence=trust.get("current_trust_bundle_sequence"),
+        authenticator_class=trust["effective_authenticator_class"],
+    )
+    if not activation.get("ok"):
+        raise WebAuthnError(
+            "OIDC session activation failed: " + str(activation.get("reason"))
+        )
+    return {
+        "method": "webauthn",
+        "user_id": user_id,
+        "credential_id": credential_id,
+        "credential_record_id": credential["id"],
+        "authenticator_class": credential["authenticator_class"],
+        "effective_authenticator_class": trust["effective_authenticator_class"],
+        "attestation_trusted": trust["currently_trusted"],
+        "attestation_trust_reason": trust["reason"],
+        "user_present": parsed["user_present"],
+        "user_verified": parsed["user_verified"],
+        "sign_count": parsed["sign_count"],
+        "challenge_id": activation["challenge_id"],
+        "session_id": session_id,
+        "session": activation["session"],
+    }
+
+
+def oidc_session_assertion_binding(assertion: dict[str, Any]) -> dict[str, str]:
+    if not isinstance(assertion, dict):
+        raise WebAuthnError("WebAuthn assertion is invalid")
+    response = assertion.get("response")
+    if not isinstance(response, dict):
+        raise WebAuthnError("WebAuthn assertion response is invalid")
+    client_data, _ = _parse_client_data(
+        response.get("clientDataJSON"), "webauthn.get"
+    )
+    challenge = client_data.get("challenge")
+    if not isinstance(challenge, str) or re.fullmatch(
+        r"[A-Za-z0-9_-]{43}", challenge
+    ) is None:
+        raise WebAuthnError("WebAuthn assertion challenge is invalid")
+    return {
+        "assertion_digest": _sha256_prefixed(
+            canonical_json(assertion).encode("utf-8")
+        ),
+        "challenge": challenge,
+    }
 
 
 def create_dev_credential(user_id: str, label: str = "Docker dev authenticator") -> dict[str, Any]:

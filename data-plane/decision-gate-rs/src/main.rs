@@ -46,6 +46,12 @@ use zeroize::{Zeroize, Zeroizing};
 
 const MAX_CREDENTIAL_LEASE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CONTROL_PLANE_ATTESTATION_BYTES: u64 = 64 * 1024;
+const MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
+const MAX_CONTROL_PLANE_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
+const MAX_CONTROL_PLANE_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
+const CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION: &str =
+    "serverware.controlPlaneAuthorizationReceipt/v1";
+const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
 const MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_HEADER_COUNT: usize = 128;
@@ -503,6 +509,114 @@ struct ResponseProofContext {
     client_nonce: String,
     client_nonce_bytes: Vec<u8>,
     tls_exporter: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ResponseProofReleaseAuthority {
+    authority_mode: &'static str,
+    grant_id: Option<String>,
+    approval_id: Option<String>,
+    credential_ref: Option<String>,
+    credential_version: u64,
+    request_digest: String,
+    operation_digest: String,
+    attempt_id: String,
+    consumption_identity_digest: String,
+    authorization_state_at_upstream_dispatch: &'static str,
+    authorization_state_observed_at_epoch_ms: u64,
+    reservation_expires_at_epoch_ms: Option<u64>,
+    dispatch_expires_at_epoch_ms: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ReleaseAuthorizationBinding {
+    attempt_id: String,
+    flow_id: String,
+    principal_id: String,
+    route_id: String,
+    credential_id: String,
+    credential_version: u64,
+    policy_hash: String,
+    request_digest: String,
+    operation_digest: Option<String>,
+    operation_context: Value,
+    require_jit_grant: bool,
+    shared_quotas: Vec<ReleaseAuthorizationBindingQuota>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ReleaseAuthorizationBindingQuota {
+    counter_key: String,
+    constraint_id: String,
+    operation: Option<String>,
+    window_seconds: u64,
+    max_count: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ControlPlaneAuthorizationReceipt {
+    #[serde(rename = "apiVersion")]
+    api_version: &'static str,
+    kind: &'static str,
+    principal_id: String,
+    route_id: String,
+    release_authority: ResponseProofReleaseAuthority,
+    request: ControlPlaneAuthorizationReceiptRequest,
+    response: ControlPlaneAuthorizationReceiptResponse,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ControlPlaneAuthorizationReceiptRequest {
+    method: &'static str,
+    path: String,
+    query: String,
+    nonce: String,
+    body_b64: String,
+    body_sha256: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ControlPlaneAuthorizationReceiptResponse {
+    status: u16,
+    body_b64: String,
+    body_sha256: String,
+    response_signing_key_id: String,
+    statement_b64: String,
+    statement_sha256: String,
+    signature: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct VerifiedDispatchEvidence {
+    receipt: ControlPlaneAuthorizationReceipt,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ResponseProofAuthorizationContext {
+    principal_id: String,
+    route_id: String,
+    release_authority: ResponseProofReleaseAuthority,
+    authorization_binding: ReleaseAuthorizationBinding,
+    control_plane_authorization_receipt: ControlPlaneAuthorizationReceipt,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct ResponseProofUpstreamResponse {
+    status: u16,
+    selected_raw_policy_headers_b64: BTreeMap<String, Vec<String>>,
+    body_digest: String,
+    canonical_digest: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ReleaseAuthorizationDispatchObservation {
+    observed_at_epoch_ms: u64,
+    reservation_expires_at_epoch_ms: Option<u64>,
+    dispatch_expires_at_epoch_ms: u64,
+    evidence: VerifiedDispatchEvidence,
 }
 
 #[derive(Serialize)]
@@ -1092,6 +1206,15 @@ struct CredentialLeaseResponseContext {
     source_tree_digest: Option<String>,
 }
 
+struct VerifiedControlPlaneSignedResponse {
+    statement: CredentialLeaseResponseStatement,
+    key_id: String,
+    body_digest: String,
+    statement_b64: String,
+    statement_digest: String,
+    signature: String,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct CredentialLeaseSet {
@@ -1244,6 +1367,14 @@ struct ReleaseAuthorizationResponse {
     retry_after_seconds: u64,
     quotas: Vec<ReleaseAuthorizationQuota>,
     store: ReleaseAuthorizationStore,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ReleaseAuthorizationDispatchRequestBody {
+    api_version: String,
+    attempt_id: String,
+    binding_digest: String,
 }
 
 #[derive(Clone, Debug)]
@@ -2962,6 +3093,115 @@ fn validate_generic_required_header_policy(
     Ok(())
 }
 
+fn validate_signed_npm_publish_response_contract(
+    route_id: &str,
+    adapter_config: &serde_json::Map<String, Value>,
+    constraints: &[Value],
+) -> Result<(), String> {
+    let response = adapter_config
+        .get("response")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            format!(
+                "route {route_id} signed npm.publish response contract requires buffered JSON capped at 65536 bytes"
+            )
+        })?;
+    if response.get("mode").and_then(Value::as_str) != Some("json")
+        || response
+            .get("maxBodyBytes")
+            .and_then(Value::as_u64)
+            .is_none_or(|limit| !(1..=65_536).contains(&limit))
+    {
+        return Err(format!(
+            "route {route_id} signed npm.publish response contract requires buffered JSON capped at 65536 bytes"
+        ));
+    }
+
+    let response_bindings = constraints
+        .iter()
+        .filter(|constraint| {
+            constraint.get("type").and_then(Value::as_str) == Some("responseBinding")
+                && constraint
+                    .get("operations")
+                    .and_then(Value::as_array)
+                    .is_some_and(|operations| {
+                        operations.len() == 1 && operations[0].as_str() == Some("npm.publish")
+                    })
+        })
+        .collect::<Vec<_>>();
+    if response_bindings.is_empty() {
+        return Err(format!(
+            "route {route_id} signed npm.publish requires a responseBinding scoped only to npm.publish"
+        ));
+    }
+    for constraint in response_bindings {
+        let constraint_id = constraint
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("unnamed");
+        if constraint
+            .get("successStatusCodes")
+            .and_then(Value::as_array)
+            .is_none_or(|statuses| {
+                statuses
+                    .iter()
+                    .any(|status| !matches!(status.as_u64(), Some(200 | 201)))
+            })
+        {
+            return Err(format!(
+                "route {route_id} responseBinding {constraint_id} npm.publish successStatusCodes may contain only 200 or 201"
+            ));
+        }
+        if constraint
+            .get("contentTypes")
+            .and_then(Value::as_array)
+            .is_none_or(|content_types| {
+                content_types.len() != 1 || content_types[0].as_str() != Some("application/json")
+            })
+        {
+            return Err(format!(
+                "route {route_id} responseBinding {constraint_id} npm.publish contentTypes must be exactly application/json"
+            ));
+        }
+    }
+
+    let response_json_constraints = constraints
+        .iter()
+        .filter(|constraint| {
+            constraint.get("type").and_then(Value::as_str) == Some("responseJson")
+                && constraint
+                    .get("operations")
+                    .and_then(Value::as_array)
+                    .is_some_and(|operations| {
+                        operations.len() == 1 && operations[0].as_str() == Some("npm.publish")
+                    })
+        })
+        .collect::<Vec<_>>();
+    if response_json_constraints.is_empty() {
+        return Err(format!(
+            "route {route_id} signed npm.publish requires a responseJson success constraint scoped only to npm.publish"
+        ));
+    }
+    if !response_json_constraints.iter().any(|constraint| {
+        constraint.get("required").and_then(Value::as_bool) == Some(true)
+            && constraint
+                .get("fields")
+                .and_then(Value::as_object)
+                .and_then(|fields| fields.get("published"))
+                .and_then(Value::as_object)
+                .is_some_and(|rule| {
+                    rule.get("required").and_then(Value::as_bool) == Some(true)
+                        && rule.get("type").and_then(Value::as_str) == Some("boolean")
+                        && rule.get("equals") == Some(&Value::Bool(true))
+                })
+    }) {
+        return Err(format!(
+            "route {route_id} signed npm.publish responseJson success constraint must require published to equal true"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
     const DEFAULTS: [(&str, &str); 5] = [
         ("action", "deny"),
@@ -3015,6 +3255,10 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         .get("metadata")
         .and_then(Value::as_object)
         .ok_or("policy metadata missing")?;
+    let signed_policy = metadata
+        .get("signature")
+        .and_then(Value::as_str)
+        .is_some_and(|signature| signature.starts_with("ed25519:"));
     if metadata.contains_key("validFrom") {
         return Err("policy metadata.validFrom is not supported by the Rust runtime".to_string());
     }
@@ -4234,9 +4478,87 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 }
             }
             if constraint_type == "responseBinding" {
+                if adapter_type == "npm.registry" {
+                    let response_config = route
+                        .get("adapter")
+                        .and_then(|adapter| adapter.get("config"))
+                        .and_then(|config| config.get("response"))
+                        .and_then(Value::as_object)
+                        .ok_or_else(|| {
+                            format!(
+                                "route {route_id} responseBinding requires buffered JSON response configuration"
+                            )
+                        })?;
+                    if response_config.get("mode").and_then(Value::as_str) != Some("json")
+                        || response_config
+                            .get("maxBodyBytes")
+                            .and_then(Value::as_u64)
+                            .is_none_or(|limit| !(1..=65_536).contains(&limit))
+                    {
+                        return Err(format!(
+                            "route {route_id} responseBinding requires a buffered JSON response capped at 65536 bytes"
+                        ));
+                    }
+                    let configured_for_publish = route
+                        .get("adapter")
+                        .and_then(|adapter| adapter.get("config"))
+                        .and_then(|config| config.get("operations"))
+                        .and_then(Value::as_array)
+                        .is_some_and(|operations| {
+                            operations
+                                .iter()
+                                .any(|operation| operation.as_str() == Some("publish"))
+                        });
+                    let scoped_to_publish = constraint
+                        .get("operations")
+                        .and_then(Value::as_array)
+                        .is_some_and(|operations| {
+                            operations.len() == 1 && operations[0].as_str() == Some("npm.publish")
+                        });
+                    if !configured_for_publish || !scoped_to_publish {
+                        return Err(format!(
+                            "route {route_id} responseBinding {constraint_id} must be scoped only to configured npm.publish"
+                        ));
+                    }
+                    let mut binds_package_name = false;
+                    let mut binds_package_version = false;
+                    for binding in constraint
+                        .get("bindings")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                    {
+                        let source = binding
+                            .get("operationField")
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if !matches!(
+                            source,
+                            "packageName" | "packageVersion" | "tarballIntegrity"
+                        ) {
+                            return Err(format!(
+                                "route {route_id} responseBinding {constraint_id} source {source} is not a captured npm.publish field"
+                            ));
+                        }
+                        if binding.get("comparison").and_then(Value::as_str) != Some("exactString")
+                        {
+                            return Err(format!(
+                                "route {route_id} responseBinding {constraint_id} npm.publish source {source} must use exactString"
+                            ));
+                        }
+                        binds_package_name |= source == "packageName";
+                        binds_package_version |= source == "packageVersion";
+                    }
+                    if !binds_package_name || !binds_package_version {
+                        return Err(format!(
+                            "route {route_id} responseBinding {constraint_id} must bind npm.publish packageName and packageVersion"
+                        ));
+                    }
+                    continue;
+                }
                 if adapter_type != "generic.rest" {
                     return Err(format!(
-                        "route {route_id} responseBinding is currently supported only for generic.rest"
+                        "route {route_id} responseBinding is currently supported only for generic.rest and npm.registry"
                     ));
                 }
                 let request_config = route
@@ -4615,6 +4937,19 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             return Err(format!(
                 "route {route_id} cannot stream responses with whole-body response constraints"
             ));
+        }
+        if signed_policy
+            && adapter_type == "npm.registry"
+            && adapter_config
+                .get("operations")
+                .and_then(Value::as_array)
+                .is_some_and(|operations| {
+                    operations
+                        .iter()
+                        .any(|operation| operation.as_str() == Some("publish"))
+                })
+        {
+            validate_signed_npm_publish_response_contract(route_id, adapter_config, constraints)?;
         }
 
         let Some(jit_value) = route.get("jit") else {
@@ -5756,8 +6091,8 @@ fn canonical_client_proof_request(
     request: &IncomingRequest,
 ) -> Result<CanonicalSafeProofRequest, String> {
     let method = request.method.to_ascii_uppercase();
-    if !matches!(method.as_str(), "GET" | "HEAD") {
-        return Err("response proof requires GET or HEAD".to_string());
+    if method != "GET" {
+        return Err("response proof requires GET".to_string());
     }
     if !request.body.is_empty() {
         return Err("response proof requires an empty request body".to_string());
@@ -5989,10 +6324,308 @@ fn append_buffered_response_headers(
     output
 }
 
+fn decode_receipt_base64url(
+    encoded: &str,
+    label: &str,
+    max_bytes: usize,
+) -> Result<Vec<u8>, String> {
+    if encoded.contains('=') {
+        return Err(format!("{label} is not unpadded base64url"));
+    }
+    let decoded = general_purpose::URL_SAFE_NO_PAD
+        .decode(encoded.as_bytes())
+        .map_err(|_| format!("{label} is not base64url"))?;
+    if decoded.len() > max_bytes || general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != encoded {
+        return Err(format!("{label} is too large or non-canonical"));
+    }
+    Ok(decoded)
+}
+
+fn validate_control_plane_authorization_receipt(
+    snapshot: &Snapshot,
+    receipt: &ControlPlaneAuthorizationReceipt,
+    principal_id: &str,
+    route_id: &str,
+    authority: &ResponseProofReleaseAuthority,
+    authorization_binding: &ReleaseAuthorizationBinding,
+) -> Result<(), String> {
+    if receipt.api_version != CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION
+        || receipt.kind != "ControlPlaneAuthorizationReceipt"
+        || receipt.principal_id != principal_id
+        || receipt.route_id != route_id
+        || receipt.release_authority != *authority
+    {
+        return Err("control-plane authorization receipt authority substitution".to_string());
+    }
+    if !valid_release_authorization_identity(Some(principal_id))
+        || !valid_release_authorization_identity(Some(route_id))
+    {
+        return Err("control-plane authorization receipt policy context is invalid".to_string());
+    }
+    let request = &receipt.request;
+    validate_canonical_response_nonce(&request.nonce, "control-plane authorization receipt")?;
+    if request.method != "POST"
+        || request.path != RELEASE_AUTHORIZATION_DISPATCH_PATH
+        || !request.query.is_empty()
+    {
+        return Err("control-plane authorization receipt request context mismatch".to_string());
+    }
+    let request_body = decode_receipt_base64url(
+        &request.body_b64,
+        "control-plane authorization receipt request body",
+        4 * 1024,
+    )?;
+    if request.body_sha256 != sha256_prefixed(&request_body) {
+        return Err("control-plane authorization receipt request body digest mismatch".to_string());
+    }
+    let dispatch_request: ReleaseAuthorizationDispatchRequestBody =
+        strict_json_from_slice(&request_body).map_err(|err| {
+            format!("parse control-plane authorization receipt request body: {err}")
+        })?;
+    let canonical_request = serde_json::to_value(&dispatch_request)
+        .map_err(|err| format!("serialize control-plane dispatch request: {err}"))?;
+    if canonical_json_ensure_ascii(&canonical_request).as_bytes() != request_body.as_slice()
+        || dispatch_request.api_version != "serverware.releaseAuthorizationDispatch/v1"
+        || dispatch_request.attempt_id != authority.attempt_id
+        || dispatch_request.binding_digest != authority.consumption_identity_digest
+    {
+        return Err("control-plane authorization receipt dispatch request mismatch".to_string());
+    }
+    let response = &receipt.response;
+    if response.status != 200 {
+        return Err("control-plane authorization receipt response status mismatch".to_string());
+    }
+    let response_body = decode_receipt_base64url(
+        &response.body_b64,
+        "control-plane authorization receipt response body",
+        MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES,
+    )?;
+    if response.body_sha256 != sha256_prefixed(&response_body) {
+        return Err(
+            "control-plane authorization receipt response body digest mismatch".to_string(),
+        );
+    }
+    let dispatch_response: ReleaseAuthorizationResponse = strict_json_from_slice(&response_body)
+        .map_err(|err| format!("parse control-plane authorization receipt response body: {err}"))?;
+    let dispatch_started_at_epoch_ms = dispatch_response
+        .dispatch_started_at_epoch_ms
+        .ok_or("control-plane authorization receipt is missing dispatch start")?;
+    let dispatch_expires_at_epoch_ms = dispatch_response
+        .dispatch_expires_at_epoch_ms
+        .ok_or("control-plane authorization receipt is missing dispatch expiry")?;
+    let reservation_expires_at_epoch_ms = dispatch_response
+        .reservation_expires_at_epoch_ms
+        .ok_or("control-plane authorization receipt is missing reservation expiry")?;
+    if dispatch_response.api_version != "serverware.releaseAuthorization/v1"
+        || !dispatch_response.ok
+        || !dispatch_response.authorized
+        || dispatch_response.state != "dispatching"
+        || dispatch_response.reason != "dispatching"
+        || dispatch_response.completion_outcome.is_some()
+        || dispatch_response.retry_after_seconds != 0
+        || dispatch_response.approval_status.is_some()
+        || dispatch_response.approval_expires_at.is_some()
+        || dispatch_response.approval_created.is_some()
+        || dispatch_response.grant_id != authority.grant_id
+        || dispatch_response.approval_request_id != authority.approval_id
+        || dispatch_response.attempt_id != authority.attempt_id
+        || dispatch_response.binding_digest != authority.consumption_identity_digest
+        || Some(reservation_expires_at_epoch_ms) != authority.reservation_expires_at_epoch_ms
+        || dispatch_started_at_epoch_ms != authority.authorization_state_observed_at_epoch_ms
+        || dispatch_expires_at_epoch_ms != authority.dispatch_expires_at_epoch_ms
+        || authority.authorization_state_at_upstream_dispatch != "dispatching"
+        || dispatch_started_at_epoch_ms >= dispatch_expires_at_epoch_ms
+        || dispatch_started_at_epoch_ms >= reservation_expires_at_epoch_ms
+    {
+        return Err("control-plane authorization receipt body and authority mismatch".to_string());
+    }
+
+    let statement_bytes = decode_receipt_base64url(
+        &response.statement_b64,
+        "control-plane authorization receipt response statement",
+        MAX_CONTROL_PLANE_RESPONSE_STATEMENT_BYTES,
+    )?;
+    let statement: CredentialLeaseResponseStatement = strict_json_from_slice(&statement_bytes)
+        .map_err(|err| {
+            format!("parse control-plane authorization receipt response statement: {err}")
+        })?;
+    let canonical_statement = serde_json::to_value(&statement)
+        .map_err(|err| format!("serialize control-plane response statement: {err}"))?;
+    if canonical_json_ensure_ascii(&canonical_statement).as_bytes() != statement_bytes.as_slice()
+        || response.statement_sha256 != sha256_prefixed(&statement_bytes)
+        || statement.version != "serverware.responseSignature/v1"
+        || statement.nonce.as_deref() != Some(request.nonce.as_str())
+        || statement.request.method != request.method
+        || statement.request.path != request.path
+        || statement.request.query != request.query
+        || statement.status_code != response.status
+        || statement.body_sha256 != response.body_sha256
+        || statement.response_signing_key_id != response.response_signing_key_id
+    {
+        return Err("control-plane authorization receipt signed statement mismatch".to_string());
+    }
+    let expected_context = snapshot
+        .attested_response_context
+        .as_ref()
+        .ok_or("control-plane authorization receipt requires attested response context")?;
+    if statement.context.runtime_manifest_digest != expected_context.runtime_manifest_digest
+        || statement.context.policy_bundle_digest != expected_context.policy_bundle_digest
+        || statement.context.provenance_digest != expected_context.provenance_digest
+        || statement.context.image_signatures_digest != expected_context.image_signatures_digest
+        || statement.context.source_tree_digest != expected_context.source_tree_digest
+        || statement.context.policy_bundle_digest != snapshot.hash
+        || snapshot.response_signing_key_id.as_deref()
+            != Some(response.response_signing_key_id.as_str())
+    {
+        return Err("control-plane authorization receipt signed context mismatch".to_string());
+    }
+    if statement.issued_at_ms < dispatch_started_at_epoch_ms
+        || statement.issued_at_ms >= dispatch_expires_at_epoch_ms
+        || statement.issued_at_ms >= reservation_expires_at_epoch_ms
+    {
+        return Err("control-plane authorization receipt signed time is invalid".to_string());
+    }
+    let signature_b64 = response
+        .signature
+        .strip_prefix("ed25519:")
+        .ok_or("control-plane authorization receipt signature must use ed25519")?;
+    let signature_bytes = decode_receipt_base64url(
+        signature_b64,
+        "control-plane authorization receipt signature",
+        64,
+    )?;
+    let signature_bytes: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| "control-plane authorization receipt signature must be 64 bytes")?;
+    snapshot
+        .response_verifying_key
+        .as_ref()
+        .ok_or("control-plane authorization receipt requires an attested response signing key")?
+        .verify(&statement_bytes, &Signature::from_bytes(&signature_bytes))
+        .map_err(|_| "control-plane authorization receipt signature verification failed")?;
+    validate_response_proof_authorization_binding(
+        authorization_binding,
+        principal_id,
+        route_id,
+        &snapshot.hash,
+        authority,
+    )?;
+    Ok(())
+}
+
+fn validate_response_proof_authorization_binding(
+    binding: &ReleaseAuthorizationBinding,
+    principal_id: &str,
+    route_id: &str,
+    policy_digest: &str,
+    authority: &ResponseProofReleaseAuthority,
+) -> Result<(), String> {
+    if binding.attempt_id != authority.attempt_id
+        || binding.flow_id != authority.attempt_id
+        || binding.principal_id != principal_id
+        || binding.route_id != route_id
+        || binding.credential_id != authority.credential_ref.as_deref().unwrap_or("")
+        || binding.credential_version != authority.credential_version
+        || binding.policy_hash != policy_digest
+        || binding.request_digest != authority.request_digest
+        || binding.operation_digest.as_deref() != Some(authority.operation_digest.as_str())
+    {
+        return Err("release authorization binding claim substitution".to_string());
+    }
+    if !binding.operation_context.is_object() {
+        return Err("release authorization binding context is invalid".to_string());
+    }
+    let mut previous_counter_key = None;
+    for quota in &binding.shared_quotas {
+        if !is_sha256_digest(&quota.counter_key)
+            || !valid_release_authorization_identity(Some(&quota.constraint_id))
+            || quota
+                .operation
+                .as_deref()
+                .is_some_and(|value| !valid_release_authorization_identity(Some(value)))
+            || !(1..=31_536_000).contains(&quota.window_seconds)
+            || !(1..=1_000_000_000).contains(&quota.max_count)
+            || previous_counter_key.is_some_and(|previous| previous >= quota.counter_key.as_str())
+        {
+            return Err("release authorization binding shared quota is invalid".to_string());
+        }
+        previous_counter_key = Some(quota.counter_key.as_str());
+    }
+    let binding_value = serde_json::to_value(binding)
+        .map_err(|err| format!("serialize release authorization binding: {err}"))?;
+    let canonical_binding = canonical_json_ensure_ascii(&binding_value);
+    if canonical_binding.len() > MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES {
+        return Err(format!(
+            "release authorization binding exceeds {MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES} bytes"
+        ));
+    }
+    if sha256_prefixed(canonical_binding.as_bytes()) != authority.consumption_identity_digest {
+        return Err("release authorization binding digest mismatch".to_string());
+    }
+    Ok(())
+}
+
+fn validate_response_proof_upstream_binding(
+    upstream_response: &ResponseProofUpstreamResponse,
+) -> Result<(), String> {
+    const REQUIRED_HEADERS: [&str; 3] = ["content-encoding", "content-length", "content-type"];
+    if REQUIRED_HEADERS.iter().any(|name| {
+        !upstream_response
+            .selected_raw_policy_headers_b64
+            .contains_key(*name)
+    }) {
+        return Err("response proof upstream raw header binding is incomplete".to_string());
+    }
+    for (name, values) in &upstream_response.selected_raw_policy_headers_b64 {
+        if !REQUIRED_HEADERS.contains(&name.as_str())
+            && !SAFE_RESPONSE_HEADERS.contains(&name.as_str())
+        {
+            return Err(format!(
+                "response proof upstream raw header binding contains unsupported header {name}"
+            ));
+        }
+        if values.len() > MAX_REQUEST_HEADER_COUNT {
+            return Err(format!(
+                "response proof upstream raw header binding contains too many values for {name}"
+            ));
+        }
+        for value in values {
+            if value.contains('=') {
+                return Err(format!(
+                    "response proof upstream raw header value for {name} is not unpadded base64url"
+                ));
+            }
+            let decoded = general_purpose::URL_SAFE_NO_PAD
+                .decode(value)
+                .map_err(|_| {
+                    format!("response proof upstream raw header value for {name} is not base64url")
+                })?;
+            if decoded.len() > 8 * 1024
+                || general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != *value
+            {
+                return Err(format!(
+                    "response proof upstream raw header value for {name} is not canonical"
+                ));
+            }
+        }
+    }
+    let canonical_digest = response_proof_upstream_canonical_digest(
+        upstream_response.status,
+        &upstream_response.selected_raw_policy_headers_b64,
+        &upstream_response.body_digest,
+    );
+    if upstream_response.canonical_digest != canonical_digest {
+        return Err("response proof upstream canonical digest mismatch".to_string());
+    }
+    Ok(())
+}
+
 fn attach_response_proof(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     context: &ResponseProofContext,
+    authorization_context: Option<&ResponseProofAuthorizationContext>,
+    upstream_response: Option<&ResponseProofUpstreamResponse>,
     expected_client_request_digest: &str,
     response: Vec<u8>,
 ) -> Result<ResponseProofAttachment, String> {
@@ -6000,11 +6633,26 @@ fn attach_response_proof(
     if !(200..300).contains(&parsed.status) {
         return Ok(ResponseProofAttachment::Skipped { response });
     }
+    let authorization_context =
+        authorization_context.ok_or("response proof authorization context is unavailable")?;
+    let release_authority = &authorization_context.release_authority;
+    let control_plane_authorization_receipt =
+        &authorization_context.control_plane_authorization_receipt;
+    let upstream_response =
+        upstream_response.ok_or("response proof upstream response binding is unavailable")?;
     let client_request_digest =
         required_parsed_response_header(&parsed.headers, "x-serverware-client-request-digest")?;
     if client_request_digest != expected_client_request_digest {
         return Err("response proof client request digest mismatch".to_string());
     }
+    validate_control_plane_authorization_receipt(
+        snapshot,
+        control_plane_authorization_receipt,
+        &authorization_context.principal_id,
+        &authorization_context.route_id,
+        release_authority,
+        &authorization_context.authorization_binding,
+    )?;
     let request_digest =
         required_parsed_response_header(&parsed.headers, "x-serverware-request-digest")?;
     let operation_digest =
@@ -6020,6 +6668,18 @@ fn attach_response_proof(
     if policy_digest != snapshot.hash {
         return Err("response proof policy digest is not the active snapshot".to_string());
     }
+    if release_authority.request_digest != request_digest
+        || release_authority.operation_digest != operation_digest
+    {
+        return Err("response proof release authority digest mismatch".to_string());
+    }
+    if upstream_response.status != parsed.status
+        || !is_sha256_digest(&upstream_response.body_digest)
+        || !is_sha256_digest(&upstream_response.canonical_digest)
+    {
+        return Err("response proof upstream response binding is invalid".to_string());
+    }
+    validate_response_proof_upstream_binding(upstream_response)?;
     for (label, digest) in [
         ("client request", client_request_digest.as_str()),
         ("request", request_digest.as_str()),
@@ -6077,14 +6737,24 @@ fn attach_response_proof(
         "type":"tls-exporter",
         "value":context.tls_exporter,
     });
+    let control_plane_authorization_receipt_value =
+        serde_json::to_value(control_plane_authorization_receipt)
+            .map_err(|err| format!("serialize control-plane authorization receipt: {err}"))?;
+    let control_plane_authorization_receipt_digest =
+        digest_json(&control_plane_authorization_receipt_value);
     let issued_at_unix = now_epoch_ms() / 1000;
     let statement = json!({
-        "apiVersion":"serverware.proxyResponseStatement/v1",
+        "apiVersion":"serverware.proxyResponseStatement/v2",
         "issued_at_unix":issued_at_unix,
         "client_nonce":context.client_nonce,
         "client_request_digest":client_request_digest,
+        "principal_id":authorization_context.principal_id,
+        "route_id":authorization_context.route_id,
         "request_digest":request_digest,
         "operation_digest":operation_digest,
+        "release_authority":release_authority,
+        "control_plane_authorization_receipt":control_plane_authorization_receipt,
+        "upstream_response":upstream_response,
         "response":{
             "status":parsed.status,
             "selected_headers":selected_headers,
@@ -6108,12 +6778,17 @@ fn attach_response_proof(
         .sign(canonical_statement.as_bytes());
     let attested_claims = json!({
         "server_statement_sha256":statement_digest,
-        "server_statement_api_version":"serverware.proxyResponseStatement/v1",
+        "server_statement_api_version":"serverware.proxyResponseStatement/v2",
         "issued_at_unix":issued_at_unix,
         "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
         "client_request_digest":client_request_digest,
+        "principal_id":authorization_context.principal_id,
+        "route_id":authorization_context.route_id,
         "request_digest":request_digest,
         "operation_digest":operation_digest,
+        "release_authority":release_authority,
+        "control_plane_authorization_receipt_sha256":control_plane_authorization_receipt_digest,
+        "upstream_response":upstream_response,
         "response_status":parsed.status,
         "selected_response_headers_digest":selected_headers_digest,
         "response_body_digest":body_digest,
@@ -6128,7 +6803,7 @@ fn attach_response_proof(
         "response_signing_key_id":state.response_proof_signing_key_id,
     });
     let attestation_request = json!({
-        "apiVersion":"serverware.responseProofAttestationRequest/v1",
+        "apiVersion":"serverware.responseProofAttestationRequest/v2",
         "kind":"ServerwareResponseProofAttestationRequest",
         "server_statement_sha256":statement_digest,
         "response_signing_key_id":state.response_proof_signing_key_id,
@@ -6150,7 +6825,7 @@ fn attach_response_proof(
         .cloned()
         .ok_or("response proof attestation output is missing vendor_tee")?;
     let runtime_proof = json!({
-        "apiVersion":"serverware.proxyResponseRuntimeProof/v1",
+        "apiVersion":"serverware.proxyResponseRuntimeProof/v2",
         "kind":"ServerwareProxyResponseRuntimeProof",
         "server_statement":statement,
         "server_statement_sha256":statement_digest,
@@ -6187,15 +6862,161 @@ fn attach_response_proof(
     })
 }
 
-fn required_response_header(headers: &HeaderMap, name: &str) -> Result<String, String> {
+fn required_signed_response_header(
+    headers: &HeaderMap,
+    name: &str,
+    label: &str,
+) -> Result<String, String> {
     let header_name = HeaderName::from_bytes(name.as_bytes())
-        .map_err(|_| format!("invalid response proof header name {name}"))?;
-    headers
-        .get(header_name)
-        .ok_or_else(|| format!("credential lease response missing {name}"))?
+        .map_err(|_| format!("invalid signed response header name {name}"))?;
+    let mut values = headers.get_all(&header_name).iter();
+    let value = values
+        .next()
+        .ok_or_else(|| format!("{label} missing {name}"))?;
+    if values.next().is_some() {
+        return Err(format!("{label} repeats {name}"));
+    }
+    if value.as_bytes().len() > MAX_CONTROL_PLANE_RESPONSE_HEADER_BYTES {
+        return Err(format!("{label} {name} is too large"));
+    }
+    value
         .to_str()
         .map(str::to_string)
-        .map_err(|_| format!("credential lease response {name} is not ASCII"))
+        .map_err(|_| format!("{label} {name} is not ASCII"))
+}
+
+fn validate_canonical_response_nonce(nonce: &str, label: &str) -> Result<(), String> {
+    if nonce.contains('=') {
+        return Err(format!("{label} nonce is not unpadded base64url"));
+    }
+    let decoded = general_purpose::URL_SAFE_NO_PAD
+        .decode(nonce.as_bytes())
+        .map_err(|_| format!("{label} nonce is not base64url"))?;
+    if decoded.len() != 32 || general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != nonce {
+        return Err(format!("{label} nonce is not canonical 32-byte base64url"));
+    }
+    Ok(())
+}
+
+fn verify_control_plane_signed_response(
+    snapshot: &Snapshot,
+    request_url: &str,
+    request_method: &str,
+    response_nonce: &str,
+    status: StatusCode,
+    headers: &HeaderMap,
+    body: &[u8],
+    label: &str,
+) -> Result<VerifiedControlPlaneSignedResponse, String> {
+    validate_canonical_response_nonce(response_nonce, label)?;
+    let verifying_key = snapshot
+        .response_verifying_key
+        .as_ref()
+        .ok_or_else(|| format!("{label} requires an attested response signing key"))?;
+    let expected_key_id = snapshot
+        .response_signing_key_id
+        .as_deref()
+        .ok_or_else(|| format!("{label} requires an attested response signing key id"))?;
+    let header_key_id =
+        required_signed_response_header(headers, "X-Serverware-Response-Key-Id", label)?;
+    if header_key_id != expected_key_id {
+        return Err(format!("{label} signing key is not attested"));
+    }
+    let statement_b64 =
+        required_signed_response_header(headers, "X-Serverware-Response-Statement-B64", label)?;
+    if statement_b64.contains('=') {
+        return Err(format!("{label} statement is not unpadded base64url"));
+    }
+    let statement_bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(statement_b64.as_bytes())
+        .map_err(|err| format!("decode {label} statement: {err}"))?;
+    if statement_bytes.len() > MAX_CONTROL_PLANE_RESPONSE_STATEMENT_BYTES
+        || general_purpose::URL_SAFE_NO_PAD.encode(&statement_bytes) != statement_b64
+    {
+        return Err(format!("{label} statement is too large or non-canonical"));
+    }
+    let statement: CredentialLeaseResponseStatement = strict_json_from_slice(&statement_bytes)
+        .map_err(|err| format!("parse {label} statement: {err}"))?;
+    let canonical_statement = serde_json::to_value(&statement)
+        .map_err(|err| format!("serialize {label} statement: {err}"))?;
+    if canonical_json_ensure_ascii(&canonical_statement).as_bytes() != statement_bytes.as_slice() {
+        return Err(format!("{label} statement is not canonical JSON"));
+    }
+    let signature_value =
+        required_signed_response_header(headers, "X-Serverware-Response-Signature", label)?;
+    let signature_b64 = signature_value
+        .strip_prefix("ed25519:")
+        .ok_or_else(|| format!("{label} signature must use ed25519"))?;
+    if signature_b64.contains('=') {
+        return Err(format!("{label} signature is not unpadded base64url"));
+    }
+    let signature_bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(signature_b64.as_bytes())
+        .map_err(|err| format!("decode {label} signature: {err}"))?;
+    let signature_array: [u8; 64] = signature_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| format!("{label} signature must be 64 bytes"))?;
+    if general_purpose::URL_SAFE_NO_PAD.encode(signature_array) != signature_b64 {
+        return Err(format!("{label} signature is not canonical base64url"));
+    }
+    verifying_key
+        .verify(&statement_bytes, &Signature::from_bytes(&signature_array))
+        .map_err(|err| format!("{label} signature verification failed: {err}"))?;
+
+    let expected_body_digest = sha256_prefixed(body);
+    if statement.version != "serverware.responseSignature/v1"
+        || statement.nonce.as_deref() != Some(response_nonce)
+        || statement.status_code != status.as_u16()
+        || statement.body_sha256 != expected_body_digest
+        || statement.response_signing_key_id != expected_key_id
+    {
+        return Err(format!("{label} statement binding mismatch"));
+    }
+    let header_body_digest =
+        required_signed_response_header(headers, "X-Serverware-Response-Body-SHA256", label)?;
+    if header_body_digest != expected_body_digest {
+        return Err(format!("{label} body digest header mismatch"));
+    }
+    let statement_digest = sha256_prefixed(&statement_bytes);
+    let header_statement_digest =
+        required_signed_response_header(headers, "X-Serverware-Response-Statement-SHA256", label)?;
+    if header_statement_digest != statement_digest {
+        return Err(format!("{label} statement digest header mismatch"));
+    }
+    let parsed_url =
+        Url::parse(request_url).map_err(|err| format!("parse {label} request URL: {err}"))?;
+    if statement.request.method != request_method
+        || statement.request.path != parsed_url.path()
+        || statement.request.query != parsed_url.query().unwrap_or("")
+    {
+        return Err(format!("{label} request binding mismatch"));
+    }
+    let expected_context = snapshot
+        .attested_response_context
+        .as_ref()
+        .ok_or_else(|| format!("{label} requires attested response context"))?;
+    if statement.context.runtime_manifest_digest != expected_context.runtime_manifest_digest
+        || statement.context.policy_bundle_digest != expected_context.policy_bundle_digest
+        || statement.context.provenance_digest != expected_context.provenance_digest
+        || statement.context.image_signatures_digest != expected_context.image_signatures_digest
+        || statement.context.source_tree_digest != expected_context.source_tree_digest
+        || statement.context.policy_bundle_digest != snapshot.hash
+    {
+        return Err(format!("{label} context mismatch"));
+    }
+    let issued_at_ms = u128::from(statement.issued_at_ms);
+    if issued_at_ms.abs_diff(now_epoch_ms()) > 30_000 {
+        return Err(format!("{label} statement is outside the clock window"));
+    }
+    Ok(VerifiedControlPlaneSignedResponse {
+        statement,
+        key_id: header_key_id,
+        body_digest: header_body_digest,
+        statement_b64,
+        statement_digest: header_statement_digest,
+        signature: signature_value,
+    })
 }
 
 fn verify_credential_lease_response(
@@ -6206,88 +7027,16 @@ fn verify_credential_lease_response(
     headers: &HeaderMap,
     body: &[u8],
 ) -> Result<(), String> {
-    let verifying_key = snapshot
-        .response_verifying_key
-        .as_ref()
-        .ok_or("credential leases require an attested response signing key")?;
-    let expected_key_id = snapshot
-        .response_signing_key_id
-        .as_deref()
-        .ok_or("credential leases require an attested response signing key id")?;
-    let header_key_id = required_response_header(headers, "X-Serverware-Response-Key-Id")?;
-    if header_key_id != expected_key_id {
-        return Err("credential lease response signing key is not attested".to_string());
-    }
-    let statement_b64 = required_response_header(headers, "X-Serverware-Response-Statement-B64")?;
-    let statement_bytes = general_purpose::URL_SAFE_NO_PAD
-        .decode(statement_b64.as_bytes())
-        .map_err(|err| format!("decode credential lease response statement: {err}"))?;
-    let statement: CredentialLeaseResponseStatement = strict_json_from_slice(&statement_bytes)
-        .map_err(|err| format!("parse credential lease response statement: {err}"))?;
-    let canonical_statement = serde_json::to_value(&statement)
-        .map_err(|err| format!("serialize credential lease response statement: {err}"))?;
-    if canonical_json(&canonical_statement).as_bytes() != statement_bytes.as_slice() {
-        return Err("credential lease response statement is not canonical JSON".to_string());
-    }
-    let signature_value = required_response_header(headers, "X-Serverware-Response-Signature")?;
-    let signature_b64 = signature_value
-        .strip_prefix("ed25519:")
-        .ok_or("credential lease response signature must use ed25519")?;
-    let signature_bytes = general_purpose::URL_SAFE_NO_PAD
-        .decode(signature_b64.as_bytes())
-        .map_err(|err| format!("decode credential lease response signature: {err}"))?;
-    let signature_array: [u8; 64] = signature_bytes
-        .try_into()
-        .map_err(|_| "credential lease response signature must be 64 bytes".to_string())?;
-    verifying_key
-        .verify(&statement_bytes, &Signature::from_bytes(&signature_array))
-        .map_err(|err| format!("credential lease response signature verification failed: {err}"))?;
-
-    let expected_body_digest = sha256_prefixed(body);
-    if statement.version != "serverware.responseSignature/v1"
-        || statement.nonce.as_deref() != Some(response_nonce)
-        || statement.status_code != status.as_u16()
-        || statement.body_sha256 != expected_body_digest
-        || statement.response_signing_key_id != expected_key_id
-    {
-        return Err("credential lease response statement binding mismatch".to_string());
-    }
-    if required_response_header(headers, "X-Serverware-Response-Body-SHA256")?
-        != expected_body_digest
-    {
-        return Err("credential lease response body digest header mismatch".to_string());
-    }
-    let statement_digest = sha256_prefixed(&statement_bytes);
-    if required_response_header(headers, "X-Serverware-Response-Statement-SHA256")?
-        != statement_digest
-    {
-        return Err("credential lease response statement digest header mismatch".to_string());
-    }
-    let parsed_url = Url::parse(request_url)
-        .map_err(|err| format!("parse credential lease URL for response proof: {err}"))?;
-    if statement.request.method != "POST"
-        || statement.request.path != parsed_url.path()
-        || statement.request.query != parsed_url.query().unwrap_or("")
-    {
-        return Err("credential lease response request binding mismatch".to_string());
-    }
-    let expected_context = snapshot
-        .attested_response_context
-        .as_ref()
-        .ok_or("credential leases require attested response context")?;
-    if statement.context.runtime_manifest_digest != expected_context.runtime_manifest_digest
-        || statement.context.policy_bundle_digest != expected_context.policy_bundle_digest
-        || statement.context.provenance_digest != expected_context.provenance_digest
-        || statement.context.image_signatures_digest != expected_context.image_signatures_digest
-        || statement.context.source_tree_digest != expected_context.source_tree_digest
-        || statement.context.policy_bundle_digest != snapshot.hash
-    {
-        return Err("credential lease response attested context mismatch".to_string());
-    }
-    let issued_at_ms = u128::from(statement.issued_at_ms);
-    if issued_at_ms.abs_diff(now_epoch_ms()) > 30_000 {
-        return Err("credential lease response statement is outside the clock window".to_string());
-    }
+    verify_control_plane_signed_response(
+        snapshot,
+        request_url,
+        "POST",
+        response_nonce,
+        status,
+        headers,
+        body,
+        "credential lease response",
+    )?;
     Ok(())
 }
 
@@ -8331,6 +9080,163 @@ fn post_release_authorization(
     Err(last_error.unwrap_or_else(|| format!("release authorization {operation} request failed")))
 }
 
+fn fresh_control_plane_response_nonce() -> Result<String, String> {
+    let rng = ring_rand::SystemRandom::new();
+    let mut nonce_bytes = [0u8; 32];
+    rng.fill(&mut nonce_bytes)
+        .map_err(|_| "generate release authorization response nonce failed".to_string())?;
+    let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+    nonce_bytes.zeroize();
+    validate_canonical_response_nonce(&nonce, "release authorization dispatch response")?;
+    Ok(nonce)
+}
+
+fn post_dispatch_release_authorization(
+    state: &GateState,
+    snapshot: &Snapshot,
+    reservation: &ReleaseAuthorizationReservation,
+) -> Result<(ReleaseAuthorizationResponse, VerifiedDispatchEvidence), String> {
+    let operation = "dispatch";
+    let url = release_authorization_url(state, operation)?;
+    let parsed_url = Url::parse(&url)
+        .map_err(|err| format!("parse release authorization dispatch URL: {err}"))?;
+    if parsed_url.path() != RELEASE_AUTHORIZATION_DISPATCH_PATH || parsed_url.query().is_some() {
+        return Err("release authorization dispatch URL is not canonical".to_string());
+    }
+    let token = state
+        .release_authorization_token
+        .as_deref()
+        .ok_or("release authorization token is not configured")?;
+    let payload = json!({
+        "apiVersion":"serverware.releaseAuthorizationDispatch/v1",
+        "attemptId":reservation.attempt_id,
+        "bindingDigest":reservation.binding_digest,
+    });
+    let request_body = canonical_json_ensure_ascii(&payload).into_bytes();
+    let mut last_error = None;
+    for attempt in 0..2 {
+        let response_nonce = fresh_control_plane_response_nonce()?;
+        let response = state
+            .audit_client
+            .post(&url)
+            .header("X-Serverware-Data-Plane-Token", token)
+            .header("X-Serverware-Response-Nonce", response_nonce.as_str())
+            .header("Content-Type", "application/json")
+            .body(request_body.clone())
+            .send();
+        let response = match response {
+            Ok(response) => response,
+            Err(err) => {
+                last_error = Some(format!(
+                    "send release authorization dispatch request: {err}"
+                ));
+                if attempt == 0 {
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                break;
+            }
+        };
+        let status = response.status();
+        let headers = response.headers().clone();
+        let response_body = response
+            .bytes()
+            .map_err(|err| format!("read release authorization dispatch response: {err}"))?;
+        if response_body.len() > MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES {
+            return Err(format!(
+                "release authorization dispatch response exceeds {MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES} bytes"
+            ));
+        }
+        if status == StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
+            last_error = Some(format!("release authorization dispatch returned {status}"));
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+        if !status.is_success() {
+            let detail = String::from_utf8_lossy(&response_body);
+            return Err(format!(
+                "release authorization dispatch returned {status}: {detail}"
+            ));
+        }
+        let signed = verify_control_plane_signed_response(
+            snapshot,
+            &url,
+            "POST",
+            &response_nonce,
+            status,
+            &headers,
+            &response_body,
+            "release authorization dispatch response",
+        )?;
+        let response = strict_json_from_slice::<ReleaseAuthorizationResponse>(&response_body)
+            .map_err(|err| format!("parse release authorization dispatch response: {err}"))?;
+        if response.api_version != "serverware.releaseAuthorization/v1" || !response.ok {
+            return Err(
+                "release authorization dispatch response has an invalid contract".to_string(),
+            );
+        }
+        validate_dispatch_release_authorization_response(&response, reservation)?;
+        let dispatch_started_at_epoch_ms = response
+            .dispatch_started_at_epoch_ms
+            .ok_or("release authorization dispatch response is missing dispatch start")?;
+        let dispatch_expires_at_epoch_ms = response
+            .dispatch_expires_at_epoch_ms
+            .ok_or("release authorization dispatch response is missing dispatch expiry")?;
+        let reservation_expires_at_epoch_ms = response
+            .reservation_expires_at_epoch_ms
+            .ok_or("release authorization dispatch response is missing reservation expiry")?;
+        if signed.statement.issued_at_ms < dispatch_started_at_epoch_ms
+            || signed.statement.issued_at_ms >= dispatch_expires_at_epoch_ms
+            || signed.statement.issued_at_ms >= reservation_expires_at_epoch_ms
+        {
+            return Err(
+                "release authorization dispatch signed response time is outside the live authorization window"
+                    .to_string(),
+            );
+        }
+        let receipt = ControlPlaneAuthorizationReceipt {
+            api_version: CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION,
+            kind: "ControlPlaneAuthorizationReceipt",
+            principal_id: String::new(),
+            route_id: String::new(),
+            release_authority: ResponseProofReleaseAuthority {
+                authority_mode: "atomic",
+                grant_id: None,
+                approval_id: None,
+                credential_ref: None,
+                credential_version: 0,
+                request_digest: String::new(),
+                operation_digest: String::new(),
+                attempt_id: reservation.attempt_id.clone(),
+                consumption_identity_digest: reservation.binding_digest.clone(),
+                authorization_state_at_upstream_dispatch: "dispatching",
+                authorization_state_observed_at_epoch_ms: dispatch_started_at_epoch_ms,
+                reservation_expires_at_epoch_ms: Some(reservation_expires_at_epoch_ms),
+                dispatch_expires_at_epoch_ms,
+            },
+            request: ControlPlaneAuthorizationReceiptRequest {
+                method: "POST",
+                path: parsed_url.path().to_string(),
+                query: parsed_url.query().unwrap_or("").to_string(),
+                nonce: response_nonce,
+                body_b64: general_purpose::URL_SAFE_NO_PAD.encode(&request_body),
+                body_sha256: sha256_prefixed(&request_body),
+            },
+            response: ControlPlaneAuthorizationReceiptResponse {
+                status: status.as_u16(),
+                body_b64: general_purpose::URL_SAFE_NO_PAD.encode(&response_body),
+                body_sha256: signed.body_digest,
+                response_signing_key_id: signed.key_id,
+                statement_b64: signed.statement_b64,
+                statement_sha256: signed.statement_digest,
+                signature: signed.signature,
+            },
+        };
+        return Ok((response, VerifiedDispatchEvidence { receipt }));
+    }
+    Err(last_error.unwrap_or_else(|| "release authorization dispatch request failed".to_string()))
+}
+
 fn validate_release_authorization_binding(
     response: &ReleaseAuthorizationResponse,
     attempt_id: &str,
@@ -8439,7 +9345,11 @@ fn validate_dispatch_release_authorization_response(
         || response.reason != "dispatching"
         || response.completion_outcome.is_some()
         || reservation_expires != reservation.reservation_expires_at_epoch_ms.map(u128::from)
-        || !matches!((started, dispatch_expires), (Some(start), Some(expires)) if start < expires && expires > now_ms)
+        || !matches!(
+            (started, dispatch_expires, reservation_expires),
+            (Some(start), Some(expires), Some(reservation_expires))
+                if start < expires && start < reservation_expires && expires > now_ms
+        )
         || response.retry_after_seconds != 0
         || response.approval_status.is_some()
         || response.approval_expires_at.is_some()
@@ -8487,7 +9397,11 @@ fn validate_complete_release_authorization_response(
         }
         _ => false,
     };
-    if !exact || response.retry_after_seconds != 0 {
+    if !exact
+        || response.retry_after_seconds != 0
+        || response.grant_id != reservation.grant_id
+        || response.approval_request_id != reservation.approval_request_id
+    {
         return Err(format!(
             "release authorization completion returned invalid state {} outcome {:?} for {requested_outcome}",
             response.state, response.completion_outcome
@@ -8639,6 +9553,253 @@ fn release_reservation_from_decision(
     }))
 }
 
+fn response_proof_release_authority(
+    decision: &Value,
+    reservation: &ReleaseAuthorizationReservation,
+    stage: ReleaseAuthorizationStage,
+    dispatch_observation: &ReleaseAuthorizationDispatchObservation,
+) -> Result<ResponseProofReleaseAuthority, String> {
+    if stage != ReleaseAuthorizationStage::Dispatching {
+        return Err(
+            "response proof release authority has not reached validated dispatch".to_string(),
+        );
+    }
+    let release = decision
+        .get("release_authorization")
+        .and_then(Value::as_object)
+        .ok_or("response proof decision is missing release authority")?;
+    if release.get("mode").and_then(Value::as_str) != Some("atomic")
+        || release.get("state").and_then(Value::as_str) != Some("reserved")
+    {
+        return Err("response proof requires atomic release authority".to_string());
+    }
+    if decision.get("attempt_id").and_then(Value::as_str) != Some(reservation.attempt_id.as_str())
+        || decision.get("flow_id").and_then(Value::as_str) != Some(reservation.attempt_id.as_str())
+        || release.get("attempt_id").and_then(Value::as_str)
+            != Some(reservation.attempt_id.as_str())
+        || release.get("binding_digest").and_then(Value::as_str)
+            != Some(reservation.binding_digest.as_str())
+    {
+        return Err("response proof release authority identity mismatch".to_string());
+    }
+    if !is_sha256_digest(&reservation.attempt_id) || !is_sha256_digest(&reservation.binding_digest)
+    {
+        return Err("response proof release authority identity is invalid".to_string());
+    }
+    for (label, value) in [
+        ("grant", reservation.grant_id.as_deref()),
+        ("approval", reservation.approval_request_id.as_deref()),
+    ] {
+        if value.is_some() && !valid_release_authorization_identity(value) {
+            return Err(format!(
+                "response proof release authority {label} ID is invalid"
+            ));
+        }
+    }
+    if reservation.grant_id.is_some() != reservation.approval_request_id.is_some() {
+        return Err("response proof release grant and approval IDs must be paired".to_string());
+    }
+    if dispatch_observation.observed_at_epoch_ms == 0
+        || dispatch_observation.dispatch_expires_at_epoch_ms
+            <= dispatch_observation.observed_at_epoch_ms
+        || dispatch_observation.reservation_expires_at_epoch_ms
+            != reservation.reservation_expires_at_epoch_ms
+        || dispatch_observation
+            .reservation_expires_at_epoch_ms
+            .is_some_and(|expires_at| dispatch_observation.observed_at_epoch_ms >= expires_at)
+    {
+        return Err(
+            "response proof release authority observation is temporally invalid".to_string(),
+        );
+    }
+    let decision_grant_id = match decision.get("grant_id") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.as_str()),
+        _ => return Err("response proof decision grant ID is missing or invalid".to_string()),
+    };
+    let decision_approval_id = match decision.get("approval_id") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) => Some(value.as_str()),
+        _ => return Err("response proof decision approval ID is missing or invalid".to_string()),
+    };
+    if decision_grant_id != reservation.grant_id.as_deref()
+        || decision_approval_id != reservation.approval_request_id.as_deref()
+    {
+        return Err("response proof release authority grant correlation mismatch".to_string());
+    }
+    let credential_ref = match decision.get("credential_ref") {
+        Some(Value::Null) => None,
+        Some(Value::String(value)) if valid_release_authorization_identity(Some(value)) => {
+            Some(value.clone())
+        }
+        _ => return Err("response proof credential identity is missing or invalid".to_string()),
+    };
+    let credential_version = decision
+        .get("credential_version")
+        .and_then(Value::as_u64)
+        .ok_or("response proof credential version is missing or invalid")?;
+    if credential_ref.is_some() != (credential_version > 0) {
+        return Err("response proof credential identity and version are inconsistent".to_string());
+    }
+    let request_digest = decision
+        .get("request_digest")
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_digest(value))
+        .ok_or("response proof request digest is missing or invalid")?
+        .to_string();
+    let operation_digest = decision
+        .get("operation_digest")
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_digest(value))
+        .ok_or("response proof operation digest is missing or invalid")?
+        .to_string();
+    Ok(ResponseProofReleaseAuthority {
+        authority_mode: "atomic",
+        grant_id: reservation.grant_id.clone(),
+        approval_id: reservation.approval_request_id.clone(),
+        credential_ref,
+        credential_version,
+        request_digest,
+        operation_digest,
+        attempt_id: reservation.attempt_id.clone(),
+        consumption_identity_digest: reservation.binding_digest.clone(),
+        authorization_state_at_upstream_dispatch: "dispatching",
+        authorization_state_observed_at_epoch_ms: dispatch_observation.observed_at_epoch_ms,
+        reservation_expires_at_epoch_ms: dispatch_observation.reservation_expires_at_epoch_ms,
+        dispatch_expires_at_epoch_ms: dispatch_observation.dispatch_expires_at_epoch_ms,
+    })
+}
+
+fn response_proof_authorization_binding(
+    decision: &Value,
+    principal_id: &str,
+    route_id: &str,
+    authority: &ResponseProofReleaseAuthority,
+    receipt: &ControlPlaneAuthorizationReceipt,
+) -> Result<ReleaseAuthorizationBinding, String> {
+    let flow_id = decision
+        .get("flow_id")
+        .and_then(Value::as_str)
+        .filter(|value| valid_release_authorization_identity(Some(value)))
+        .ok_or("response proof release binding flow ID is missing or invalid")?;
+    let policy_hash = decision
+        .get("policy_hash")
+        .and_then(Value::as_str)
+        .filter(|value| is_sha256_digest(value))
+        .ok_or("response proof release binding policy hash is missing or invalid")?;
+    let operation_context = decision
+        .get("operation")
+        .filter(|value| value.is_object())
+        .ok_or("response proof release binding operation context is missing or invalid")?
+        .clone();
+    let require_jit_grant = decision
+        .pointer("/jit/required")
+        .and_then(Value::as_bool)
+        .ok_or("response proof release binding JIT requirement is missing or invalid")?;
+    let response_body = decode_receipt_base64url(
+        &receipt.response.body_b64,
+        "control-plane authorization receipt response body",
+        MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES,
+    )?;
+    let dispatch_response: ReleaseAuthorizationResponse = strict_json_from_slice(&response_body)
+        .map_err(|err| format!("parse release authorization binding response: {err}"))?;
+    let mut shared_quotas = dispatch_response
+        .quotas
+        .iter()
+        .map(|quota| {
+            Ok(ReleaseAuthorizationBindingQuota {
+                counter_key: quota
+                    .counter_key
+                    .as_deref()
+                    .filter(|value| is_sha256_digest(value))
+                    .ok_or_else(|| {
+                        "release authorization binding quota counter key is invalid".to_string()
+                    })?
+                    .to_string(),
+                constraint_id: quota
+                    .constraint_id
+                    .as_deref()
+                    .filter(|value| valid_release_authorization_identity(Some(value)))
+                    .ok_or_else(|| {
+                        "release authorization binding quota constraint ID is invalid".to_string()
+                    })?
+                    .to_string(),
+                operation: quota.operation.clone(),
+                window_seconds: quota.window_seconds.ok_or_else(|| {
+                    "release authorization binding quota window is missing".to_string()
+                })?,
+                max_count: quota.max.ok_or_else(|| {
+                    "release authorization binding quota maximum is missing".to_string()
+                })?,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    shared_quotas.sort_by(|left, right| left.counter_key.cmp(&right.counter_key));
+    Ok(ReleaseAuthorizationBinding {
+        attempt_id: authority.attempt_id.clone(),
+        flow_id: flow_id.to_string(),
+        principal_id: principal_id.to_string(),
+        route_id: route_id.to_string(),
+        credential_id: authority.credential_ref.clone().unwrap_or_default(),
+        credential_version: authority.credential_version,
+        policy_hash: policy_hash.to_string(),
+        request_digest: authority.request_digest.clone(),
+        operation_digest: Some(authority.operation_digest.clone()),
+        operation_context,
+        require_jit_grant,
+        shared_quotas,
+    })
+}
+
+fn response_proof_authorization_context(
+    snapshot: &Snapshot,
+    decision: &Value,
+    reservation: &ReleaseAuthorizationReservation,
+    stage: ReleaseAuthorizationStage,
+    dispatch_observation: &ReleaseAuthorizationDispatchObservation,
+) -> Result<ResponseProofAuthorizationContext, String> {
+    let principal_id = decision
+        .get("principal_id")
+        .and_then(Value::as_str)
+        .filter(|value| valid_release_authorization_identity(Some(value)))
+        .ok_or("response proof principal identity is missing or invalid")?
+        .to_string();
+    let route_id = decision
+        .get("route_id")
+        .and_then(Value::as_str)
+        .filter(|value| valid_release_authorization_identity(Some(value)))
+        .ok_or("response proof route identity is missing or invalid")?
+        .to_string();
+    let release_authority =
+        response_proof_release_authority(decision, reservation, stage, dispatch_observation)?;
+    let mut receipt = dispatch_observation.evidence.receipt.clone();
+    receipt.principal_id = principal_id.clone();
+    receipt.route_id = route_id.clone();
+    receipt.release_authority = release_authority.clone();
+    let authorization_binding = response_proof_authorization_binding(
+        decision,
+        &principal_id,
+        &route_id,
+        &release_authority,
+        &receipt,
+    )?;
+    validate_control_plane_authorization_receipt(
+        snapshot,
+        &receipt,
+        &principal_id,
+        &route_id,
+        &release_authority,
+        &authorization_binding,
+    )?;
+    Ok(ResponseProofAuthorizationContext {
+        principal_id,
+        route_id,
+        release_authority,
+        authorization_binding,
+        control_plane_authorization_receipt: receipt,
+    })
+}
+
 impl<'a> ReleaseAuthorizationGuard<'a> {
     fn from_decision(state: &'a GateState, decision: &Value) -> Result<Option<Self>, String> {
         Ok(
@@ -8650,23 +9811,29 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
         )
     }
 
-    fn dispatch(&mut self) -> Result<(), String> {
+    fn dispatch(
+        &mut self,
+        snapshot: &Snapshot,
+    ) -> Result<ReleaseAuthorizationDispatchObservation, String> {
         if self.stage != ReleaseAuthorizationStage::Reserved {
             return Err("release authorization is not reserved".to_string());
         }
         self.stage = ReleaseAuthorizationStage::DispatchUncertain;
-        let response = post_release_authorization(
-            self.state,
-            "dispatch",
-            &json!({
-                "apiVersion":"serverware.releaseAuthorizationDispatch/v1",
-                "attemptId":self.reservation.attempt_id,
-                "bindingDigest":self.reservation.binding_digest,
-            }),
-        )?;
-        validate_dispatch_release_authorization_response(&response, &self.reservation)?;
+        let (response, evidence) =
+            post_dispatch_release_authorization(self.state, snapshot, &self.reservation)?;
         self.stage = ReleaseAuthorizationStage::Dispatching;
-        Ok(())
+        let observed_at_epoch_ms = response
+            .dispatch_started_at_epoch_ms
+            .ok_or("release authorization dispatch start is unavailable")?;
+        let dispatch_expires_at_epoch_ms = response
+            .dispatch_expires_at_epoch_ms
+            .ok_or("release authorization dispatch expiry is unavailable")?;
+        Ok(ReleaseAuthorizationDispatchObservation {
+            observed_at_epoch_ms,
+            reservation_expires_at_epoch_ms: response.reservation_expires_at_epoch_ms,
+            dispatch_expires_at_epoch_ms,
+            evidence,
+        })
     }
 
     fn complete(&mut self, outcome: &str) -> Result<(), String> {
@@ -12770,10 +13937,9 @@ fn decide_internal_with_mode(
             return deny(status, &reason, payload, started);
         }
     }
-    let has_response_binding = route.adapter_type == "generic.rest"
-        && route.constraints.iter().any(|constraint| {
-            constraint.get("type").and_then(Value::as_str) == Some("responseBinding")
-        });
+    let has_response_binding = route.constraints.iter().any(|constraint| {
+        constraint.get("type").and_then(Value::as_str) == Some("responseBinding")
+    });
     let response_binding_preflight = if has_response_binding {
         let mut context =
             match prepare_request_operation_context(&req, &headers, &url, &route_match, &injection)
@@ -15379,10 +16545,7 @@ impl JsonSseRedactorCore {
 
     fn process(&mut self, source_done: bool) -> Result<Vec<Vec<u8>>, String> {
         let mut output = Vec::new();
-        loop {
-            let Some(newline) = self.pending.iter().position(|byte| *byte == b'\n') else {
-                break;
-            };
+        while let Some(newline) = self.pending.iter().position(|byte| *byte == b'\n') {
             let raw_line = self.pending.drain(..=newline).collect::<Vec<_>>();
             output.extend(self.process_line(trim_sse_line(&raw_line))?);
         }
@@ -15583,10 +16746,7 @@ impl FormUrlencodedRedactorCore {
 
     fn process(&mut self, source_done: bool) -> Result<Vec<Vec<u8>>, String> {
         let mut output = Vec::new();
-        loop {
-            let Some(separator) = self.pending.iter().position(|byte| *byte == b'&') else {
-                break;
-            };
+        while let Some(separator) = self.pending.iter().position(|byte| *byte == b'&') {
             let pair = self.pending.drain(..separator).collect::<Vec<_>>();
             self.pending.drain(..1);
             if let Some(chunk) = self.redact_pair(&pair)? {
@@ -17751,6 +18911,50 @@ fn response_content_encoding_is_identity_or_absent(headers: &HeaderMap) -> bool 
         .is_ok_and(|value| value.trim().eq_ignore_ascii_case("identity"))
 }
 
+fn selected_raw_policy_headers_b64(
+    response_config: &Value,
+    upstream_headers: &HeaderMap,
+) -> BTreeMap<String, Vec<String>> {
+    let configured = response_config
+        .get("allowedHeaders")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(|name| name.to_ascii_lowercase())
+        .collect::<HashSet<_>>();
+    let mut names = vec!["content-encoding", "content-length", "content-type"];
+    names.extend(
+        SAFE_RESPONSE_HEADERS
+            .iter()
+            .copied()
+            .filter(|name| configured.contains(*name)),
+    );
+    names
+        .into_iter()
+        .map(|name| {
+            let values = upstream_headers
+                .get_all(name)
+                .iter()
+                .map(|value| general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes()))
+                .collect();
+            (name.to_string(), values)
+        })
+        .collect()
+}
+
+fn response_proof_upstream_canonical_digest(
+    status: u16,
+    selected_raw_policy_headers_b64: &BTreeMap<String, Vec<String>>,
+    body_digest: &str,
+) -> String {
+    digest_json(&json!({
+        "status":status,
+        "selected_raw_policy_headers_b64":selected_raw_policy_headers_b64,
+        "body_digest":body_digest,
+    }))
+}
+
 fn finalize_upstream_response(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -17760,6 +18964,7 @@ fn finalize_upstream_response(
     response: reqwest::blocking::Response,
     response_secret_guard: &ResponseSecretGuard,
     stream_writer: Option<&mut dyn Write>,
+    response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
     _keep_alive: bool,
 ) -> ForwardResult {
     let status = response.status();
@@ -17866,6 +19071,9 @@ fn finalize_upstream_response(
         has_response_binding: base_response_policy.has_response_binding,
         credential_bearing: base_response_policy.credential_bearing,
     };
+    let response_proof_raw_headers = response_proof_upstream_output.as_ref().map(|_| {
+        selected_raw_policy_headers_b64(&response_policy.response_config, &upstream_headers)
+    });
     let Some(response_body_limit) = response_policy
         .response_config
         .get("maxBodyBytes")
@@ -17961,6 +19169,22 @@ fn finalize_upstream_response(
         .read_to_end(&mut body)
     {
         Ok(_) if body.len() as u64 <= response_body_limit => {
+            if let Some(output) = response_proof_upstream_output {
+                let body_digest = sha256_prefixed(&body);
+                let selected_raw_policy_headers_b64 = response_proof_raw_headers
+                    .expect("proof header binding exists when proof output is requested");
+                let canonical_digest = response_proof_upstream_canonical_digest(
+                    status.as_u16(),
+                    &selected_raw_policy_headers_b64,
+                    &body_digest,
+                );
+                *output = Some(ResponseProofUpstreamResponse {
+                    status: status.as_u16(),
+                    selected_raw_policy_headers_b64,
+                    body_digest,
+                    canonical_digest,
+                });
+            }
             ForwardResult::Buffered(validate_forward_response(
                 state,
                 snapshot,
@@ -18009,6 +19233,8 @@ fn forward_absolute_request_inner(
     request: IncomingRequest,
     authenticated_principal_id: Option<&str>,
     client_request_digest: Option<&str>,
+    response_proof_authorization_output: Option<&mut Option<ResponseProofAuthorizationContext>>,
+    response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
     stream_writer: Option<&mut dyn Write>,
     keep_alive: bool,
 ) -> ForwardResult {
@@ -18092,6 +19318,7 @@ fn forward_absolute_request_inner(
             json!({"error":"response_proof_request_binding_mismatch"}),
         ));
     }
+    let response_proof_requested = response_proof_authorization_output.is_some();
     let mut upstream_url = target_url;
     apply_rewrite(
         &mut upstream_url,
@@ -18118,6 +19345,12 @@ fn forward_absolute_request_inner(
         buffered!(json_status_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"error":"response_proof_requires_buffered_response_route"}),
+        ));
+    }
+    if response_proof_requested && release_authorization.is_none() {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"response_proof_release_authority_unavailable"}),
         ));
     }
     let injection_plan = decision
@@ -18252,12 +19485,46 @@ fn forward_absolute_request_inner(
             json!({"error":"credential_lease_changed_before_release"}),
         ));
     }
+    let mut release_dispatch_observation = None;
     if let Some(release) = release_authorization.as_mut() {
-        if let Err(err) = release.dispatch() {
+        match release.dispatch(snapshot) {
+            Ok(observation) => release_dispatch_observation = Some(observation),
+            Err(err) => {
+                buffered!(json_status_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error":"release_authorization_dispatch_failed","detail":err}),
+                ));
+            }
+        }
+    }
+    if response_proof_requested {
+        let Some(release) = release_authorization.as_ref() else {
             buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
-                json!({"error":"release_authorization_dispatch_failed","detail":err}),
+                json!({"error":"response_proof_release_authority_unavailable"}),
             ));
+        };
+        let Some(dispatch_observation) = release_dispatch_observation.as_ref() else {
+            buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"response_proof_release_authority_unavailable"}),
+            ));
+        };
+        let authorization_context = match response_proof_authorization_context(
+            snapshot,
+            &decision,
+            &release.reservation,
+            release.stage,
+            dispatch_observation,
+        ) {
+            Ok(context) => context,
+            Err(err) => buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"response_proof_release_authority_invalid","detail":err}),
+            )),
+        };
+        if let Some(output) = response_proof_authorization_output {
+            *output = Some(authorization_context);
         }
     }
     let response = match builder.send() {
@@ -18298,6 +19565,7 @@ fn forward_absolute_request_inner(
         response,
         &response_secret_guard,
         stream_writer,
+        response_proof_upstream_output,
         keep_alive,
     )
 }
@@ -18566,7 +19834,7 @@ fn forward_absolute_streaming_request_to(
         ));
     }
     if let Some(release) = release_authorization.as_mut() {
-        if let Err(err) = release.dispatch() {
+        if let Err(err) = release.dispatch(snapshot) {
             write_buffered!(json_status_response(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"error":"release_authorization_dispatch_failed","detail":err}),
@@ -18686,6 +19954,7 @@ fn forward_absolute_streaming_request_to(
         response,
         &response_secret_guard,
         Some(writer),
+        None,
         keep_alive,
     ) {
         ForwardResult::Buffered(response) => {
@@ -18983,7 +20252,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
         ));
     }
     if let Some(release) = release_authorization.as_mut() {
-        if let Err(err) = release.dispatch() {
+        if let Err(err) = release.dispatch(snapshot) {
             drop(start_sender);
             let _ = sender_thread.join();
             write_buffered!(json_status_response(
@@ -19159,6 +20428,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
         response,
         &response_secret_guard,
         Some(tls),
+        None,
         keep_alive,
     ) {
         ForwardResult::Buffered(response) => {
@@ -19204,6 +20474,8 @@ fn forward_absolute_request_to(
     } else {
         None
     };
+    let mut response_proof_authorization = None;
+    let mut response_proof_upstream = None;
     let result = if response_proof.is_some() {
         forward_absolute_request_inner(
             state,
@@ -19211,6 +20483,8 @@ fn forward_absolute_request_to(
             request,
             authenticated_principal_id,
             client_request_digest.as_deref(),
+            Some(&mut response_proof_authorization),
+            Some(&mut response_proof_upstream),
             None,
             keep_alive,
         )
@@ -19220,6 +20494,8 @@ fn forward_absolute_request_to(
             snapshot,
             request,
             authenticated_principal_id,
+            None,
+            None,
             None,
             Some(writer),
             keep_alive,
@@ -19236,6 +20512,8 @@ fn forward_absolute_request_to(
                     state,
                     snapshot,
                     context,
+                    response_proof_authorization.as_ref(),
+                    response_proof_upstream.as_ref(),
                     expected_client_request_digest,
                     response,
                 ) {
@@ -20053,7 +21331,7 @@ fn handle_connect_request(
         }
         let response_proof =
             if lower_headers(&head.headers).contains_key(RESPONSE_PROOF_NONCE_HEADER) {
-                if !matches!(head.method.as_str(), "GET" | "HEAD") {
+                if head.method != "GET" {
                     let response = json_status_response(
                         StatusCode::BAD_REQUEST,
                         json!({"error":"response_proof_requires_safe_method"}),
@@ -21250,6 +22528,57 @@ mod tests {
         })
     }
 
+    fn test_dispatch_evidence(
+        observed_at_epoch_ms: u64,
+        reservation_expires_at_epoch_ms: u64,
+        dispatch_expires_at_epoch_ms: u64,
+    ) -> VerifiedDispatchEvidence {
+        let digest = sha256_prefixed(b"test-dispatch-evidence");
+        VerifiedDispatchEvidence {
+            receipt: ControlPlaneAuthorizationReceipt {
+                api_version: CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION,
+                kind: "ControlPlaneAuthorizationReceipt",
+                principal_id: "agent:test".to_string(),
+                route_id: "route:test".to_string(),
+                release_authority: ResponseProofReleaseAuthority {
+                    authority_mode: "atomic",
+                    grant_id: None,
+                    approval_id: None,
+                    credential_ref: None,
+                    credential_version: 0,
+                    request_digest: digest.clone(),
+                    operation_digest: digest.clone(),
+                    attempt_id: digest.clone(),
+                    consumption_identity_digest: digest.clone(),
+                    authorization_state_at_upstream_dispatch: "dispatching",
+                    authorization_state_observed_at_epoch_ms: observed_at_epoch_ms,
+                    reservation_expires_at_epoch_ms: Some(reservation_expires_at_epoch_ms),
+                    dispatch_expires_at_epoch_ms,
+                },
+                request: ControlPlaneAuthorizationReceiptRequest {
+                    method: "POST",
+                    path: RELEASE_AUTHORIZATION_DISPATCH_PATH.to_string(),
+                    query: String::new(),
+                    nonce: general_purpose::URL_SAFE_NO_PAD.encode([1u8; 32]),
+                    body_b64: String::new(),
+                    body_sha256: sha256_prefixed(b""),
+                },
+                response: ControlPlaneAuthorizationReceiptResponse {
+                    status: 200,
+                    body_b64: String::new(),
+                    body_sha256: sha256_prefixed(b""),
+                    response_signing_key_id: digest.clone(),
+                    statement_b64: String::new(),
+                    statement_sha256: sha256_prefixed(b""),
+                    signature: format!(
+                        "ed25519:{}",
+                        general_purpose::URL_SAFE_NO_PAD.encode([2u8; 64])
+                    ),
+                },
+            },
+        }
+    }
+
     fn test_gate_state(snapshot: Arc<Snapshot>) -> GateState {
         let client = Client::builder().build().expect("test client");
         let policy_high_water = policy_high_water_for(&snapshot);
@@ -21680,6 +23009,81 @@ mod tests {
         )
     }
 
+    fn signed_control_plane_test_response(
+        signing_key: &SigningKey,
+        snapshot: &Snapshot,
+        request: &IncomingRequest,
+        response_nonce: &str,
+        issued_at_ms: u64,
+        body: Value,
+    ) -> Vec<u8> {
+        let body = serde_json::to_vec(&body).expect("signed response body");
+        let body_sha256 = sha256_prefixed(&body);
+        let key_id = snapshot
+            .response_signing_key_id
+            .as_deref()
+            .expect("test response signing key id");
+        let context = snapshot
+            .attested_response_context
+            .as_ref()
+            .expect("test attested response context");
+        let (path, query) = request
+            .target
+            .split_once('?')
+            .unwrap_or((&request.target, ""));
+        let statement = json!({
+            "version":"serverware.responseSignature/v1",
+            "issued_at_ms":issued_at_ms,
+            "request":{
+                "method":request.method,
+                "path":path,
+                "query":query,
+            },
+            "status_code":200,
+            "body_sha256":body_sha256,
+            "nonce":response_nonce,
+            "response_signing_key_id":key_id,
+            "context":{
+                "runtime_manifest_digest":context.runtime_manifest_digest,
+                "policy_bundle_digest":context.policy_bundle_digest,
+                "provenance_digest":context.provenance_digest,
+                "image_signatures_digest":context.image_signatures_digest,
+                "source_tree_digest":context.source_tree_digest,
+            },
+        });
+        let statement = canonical_json_ensure_ascii(&statement).into_bytes();
+        let statement_sha256 = sha256_prefixed(&statement);
+        let statement_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&statement);
+        let signature = signing_key.sign(&statement);
+        http_binary_response_with_headers(
+            StatusCode::OK,
+            Some("application/json"),
+            body,
+            &[
+                (
+                    "X-Serverware-Response-Key-Id".to_string(),
+                    key_id.to_string(),
+                ),
+                ("X-Serverware-Response-Body-SHA256".to_string(), body_sha256),
+                (
+                    "X-Serverware-Response-Statement-B64".to_string(),
+                    statement_b64,
+                ),
+                (
+                    "X-Serverware-Response-Statement-SHA256".to_string(),
+                    statement_sha256,
+                ),
+                (
+                    "X-Serverware-Response-Signature".to_string(),
+                    format!(
+                        "ed25519:{}",
+                        general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+                    ),
+                ),
+            ],
+        )
+    }
+
     #[test]
     fn reserve_response_validation_binds_jit_grant_identity_and_denial_reason() {
         let reserved = test_release_authorization_response("reserved", None, true, false);
@@ -21863,6 +23267,69 @@ mod tests {
     }
 
     #[test]
+    fn completion_validation_binds_authority_ids_for_every_terminal_result() {
+        let reservation = ReleaseAuthorizationReservation {
+            attempt_id: "attempt-test".to_string(),
+            binding_digest: format!("sha256:{}", "a".repeat(64)),
+            grant_id: Some("grant:test".to_string()),
+            approval_request_id: Some("approval:test".to_string()),
+            reservation_expires_at_epoch_ms: Some(1234),
+        };
+        for (state, completion_outcome, authorized, replay, requested_outcome) in [
+            ("committed", "forwarded", true, false, "forwarded"),
+            ("cancelled", "not_forwarded", false, false, "not_forwarded"),
+            ("committed_indeterminate", "unknown", true, false, "unknown"),
+            ("committed", "forwarded", true, true, "unknown"),
+            ("cancelled", "not_forwarded", false, true, "unknown"),
+        ] {
+            let mut exact = test_release_authorization_response(
+                state,
+                Some(completion_outcome),
+                authorized,
+                replay,
+            );
+            exact.grant_id = reservation.grant_id.clone();
+            exact.approval_request_id = reservation.approval_request_id.clone();
+            validate_complete_release_authorization_response(
+                &exact,
+                &reservation,
+                requested_outcome,
+            )
+            .expect("terminal completion must preserve exact authority IDs");
+
+            let mut wrong_grant = test_release_authorization_response(
+                state,
+                Some(completion_outcome),
+                authorized,
+                replay,
+            );
+            wrong_grant.grant_id = Some("grant:other".to_string());
+            wrong_grant.approval_request_id = reservation.approval_request_id.clone();
+            assert!(validate_complete_release_authorization_response(
+                &wrong_grant,
+                &reservation,
+                requested_outcome,
+            )
+            .is_err());
+
+            let mut wrong_approval = test_release_authorization_response(
+                state,
+                Some(completion_outcome),
+                authorized,
+                replay,
+            );
+            wrong_approval.grant_id = reservation.grant_id.clone();
+            wrong_approval.approval_request_id = Some("approval:other".to_string());
+            assert!(validate_complete_release_authorization_response(
+                &wrong_approval,
+                &reservation,
+                requested_outcome,
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
     fn reserved_release_guard_cancels_on_injected_pre_send_failure() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
         let address = listener.local_addr().expect("release listener address");
@@ -21881,7 +23348,7 @@ mod tests {
         });
 
         let snapshot = test_snapshot(1);
-        let mut state = test_gate_state(snapshot);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
         state.release_authorization_base_url = Some(format!(
             "http://{address}/api/data-plane/release-authorizations"
         ));
@@ -21929,7 +23396,7 @@ mod tests {
         });
 
         let snapshot = test_snapshot(1);
-        let mut state = test_gate_state(snapshot);
+        let mut state = test_gate_state(snapshot.clone());
         state.release_authorization_base_url = Some(format!(
             "http://{address}/api/data-plane/release-authorizations"
         ));
@@ -21946,7 +23413,7 @@ mod tests {
             stage: ReleaseAuthorizationStage::Reserved,
         };
         guard
-            .dispatch()
+            .dispatch(&snapshot)
             .expect_err("lost dispatch responses must remain ambiguous");
         assert_eq!(guard.stage, ReleaseAuthorizationStage::DispatchUncertain);
         guard
@@ -21988,7 +23455,7 @@ mod tests {
         });
 
         let snapshot = test_snapshot(1);
-        let mut state = test_gate_state(snapshot);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
         state.release_authorization_base_url = Some(format!(
             "http://{address}/api/data-plane/release-authorizations"
         ));
@@ -22027,7 +23494,23 @@ mod tests {
         let binding_digest = format!("sha256:{}", "a".repeat(64));
         let server_binding_digest = binding_digest.clone();
         let now_ms = u64::try_from(now_epoch_ms()).expect("current epoch fits u64");
+        let dispatch_started_at_ms = now_ms.saturating_sub(5_000);
         let reservation_expires_at = now_ms + 30_000;
+        let response_signing_key = SigningKey::from_bytes(&[91u8; 32]);
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.response_signing_key_id = Some(sha256_prefixed(
+            response_signing_key.verifying_key().as_bytes(),
+        ));
+        snapshot.response_verifying_key = Some(response_signing_key.verifying_key());
+        snapshot.attested_response_context = Some(AttestedResponseContext {
+            runtime_manifest_digest: sha256_prefixed(b"test-runtime-manifest"),
+            policy_bundle_digest: snapshot.hash.clone(),
+            provenance_digest: None,
+            image_signatures_digest: None,
+            source_tree_digest: None,
+        });
+        let snapshot = Arc::new(snapshot);
+        let server_snapshot = Arc::clone(&snapshot);
         let server = thread::spawn(move || {
             for (state, completion_outcome) in [
                 ("reserved", None),
@@ -22048,34 +23531,48 @@ mod tests {
                 payload_sender
                     .send(strict_json_value_from_slice(&request.body).expect("release JSON"))
                     .expect("capture release payload");
-                let response = http_response(
-                    "200 OK",
-                    json!({
-                        "apiVersion":"serverware.releaseAuthorization/v1",
-                        "ok":true,
-                        "authorized":true,
-                        "state":state,
-                        "reason":state,
-                        "attemptId":"attempt-test",
-                        "bindingDigest":server_binding_digest,
-                        "idempotentReplay":false,
-                        "grantId":null,
-                        "approvalRequestId":null,
-                        "reservationExpiresAtEpochMs":reservation_expires_at,
-                        "dispatchStartedAtEpochMs":if state == "reserved" {Value::Null} else {json!(now_ms)},
-                        "dispatchExpiresAtEpochMs":if state == "reserved" {Value::Null} else {json!(now_ms + 10_000)},
-                        "completionOutcome":completion_outcome,
-                        "retryAfterSeconds":0,
-                        "quotas":[],
-                        "store":{"backend":"sqlite","ha":false},
-                    }),
-                );
+                let body = json!({
+                    "apiVersion":"serverware.releaseAuthorization/v1",
+                    "ok":true,
+                    "authorized":true,
+                    "state":state,
+                    "reason":state,
+                    "attemptId":"attempt-test",
+                    "bindingDigest":server_binding_digest,
+                    "idempotentReplay":false,
+                    "grantId":null,
+                    "approvalRequestId":null,
+                    "reservationExpiresAtEpochMs":reservation_expires_at,
+                    "dispatchStartedAtEpochMs":if state == "reserved" {Value::Null} else {json!(dispatch_started_at_ms)},
+                    "dispatchExpiresAtEpochMs":if state == "reserved" {Value::Null} else {json!(now_ms + 10_000)},
+                    "completionOutcome":completion_outcome,
+                    "retryAfterSeconds":0,
+                    "quotas":[],
+                    "store":{"backend":"sqlite","ha":false},
+                });
+                let response = if state == "dispatching" {
+                    let response_nonce = request
+                        .headers
+                        .get("x-serverware-response-nonce")
+                        .expect("dispatch response nonce");
+                    validate_canonical_response_nonce(response_nonce, "test dispatch")
+                        .expect("canonical dispatch response nonce");
+                    signed_control_plane_test_response(
+                        &response_signing_key,
+                        &server_snapshot,
+                        &request,
+                        response_nonce,
+                        now_ms,
+                        body,
+                    )
+                } else {
+                    http_response("200 OK", body)
+                };
                 stream.write_all(&response).expect("release response");
             }
         });
 
-        let snapshot = test_snapshot(1);
-        let mut state = test_gate_state(snapshot);
+        let mut state = test_gate_state(snapshot.clone());
         state.atomic_release_authorization_enabled = true;
         state.release_authorization_base_url = Some(format!(
             "http://{address}/api/data-plane/release-authorizations"
@@ -22114,7 +23611,13 @@ mod tests {
             },
             stage: ReleaseAuthorizationStage::Reserved,
         };
-        guard.dispatch().expect("dispatch release authorization");
+        let dispatch_observation = guard
+            .dispatch(&snapshot)
+            .expect("dispatch release authorization");
+        assert_eq!(
+            dispatch_observation.observed_at_epoch_ms,
+            dispatch_started_at_ms
+        );
         guard
             .complete_forwarded()
             .expect("complete forwarded release authorization");
@@ -22424,6 +23927,8 @@ mod tests {
                 client_ip: Some("127.0.0.1".to_string()),
             },
             Some("agent:test"),
+            None,
+            None,
             None,
             None,
             false,
@@ -23378,6 +24883,8 @@ mod tests {
             Some("agent:test"),
             None,
             None,
+            None,
+            None,
             false,
         );
         let response = match result {
@@ -23499,6 +25006,8 @@ mod tests {
             Some("agent:test"),
             None,
             None,
+            None,
+            None,
             false,
         );
         let response = match result {
@@ -23607,6 +25116,8 @@ mod tests {
                 client_ip: Some("127.0.0.1".to_string()),
             },
             Some("agent:test"),
+            None,
+            None,
             None,
             None,
             false,
@@ -24411,6 +25922,94 @@ mod tests {
     }
 
     #[test]
+    fn npm_publish_response_identity_and_success_fail_closed() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.adapter_type = "npm.registry".to_string();
+        route.constraints = vec![
+            json!({
+                "id":"npm-publish-identity",
+                "type":"responseBinding",
+                "phase":"response",
+                "operations":["npm.publish"],
+                "successStatusCodes":[200],
+                "contentTypes":["application/json"],
+                "bindings":[
+                    {"id":"package-name","operationField":"packageName","responseField":"package","comparison":"exactString"},
+                    {"id":"package-version","operationField":"packageVersion","responseField":"version","comparison":"exactString"}
+                ]
+            }),
+            json!({
+                "id":"npm-publish-success",
+                "type":"responseJson",
+                "phase":"response",
+                "operations":["npm.publish"],
+                "required":true,
+                "fields":{"published":{"required":true,"type":"boolean","equals":true}}
+            }),
+        ];
+        let operation = json!({
+            "operation":"npm.publish",
+            "packageName":"@scope/package",
+            "packageVersion":"1.2.3",
+            "tarballIntegrity":format!("sha512-{}", "a".repeat(86)),
+        });
+        validate_response_binding_sources(&route, &operation)
+            .expect("complete npm publish sources must be admitted before release");
+        validate_response_constraints(
+            &route,
+            br#"{"package":"@scope/package","version":"1.2.3","published":true}"#,
+            Some(&operation),
+        )
+        .expect("matching npm publish response must pass");
+
+        for (body, expected_error, expected_binding) in [
+            (
+                br#"{"package":"@scope/other","version":"1.2.3","published":true}"#.as_slice(),
+                "response_binding_mismatch",
+                Some("package-name"),
+            ),
+            (
+                br#"{"version":"1.2.3","published":true}"#.as_slice(),
+                "response_binding_field_ambiguous",
+                Some("package-name"),
+            ),
+            (
+                br#"{"package":"@scope/package","version":"9.9.9","published":true}"#.as_slice(),
+                "response_binding_mismatch",
+                Some("package-version"),
+            ),
+            (
+                br#"{"package":"@scope/package","version":"1.2.3","published":false}"#.as_slice(),
+                "response_json_field_equals_denied",
+                None,
+            ),
+            (
+                br#"{"package":"@scope/package","version":"1.2.3"}"#.as_slice(),
+                "response_json_required_field_missing",
+                None,
+            ),
+        ] {
+            let denied = validate_response_constraints(&route, body, Some(&operation))
+                .expect_err("npm publish mismatch or missing success evidence must deny");
+            assert_eq!(denied["error"], expected_error);
+            if let Some(binding) = expected_binding {
+                assert_eq!(denied["binding_id"], binding);
+            }
+            assert_eq!(denied["status_code"], 502);
+        }
+
+        let mut missing_package_source = operation;
+        missing_package_source
+            .as_object_mut()
+            .expect("operation object")
+            .remove("packageName");
+        let denied = validate_response_binding_sources(&route, &missing_package_source)
+            .expect_err("missing npm package source must deny before credential release");
+        assert_eq!(denied["error"], "response_binding_source_missing");
+        assert_eq!(denied["binding_id"], "package-name");
+    }
+
+    #[test]
     fn response_content_encoding_requires_one_identity_value_or_absence() {
         let mut headers = HeaderMap::new();
         assert!(response_content_encoding_is_identity_or_absent(&headers));
@@ -24448,6 +26047,36 @@ mod tests {
         assert!(!response_content_encoding_is_identity_or_absent(
             &invalid_bytes
         ));
+    }
+
+    #[test]
+    fn response_proof_binds_all_consulted_raw_upstream_headers_only() {
+        let mut headers = HeaderMap::new();
+        headers.append("content-type", HeaderValue::from_static("application/json"));
+        headers.append("content-encoding", HeaderValue::from_static("identity"));
+        headers.append("content-length", HeaderValue::from_static("17"));
+        headers.append("cache-control", HeaderValue::from_static("private"));
+        headers.append("etag", HeaderValue::from_static("\"v1\""));
+        headers.append("x-unconsulted", HeaderValue::from_static("not-bound"));
+        let selected = selected_raw_policy_headers_b64(
+            &json!({"allowedHeaders":["cache-control","etag"]}),
+            &headers,
+        );
+        assert_eq!(
+            selected.keys().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "cache-control",
+                "content-encoding",
+                "content-length",
+                "content-type",
+                "etag",
+            ]
+        );
+        assert_eq!(
+            selected["content-type"],
+            vec![general_purpose::URL_SAFE_NO_PAD.encode(b"application/json")]
+        );
+        assert!(!selected.contains_key("x-unconsulted"));
     }
 
     #[test]
@@ -25476,6 +27105,128 @@ mod tests {
     }
 
     #[test]
+    fn response_proof_authority_is_exact_and_semantically_consistent() {
+        let attempt_id = format!("sha256:{}", "a".repeat(64));
+        let binding_digest = format!("sha256:{}", "b".repeat(64));
+        let request_digest = format!("sha256:{}", "c".repeat(64));
+        let operation_digest = format!("sha256:{}", "d".repeat(64));
+        let reservation = ReleaseAuthorizationReservation {
+            attempt_id: attempt_id.clone(),
+            binding_digest: binding_digest.clone(),
+            grant_id: Some("grant:test".to_string()),
+            approval_request_id: Some("approval:test".to_string()),
+            reservation_expires_at_epoch_ms: Some(1234),
+        };
+        let dispatch_observation = ReleaseAuthorizationDispatchObservation {
+            observed_at_epoch_ms: 1000,
+            reservation_expires_at_epoch_ms: Some(1234),
+            dispatch_expires_at_epoch_ms: 1200,
+            evidence: test_dispatch_evidence(1000, 1234, 1200),
+        };
+        let decision = json!({
+            "attempt_id":attempt_id,
+            "flow_id":attempt_id,
+            "grant_id":"grant:test",
+            "approval_id":"approval:test",
+            "credential_ref":"credential:test",
+            "credential_version":7,
+            "request_digest":request_digest,
+            "operation_digest":operation_digest,
+            "release_authorization":{
+                "mode":"atomic",
+                "state":"reserved",
+                "attempt_id":attempt_id,
+                "binding_digest":binding_digest,
+                "grant_id":"grant:test",
+                "approval_request_id":"approval:test",
+            },
+        });
+        assert!(response_proof_release_authority(
+            &decision,
+            &reservation,
+            ReleaseAuthorizationStage::Reserved,
+            &dispatch_observation,
+        )
+        .expect_err("proof authority must not exist before validated dispatch")
+        .contains("validated dispatch"));
+        let authority = response_proof_release_authority(
+            &decision,
+            &reservation,
+            ReleaseAuthorizationStage::Dispatching,
+            &dispatch_observation,
+        )
+        .expect("exact dispatched atomic authority");
+        assert_eq!(
+            serde_json::to_value(&authority).expect("serialize authority"),
+            json!({
+                "authority_mode":"atomic",
+                "grant_id":"grant:test",
+                "approval_id":"approval:test",
+                "credential_ref":"credential:test",
+                "credential_version":7,
+                "request_digest":request_digest,
+                "operation_digest":operation_digest,
+                "attempt_id":attempt_id,
+                "consumption_identity_digest":binding_digest,
+                "authorization_state_at_upstream_dispatch":"dispatching",
+                "authorization_state_observed_at_epoch_ms":1000,
+                "reservation_expires_at_epoch_ms":1234,
+                "dispatch_expires_at_epoch_ms":1200,
+            })
+        );
+        let serialized = serde_json::to_value(&authority).expect("serialize authority");
+        assert!(serialized.get("authorization_state").is_none());
+        assert!(serialized.get("completion_outcome").is_none());
+
+        let expired_observation = ReleaseAuthorizationDispatchObservation {
+            observed_at_epoch_ms: 1234,
+            reservation_expires_at_epoch_ms: Some(1234),
+            dispatch_expires_at_epoch_ms: 1300,
+            evidence: test_dispatch_evidence(1234, 1234, 1300),
+        };
+        assert!(response_proof_release_authority(
+            &decision,
+            &reservation,
+            ReleaseAuthorizationStage::Dispatching,
+            &expired_observation,
+        )
+        .expect_err("dispatch observation at reservation expiry must fail")
+        .contains("temporally invalid"));
+
+        let mut invalid_attempt = reservation.clone();
+        invalid_attempt.attempt_id = "attempt:not-a-digest".to_string();
+        assert!(response_proof_release_authority(
+            &decision,
+            &invalid_attempt,
+            ReleaseAuthorizationStage::Dispatching,
+            &dispatch_observation,
+        )
+        .is_err());
+
+        let mut invalid_credential = decision.clone();
+        invalid_credential["credential_ref"] = Value::Null;
+        assert!(response_proof_release_authority(
+            &invalid_credential,
+            &reservation,
+            ReleaseAuthorizationStage::Dispatching,
+            &dispatch_observation,
+        )
+        .expect_err("null credential with positive version must fail")
+        .contains("inconsistent"));
+
+        let mut partial_grant = reservation.clone();
+        partial_grant.approval_request_id = None;
+        assert!(response_proof_release_authority(
+            &decision,
+            &partial_grant,
+            ReleaseAuthorizationStage::Dispatching,
+            &dispatch_observation,
+        )
+        .expect_err("partial grant identity must fail")
+        .contains("paired"));
+    }
+
+    #[test]
     fn response_proof_rejects_cross_wired_client_request_digest() {
         let snapshot = test_snapshot(1);
         let state = test_gate_state(Arc::clone(&snapshot));
@@ -25486,6 +27237,59 @@ mod tests {
         };
         let expected_client_digest = format!("sha256:{}", "a".repeat(64));
         let supplied_client_digest = format!("sha256:{}", "b".repeat(64));
+        let release_authority = ResponseProofReleaseAuthority {
+            authority_mode: "atomic",
+            grant_id: None,
+            approval_id: None,
+            credential_ref: None,
+            credential_version: 0,
+            request_digest: format!("sha256:{}", "c".repeat(64)),
+            operation_digest: format!("sha256:{}", "d".repeat(64)),
+            attempt_id: format!("sha256:{}", "e".repeat(64)),
+            consumption_identity_digest: format!("sha256:{}", "f".repeat(64)),
+            authorization_state_at_upstream_dispatch: "dispatching",
+            authorization_state_observed_at_epoch_ms: 1000,
+            reservation_expires_at_epoch_ms: Some(2000),
+            dispatch_expires_at_epoch_ms: 1500,
+        };
+        let selected_raw_policy_headers_b64 = BTreeMap::from([
+            ("content-encoding".to_string(), Vec::new()),
+            ("content-length".to_string(), Vec::new()),
+            ("content-type".to_string(), Vec::new()),
+        ]);
+        let upstream_body_digest = sha256_prefixed(b"");
+        let upstream_canonical_digest = response_proof_upstream_canonical_digest(
+            200,
+            &selected_raw_policy_headers_b64,
+            &upstream_body_digest,
+        );
+        let upstream_response = ResponseProofUpstreamResponse {
+            status: 200,
+            selected_raw_policy_headers_b64,
+            body_digest: upstream_body_digest,
+            canonical_digest: upstream_canonical_digest,
+        };
+        let authorization_binding = ReleaseAuthorizationBinding {
+            attempt_id: release_authority.attempt_id.clone(),
+            flow_id: release_authority.attempt_id.clone(),
+            principal_id: "agent:test".to_string(),
+            route_id: "route:test".to_string(),
+            credential_id: String::new(),
+            credential_version: 0,
+            policy_hash: snapshot.hash.clone(),
+            request_digest: release_authority.request_digest.clone(),
+            operation_digest: Some(release_authority.operation_digest.clone()),
+            operation_context: json!({}),
+            require_jit_grant: false,
+            shared_quotas: Vec::new(),
+        };
+        let authorization_context = ResponseProofAuthorizationContext {
+            principal_id: "agent:test".to_string(),
+            route_id: "route:test".to_string(),
+            release_authority,
+            authorization_binding,
+            control_plane_authorization_receipt: test_dispatch_evidence(1000, 2000, 1500).receipt,
+        };
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nX-Serverware-Client-Request-Digest: {supplied_client_digest}\r\nX-Serverware-Request-Digest: sha256:{}\r\nX-Serverware-Operation-Digest: sha256:{}\r\nX-Serverware-Policy-Hash: {}\r\nX-Serverware-Response-Body-SHA256: {}\r\n\r\n",
             "c".repeat(64),
@@ -25498,6 +27302,8 @@ mod tests {
             &state,
             &snapshot,
             &context,
+            Some(&authorization_context),
+            Some(&upstream_response),
             &expected_client_digest,
             response,
         )
@@ -26425,7 +28231,7 @@ mod tests {
                 "response":{
                     "mode":"json",
                     "maxBodyBytes":65536,
-                    "allowedFields":["ok"],
+                    "allowedFields":["package","version","published"],
                     "allowedHeaders":[],
                     "error":{
                         "mode":"json",
@@ -26436,6 +28242,38 @@ mod tests {
                     }
                 }
             }},
+            "constraints":[
+                {
+                    "id":"npm-publish-package-binding",
+                    "type":"responseBinding",
+                    "phase":"response",
+                    "operations":["npm.publish"],
+                    "successStatusCodes":[200,201],
+                    "contentTypes":["application/json"],
+                    "bindings":[
+                        {
+                            "id":"package-name",
+                            "operationField":"packageName",
+                            "responseField":"package",
+                            "comparison":"exactString"
+                        },
+                        {
+                            "id":"package-version",
+                            "operationField":"packageVersion",
+                            "responseField":"version",
+                            "comparison":"exactString"
+                        }
+                    ]
+                },
+                {
+                    "id":"npm-publish-success",
+                    "type":"responseJson",
+                    "phase":"response",
+                    "operations":["npm.publish"],
+                    "required":true,
+                    "fields":{"published":{"required":true,"type":"boolean","equals":true}}
+                }
+            ],
             "jit":{
                 "required":true,
                 "mode":"perOperation",
@@ -26455,11 +28293,97 @@ mod tests {
                 }}
             }
         });
-        validate_policy_capabilities(&policy_with_route(npm_route.clone()))
+        let signed_npm_policy = |route: Value| {
+            let mut policy = policy_with_route(route);
+            policy["metadata"]["signature"] = json!("ed25519:test-signature");
+            policy
+        };
+        validate_policy_capabilities(&signed_npm_policy(npm_route.clone()))
             .expect("hardware-bound npm policy");
+
+        let mut missing_response_binding = npm_route.clone();
+        missing_response_binding["constraints"]
+            .as_array_mut()
+            .expect("npm constraints")
+            .retain(|constraint| {
+                constraint.get("type").and_then(Value::as_str) != Some("responseBinding")
+            });
+        assert_eq!(
+            validate_policy_capabilities(&signed_npm_policy(missing_response_binding))
+                .expect_err("signed npm publish without responseBinding must fail policy load"),
+            "route npm:test signed npm.publish requires a responseBinding scoped only to npm.publish"
+        );
+
+        let mut missing_response_json = npm_route.clone();
+        missing_response_json["constraints"]
+            .as_array_mut()
+            .expect("npm constraints")
+            .retain(|constraint| {
+                constraint.get("type").and_then(Value::as_str) != Some("responseJson")
+            });
+        assert_eq!(
+            validate_policy_capabilities(&signed_npm_policy(missing_response_json))
+                .expect_err("signed npm publish without responseJson must fail policy load"),
+            "route npm:test signed npm.publish requires a responseJson success constraint scoped only to npm.publish"
+        );
+
+        let mut mismatched_success = npm_route.clone();
+        mismatched_success["constraints"][1]["fields"]["published"]["equals"] = json!(false);
+        assert_eq!(
+            validate_policy_capabilities(&signed_npm_policy(mismatched_success))
+                .expect_err("signed npm publish with false success assertion must fail policy load"),
+            "route npm:test signed npm.publish responseJson success constraint must require published to equal true"
+        );
+
+        let mut missing_package_binding = npm_route.clone();
+        missing_package_binding["constraints"][0]["bindings"]
+            .as_array_mut()
+            .expect("npm response bindings")
+            .retain(|binding| {
+                binding.get("operationField").and_then(Value::as_str) != Some("packageVersion")
+            });
+        assert_eq!(
+            validate_policy_capabilities(&signed_npm_policy(missing_package_binding))
+                .expect_err("npm publish response binding without packageVersion must fail policy load"),
+            "route npm:test responseBinding npm-publish-package-binding must bind npm.publish packageName and packageVersion"
+        );
+
+        let mut mismatched_operation = npm_route.clone();
+        mismatched_operation["constraints"][0]["operations"] = json!(["npm.distTagWrite"]);
+        assert_eq!(
+            validate_policy_capabilities(&signed_npm_policy(mismatched_operation))
+                .expect_err("npm publish response binding with mismatched operation must fail policy load"),
+            "route npm:test responseBinding npm-publish-package-binding must be scoped only to configured npm.publish"
+        );
+
+        let mut invalid_success_status = npm_route.clone();
+        invalid_success_status["constraints"][0]["successStatusCodes"] = json!([202]);
+        assert_eq!(
+            validate_policy_capabilities(&signed_npm_policy(invalid_success_status))
+                .expect_err("npm publish response binding with status 202 must fail policy load"),
+            "route npm:test responseBinding npm-publish-package-binding npm.publish successStatusCodes may contain only 200 or 201"
+        );
+
+        let mut invalid_success_content_type = npm_route.clone();
+        invalid_success_content_type["constraints"][0]["contentTypes"] =
+            json!(["application/problem+json"]);
+        assert_eq!(
+            validate_policy_capabilities(&signed_npm_policy(invalid_success_content_type))
+                .expect_err("npm publish response binding with non-npm JSON type must fail policy load"),
+            "route npm:test responseBinding npm-publish-package-binding npm.publish contentTypes must be exactly application/json"
+        );
+
+        let mut oversized_response = npm_route.clone();
+        oversized_response["adapter"]["config"]["response"]["maxBodyBytes"] = json!(65_537);
+        assert_eq!(
+            validate_policy_capabilities(&signed_npm_policy(oversized_response))
+                .expect_err("signed npm publish response over 64 KiB must fail policy load"),
+            "route npm:test responseBinding requires a buffered JSON response capped at 65536 bytes"
+        );
+
         let mut unsafe_npm = npm_route;
         unsafe_npm["jit"]["approvers"]["authn"]["requireHardwareAttestation"] = json!(false);
-        assert!(validate_policy_capabilities(&policy_with_route(unsafe_npm))
+        assert!(validate_policy_capabilities(&signed_npm_policy(unsafe_npm))
             .expect_err("npm write without hardware attestation must fail policy load")
             .contains("hardware-attested"));
 
@@ -26997,6 +28921,8 @@ mod tests {
         assert_ne!(digest, changed);
 
         request.method = "POST".to_string();
+        assert!(canonical_client_proof_request(&request).is_err());
+        request.method = "HEAD".to_string();
         assert!(canonical_client_proof_request(&request).is_err());
         request.method = "GET".to_string();
         request.body = b"not-empty".to_vec();

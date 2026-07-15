@@ -84,6 +84,7 @@ from serverware.config import (
     MITMPROXY_CONF_DIR,
     OAUTH_PENDING_CREDENTIAL_TTL_SECONDS,
     OIDC_LOGIN_STATE_TTL_SECONDS,
+    OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS,
     POLICY_BUNDLE_PATH,
     POLICY_CANARY_BUNDLE_PATH,
     POLICY_CANARY_MAX_DENIALS,
@@ -101,6 +102,7 @@ from serverware.config import (
     SECRET_LEASE_TTL_SECONDS,
     SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS,
     WEBAUTHN_BOOTSTRAP_TOKEN,
+    WEBAUTHN_RECOVERY_ENABLED,
 )
 from serverware import db, grants, runtime
 from serverware.auth import (
@@ -113,14 +115,20 @@ from serverware.auth import (
     OIDCAuthoritativeStateError,
     admin_status,
     issue_csrf_cookie,
-    oidc_identity_from_token,
+    oidc_browser_session_for_request,
+    oidc_identity_from_browser_session,
+    oidc_pending_session_identity,
+    oidc_session_token_digest,
     require_admin,
     require_role,
     rotate_generated_admin_token,
     validate_csrf_request,
 )
-from serverware.crypto import encrypt_credential_lease_envelope
-from serverware.control_plane_startup import validate_control_plane_startup
+from serverware.crypto import decrypt_secret, encrypt_credential_lease_envelope, encrypt_secret
+from serverware.control_plane_startup import (
+    control_plane_startup_required,
+    validate_control_plane_startup,
+)
 from serverware.enrollment import (
     AgentEnrollmentError,
     build_agent_enrollment,
@@ -190,10 +198,18 @@ from serverware.webauthn import (
     control_plane_mutation_options,
     create_dev_credential,
     dev_assertion,
+    oidc_session_binding_options,
+    oidc_session_assertion_binding,
+    prepare_lost_active_key_revocation,
+    prepare_recovery_registration,
+    recovery_registration_options,
     registration_options,
     verify_control_plane_mutation_assertion,
+    verify_oidc_session_binding_assertion,
     verify_approval_assertion,
     verify_registration,
+    verify_lost_active_key_revocation,
+    verify_recovery_registration,
 )
 from serverware.webauthn_trust import (
     WebAuthnTrustError,
@@ -323,6 +339,30 @@ async def signed_response_middleware(request: Request, call_next):
     )
     headers = dict(response.headers)
     headers.pop("content-length", None)
+    headers.update(
+        {
+            "Cache-Control": "no-store",
+            "Pragma": "no-cache",
+            "X-Content-Type-Options": "nosniff",
+            "X-Frame-Options": "DENY",
+            "Referrer-Policy": "no-referrer",
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "Permissions-Policy": (
+                "camera=(), geolocation=(), microphone=(), payment=(), usb=(), "
+                "publickey-credentials-create=(self), "
+                "publickey-credentials-get=(self)"
+            ),
+            "Content-Security-Policy": (
+                "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; "
+                "form-action 'self'; object-src 'none'; connect-src 'self'; "
+                "img-src 'self' data:; font-src 'self'; "
+                "style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+            ),
+        }
+    )
+    if request.url.scheme == "https":
+        headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     headers.update(response_signature_headers(statement))
     return Response(
         content=body,
@@ -514,6 +554,12 @@ class ControlPlaneMutationWebAuthnOptions(BaseModel):
     approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
 
 
+class OIDCSessionWebAuthnVerify(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    response: dict[str, Any]
+
+
 class PolicyDryRunCase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -598,6 +644,48 @@ class WebAuthnRegistrationFinish(BaseModel):
 
     label: str = "YubiKey"
     response: dict[str, Any]
+
+
+class WebAuthnRecoveryStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(default="Recovery YubiKey", min_length=1, max_length=128)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class WebAuthnRecoveryPrepare(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    recovery_id: str = Field(alias="recoveryId", min_length=36, max_length=36)
+    response: dict[str, Any]
+
+
+class WebAuthnRecoveryAuthorization(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    statement: dict[str, Any]
+    signature: str = Field(min_length=10, max_length=256)
+
+
+class WebAuthnRecoveryVerify(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    recovery_id: str = Field(alias="recoveryId", min_length=36, max_length=36)
+    response: dict[str, Any]
+    authorization: WebAuthnRecoveryAuthorization
+
+
+class WebAuthnRecoveryRevocationStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class WebAuthnRecoveryRevocationVerify(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    revocation_id: str = Field(alias="revocationId", min_length=36, max_length=36)
+    authorization: WebAuthnRecoveryAuthorization
 
 
 class WebAuthnCredentialRevoke(BaseModel):
@@ -947,7 +1035,8 @@ class KeyReleaseVerify(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
-    validate_control_plane_startup()
+    if control_plane_startup_required():
+        validate_control_plane_startup()
     _drain_setup_session_audit_outbox()
     runtime.start_runtime_workers()
     runtime.start_audit_anchor_worker()
@@ -978,10 +1067,13 @@ def healthz() -> dict[str, Any]:
 @app.get("/api/auth/status")
 def operator_auth_status(request: Request) -> dict[str, Any]:
     identity = None
+    session = None
     token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
     if token:
         try:
-            identity = oidc_identity_from_token(token, auth_method="oidc-session")
+            session = oidc_browser_session_for_request(request)
+            if session is not None:
+                identity = oidc_identity_from_browser_session(session)
         except (OIDCAuthError, OIDCAccessDenied, OIDCAuthoritativeStateError):
             identity = None
     return {
@@ -989,6 +1081,10 @@ def operator_auth_status(request: Request) -> dict[str, Any]:
         "userId": identity.user_id if identity else None,
         "roles": sorted(identity.roles) if identity else [],
         "authMethod": identity.auth_method if identity else None,
+        "sessionState": session.get("status") if session else None,
+        "webauthnRequired": bool(
+            session and session.get("status") == "pending_webauthn"
+        ),
         "oidcBrowserLoginConfigured": browser_login_configured(),
     }
 
@@ -1067,11 +1163,11 @@ def operator_oidc_callback(
     response = RedirectResponse(url="/", status_code=303)
     response.set_cookie(
         OIDC_SESSION_COOKIE_NAME,
-        completed["id_token"],
-        max_age=completed["max_age"],
+        completed["session_token"],
+        max_age=completed["cookie_max_age"],
         httponly=True,
         secure=request.url.scheme == "https",
-        samesite="lax",
+        samesite="strict",
         path="/",
     )
     response.delete_cookie("serverware_oidc_flow", path="/api/auth/oidc/callback")
@@ -1082,29 +1178,428 @@ def operator_oidc_callback(
             "user_id": identity.user_id,
             "roles": sorted(identity.roles),
             "expires_at_epoch": completed["expires_at"],
+            "session_id": completed["session"]["id"],
+            "session_status": completed["session"]["status"],
         },
         actor_id=identity.user_id,
     )
     return response
 
 
+def _oidc_session_for_request(request: Request) -> tuple[str, dict[str, Any]]:
+    token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
+    try:
+        session = oidc_browser_session_for_request(request)
+    except (OIDCAuthError, OIDCAuthoritativeStateError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not token or not session:
+        raise HTTPException(status_code=401, detail="OIDC browser session required")
+    return token, session
+
+
+def _pending_oidc_session_for_request(request: Request) -> tuple[str, dict[str, Any]]:
+    token, session = _oidc_session_for_request(request)
+    if session.get("status") != "pending_webauthn":
+        raise HTTPException(
+            status_code=409, detail="OIDC browser session is not awaiting WebAuthn"
+        )
+    try:
+        oidc_pending_session_identity(session)
+    except OIDCAuthoritativeStateError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OIDCAccessDenied as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except OIDCAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return token, session
+
+
+@app.post("/api/auth/session/webauthn/options")
+def operator_session_webauthn_options(request: Request) -> dict[str, Any]:
+    _, session = _pending_oidc_session_for_request(request)
+    try:
+        options = oidc_session_binding_options(
+            session_id=str(session["id"]),
+            user_id=str(session["user_id"]),
+            session_expires_at=str(session["expires_at"]),
+            pending_expires_at=str(session["pending_expires_at"]),
+            authn_policy=_control_plane_mutation_authn_policy(),
+            ttl_seconds=OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS,
+        )
+    except WebAuthnError as exc:
+        if "no currently eligible WebAuthn credential" not in str(exc):
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        history = db.list_webauthn_credentials(
+            str(session["user_id"]), include_revoked=True
+        )
+        active_credential_count = sum(
+            1 for credential in history if credential.get("revoked_at") is None
+        )
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error": "oidc_session_webauthn_unavailable",
+                "message": "No currently trusted passkey is registered for this OIDC subject",
+                "firstEnrollmentAvailable": not history,
+                "recoveryAvailable": bool(history)
+                and active_credential_count == 0
+                and WEBAUTHN_RECOVERY_ENABLED,
+                "offlineRevocationAvailable": active_credential_count == 1
+                and WEBAUTHN_RECOVERY_ENABLED,
+                "bootstrapRequired": RELEASE_CHANNEL.strip().lower()
+                not in {"dev", "development", "local", "test"},
+            },
+        )
+    return options
+
+
+def _oidc_first_enrollment_authorization(
+    session: dict[str, Any], payload_digest: str
+) -> dict[str, Any]:
+    return {
+        "mode": "oidc-session-first-enrollment",
+        "session_id": session["id"],
+        "user_id": session["user_id"],
+        "pending_expires_at": session["pending_expires_at"],
+        "payload_digest": payload_digest,
+        "existing_credential_count": 0,
+    }
+
+
+@app.post("/api/auth/session/webauthn/register/options")
+def operator_session_webauthn_register_options(
+    payload: WebAuthnRegistrationStart, request: Request
+) -> dict[str, Any]:
+    _, session = _pending_oidc_session_for_request(request)
+    history = db.list_webauthn_credentials(
+        str(session["user_id"]), include_revoked=True
+    )
+    if history:
+        raise HTTPException(
+            status_code=409,
+            detail="first enrollment is closed because credential history exists",
+        )
+    production_release = RELEASE_CHANNEL.strip().lower() not in {
+        "dev",
+        "development",
+        "local",
+        "test",
+    }
+    if production_release:
+        if len(WEBAUTHN_BOOTSTRAP_TOKEN) < 32:
+            raise HTTPException(
+                status_code=503, detail="WebAuthn bootstrap token is not configured safely"
+            )
+        if not payload.bootstrap_token or not hmac.compare_digest(
+            WEBAUTHN_BOOTSTRAP_TOKEN, payload.bootstrap_token
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail="valid WebAuthn bootstrap token required for first enrollment",
+            )
+    payload_digest = _control_plane_payload_digest(
+        {
+            "type": "serverware.oidc_session_first_enrollment",
+            "session_id": session["id"],
+            "user_id": session["user_id"],
+            "pending_expires_at": session["pending_expires_at"],
+            "label": payload.label,
+        }
+    )
+    return registration_options(
+        str(session["user_id"]),
+        payload.label,
+        authorization=_oidc_first_enrollment_authorization(
+            session, payload_digest
+        ),
+    )
+
+
+@app.post("/api/auth/session/webauthn/register/verify")
+def operator_session_webauthn_register_verify(
+    payload: WebAuthnRegistrationFinish, request: Request
+) -> dict[str, Any]:
+    _, session = _pending_oidc_session_for_request(request)
+    payload_digest = _control_plane_payload_digest(
+        {
+            "type": "serverware.oidc_session_first_enrollment",
+            "session_id": session["id"],
+            "user_id": session["user_id"],
+            "pending_expires_at": session["pending_expires_at"],
+            "label": payload.label,
+        }
+    )
+    expected = _oidc_first_enrollment_authorization(session, payload_digest)
+    try:
+        credential = verify_registration(
+            str(session["user_id"]),
+            payload.label,
+            payload.response,
+            require_authorization=True,
+            expected_authorization=expected,
+        )
+    except WebAuthnError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    credential.pop("_registration_authorization", None)
+    return credential
+
+
+def _recovery_http_exception(exc: WebAuthnError) -> HTTPException:
+    detail = str(exc)
+    normalized = detail.lower()
+    if any(
+        marker in normalized
+        for marker in (
+            "trust bundle",
+            "trust publication",
+            "recovery root",
+            "recovery is disabled",
+            "metadata",
+        )
+    ):
+        return HTTPException(status_code=503, detail=detail)
+    if any(
+        marker in normalized
+        for marker in (
+            "signature",
+            "authorization",
+            "hardware attestation",
+            "subject mismatch",
+        )
+    ):
+        return HTTPException(status_code=403, detail=detail)
+    if any(
+        marker in normalized
+        for marker in (
+            "history",
+            "active webauthn",
+            "ordinary webauthn",
+            "state changed",
+            "already",
+            "not live",
+            "not prepared",
+            "not awaiting",
+            "expired",
+            "replayed",
+            "capacity",
+        )
+    ):
+        return HTTPException(status_code=409, detail=detail)
+    return HTTPException(status_code=400, detail=detail)
+
+
+def _webauthn_recovery_policy_digest() -> str:
+    return _control_plane_payload_digest(_control_plane_mutation_authn_policy())
+
+
+@app.post("/api/auth/session/webauthn/recovery/options")
+def operator_session_webauthn_recovery_options(
+    payload: WebAuthnRecoveryStart, request: Request
+) -> dict[str, Any]:
+    token, session = _pending_oidc_session_for_request(request)
+    try:
+        return recovery_registration_options(
+            pending_token_digest=oidc_session_token_digest(token),
+            oidc_session_id=str(session["id"]),
+            user_id=str(session["user_id"]),
+            label=payload.label,
+            reason=payload.reason,
+            auth_policy_digest=_webauthn_recovery_policy_digest(),
+        )
+    except WebAuthnError as exc:
+        raise _recovery_http_exception(exc) from exc
+
+
+@app.post("/api/auth/session/webauthn/recovery/revoke/options")
+def operator_session_webauthn_recovery_revocation_options(
+    payload: WebAuthnRecoveryRevocationStart, request: Request
+) -> dict[str, Any]:
+    token, session = _pending_oidc_session_for_request(request)
+    try:
+        return prepare_lost_active_key_revocation(
+            pending_token_digest=oidc_session_token_digest(token),
+            oidc_session_id=str(session["id"]),
+            user_id=str(session["user_id"]),
+            reason=payload.reason,
+            auth_policy_digest=_webauthn_recovery_policy_digest(),
+        )
+    except WebAuthnError as exc:
+        raise _recovery_http_exception(exc) from exc
+
+
+@app.post("/api/auth/session/webauthn/recovery/revoke/verify")
+def operator_session_webauthn_recovery_revocation_verify(
+    payload: WebAuthnRecoveryRevocationVerify, request: Request
+) -> dict[str, Any]:
+    token, session = _pending_oidc_session_for_request(request)
+    try:
+        return verify_lost_active_key_revocation(
+            revocation_id=payload.revocation_id,
+            pending_token_digest=oidc_session_token_digest(token),
+            user_id=str(session["user_id"]),
+            authorization=payload.authorization.model_dump(),
+            auth_policy_digest=_webauthn_recovery_policy_digest(),
+        )
+    except WebAuthnError as exc:
+        raise _recovery_http_exception(exc) from exc
+
+
+@app.post("/api/auth/session/webauthn/recovery/prepare")
+def operator_session_webauthn_recovery_prepare(
+    payload: WebAuthnRecoveryPrepare, request: Request
+) -> dict[str, Any]:
+    token, session = _pending_oidc_session_for_request(request)
+    try:
+        return prepare_recovery_registration(
+            recovery_id=payload.recovery_id,
+            pending_token_digest=oidc_session_token_digest(token),
+            user_id=str(session["user_id"]),
+            response=payload.response,
+            allowed_authenticator_classes=(
+                CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES
+            ),
+        )
+    except WebAuthnError as exc:
+        raise _recovery_http_exception(exc) from exc
+
+
+@app.post("/api/auth/session/webauthn/recovery/verify")
+def operator_session_webauthn_recovery_verify(
+    payload: WebAuthnRecoveryVerify, request: Request
+) -> dict[str, Any]:
+    token, session = _pending_oidc_session_for_request(request)
+    try:
+        return verify_recovery_registration(
+            recovery_id=payload.recovery_id,
+            pending_token_digest=oidc_session_token_digest(token),
+            user_id=str(session["user_id"]),
+            response=payload.response,
+            authorization=payload.authorization.model_dump(),
+            auth_policy_digest=_webauthn_recovery_policy_digest(),
+            allowed_authenticator_classes=(
+                CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES
+            ),
+        )
+    except WebAuthnError as exc:
+        raise _recovery_http_exception(exc) from exc
+
+
+@app.post("/api/auth/session/webauthn/verify")
+def operator_session_webauthn_verify(
+    payload: OIDCSessionWebAuthnVerify, request: Request, response: Response
+) -> dict[str, Any]:
+    try:
+        assertion_binding = oidc_session_assertion_binding(payload.response)
+    except WebAuthnError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
+    if not token:
+        raise HTTPException(status_code=401, detail="OIDC browser session required")
+    try:
+        session = oidc_browser_session_for_request(request)
+    except (OIDCAuthError, OIDCAuthoritativeStateError) as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    if session is not None and session.get("status") == "pending_webauthn":
+        _, session = _pending_oidc_session_for_request(request)
+        active_token = secrets.token_urlsafe(48)
+        try:
+            evidence = verify_oidc_session_binding_assertion(
+                old_token_digest=oidc_session_token_digest(token),
+                new_token_digest=oidc_session_token_digest(active_token),
+                session_id=str(session["id"]),
+                user_id=str(session["user_id"]),
+                session_expires_at=str(session["expires_at"]),
+                pending_expires_at=str(session["pending_expires_at"]),
+                authn_policy=_control_plane_mutation_authn_policy(),
+                assertion=payload.response,
+                encrypted_active_token=encrypt_secret(active_token),
+            )
+        except WebAuthnError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif session is None:
+        try:
+            delivery = db.recover_oidc_session_activation_delivery(
+                old_token_digest=oidc_session_token_digest(token),
+                assertion_digest=assertion_binding["assertion_digest"],
+                challenge=assertion_binding["challenge"],
+            )
+        except db.MetadataStoreError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if not delivery.get("ok"):
+            raise HTTPException(
+                status_code=409,
+                detail="OIDC session activation retry is unavailable",
+            )
+        try:
+            active_token = decrypt_secret(str(delivery["encrypted_active_token"]))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="OIDC session activation retry envelope is invalid",
+            ) from exc
+        evidence = {"session": delivery["session"]}
+    else:
+        raise HTTPException(
+            status_code=409, detail="OIDC browser session is not awaiting WebAuthn"
+        )
+    active_expires_at = datetime.fromisoformat(str(evidence["session"]["expires_at"]))
+    active_max_age = max(
+        1, int((active_expires_at - datetime.now(timezone.utc)).total_seconds())
+    )
+    response.set_cookie(
+        OIDC_SESSION_COOKIE_NAME,
+        active_token,
+        max_age=active_max_age,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+    return {"ok": True, "authenticated": True}
+
+
 @app.post("/api/auth/logout")
 def operator_logout(
     response: Response,
     request: Request,
-    identity: AdminIdentity = Depends(require_admin),
+    x_serverware_admin_token: str | None = Header(
+        default=None, alias="X-Serverware-Admin-Token"
+    ),
 ) -> dict[str, Any]:
+    session_token = request.cookies.get(OIDC_SESSION_COOKIE_NAME)
+    session = None
+    try:
+        identity = require_admin(request, x_serverware_admin_token)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        _, session = _oidc_session_for_request(request)
+        identity = AdminIdentity(
+            str(session["user_id"]),
+            frozenset(str(role) for role in session.get("roles", [])),
+            "oidc-session-pending",
+        )
+    if session_token:
+        result = db.revoke_oidc_browser_session(
+            token_digest=oidc_session_token_digest(session_token),
+            actor_id=identity.user_id,
+            reason="operator_logout",
+        )
+        session = session or result.get("session")
     response.delete_cookie(
         OIDC_SESSION_COOKIE_NAME,
         path="/",
         secure=request.url.scheme == "https",
         httponly=True,
-        samesite="lax",
+        samesite="strict",
     )
     response.delete_cookie(CSRF_COOKIE_NAME, path="/")
     db.record_audit_event(
         "control_plane.logout",
-        {"auth_method": identity.auth_method},
+        {
+            "auth_method": identity.auth_method,
+            "session_id": session.get("id") if session else None,
+        },
         actor_id=identity.user_id,
     )
     return {"ok": True}
@@ -3312,8 +3807,18 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
 
 @app.get("/api/csrf")
 def csrf_token(
-    response: Response, request: Request, _: AdminIdentity = Depends(require_admin)
+    response: Response,
+    request: Request,
+    x_serverware_admin_token: str | None = Header(
+        default=None, alias="X-Serverware-Admin-Token"
+    ),
 ) -> dict[str, Any]:
+    try:
+        require_admin(request, x_serverware_admin_token)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise
+        _oidc_session_for_request(request)
     token = issue_csrf_cookie(response, request)
     return {
         "ok": True,
@@ -11038,6 +11543,7 @@ UI_HTML = r"""
       <label class="sr-only" for="admin-token">Operator admin token or OIDC JWT</label>
       <input id="admin-token" class="token-field" type="password" placeholder="Admin token or OIDC JWT" autocomplete="off">
       <button id="operator-sign-in" class="secondary" type="button" onclick="runUiAction('Sign in', signInWithOIDC)" hidden>Sign in</button>
+      <button id="operator-session-verify" type="button" onclick="runUiAction('Verify passkey', verifyOIDCSessionPasskey)" hidden>Verify passkey</button>
       <button id="operator-sign-out" class="secondary" type="button" onclick="runUiAction('Sign out', signOutOperator)" hidden>Sign out</button>
       <button class="secondary" type="button" onclick="runUiAction('Refresh', refresh)">Refresh</button>
       <button type="button" onclick="runUiAction('Seed demo', seedDemo)">Seed demo</button>
@@ -11358,7 +11864,6 @@ UI_HTML = r"""
     const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
     const json = (value) => esc(JSON.stringify(value, null, 2));
     const canonicalValue = (value) => Array.isArray(value) ? value.map(canonicalValue) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])])) : value;
-    const tokenKey = 'serverware.adminToken';
     const oauthDraftKey = 'serverware.oauthDraft';
     const pendingMutationKey = 'serverware.pendingMutation';
     let csrfToken = null;
@@ -11560,16 +12065,21 @@ UI_HTML = r"""
 
     function renderAuthStatus() {
       const authenticated = Boolean(state.authStatus?.authenticated);
+      const pendingWebAuthn = Boolean(state.authStatus?.webauthnRequired);
+      const hasBrowserSession = ['pending_webauthn', 'active'].includes(state.authStatus?.sessionState);
       const tokenAuthenticated = Boolean(adminToken());
       const label = authenticated
         ? state.authStatus.userId
+        : pendingWebAuthn
+          ? 'Passkey required'
         : tokenAuthenticated
           ? 'Token session'
           : 'Signed out';
       $('operator-auth-status').textContent = label;
       $('operator-auth-status').className = authenticated || tokenAuthenticated ? 'pill good' : 'pill warn';
-      $('operator-sign-in').hidden = authenticated || tokenAuthenticated || !state.authStatus?.oidcBrowserLoginConfigured;
-      $('operator-sign-out').hidden = !authenticated;
+      $('operator-sign-in').hidden = hasBrowserSession || tokenAuthenticated || !state.authStatus?.oidcBrowserLoginConfigured;
+      $('operator-session-verify').hidden = !pendingWebAuthn;
+      $('operator-sign-out').hidden = !hasBrowserSession;
       $('admin-token').hidden = authenticated;
     }
 
@@ -11581,8 +12091,156 @@ UI_HTML = r"""
       return {pending: true};
     }
 
+    async function sessionApi(path, options = {}) {
+      const method = String(options.method || 'POST').toUpperCase();
+      const csrf = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) ? await ensureCsrfToken() : null;
+      const response = await fetch(path, {
+        ...options,
+        method,
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(csrf ? {'X-Serverware-CSRF-Token': csrf} : {}),
+          ...(options.headers || {})
+        }
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new ApiError(response.status, payload);
+      return payload;
+    }
+
+    async function verifyOIDCSessionPasskey() {
+      if (!window.PublicKeyCredential || !navigator.credentials) throw new Error('WebAuthn is not available in this browser');
+      let options;
+      try {
+        options = await sessionApi('/api/auth/session/webauthn/options');
+      } catch (error) {
+        const detail = error instanceof ApiError ? error.detail : null;
+        if (
+          error.status !== 409
+          || detail?.error !== 'oidc_session_webauthn_unavailable'
+        ) throw error;
+        if (detail.firstEnrollmentAvailable) {
+          await enrollFirstOIDCSessionPasskey(Boolean(detail.bootstrapRequired));
+        } else if (detail.offlineRevocationAvailable) {
+          await decommissionLostOIDCSessionPasskey();
+          await recoverOIDCSessionPasskey();
+        } else if (detail.recoveryAvailable) {
+          await recoverOIDCSessionPasskey();
+        } else {
+          throw error;
+        }
+        options = await sessionApi('/api/auth/session/webauthn/options');
+      }
+      let assertion;
+      try {
+        assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
+      } catch (error) {
+        if (
+          error?.name !== 'NotAllowedError'
+          || !window.confirm('Is this the lost last security key? Continuing requires two separate offline-root signatures: one to revoke it and one to register its replacement.')
+        ) throw error;
+        await decommissionLostOIDCSessionPasskey();
+        await recoverOIDCSessionPasskey();
+        options = await sessionApi('/api/auth/session/webauthn/options');
+        assertion = await navigator.credentials.get({publicKey: prepareRequestOptions(options)});
+      }
+      const verifyRequest = {body: JSON.stringify({response: credentialToJson(assertion)})};
+      try {
+        await sessionApi('/api/auth/session/webauthn/verify', verifyRequest);
+      } catch (error) {
+        if (!(error instanceof TypeError)) throw error;
+        const status = await fetchAuthStatus();
+        if (!status?.authenticated) {
+          await sessionApi('/api/auth/session/webauthn/verify', verifyRequest);
+        }
+      }
+      csrfToken = null;
+      await fetchAuthStatus();
+      await refresh();
+      return {authenticated: true};
+    }
+
+    async function enrollFirstOIDCSessionPasskey(bootstrapRequired) {
+      const bootstrapToken = bootstrapRequired ? await requestWebAuthnBootstrapToken() : null;
+      if (bootstrapRequired && !bootstrapToken) throw new Error('First passkey enrollment cancelled');
+      const options = await sessionApi('/api/auth/session/webauthn/register/options', {
+        body: JSON.stringify({label: 'YubiKey', ...(bootstrapToken ? {bootstrapToken} : {})})
+      });
+      const credential = await navigator.credentials.create({publicKey: prepareCreationOptions(options)});
+      await sessionApi('/api/auth/session/webauthn/register/verify', {
+        body: JSON.stringify({label: 'YubiKey', response: credentialToJson(credential)})
+      });
+    }
+
+    async function recoverOIDCSessionPasskey() {
+      const label = window.prompt('Replacement security key label', 'Recovery YubiKey');
+      if (!label) throw new Error('WebAuthn recovery cancelled');
+      const reason = window.prompt('Reason for offline recovery approval', 'Last registered key was revoked');
+      if (!reason) throw new Error('WebAuthn recovery cancelled');
+      const options = await sessionApi('/api/auth/session/webauthn/recovery/options', {
+        body: JSON.stringify({label, reason})
+      });
+      const credential = await navigator.credentials.create({publicKey: prepareCreationOptions(options)});
+      const response = credentialToJson(credential);
+      const prepared = await sessionApi('/api/auth/session/webauthn/recovery/prepare', {
+        body: JSON.stringify({recoveryId: options.recoveryId, response})
+      });
+      const authorization = await authorizeOfflineRecoveryStatement(
+        prepared,
+        'recovery'
+      );
+      const recovered = await sessionApi('/api/auth/session/webauthn/recovery/verify', {
+        body: JSON.stringify({
+          recoveryId: options.recoveryId,
+          response,
+          authorization
+        })
+      });
+      if (!recovered.ordinaryAssertionRequired) throw new Error('Recovery did not require possession proof');
+      return recovered;
+    }
+
+    async function decommissionLostOIDCSessionPasskey() {
+      const reason = window.prompt(
+        'Reason for explicitly revoking the lost active security key',
+        'Last active security key is lost'
+      );
+      if (!reason) throw new Error('Lost-key decommission cancelled');
+      const prepared = await sessionApi('/api/auth/session/webauthn/recovery/revoke/options', {
+        body: JSON.stringify({reason})
+      });
+      const authorization = await authorizeOfflineRecoveryStatement(
+        prepared,
+        'lost-key decommission'
+      );
+      const revoked = await sessionApi('/api/auth/session/webauthn/recovery/revoke/verify', {
+        body: JSON.stringify({revocationId: prepared.revocationId, authorization})
+      });
+      if (!revoked.recoveryRequired) throw new Error('Lost-key decommission did not require replacement recovery');
+      return revoked;
+    }
+
+    async function authorizeOfflineRecoveryStatement(prepared, ceremonyName) {
+      let copied = false;
+      try {
+        await navigator.clipboard.writeText(prepared.canonicalStatement);
+        copied = true;
+      } catch (_) {
+        window.prompt(`Copy this canonical ${ceremonyName} statement to the offline signer`, prepared.canonicalStatement);
+      }
+      const signature = window.prompt(
+        copied
+          ? `The canonical ${ceremonyName} statement was copied. Paste the offline Ed25519 signature.`
+          : `Paste the offline Ed25519 signature for ${ceremonyName}.`,
+        'ed25519:'
+      );
+      if (!signature || signature === 'ed25519:') throw new Error(`Offline ${ceremonyName} approval cancelled`);
+      return {statement: prepared.statement, signature};
+    }
+
     async function signOutOperator() {
-      await api('/api/auth/logout', {method: 'POST'});
+      await sessionApi('/api/auth/logout');
       csrfToken = null;
       await fetchAuthStatus();
       render();
@@ -11748,7 +12406,6 @@ UI_HTML = r"""
       if (res.status === 401) {
         $('admin-token').value = '';
         $('admin-token').placeholder = 'Operator token rejected';
-        sessionStorage.removeItem(tokenKey);
         csrfToken = null;
         state.authStatus = {...(state.authStatus || {}), authenticated: false, userId: null, roles: [], authMethod: null};
         renderAuthStatus();
@@ -11937,6 +12594,18 @@ UI_HTML = r"""
             if (requestedSetupId && error.status !== 404 && error.status !== 403) throw error;
           }
         }
+        const latest = {
+          enrollmentPacket: state.enrollmentPacket,
+          setupSession: state.setupSession,
+          setupChallenge: state.setupChallenge,
+          oauthSetupSessionId: state.oauthSetupSessionId,
+          setupVerification: state.setupVerification,
+          approvalReview: state.approvalReview,
+          policyCandidate: state.policyCandidate,
+          auditSearchResult: state.auditSearchResult,
+          auditChain: state.auditChain,
+          authStatus: state.authStatus
+        };
         state = {
           ...bootstrap,
           controlPlaneApprovals: controlPlaneResult.status === 'fulfilled' ? controlPlaneResult.value : [],
@@ -11947,11 +12616,11 @@ UI_HTML = r"""
             : {error: String(attestationResult.reason?.message || attestationResult.reason || 'Attestation unavailable')},
           setupSessions,
           setupSession,
-          ...retained
+          ...latest
         };
         state.setupSessions = setupSessions;
         state.setupSession = setupSession;
-        state.approvalReview = retained.approvalReview && state.approvals.some((item) => item.id === retained.approvalReview.id) ? retained.approvalReview : null;
+        state.approvalReview = latest.approvalReview && state.approvals.some((item) => item.id === latest.approvalReview.id) ? latest.approvalReview : null;
         render(controlState);
       })();
       try {
@@ -13732,15 +14401,6 @@ UI_HTML = r"""
       const packetFilename = downloadEnrollment(packetText);
       const packetDigestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(packetText));
       const packetSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
-      const setupSession = state.setupSession;
-      let receiptTrust = null;
-      if (setupSession?.enrollmentSessionId) {
-        try {
-          receiptTrust = await api('/api/setup/receipt-trust');
-        } catch (error) {
-          if (error.status !== 503) throw error;
-        }
-      }
       const command = [
         'set -euo pipefail',
         'umask 077',
@@ -13752,21 +14412,12 @@ UI_HTML = r"""
         `export HTTPS_PROXY=${shellQuote(serverware.proxyUrl)}`,
         `export HTTP_PROXY=${shellQuote(serverware.proxyUrl)}`
       ];
-      if (receiptTrust && setupSession?.assignmentDigest && setupSession?.routePolicyDigest) {
-        command.push(
-          ': "${SERVERWARE_SETUP_ENROLLMENT_VERIFIER_SIGNING_KEY:?set the independent verifier Ed25519 private-key path}"',
-          'SETUP_ENROLLMENT_RECEIPT="${SERVERWARE_SETUP_ENROLLMENT_RECEIPT:-${VERIFIED_ENROLLMENT_PACKET%.json}.receipt.json}"',
-          `python3 scripts/generate_agent_enrollment.py --sign-setup-receipt --verify-packet "$ENROLLMENT_PACKET" --expected-packet-sha256 ${shellQuote(packetSha256)} --expected-principal ${shellQuote(packet.principalId)} --expected-nonce ${shellQuote(packet.nonce)} --base ${shellQuote(serverware.controlPlaneUrl)} --setup-session-id ${shellQuote(setupSession.id)} --enrollment-session-id ${shellQuote(setupSession.enrollmentSessionId)} --route-id ${shellQuote(setupSession.routeId)} --credential-id ${shellQuote(setupSession.credentialId)} --credential-version ${Number(setupSession.credentialVersion)} --policy-hash ${shellQuote(setupSession.policyHash)} --route-policy-digest ${shellQuote(setupSession.routePolicyDigest)} --expected-assignment-digest ${shellQuote(setupSession.assignmentDigest)} --trust-profile-sha256 ${shellQuote(receiptTrust.digest)} --verifier-provider ${shellQuote(receiptTrust.enrollmentVerifier.provider)} --setup-receipt-signing-key "$SERVERWARE_SETUP_ENROLLMENT_VERIFIER_SIGNING_KEY" --expected-verifier-key-id ${shellQuote(receiptTrust.enrollmentVerifier.keyId)} > "$SETUP_ENROLLMENT_RECEIPT"`
-        );
-      }
       const commandText = command.join('\n');
       await navigator.clipboard.writeText(commandText);
-      return {copied: true, principalId: packet.principalId, setupReceipt: Boolean(receiptTrust)};
+      return {copied: true, principalId: packet.principalId};
     }
-    $('admin-token').value = sessionStorage.getItem(tokenKey) || '';
+    $('admin-token').value = '';
     $('admin-token').addEventListener('change', async () => {
-      if (adminToken()) sessionStorage.setItem(tokenKey, adminToken());
-      else sessionStorage.removeItem(tokenKey);
       renderAuthStatus();
       try {
         await refresh();

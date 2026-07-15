@@ -12,9 +12,11 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
 KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 PLACEHOLDER_RE = re.compile(
     r"(<[^>]+>|\$\{[^}]+\}|CHANGE[_-]?ME|REPLACE[_-]?ME|FILL[_-]?ME|TODO|TBD)",
@@ -78,6 +80,76 @@ def load_env_file(path: Path) -> dict[str, str]:
     return loaded
 
 
+def validate_proxy_proof_policy_consistency(
+    policy_bundle_path: Path,
+    *,
+    agent_id: str,
+    principal_id: str,
+    proof_url: str,
+) -> None:
+    from serverware.policy_bundle import compile_policy_bundle, strict_json_loads
+
+    try:
+        bundle = strict_json_loads(policy_bundle_path.read_bytes())
+        if not isinstance(bundle, dict):
+            raise ValueError("policy bundle must be a JSON object")
+        policy = compile_policy_bundle(
+            bundle,
+            validate_schema=False,
+            verify_signature=False,
+        )
+    except Exception as exc:
+        raise ValueError(
+            f"exact --policy-bundle JSON could not be compiled: {exc}"
+        ) from exc
+
+    mapped_principals = []
+    for principal in policy.principals.values():
+        expected_agent_ids = [
+            value
+            for name, value in principal.required_headers.items()
+            if name.lower() == "x-serverware-agent"
+        ]
+        if expected_agent_ids and all(value == agent_id for value in expected_agent_ids):
+            mapped_principals.append(principal.id)
+    if mapped_principals != [principal_id]:
+        raise ValueError(
+            "SERVERWARE_PROXY_PROOF_AGENT_ID and SERVERWARE_PROXY_PROOF_PRINCIPAL_ID "
+            "do not map to the same unique principal in the exact --policy-bundle JSON"
+        )
+
+    try:
+        parsed_url = urlsplit(proof_url)
+        proof_host = parsed_url.hostname
+        proof_port = parsed_url.port
+    except ValueError as exc:
+        raise ValueError("SERVERWARE_PROXY_PROOF_URL is invalid") from exc
+    if (
+        not parsed_url.scheme
+        or not proof_host
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or parsed_url.fragment
+    ):
+        raise ValueError("SERVERWARE_PROXY_PROOF_URL is invalid")
+    if proof_port is None:
+        proof_port = 443 if parsed_url.scheme.lower() == "https" else 80
+    proof_path = parsed_url.path or "/"
+    matched = policy.match_route(
+        parsed_url.scheme,
+        proof_host,
+        proof_port,
+        "GET",
+        proof_path,
+        principal_id,
+    )
+    if matched is None:
+        raise ValueError(
+            "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID is not authorized for the GET proof URL "
+            "scheme, host, port, and path in the exact --policy-bundle JSON"
+        )
+
+
 def generated_client_nonce() -> str:
     return base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode("ascii")
 
@@ -102,6 +174,8 @@ def collector_command(args: argparse.Namespace) -> dict[str, Any]:
         args.proxy_proof_verifier_public_key,
         "--expected-server-instance-id",
         args.proxy_server_instance_id,
+        "--expected-principal-id",
+        args.proxy_principal_id,
         "--max-age-seconds",
         str(args.proxy_proof_max_age_seconds),
         "--nonce",
@@ -179,6 +253,10 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
             args.reproducible_build_trusted_public_key,
             "--kms-materials",
             args.kms_materials,
+            "--control-plane-response-signing-public-key",
+            args.control_plane_response_signing_public_key,
+            "--control-plane-response-signing-public-key-id",
+            args.control_plane_response_signing_public_key_id,
             "--proxy-response-proof",
             args.proxy_response_proof,
             "--proxy-proof-verifier-public-key",
@@ -252,6 +330,10 @@ def command_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
                 "scripts/verify_production_readiness.py",
                 "--mode",
                 "config",
+                "--expected-control-plane-uid",
+                str(args.expected_control_plane_uid),
+                "--expected-control-plane-gid",
+                str(args.expected_control_plane_gid),
                 "--out",
                 config_out,
             ],
@@ -292,6 +374,10 @@ def command_plan(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "scripts/verify_production_readiness.py",
                     "--mode",
                     "live",
+                    "--expected-control-plane-uid",
+                    str(args.expected_control_plane_uid),
+                    "--expected-control-plane-gid",
+                    str(args.expected_control_plane_gid),
                     "--claims-file",
                     claims_file,
                     "--nitro-evidence-file",
@@ -383,6 +469,8 @@ def main() -> None:
     parser.add_argument("--env-file", default=os.getenv("PRODUCTION_READINESS_ENV", "ops/production-readiness.env"))
     parser.add_argument("--compose-file", default="docker-compose.production.yml")
     parser.add_argument("--python", default=sys.executable)
+    parser.add_argument("--expected-control-plane-uid", type=int, default=65532)
+    parser.add_argument("--expected-control-plane-gid", type=int, default=65532)
     parser.add_argument("--config-out", default=".tmp/production-readiness-config.json")
     parser.add_argument("--claims-file", default=".tmp/production-readiness-claims.json")
     parser.add_argument("--nitro-evidence-out", default=".tmp/nitro-kms-evidence.json")
@@ -422,6 +510,14 @@ def main() -> None:
     parser.add_argument("--reproducible-build-signature", required=True)
     parser.add_argument("--reproducible-build-trusted-public-key", required=True)
     parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
+    parser.add_argument(
+        "--control-plane-response-signing-public-key",
+        default=None,
+    )
+    parser.add_argument(
+        "--control-plane-response-signing-public-key-id",
+        default=None,
+    )
     parser.add_argument("--proxy-response-proof", default=None)
     parser.add_argument("--proxy-proof-summary-out", default=".tmp/proxy-response-proof-summary.json")
     parser.add_argument("--proxy-proof-collector-command", default=None)
@@ -433,6 +529,7 @@ def main() -> None:
     parser.add_argument("--proxy-proof-verifier-public-key", default=None)
     parser.add_argument("--proxy-server-instance-id", default=None)
     parser.add_argument("--proxy-agent-id", default=None)
+    parser.add_argument("--proxy-principal-id", default=None)
     parser.add_argument("--proxy-proof-max-age-seconds", type=int, default=None)
     parser.add_argument("--control-plane-base", default=None)
     parser.add_argument("--control-plane-ca-bundle", default=None)
@@ -484,6 +581,12 @@ def main() -> None:
         "rekor_trusted_public_key": "SERVERWARE_REKOR_TRUSTED_PUBLIC_KEY",
         "external_checkpoint_provider": "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER",
         "external_checkpoint_trusted_public_key": "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+        "control_plane_response_signing_public_key": (
+            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY"
+        ),
+        "control_plane_response_signing_public_key_id": (
+            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID"
+        ),
     }
     missing_trust = []
     for attribute, env_name in trust_settings.items():
@@ -515,6 +618,18 @@ def main() -> None:
         print(
             "production readiness env error: missing release completion trust settings: "
             + ", ".join(missing_trust),
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    if (
+        SHA256_RE.fullmatch(
+            args.control_plane_response_signing_public_key_id
+        )
+        is None
+    ):
+        print(
+            "production readiness env error: control-plane response signing public key ID "
+            "must be sha256:<64 lowercase hex>",
             file=sys.stderr,
         )
         raise SystemExit(1)
@@ -693,8 +808,17 @@ def main() -> None:
             missing.append(
                 "--proxy-server-instance-id or SERVERWARE_PROXY_SERVER_INSTANCE_ID or "
                 "SERVERWARE_DATA_PLANE_INSTANCE_ID"
-            )
+        )
         args.proxy_agent_id = args.proxy_agent_id or loaded.get("SERVERWARE_PROXY_PROOF_AGENT_ID")
+        if not args.proxy_agent_id:
+            missing.append("--proxy-agent-id or SERVERWARE_PROXY_PROOF_AGENT_ID")
+        args.proxy_principal_id = args.proxy_principal_id or loaded.get(
+            "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID"
+        )
+        if not args.proxy_principal_id:
+            missing.append(
+                "--proxy-principal-id or SERVERWARE_PROXY_PROOF_PRINCIPAL_ID"
+            )
         max_age = args.proxy_proof_max_age_seconds
         if max_age is None:
             raw_max_age = loaded.get("SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS", "300")
@@ -720,6 +844,19 @@ def main() -> None:
                 file=sys.stderr,
             )
             raise SystemExit(1)
+        try:
+            validate_proxy_proof_policy_consistency(
+                Path(args.policy_bundle),
+                agent_id=args.proxy_agent_id,
+                principal_id=args.proxy_principal_id,
+                proof_url=args.proxy_proof_url,
+            )
+        except Exception as exc:
+            print(
+                f"production readiness env error: proxy proof policy consistency validation failed: {exc}",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from exc
         args.proxy_client_nonce = generated_client_nonce()
         args.proxy_request_digest = "$COLLECTOR_SUMMARY.request_digest"
         args.proxy_operation_digest = "$COLLECTOR_SUMMARY.operation_digest"

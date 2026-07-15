@@ -8,6 +8,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime
 from typing import Any
 
 from serverware import db
@@ -23,6 +24,8 @@ from serverware.config import (
     OIDC_ISSUER,
     OIDC_LOGIN_STATE_TTL_SECONDS,
     OIDC_REDIRECT_URI,
+    OIDC_SESSION_WEBAUTHN_REQUIRED,
+    OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS,
     OIDC_SESSION_TTL_SECONDS,
     OIDC_TOKEN_AUTH_METHOD,
     OIDC_TOKEN_ENDPOINT,
@@ -183,12 +186,38 @@ def complete_operator_login(
         expires_at = int(token_payload["exp"])
     except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise OperatorOIDCError("OIDC id_token expiry is invalid") from exc
-    max_age = min(OIDC_SESSION_TTL_SECONDS, expires_at - int(time.time()))
-    if max_age <= 0:
-        raise OperatorOIDCError("OIDC id_token is already expired")
+    session_token = secrets.token_urlsafe(48)
+    try:
+        session = db.create_oidc_browser_session(
+            token_digest="sha256:"
+            + hashlib.sha256(session_token.encode("utf-8")).hexdigest(),
+            oidc_token_digest="sha256:"
+            + hashlib.sha256(id_token.encode("utf-8")).hexdigest(),
+            user_id=identity.user_id,
+            roles=sorted(identity.roles),
+            ttl_seconds=OIDC_SESSION_TTL_SECONDS,
+            provider_expires_at_epoch=expires_at,
+            pending_ttl_seconds=OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS,
+            require_webauthn=OIDC_SESSION_WEBAUTHN_REQUIRED,
+        )
+    except (db.MetadataStoreError, ValueError) as exc:
+        raise OperatorOIDCError("OIDC browser session could not be persisted") from exc
+    max_age = max(
+        1,
+        int(
+            datetime.fromisoformat(str(session["expires_at"])).timestamp()
+            - time.time()
+        ),
+    )
     return {
-        "id_token": id_token,
+        "session_token": session_token,
+        "session": session,
         "identity": identity,
         "max_age": max_age,
+        "cookie_max_age": (
+            min(max_age, OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS)
+            if OIDC_SESSION_WEBAUTHN_REQUIRED
+            else max_age
+        ),
         "expires_at": expires_at,
     }

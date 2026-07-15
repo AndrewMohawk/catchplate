@@ -19,12 +19,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 import build_production_images
 import production_release_input_preflight
 import run_production_readiness
+import test_production_policy_identity
 import test_production_release_input_preflight
 import verify_release_completion
 import verify_production_policy_identity
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_TREE_DIGEST = build_production_images.source_tree_digest()
+IMAGE_SIGNATURES_DIGEST = ""
 
 
 def canonical_json(value: Any) -> str:
@@ -176,6 +178,71 @@ def test_final_file_snapshots() -> None:
         else:
             raise AssertionError("final verification accepted a symlinked input")
 
+        proxy_snapshot_paths = {
+            "proxy_response_proof": tmp / "proxy-response-proof.json",
+            "proxy_collector_public_key": tmp / "proxy-collector.pub.pem",
+            "proxy_proof_verifier_public_key": tmp / "proxy-verifier.pub.pem",
+            "control_plane_response_signing_public_key": tmp
+            / "control-plane-response-signing.pub.pem",
+            "policy_bundle": tmp / "policy-bundle.json",
+            "policy_trusted_public_key": tmp / "policy-signing.pub.pem",
+        }
+        proxy_snapshot_original = {
+            "proxy_response_proof": b'{"proof":"original"}\n',
+            "proxy_collector_public_key": proxy_collector_key_info()[
+                "public_key_pem"
+            ].encode("ascii"),
+            "proxy_proof_verifier_public_key": proxy_vendor_verifier_key_info()[
+                "public_key_pem"
+            ].encode("ascii"),
+            "control_plane_response_signing_public_key": control_plane_response_signing_key_info()[
+                "public_key_pem"
+            ].encode("ascii"),
+            "policy_bundle": b'{"policy":"original"}\n',
+            "policy_trusted_public_key": release_key_info()["public_key_pem"].encode(
+                "ascii"
+            ),
+        }
+        for name, path in proxy_snapshot_paths.items():
+            path.write_bytes(proxy_snapshot_original[name])
+        proxy_snapshots = verify_release_completion.snapshot_final_verification_files(
+            proxy_snapshot_paths,
+            include_hardware_assurance=False,
+            include_final_receipt=False,
+            include_proxy_security=True,
+            include_policy=True,
+        )
+        for path in proxy_snapshot_paths.values():
+            path.write_bytes(b"replacement")
+        for name, original in proxy_snapshot_original.items():
+            if proxy_snapshots[name].data != original:
+                raise AssertionError(f"final verification reopened swapped {name} input")
+
+        for symlinked_name, path in proxy_snapshot_paths.items():
+            path.unlink()
+            path.symlink_to(document_path)
+            for other_name, other_path in proxy_snapshot_paths.items():
+                if other_name != symlinked_name:
+                    other_path.unlink(missing_ok=True)
+                    other_path.write_bytes(proxy_snapshot_original[other_name])
+            try:
+                verify_release_completion.snapshot_final_verification_files(
+                    proxy_snapshot_paths,
+                    include_hardware_assurance=False,
+                    include_final_receipt=False,
+                    include_proxy_security=True,
+                    include_policy=True,
+                )
+            except ValueError as exc:
+                if "must not be a symlink" not in str(exc):
+                    raise AssertionError(
+                        f"symlinked {symlinked_name} failed for the wrong reason: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError(
+                    f"final verification accepted symlinked {symlinked_name} input"
+                )
+
         oversized_path = tmp / "oversized-final-receipt.json"
         oversized_path.write_bytes(b"x" * 65)
         try:
@@ -260,6 +327,16 @@ def rekor_key_info() -> dict[str, Any]:
 
 def final_challenge_authority_key_info() -> dict[str, Any]:
     key = Ed25519PrivateKey.from_private_bytes(b"\x0b" * 32)
+    return ed25519_key_info(key)
+
+
+def control_plane_response_signing_key_info() -> dict[str, Any]:
+    key = Ed25519PrivateKey.from_private_bytes(b"\x0c" * 32)
+    return ed25519_key_info(key)
+
+
+def alternate_control_plane_response_signing_key_info() -> dict[str, Any]:
+    key = Ed25519PrivateKey.from_private_bytes(b"\x0d" * 32)
     return ed25519_key_info(key)
 
 
@@ -367,6 +444,8 @@ def digest(char: str) -> str:
 POLICY_DIGEST = digest("8")
 
 
+PROXY_PRINCIPAL_ID = "agent:payments"
+ALTERNATE_PROXY_PRINCIPAL_ID = "agent:billing"
 PROXY_CLIENT_NONCE = b64e(b"n" * 32)
 PROXY_TLS_CHANNEL_BINDING = b64e(b"t" * 32)
 PROXY_REQUEST_DIGEST = digest("1")
@@ -501,6 +580,13 @@ def resign_proxy_response_proof(
             "client_request_digest": server_statement["client_request_digest"],
             "request_digest": server_statement["request_digest"],
             "operation_digest": server_statement["operation_digest"],
+            "principal_id": server_statement["principal_id"],
+            "route_id": server_statement["route_id"],
+            "release_authority": server_statement["release_authority"],
+            "control_plane_authorization_receipt_sha256": sha256_prefixed_json(
+                server_statement["control_plane_authorization_receipt"]
+            ),
+            "upstream_response": server_statement["upstream_response"],
             "response_status": response["status"],
             "selected_response_headers_digest": response["selected_headers_digest"],
             "response_body_digest": response["body_digest"],
@@ -525,9 +611,9 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
         "apiVersion": "serverware.clientProofRequest/v1",
         "method": "GET",
         "scheme": "https",
-        "authority": "api.example.test",
-        "path": "/v1/resource",
-        "query": [["limit", "10"]],
+        "authority": "demo-upstream:8443",
+        "path": "/echo",
+        "query": [],
         "headers": {"accept": "application/json"},
         "body_sha256": sha256_prefixed_bytes(b""),
     }
@@ -547,23 +633,53 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
         "selected_headers_digest": sha256_prefixed_json(selected_headers),
         "body_digest": body_digest,
     }
+    upstream_response = {
+        "status": 200,
+        "selected_raw_policy_headers_b64": {
+            "content-encoding": [],
+            "content-length": [b64e(str(len(body)).encode("ascii"))],
+            "content-type": [b64e(b"application/json")],
+        },
+        "body_digest": body_digest,
+    }
+    upstream_response["canonical_digest"] = sha256_prefixed_json(upstream_response)
     tls_channel_binding = {
         "type": "tls-exporter",
         "value": PROXY_TLS_CHANNEL_BINDING,
     }
+    release_authority = {
+        "authority_mode": "atomic",
+        "grant_id": "grant:response-proof",
+        "approval_id": "approval:response-proof",
+        "credential_ref": "credential:response-proof",
+        "credential_version": 7,
+        "request_digest": PROXY_REQUEST_DIGEST,
+        "operation_digest": PROXY_OPERATION_DIGEST,
+        "attempt_id": digest("a"),
+        "consumption_identity_digest": digest("b"),
+        "authorization_state_at_upstream_dispatch": "dispatching",
+        "authorization_state_observed_at_epoch_ms": captured_at * 1000,
+        "reservation_expires_at_epoch_ms": captured_at * 1000 + 300_000,
+        "dispatch_expires_at_epoch_ms": captured_at * 1000 + 300_000,
+    }
     document = {
-        "apiVersion": "serverware.proxyResponseProof/v2",
+        "apiVersion": "serverware.proxyResponseProof/v3",
         "kind": "ServerwareProxyResponseProof",
         "external_capture": {
-            "apiVersion": "serverware.proxyResponseCapture/v1",
+            "apiVersion": "serverware.proxyResponseCapture/v2",
             "environment": "production",
             "collection_mode": "external-client-capture",
             "captured_at_unix": captured_at,
             "client_nonce": PROXY_CLIENT_NONCE,
             "client_request": client_request,
             "client_request_digest": client_request_digest,
+            "principal_id": PROXY_PRINCIPAL_ID,
+            "route_id": "demo.echo",
             "request_digest": PROXY_REQUEST_DIGEST,
             "operation_digest": PROXY_OPERATION_DIGEST,
+            "release_authority": json.loads(json.dumps(release_authority)),
+            "control_plane_authorization_receipt": {},
+            "upstream_response": json.loads(json.dumps(upstream_response)),
             "response": json.loads(json.dumps(response)),
             "tls_channel_binding": json.loads(json.dumps(tls_channel_binding)),
             "tls_peer": {
@@ -574,12 +690,17 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
         },
         "collector_signature": {},
         "server_statement": {
-            "apiVersion": "serverware.proxyResponseStatement/v1",
+            "apiVersion": "serverware.proxyResponseStatement/v2",
             "issued_at_unix": captured_at,
             "client_nonce": PROXY_CLIENT_NONCE,
             "client_request_digest": client_request_digest,
+            "principal_id": PROXY_PRINCIPAL_ID,
+            "route_id": "demo.echo",
             "request_digest": PROXY_REQUEST_DIGEST,
             "operation_digest": PROXY_OPERATION_DIGEST,
+            "release_authority": json.loads(json.dumps(release_authority)),
+            "control_plane_authorization_receipt": {},
+            "upstream_response": json.loads(json.dumps(upstream_response)),
             "response": json.loads(json.dumps(response)),
             "tls_channel_binding": json.loads(json.dumps(tls_channel_binding)),
             "policy_digest": POLICY_DIGEST,
@@ -616,12 +737,161 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
             },
         },
     }
+    receipt = control_plane_authorization_receipt(document)
+    document["external_capture"]["control_plane_authorization_receipt"] = clone_document(
+        receipt
+    )
+    document["server_statement"]["control_plane_authorization_receipt"] = receipt
     resign_proxy_response_proof(document)
+    return document
+
+
+def resign_control_plane_authorization_receipt(
+    document: dict[str, Any],
+    key_info: dict[str, Any] | None = None,
+) -> None:
+    signer = key_info or control_plane_response_signing_key_info()
+    response = document["response"]
+    statement = json.loads(b64d(response["statement_b64"]).decode("utf-8"))
+    response["response_signing_key_id"] = signer["key_id"]
+    statement["response_signing_key_id"] = signer["key_id"]
+    statement_bytes = canonical_json(statement).encode("utf-8")
+    response["statement_b64"] = b64e(statement_bytes)
+    response["statement_sha256"] = sha256_prefixed_bytes(statement_bytes)
+    response["signature"] = "ed25519:" + b64e(
+        signer["key"].sign(statement_bytes)
+    )
+
+
+def replace_control_plane_receipt_response_body(
+    document: dict[str, Any],
+    body: dict[str, Any],
+    *,
+    issued_at_ms: int | None = None,
+    key_info: dict[str, Any] | None = None,
+) -> None:
+    response = document["response"]
+    body_bytes = canonical_json(body).encode("utf-8")
+    body_digest = sha256_prefixed_bytes(body_bytes)
+    response["body_b64"] = b64e(body_bytes)
+    response["body_sha256"] = body_digest
+    statement = json.loads(b64d(response["statement_b64"]).decode("utf-8"))
+    statement["body_sha256"] = body_digest
+    if issued_at_ms is not None:
+        statement["issued_at_ms"] = issued_at_ms
+    statement_bytes = canonical_json(statement).encode("utf-8")
+    response["statement_b64"] = b64e(statement_bytes)
+    resign_control_plane_authorization_receipt(document, key_info)
+
+
+def control_plane_authorization_receipt(
+    proxy_proof: dict[str, Any],
+) -> dict[str, Any]:
+    release_authority = proxy_proof["server_statement"]["release_authority"]
+    observed_at_epoch_ms = release_authority[
+        "authorization_state_observed_at_epoch_ms"
+    ]
+    request_body = {
+        "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+        "attemptId": release_authority["attempt_id"],
+        "bindingDigest": release_authority["consumption_identity_digest"],
+    }
+    request_body_bytes = canonical_json(request_body).encode("utf-8")
+    response_body = {
+        "apiVersion": "serverware.releaseAuthorization/v1",
+        "ok": True,
+        "authorized": True,
+        "state": "dispatching",
+        "reason": "dispatching",
+        "attemptId": release_authority["attempt_id"],
+        "bindingDigest": release_authority["consumption_identity_digest"],
+        "idempotentReplay": False,
+        "grantId": release_authority["grant_id"],
+        "approvalRequestId": release_authority["approval_id"],
+        "reservationExpiresAtEpochMs": release_authority[
+            "reservation_expires_at_epoch_ms"
+        ],
+        "dispatchStartedAtEpochMs": observed_at_epoch_ms,
+        "dispatchExpiresAtEpochMs": release_authority[
+            "dispatch_expires_at_epoch_ms"
+        ],
+        "completionOutcome": None,
+        "retryAfterSeconds": 0,
+        "quotas": [],
+        "store": {"backend": "postgres", "ha": True},
+    }
+    response_body_bytes = canonical_json(response_body).encode("utf-8")
+    response_body_digest = sha256_prefixed_bytes(response_body_bytes)
+    nonce = b64e(b"c" * 32)
+    signer = control_plane_response_signing_key_info()
+    response_statement = {
+        "version": verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION,
+        "issued_at_ms": observed_at_epoch_ms,
+        "request": {
+            "method": "POST",
+            "path": verify_release_completion.CONTROL_PLANE_DISPATCH_PATH,
+            "query": "",
+        },
+        "status_code": 200,
+        "body_sha256": response_body_digest,
+        "nonce": nonce,
+        "response_signing_key_id": signer["key_id"],
+        "context": {
+            "runtime_manifest_digest": proxy_proof["server_statement"][
+                "runtime_manifest_digest"
+            ],
+            "policy_bundle_digest": POLICY_DIGEST,
+            "provenance_digest": proxy_proof["server_statement"]["release_digest"],
+            "image_signatures_digest": IMAGE_SIGNATURES_DIGEST,
+            "source_tree_digest": SOURCE_TREE_DIGEST,
+        },
+    }
+    response_statement_bytes = canonical_json(response_statement).encode("utf-8")
+    document = {
+        "apiVersion": (
+            verify_release_completion.CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION
+        ),
+        "kind": "ControlPlaneAuthorizationReceipt",
+        "principal_id": proxy_proof["server_statement"]["principal_id"],
+        "route_id": proxy_proof["server_statement"]["route_id"],
+        "release_authority": clone_document(release_authority),
+        "request": {
+            "method": "POST",
+            "path": verify_release_completion.CONTROL_PLANE_DISPATCH_PATH,
+            "query": "",
+            "nonce": nonce,
+            "body_b64": b64e(request_body_bytes),
+            "body_sha256": sha256_prefixed_bytes(request_body_bytes),
+        },
+        "response": {
+            "status": 200,
+            "body_b64": b64e(response_body_bytes),
+            "body_sha256": response_body_digest,
+            "response_signing_key_id": signer["key_id"],
+            "statement_b64": b64e(response_statement_bytes),
+            "statement_sha256": sha256_prefixed_bytes(response_statement_bytes),
+            "signature": "",
+        },
+    }
+    resign_control_plane_authorization_receipt(document)
     return document
 
 
 def clone_document(value: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(value))
+
+
+def replace_embedded_control_plane_receipt(
+    proxy_proof: dict[str, Any],
+    receipt: dict[str, Any],
+) -> None:
+    proxy_proof["external_capture"]["control_plane_authorization_receipt"] = clone_document(
+        receipt
+    )
+    proxy_proof["server_statement"]["control_plane_authorization_receipt"] = clone_document(
+        receipt
+    )
+    resign_proxy_response_proof(proxy_proof)
 
 
 def benchmark_document(*, p99_ms: float = 9.0) -> dict[str, Any]:
@@ -666,6 +936,7 @@ def write_production_env_files(
     (tmp / "production.env").write_text(
         f"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST={digest('9')}\n"
         f"SERVERWARE_DATA_PLANE_INSTANCE_ID={PROXY_SERVER_INSTANCE_ID}\n"
+        f"{verify_release_completion.PROXY_PRINCIPAL_ENV_KEY}={PROXY_PRINCIPAL_ID}\n"
         f"SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID={proxy_collector_key_info()['key_id']}\n"
         f"SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID={proxy_vendor_verifier_key_info()['key_id']}\n"
         f"{verify_release_completion.RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY}={tmp / 'release-signing.pub.pem'}\n"
@@ -673,6 +944,8 @@ def write_production_env_files(
         f"{verify_release_completion.REKOR_TRUST_ROOT_ENV_KEY}={tmp / 'rekor.pub.pem'}\n"
         f"{verify_release_completion.EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY}={tmp / 'external-checkpoint.pub.pem'}\n"
         f"{verify_release_completion.EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY}=managed-prod-log\n"
+        f"{verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNING_KEY_ENV_KEY}={tmp / 'control-plane-response-signing.pub.pem'}\n"
+        f"{verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY}={control_plane_response_signing_key_info()['key_id']}\n"
         f"SERVERWARE_PRODUCTION_IMAGES={selected_readiness_value}\n",
         encoding="utf-8",
     )
@@ -770,6 +1043,10 @@ def test_final_production_env_binding() -> None:
             final_challenge_authority_key_info()["public_key_pem"],
             encoding="ascii",
         )
+        (tmp / "control-plane-response-signing.pub.pem").write_text(
+            control_plane_response_signing_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
 
         configured = write_final_production_env_file(tmp)
         readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
@@ -795,6 +1072,8 @@ def test_final_production_env_binding() -> None:
             verify_release_completion.REKOR_TRUST_ROOT_ENV_KEY,
             verify_release_completion.EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY,
             verify_release_completion.EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY,
+            verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNING_KEY_ENV_KEY,
+            verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY,
         )
         final_inputs = {name: configured.get(name) for name in final_input_names}
         release_trust_inputs = {name: configured.get(name) for name in release_trust_input_names}
@@ -816,6 +1095,11 @@ def test_final_production_env_binding() -> None:
                 "final_challenge_authority_public_key": verify_release_completion.snapshot_regular_file(
                     tmp / "final-challenge-authority.pub.pem",
                     "final challenge authority trust root",
+                    max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+                ),
+                "control_plane_response_signing_public_key": verify_release_completion.snapshot_regular_file(
+                    tmp / "control-plane-response-signing.pub.pem",
+                    "control-plane response signing trust root",
                     max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
                 ),
             }
@@ -852,6 +1136,9 @@ def test_final_production_env_binding() -> None:
             or binding.get("rekor_trusted_public_key_id") != rekor_key_info()["key_id"]
             or binding.get("external_checkpoint_trusted_public_key_id")
             != external_receipt_key_info()["key_id"]
+            or binding.get("control_plane_response_signing_public_key_id")
+            != control_plane_response_signing_key_info()["key_id"]
+            or binding.get("expected_proxy_principal_id") != PROXY_PRINCIPAL_ID
             or binding.get("hardware_assurance_trusted_public_key_id")
             != hardware_verifier_key_info()["key_id"]
             or binding.get("final_challenge_authority_public_key_id")
@@ -869,6 +1156,11 @@ def test_final_production_env_binding() -> None:
             "final_challenge_authority_public_key": verify_release_completion.snapshot_regular_file(
                 tmp / "final-challenge-authority.pub.pem",
                 "final challenge authority trust root",
+                max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+            ),
+            "control_plane_response_signing_public_key": verify_release_completion.snapshot_regular_file(
+                tmp / "control-plane-response-signing.pub.pem",
+                "control-plane response signing trust root",
                 max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
             ),
         }
@@ -1082,6 +1374,13 @@ def test_final_production_env_binding() -> None:
         )
         readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
         expect_failure("must set SERVERWARE_COMPLETION_VERIFICATION_MODE=final")
+
+        write_final_production_env_file(
+            tmp,
+            omitted={verify_release_completion.PROXY_PRINCIPAL_ENV_KEY},
+        )
+        readiness_summary, preflight_summary, config_summary = final_env_binding_summaries(tmp)
+        expect_failure("production readiness expected proxy principal ID is invalid")
 
         digest_configured = write_final_production_env_file(
             tmp,
@@ -1865,6 +2164,56 @@ def write(path: Path, value: dict[str, Any]) -> None:
     path.write_text(json.dumps(value, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def authorize_alternate_proxy_principal(tmp: Path) -> str:
+    fixture = test_production_policy_identity.ProductionPolicyIdentityVerifierTests(
+        methodName="runTest"
+    )
+    fixture.setUp()
+    fixture.now_ms = int(time.time() * 1000)
+    bundle_path = tmp / "policy-bundle.json"
+    bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+    bundle["principals"].append(
+        fixture.principal(
+            principal_id=ALTERNATE_PROXY_PRINCIPAL_ID,
+            token_id="billing-agent-01",
+            token=b"test-only-high-entropy-bearer-material-02",
+            source_cidrs=["10.42.7.20/32"],
+        )
+    )
+    bundle["routes"][0]["principals"].append(ALTERNATE_PROXY_PRINCIPAL_ID)
+    bundle = fixture.sign(bundle)
+    write(bundle_path, bundle)
+
+    identity_result = fixture.verify(bundle)
+    if identity_result.get("ok") is not True:
+        raise AssertionError(
+            f"two-principal policy fixture failed identity verification: {identity_result}"
+        )
+    policy_key_path = tmp / "policy-signing.pub.pem"
+    verify_production_policy_identity.write_private(
+        tmp / "production-policy-identity-verification.json",
+        verify_production_policy_identity.persisted_report(
+            identity_result,
+            bundle_path=bundle_path,
+            trusted_public_key_path=policy_key_path,
+            trusted_public_key_hash=fixture.public_key_hash,
+        ),
+    )
+    policy_hash = identity_result["policy"]["hash"]
+    activation_report_path = tmp / "policy-activation-verification.json"
+    activation_report = json.loads(
+        activation_report_path.read_text(encoding="utf-8")
+    )
+    activation_report["candidate_policy_hash"] = policy_hash
+    test_production_release_input_preflight.signed_report(
+        tmp,
+        name="policy-activation-verification",
+        purpose=production_release_input_preflight.ACTIVATION_PURPOSE,
+        report=activation_report,
+    )
+    return policy_hash
+
+
 def production_images_build() -> dict[str, Any]:
     return {
         "apiVersion": "serverware.productionImagesBuild/v1",
@@ -2142,6 +2491,7 @@ def run_verifier(
     *extra: str,
     allow_host_bypass: bool = True,
     include_proxy_proof: bool = True,
+    include_control_plane_response_signing_trust_root: bool = True,
     include_hardware_assurance: bool = False,
     hardware_expected_challenge_mode: str | None = "nonce",
 ) -> subprocess.CompletedProcess[bytes]:
@@ -2192,6 +2542,16 @@ def run_verifier(
             str(tmp / "hardware-assurance-verifier.pub.pem"),
             *hardware_expected_challenge_args,
         ]
+    control_plane_response_signing_args: list[str] = []
+    if include_control_plane_response_signing_trust_root:
+        control_plane_response_signing_args.extend(
+            [
+                "--control-plane-response-signing-public-key",
+                str(tmp / "control-plane-response-signing.pub.pem"),
+                "--control-plane-response-signing-public-key-id",
+                control_plane_response_signing_key_info()["key_id"],
+            ]
+        )
     return subprocess.run(
         [
             sys.executable,
@@ -2253,6 +2613,7 @@ def run_verifier(
             str(tmp / "reproducible-build-verification.pub.pem"),
             "--kms-materials",
             str(tmp / "kms-materials.json"),
+            *control_plane_response_signing_args,
             *proxy_proof_args,
             *hardware_assurance_args,
             *extra,
@@ -2331,12 +2692,224 @@ def test_proxy_response_proof_requirements(
     if missing.returncode == 0 or "production completion requires --proxy-response-proof" not in detail(missing):
         raise AssertionError(f"completion verifier accepted absent proxy proof evidence: {detail(missing)}")
 
+    retired_receipt_cli = run_verifier(
+        tmp,
+        "--control-plane-authorization-receipt",
+        str(tmp / "retired-detached-receipt.json"),
+    )
+    if (
+        retired_receipt_cli.returncode == 0
+        or "unrecognized arguments: --control-plane-authorization-receipt"
+        not in detail(retired_receipt_cli)
+    ):
+        raise AssertionError(
+            "completion verifier still exposes a detached control-plane authorization receipt CLI: "
+            + detail(retired_receipt_cli)
+        )
+
+    missing_response_signing_trust = run_verifier(
+        tmp, include_control_plane_response_signing_trust_root=False
+    )
+    if (
+        missing_response_signing_trust.returncode == 0
+        or "requires --control-plane-response-signing-public-key"
+        not in detail(missing_response_signing_trust)
+    ):
+        raise AssertionError(
+            "completion verifier accepted an embedded receipt without its independent response trust root: "
+            + detail(missing_response_signing_trust)
+        )
+
+    valid_receipt = clone_document(
+        valid_document["server_statement"]["control_plane_authorization_receipt"]
+    )
+    forged_receipt = clone_document(valid_receipt)
+    forged_receipt["response"]["signature"] = "ed25519:" + b64e(b"x" * 64)
+    forged_receipt_proof = clone_document(valid_document)
+    replace_embedded_control_plane_receipt(forged_receipt_proof, forged_receipt)
+    expect_proxy_proof_failure(
+        tmp,
+        forged_receipt_proof,
+        "control-plane authorization receipt signature verification failed",
+        "an embedded receipt with a forged control-plane response signature",
+    )
+    unexpected_receipt_field = clone_document(valid_receipt)
+    unexpected_receipt_field["request"]["completion_outcome"] = "forwarded"
+    unexpected_receipt_proof = clone_document(valid_document)
+    replace_embedded_control_plane_receipt(
+        unexpected_receipt_proof,
+        unexpected_receipt_field,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        unexpected_receipt_proof,
+        "control-plane authorization receipt request fields do not match the contract",
+        "an embedded receipt with an unexpected nested request field",
+    )
+
+    substituted_request_body_receipt = clone_document(valid_receipt)
+    substituted_request_body = {
+        "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+        "attemptId": digest("0"),
+        "bindingDigest": substituted_request_body_receipt["release_authority"][
+            "consumption_identity_digest"
+        ],
+    }
+    substituted_request_body_bytes = canonical_json(substituted_request_body).encode(
+        "utf-8"
+    )
+    substituted_request_body_receipt["request"]["body_b64"] = b64e(
+        substituted_request_body_bytes
+    )
+    substituted_request_body_receipt["request"]["body_sha256"] = sha256_prefixed_bytes(
+        substituted_request_body_bytes
+    )
+    substituted_request_body_proof = clone_document(valid_document)
+    replace_embedded_control_plane_receipt(
+        substituted_request_body_proof,
+        substituted_request_body_receipt,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        substituted_request_body_proof,
+        "control-plane authorization receipt dispatch request body mismatch",
+        "an embedded receipt with a substituted exact dispatch request body",
+    )
+
+    substituted_context_receipt = clone_document(valid_receipt)
+    substituted_context_statement = json.loads(
+        b64d(substituted_context_receipt["response"]["statement_b64"]).decode(
+            "utf-8"
+        )
+    )
+    substituted_context_statement["context"]["policy_bundle_digest"] = digest("0")
+    substituted_context_receipt["response"]["statement_b64"] = b64e(
+        canonical_json(substituted_context_statement).encode("utf-8")
+    )
+    resign_control_plane_authorization_receipt(substituted_context_receipt)
+    substituted_context_proof = clone_document(valid_document)
+    replace_embedded_control_plane_receipt(
+        substituted_context_proof,
+        substituted_context_receipt,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        substituted_context_proof,
+        "control-plane authorization receipt signed response attested context mismatch",
+        "an independently re-signed receipt with substituted attested context",
+    )
+
+    substituted_key_receipt = clone_document(valid_receipt)
+    resign_control_plane_authorization_receipt(
+        substituted_key_receipt,
+        alternate_control_plane_response_signing_key_info(),
+    )
+    substituted_key_proof = clone_document(valid_document)
+    replace_embedded_control_plane_receipt(
+        substituted_key_proof,
+        substituted_key_receipt,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        substituted_key_proof,
+        "not signed by the independently trusted control-plane response key",
+        "an embedded receipt signed by a substituted response key",
+    )
+
+    historical_receipt_proof = clone_document(valid_document)
+    historical_start_ms = (int(time.time()) - 120) * 1000
+    historical_dispatch_expiry_ms = historical_start_ms + 10_000
+    historical_reservation_expiry_ms = historical_start_ms + 20_000
+    for authority in (
+        historical_receipt_proof["external_capture"]["release_authority"],
+        historical_receipt_proof["server_statement"]["release_authority"],
+    ):
+        authority["authorization_state_observed_at_epoch_ms"] = historical_start_ms
+        authority["dispatch_expires_at_epoch_ms"] = historical_dispatch_expiry_ms
+        authority["reservation_expires_at_epoch_ms"] = historical_reservation_expiry_ms
+    historical_receipt = clone_document(valid_receipt)
+    historical_receipt["release_authority"] = clone_document(
+        historical_receipt_proof["server_statement"]["release_authority"]
+    )
+    historical_response_body = json.loads(
+        b64d(historical_receipt["response"]["body_b64"]).decode("utf-8")
+    )
+    historical_response_body["dispatchStartedAtEpochMs"] = historical_start_ms
+    historical_response_body["dispatchExpiresAtEpochMs"] = historical_dispatch_expiry_ms
+    historical_response_body[
+        "reservationExpiresAtEpochMs"
+    ] = historical_reservation_expiry_ms
+    replace_control_plane_receipt_response_body(
+        historical_receipt,
+        historical_response_body,
+        issued_at_ms=historical_start_ms + 1,
+    )
+    replace_embedded_control_plane_receipt(
+        historical_receipt_proof,
+        historical_receipt,
+    )
+    write(tmp / "proxy-response-proof.json", historical_receipt_proof)
+    historical_result = run_verifier(tmp)
+    if historical_result.returncode != 0:
+        raise AssertionError(
+            "completion verifier rejected a historically valid expired dispatch window: "
+            + detail(historical_result)
+        )
+
+    for body_field, authority_field, expected_error in (
+        (
+            "dispatchExpiresAtEpochMs",
+            "dispatch_expires_at_epoch_ms",
+            "signed response was issued at or after dispatch expiry",
+        ),
+        (
+            "reservationExpiresAtEpochMs",
+            "reservation_expires_at_epoch_ms",
+            "signed response was issued at or after reservation expiry",
+        ),
+    ):
+        exact_expiry_proof = clone_document(valid_document)
+        exact_expiry_receipt = clone_document(valid_receipt)
+        exact_expiry_body = json.loads(
+            b64d(exact_expiry_receipt["response"]["body_b64"]).decode("utf-8")
+        )
+        exact_issue_ms = exact_expiry_body["dispatchStartedAtEpochMs"] + 1
+        exact_expiry_body[body_field] = exact_issue_ms
+        for authority in (
+            exact_expiry_proof["external_capture"]["release_authority"],
+            exact_expiry_proof["server_statement"]["release_authority"],
+        ):
+            authority[authority_field] = exact_issue_ms
+        exact_expiry_receipt["release_authority"] = clone_document(
+            exact_expiry_proof["server_statement"]["release_authority"]
+        )
+        replace_control_plane_receipt_response_body(
+            exact_expiry_receipt,
+            exact_expiry_body,
+            issued_at_ms=exact_issue_ms,
+        )
+        replace_embedded_control_plane_receipt(
+            exact_expiry_proof,
+            exact_expiry_receipt,
+        )
+        expect_proxy_proof_failure(
+            tmp,
+            exact_expiry_proof,
+            expected_error,
+            f"a signed response issued exactly at {body_field}",
+        )
+
     wrong_version = clone_document(valid_document)
-    wrong_version["apiVersion"] = "serverware.proxyResponseProof/v1"
-    expect_proxy_proof_failure(tmp, wrong_version, "proxy response proof has wrong apiVersion", "a legacy v1 proxy proof")
+    wrong_version["apiVersion"] = "serverware.proxyResponseProof/v2"
+    expect_proxy_proof_failure(
+        tmp,
+        wrong_version,
+        "proxy response proof has wrong apiVersion",
+        "a legacy v2 proxy proof without mandatory release authority",
+    )
 
     wrong_capture_version = clone_document(valid_document)
-    wrong_capture_version["external_capture"]["apiVersion"] = "serverware.proxyResponseCapture/v0"
+    wrong_capture_version["external_capture"]["apiVersion"] = "serverware.proxyResponseCapture/v1"
     expect_proxy_proof_failure(
         tmp,
         wrong_capture_version,
@@ -2350,12 +2923,39 @@ def test_proxy_response_proof_requirements(
     expect_proxy_proof_failure(
         tmp,
         tampered_client_request,
-        "external client request digest mismatch",
+        "independently matched policy route did not match exactly one signed route",
         "a collector-signed capture with a tampered client request",
     )
 
+    substituted_route = clone_document(valid_document)
+    substituted_route["external_capture"]["route_id"] = "demo.echo.substituted"
+    sign_proxy_external_capture(substituted_route)
+    expect_proxy_proof_failure(
+        tmp,
+        substituted_route,
+        "external capture route ID does not match the independently matched signed policy route",
+        "a collector-signed route ID substitution",
+    )
+
+    cross_principal = clone_document(valid_document)
+    for proof_section in (
+        cross_principal["external_capture"],
+        cross_principal["server_statement"],
+    ):
+        proof_section["principal_id"] = ALTERNATE_PROXY_PRINCIPAL_ID
+        proof_section["control_plane_authorization_receipt"][
+            "principal_id"
+        ] = ALTERNATE_PROXY_PRINCIPAL_ID
+    resign_proxy_response_proof(cross_principal)
+    expect_proxy_proof_failure(
+        tmp,
+        cross_principal,
+        "external capture principal ID does not match the independently configured expected proxy principal",
+        "a collector-signed proof for a different policy-authorized principal",
+    )
+
     wrong_statement_version = clone_document(valid_document)
-    wrong_statement_version["server_statement"]["apiVersion"] = "serverware.proxyResponseStatement/v0"
+    wrong_statement_version["server_statement"]["apiVersion"] = "serverware.proxyResponseStatement/v1"
     resign_proxy_response_proof(wrong_statement_version)
     expect_proxy_proof_failure(
         tmp,
@@ -2587,6 +3187,204 @@ def test_proxy_response_proof_requirements(
         "an operation digest mismatch between capture and statement",
     )
 
+    missing_release_authority = clone_document(valid_document)
+    del missing_release_authority["server_statement"]["release_authority"]
+    resign_proxy_response_proof(
+        missing_release_authority,
+        sync_attested_claims=False,
+    )
+    expect_proxy_proof_failure(
+        tmp,
+        missing_release_authority,
+        "server statement fields do not match the contract",
+        "a signed v3 statement without release authority",
+    )
+
+    cross_wired_authority = clone_document(valid_document)
+    cross_wired_authority["server_statement"]["release_authority"]["grant_id"] = "grant:other"
+    resign_proxy_response_proof(cross_wired_authority)
+    expect_proxy_proof_failure(
+        tmp,
+        cross_wired_authority,
+        "external capture release authority does not match server statement",
+        "a grant identity cross-wired between the collector and server statement",
+    )
+
+    double_substitution = clone_document(valid_document)
+    for authority in (
+        double_substitution["external_capture"]["release_authority"],
+        double_substitution["server_statement"]["release_authority"],
+    ):
+        authority["grant_id"] = "grant:substituted"
+    resign_proxy_response_proof(double_substitution)
+    expect_proxy_proof_failure(
+        tmp,
+        double_substitution,
+        "control-plane authorization receipt release authority mismatch",
+        "a double substitution with both capture and statement changed and every internal proof signature refreshed",
+    )
+
+    for field, replacement, expected_error in (
+        ("request_digest", digest("0"), "release authority request digest mismatch"),
+        ("operation_digest", digest("0"), "release authority operation digest mismatch"),
+        ("attempt_id", "not-a-digest", "attempt ID must be a sha256-prefixed digest"),
+        (
+            "consumption_identity_digest",
+            "not-a-digest",
+            "consumption identity digest must be a sha256-prefixed digest",
+        ),
+        (
+            "authorization_state_at_upstream_dispatch",
+            "forwarded",
+            "does not prove historical dispatch authorization",
+        ),
+    ):
+        invalid_authority = clone_document(valid_document)
+        invalid_authority["server_statement"]["release_authority"][field] = replacement
+        invalid_authority["external_capture"]["release_authority"][field] = replacement
+        resign_proxy_response_proof(invalid_authority)
+        expect_proxy_proof_failure(
+            tmp,
+            invalid_authority,
+            expected_error,
+            f"a v3 proof with invalid release authority {field}",
+        )
+
+    premature_completion_claim = clone_document(valid_document)
+    for authority in (
+        premature_completion_claim["server_statement"]["release_authority"],
+        premature_completion_claim["external_capture"]["release_authority"],
+    ):
+        authority["completion_outcome"] = "forwarded"
+    resign_proxy_response_proof(premature_completion_claim)
+    expect_proxy_proof_failure(
+        tmp,
+        premature_completion_claim,
+        "release authority fields do not match the contract",
+        "an inline proof that overclaims downstream response completion",
+    )
+
+    future_dispatch_observation = clone_document(valid_document)
+    future_observed_at = (int(time.time()) + 60) * 1000
+    for authority in (
+        future_dispatch_observation["server_statement"]["release_authority"],
+        future_dispatch_observation["external_capture"]["release_authority"],
+    ):
+        authority["authorization_state_observed_at_epoch_ms"] = future_observed_at
+        authority["reservation_expires_at_epoch_ms"] = future_observed_at + 15_000
+        authority["dispatch_expires_at_epoch_ms"] = future_observed_at + 15_000
+    resign_proxy_response_proof(future_dispatch_observation)
+    expect_proxy_proof_failure(
+        tmp,
+        future_dispatch_observation,
+        "dispatch observation postdates the enclosing proof event",
+        "a historical dispatch observation recorded after proof issuance",
+    )
+
+    head_request = clone_document(valid_document)
+    head_request["external_capture"]["client_request"]["method"] = "HEAD"
+    resign_proxy_response_proof(head_request)
+    expect_proxy_proof_failure(
+        tmp,
+        head_request,
+        "proxy response proof request method is not GET",
+        "a HEAD request in the GET-only response-proof contract",
+    )
+
+    inconsistent_grant = clone_document(valid_document)
+    inconsistent_grant["server_statement"]["release_authority"]["approval_id"] = None
+    inconsistent_grant["external_capture"]["release_authority"]["approval_id"] = None
+    resign_proxy_response_proof(inconsistent_grant)
+    expect_proxy_proof_failure(
+        tmp,
+        inconsistent_grant,
+        "grant and approval identities are inconsistent",
+        "a grant-backed proof without its approval identity",
+    )
+
+    credential_version_mismatch = clone_document(valid_document)
+    credential_version_mismatch["server_statement"]["release_authority"]["credential_version"] = 0
+    credential_version_mismatch["external_capture"]["release_authority"]["credential_version"] = 0
+    resign_proxy_response_proof(credential_version_mismatch)
+    expect_proxy_proof_failure(
+        tmp,
+        credential_version_mismatch,
+        "credential identity and version are inconsistent",
+        "a credential-backed proof without a positive credential version",
+    )
+
+    cross_wired_upstream = clone_document(valid_document)
+    cross_wired_server_response = cross_wired_upstream["server_statement"][
+        "upstream_response"
+    ]
+    cross_wired_server_response["body_digest"] = digest("0")
+    cross_wired_server_response["canonical_digest"] = sha256_prefixed_json(
+        {
+            "status": cross_wired_server_response["status"],
+            "selected_raw_policy_headers_b64": cross_wired_server_response[
+                "selected_raw_policy_headers_b64"
+            ],
+            "body_digest": cross_wired_server_response["body_digest"],
+        }
+    )
+    resign_proxy_response_proof(cross_wired_upstream)
+    expect_proxy_proof_failure(
+        tmp,
+        cross_wired_upstream,
+        "external capture upstream response does not match server statement",
+        "an upstream body digest cross-wired between the collector and server statement",
+    )
+
+    tampered_raw_upstream_header = clone_document(valid_document)
+    for upstream in (
+        tampered_raw_upstream_header["server_statement"]["upstream_response"],
+        tampered_raw_upstream_header["external_capture"]["upstream_response"],
+    ):
+        upstream["selected_raw_policy_headers_b64"]["content-type"] = [
+            b64e(b"text/plain")
+        ]
+    resign_proxy_response_proof(tampered_raw_upstream_header)
+    expect_proxy_proof_failure(
+        tmp,
+        tampered_raw_upstream_header,
+        "upstream response canonical digest mismatch",
+        "raw upstream policy headers changed without the canonical binding",
+    )
+
+    omitted_raw_upstream_header = clone_document(valid_document)
+    for upstream in (
+        omitted_raw_upstream_header["server_statement"]["upstream_response"],
+        omitted_raw_upstream_header["external_capture"]["upstream_response"],
+    ):
+        del upstream["selected_raw_policy_headers_b64"]["content-encoding"]
+        upstream["canonical_digest"] = sha256_prefixed_json(
+            {
+                "status": upstream["status"],
+                "selected_raw_policy_headers_b64": upstream[
+                    "selected_raw_policy_headers_b64"
+                ],
+                "body_digest": upstream["body_digest"],
+            }
+        )
+    resign_proxy_response_proof(omitted_raw_upstream_header)
+    expect_proxy_proof_failure(
+        tmp,
+        omitted_raw_upstream_header,
+        "raw policy header names do not exactly match the signed route success profile",
+        "a fully re-signed proof omitting a mandatory raw response header",
+    )
+
+    wrong_upstream_status = clone_document(valid_document)
+    wrong_upstream_status["server_statement"]["upstream_response"]["status"] = 503
+    wrong_upstream_status["external_capture"]["upstream_response"]["status"] = 503
+    resign_proxy_response_proof(wrong_upstream_status)
+    expect_proxy_proof_failure(
+        tmp,
+        wrong_upstream_status,
+        "upstream response status mismatch",
+        "a proof whose upstream status differs from the released response",
+    )
+
     mismatched_response = clone_document(valid_document)
     mismatched_response["server_statement"]["response"]["body_digest"] = digest("0")
     resign_proxy_response_proof(mismatched_response)
@@ -2767,7 +3565,7 @@ def test_proxy_response_proof_requirements(
         )
 
     duplicate_json = json.dumps(valid_document, sort_keys=True)
-    api_version_field = '"apiVersion": "serverware.proxyResponseProof/v2"'
+    api_version_field = '"apiVersion": "serverware.proxyResponseProof/v3"'
     if api_version_field not in duplicate_json:
         raise AssertionError("proxy proof fixture did not contain its expected apiVersion field")
     (tmp / "proxy-response-proof.json").write_text(
@@ -2786,7 +3584,7 @@ def main() -> None:
     verify_ed25519_signature_canonicalization()
     test_final_file_snapshots()
     test_final_production_env_binding()
-    global POLICY_DIGEST
+    global IMAGE_SIGNATURES_DIGEST, POLICY_DIGEST
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
         production_build = production_images_build()
@@ -2796,14 +3594,16 @@ def main() -> None:
             if image["service"] == "serverware-decision-gate":
                 item["rust_binary_sha256"] = image["binary_digest"]
             reproduced_images.append(item)
-        _, POLICY_DIGEST = test_production_release_input_preflight.release_security_fixture(
+        test_production_release_input_preflight.release_security_fixture(
             tmp,
             source_tree_digest=SOURCE_TREE_DIGEST,
             images=reproduced_images,
         )
+        POLICY_DIGEST = authorize_alternate_proxy_principal(tmp)
         provenance_summary, provenance_document = release_provenance()
         nitro = nitro_evidence(provenance_summary["provenance_digest"])
         image_summary, image_document = image_signatures(provenance_summary["provenance_digest"])
+        IMAGE_SIGNATURES_DIGEST = image_summary["image_signature_bundle_digest"]
         write_production_env_files(tmp)
         write(tmp / "production-readiness.json", production_readiness(nitro, tmp))
         write(tmp / "nitro-kms-evidence.json", nitro)
@@ -2837,6 +3637,10 @@ def main() -> None:
         )
         valid_proxy_response_proof = proxy_response_proof(provenance_summary["provenance_digest"])
         write(tmp / "proxy-response-proof.json", valid_proxy_response_proof)
+        (tmp / "control-plane-response-signing.pub.pem").write_text(
+            control_plane_response_signing_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
         (tmp / "proxy-vendor-verifier-public-key.pem").write_text(
             proxy_vendor_verifier_key_info()["public_key_pem"],
             encoding="ascii",
@@ -2875,6 +3679,9 @@ def main() -> None:
                 "server_statement_signature_verified",
                 "fresh_client_nonce_bound",
                 "authenticated_external_client_capture_bound",
+                "release_authority_bound",
+                "embedded_control_plane_authorization_receipt_bound",
+                "upstream_response_bound",
                 "release_artifacts_bound",
             )
         ):

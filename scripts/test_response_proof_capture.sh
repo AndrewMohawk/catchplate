@@ -24,6 +24,7 @@ docker compose run --rm --no-deps \
   --ca /data/decision-gate-ca-cert.pem \
   --out /proof/dev-proxy-response-proof.json \
   --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
   --proxy-header "X-Serverware-Agent: demo-agent" \
   --header "X-Serverware-Agent: demo-agent" \
   > "$TMP_DIR/dev-proxy-response-proof-summary.json"
@@ -38,6 +39,14 @@ import json
 import sys
 from cryptography.hazmat.primitives import serialization
 
+
+def decode_base64url(value):
+    assert isinstance(value, str) and "=" not in value, value
+    decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    assert base64.urlsafe_b64encode(decoded).rstrip(b"=").decode("ascii") == value, value
+    return decoded
+
+
 proof_path, summary_path, collector_public_der_path = sys.argv[1:]
 with open(proof_path, "rb") as handle:
     proof_bytes = handle.read()
@@ -50,15 +59,171 @@ with open(collector_public_der_path, "rb") as handle:
 assert summary["ok"] is True, summary
 assert summary["response_status"] == 200, summary
 assert summary["proof_sha256"] == "sha256:" + hashlib.sha256(proof_bytes).hexdigest(), summary
-assert proof["apiVersion"] == "serverware.proxyResponseProof/v2", proof
+assert proof["apiVersion"] == "serverware.proxyResponseProof/v3", proof
 assert proof["kind"] == "ServerwareProxyResponseProof", proof
 capture = proof["external_capture"]
 statement = proof["server_statement"]
-assert capture["apiVersion"] == "serverware.proxyResponseCapture/v1", capture
+assert capture["apiVersion"] == "serverware.proxyResponseCapture/v2", capture
 assert capture["environment"] == "development", capture
 assert capture["collection_mode"] == "external-client-capture", capture
-for field in ("client_nonce", "client_request_digest", "request_digest", "operation_digest", "response", "tls_channel_binding"):
+for field in (
+    "client_nonce",
+    "client_request_digest",
+    "principal_id",
+    "route_id",
+    "request_digest",
+    "operation_digest",
+    "release_authority",
+    "control_plane_authorization_receipt",
+    "upstream_response",
+    "response",
+    "tls_channel_binding",
+):
     assert capture[field] == statement[field], (field, capture[field], statement[field])
+assert statement["apiVersion"] == "serverware.proxyResponseStatement/v2", statement
+release_authority = capture["release_authority"]
+assert set(release_authority) == {
+    "authority_mode",
+    "grant_id",
+    "approval_id",
+    "credential_ref",
+    "credential_version",
+    "request_digest",
+    "operation_digest",
+    "attempt_id",
+    "consumption_identity_digest",
+    "authorization_state_at_upstream_dispatch",
+    "authorization_state_observed_at_epoch_ms",
+    "reservation_expires_at_epoch_ms",
+    "dispatch_expires_at_epoch_ms",
+}, release_authority
+assert release_authority["authority_mode"] == "atomic", release_authority
+assert (release_authority["grant_id"] is None) == (release_authority["approval_id"] is None), release_authority
+assert (release_authority["credential_ref"] is None) == (release_authority["credential_version"] == 0), release_authority
+assert release_authority["request_digest"] == capture["request_digest"], release_authority
+assert release_authority["operation_digest"] == capture["operation_digest"], release_authority
+assert release_authority["attempt_id"].startswith("sha256:") and len(release_authority["attempt_id"]) == 71, release_authority
+assert release_authority["consumption_identity_digest"].startswith("sha256:") and len(release_authority["consumption_identity_digest"]) == 71, release_authority
+assert release_authority["authorization_state_at_upstream_dispatch"] == "dispatching", release_authority
+observed_at = release_authority["authorization_state_observed_at_epoch_ms"]
+reservation_expires_at = release_authority["reservation_expires_at_epoch_ms"]
+dispatch_expires_at = release_authority["dispatch_expires_at_epoch_ms"]
+assert isinstance(observed_at, int) and 0 < observed_at <= statement["issued_at_unix"] * 1000 + 999, release_authority
+assert isinstance(reservation_expires_at, int) and observed_at < reservation_expires_at, release_authority
+assert isinstance(dispatch_expires_at, int) and observed_at < dispatch_expires_at, release_authority
+assert "completion_outcome" not in release_authority, release_authority
+assert summary["release_authority"] == release_authority, summary
+receipt = capture["control_plane_authorization_receipt"]
+assert set(receipt) == {
+    "apiVersion",
+    "kind",
+    "principal_id",
+    "route_id",
+    "release_authority",
+    "request",
+    "response",
+}, receipt
+assert receipt["apiVersion"] == "serverware.controlPlaneAuthorizationReceipt/v1", receipt
+assert receipt["kind"] == "ControlPlaneAuthorizationReceipt", receipt
+assert receipt["principal_id"] == capture["principal_id"], receipt
+assert receipt["route_id"] == capture["route_id"], receipt
+assert receipt["release_authority"] == release_authority, receipt
+receipt_request = receipt["request"]
+assert set(receipt_request) == {"method", "path", "query", "nonce", "body_b64", "body_sha256"}, receipt_request
+assert receipt_request["method"] == "POST", receipt_request
+assert receipt_request["path"] == "/api/data-plane/release-authorizations/dispatch", receipt_request
+assert receipt_request["query"] == "", receipt_request
+assert len(decode_base64url(receipt_request["nonce"])) == 32, receipt_request
+receipt_request_body = decode_base64url(receipt_request["body_b64"])
+assert receipt_request["body_sha256"] == "sha256:" + hashlib.sha256(receipt_request_body).hexdigest(), receipt_request
+assert receipt_request_body == json.dumps(
+    json.loads(receipt_request_body), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+).encode(), receipt_request
+dispatch_request = json.loads(receipt_request_body)
+assert dispatch_request == {
+    "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+    "attemptId": release_authority["attempt_id"],
+    "bindingDigest": release_authority["consumption_identity_digest"],
+}, dispatch_request
+receipt_response = receipt["response"]
+assert set(receipt_response) == {
+    "status",
+    "body_b64",
+    "body_sha256",
+    "response_signing_key_id",
+    "statement_b64",
+    "statement_sha256",
+    "signature",
+}, receipt_response
+assert receipt_response["status"] == 200, receipt_response
+receipt_response_body = decode_base64url(receipt_response["body_b64"])
+assert receipt_response["body_sha256"] == "sha256:" + hashlib.sha256(receipt_response_body).hexdigest(), receipt_response
+dispatch_response = json.loads(receipt_response_body)
+assert dispatch_response["apiVersion"] == "serverware.releaseAuthorization/v1", dispatch_response
+assert dispatch_response["ok"] is True and dispatch_response["authorized"] is True, dispatch_response
+assert dispatch_response["state"] == dispatch_response["reason"] == "dispatching", dispatch_response
+assert dispatch_response["attemptId"] == release_authority["attempt_id"], dispatch_response
+assert dispatch_response["bindingDigest"] == release_authority["consumption_identity_digest"], dispatch_response
+assert dispatch_response["grantId"] == release_authority["grant_id"], dispatch_response
+assert dispatch_response["approvalRequestId"] == release_authority["approval_id"], dispatch_response
+assert dispatch_response["dispatchStartedAtEpochMs"] == observed_at, dispatch_response
+assert dispatch_response["dispatchExpiresAtEpochMs"] == dispatch_expires_at, dispatch_response
+assert dispatch_response["reservationExpiresAtEpochMs"] == reservation_expires_at, dispatch_response
+assert dispatch_response["completionOutcome"] is None, dispatch_response
+receipt_statement_bytes = decode_base64url(receipt_response["statement_b64"])
+assert receipt_response["statement_sha256"] == "sha256:" + hashlib.sha256(receipt_statement_bytes).hexdigest(), receipt_response
+assert receipt_statement_bytes == json.dumps(
+    json.loads(receipt_statement_bytes), sort_keys=True, separators=(",", ":"), ensure_ascii=True
+).encode(), receipt_response
+receipt_statement = json.loads(receipt_statement_bytes)
+assert receipt_statement["version"] == "serverware.responseSignature/v1", receipt_statement
+assert receipt_statement["request"] == {
+    "method": receipt_request["method"],
+    "path": receipt_request["path"],
+    "query": receipt_request["query"],
+}, receipt_statement
+assert receipt_statement["nonce"] == receipt_request["nonce"], receipt_statement
+assert receipt_statement["status_code"] == receipt_response["status"], receipt_statement
+assert receipt_statement["body_sha256"] == receipt_response["body_sha256"], receipt_statement
+assert receipt_statement["response_signing_key_id"] == receipt_response["response_signing_key_id"], receipt_statement
+assert observed_at <= receipt_statement["issued_at_ms"] < dispatch_expires_at, receipt_statement
+assert receipt_statement["issued_at_ms"] < reservation_expires_at, receipt_statement
+assert receipt_response["signature"].startswith("ed25519:"), receipt_response
+assert len(decode_base64url(receipt_response["signature"].removeprefix("ed25519:"))) == 64, receipt_response
+upstream_response = capture["upstream_response"]
+assert set(upstream_response) == {
+    "status",
+    "selected_raw_policy_headers_b64",
+    "body_digest",
+    "canonical_digest",
+}, upstream_response
+assert upstream_response["status"] == capture["response"]["status"] == summary["response_status"], upstream_response
+assert upstream_response["body_digest"].startswith("sha256:") and len(upstream_response["body_digest"]) == 71, upstream_response
+raw_headers = upstream_response["selected_raw_policy_headers_b64"]
+required_raw_headers = {"content-encoding", "content-length", "content-type"}
+allowed_raw_headers = required_raw_headers | {
+    "cache-control",
+    "content-language",
+    "etag",
+    "last-modified",
+    "retry-after",
+    "www-authenticate",
+}
+assert required_raw_headers <= set(raw_headers) <= allowed_raw_headers, raw_headers
+for name, values in raw_headers.items():
+    assert isinstance(values, list) and len(values) <= 128, (name, values)
+    for value in values:
+        assert "=" not in value, (name, value)
+        decoded = decode_base64url(value)
+        assert len(decoded) <= 8192, (name, len(decoded))
+canonical_upstream = {
+    "status": upstream_response["status"],
+    "selected_raw_policy_headers_b64": raw_headers,
+    "body_digest": upstream_response["body_digest"],
+}
+assert upstream_response["canonical_digest"] == "sha256:" + hashlib.sha256(
+    json.dumps(canonical_upstream, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
+).hexdigest(), upstream_response
 canonical_client_request = json.dumps(
     capture["client_request"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
 ).encode()
@@ -121,8 +286,20 @@ expected_claims = {
     "issued_at_unix": statement["issued_at_unix"],
     "client_nonce_sha256": "sha256:" + hashlib.sha256(base64.urlsafe_b64decode(capture["client_nonce"] + "==")).hexdigest(),
     "client_request_digest": statement["client_request_digest"],
+    "principal_id": statement["principal_id"],
+    "route_id": statement["route_id"],
     "request_digest": statement["request_digest"],
     "operation_digest": statement["operation_digest"],
+    "release_authority": statement["release_authority"],
+    "control_plane_authorization_receipt_sha256": "sha256:" + hashlib.sha256(
+        json.dumps(
+            statement["control_plane_authorization_receipt"],
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode()
+    ).hexdigest(),
+    "upstream_response": statement["upstream_response"],
     "response_status": statement["response"]["status"],
     "selected_response_headers_digest": statement["response"]["selected_headers_digest"],
     "response_body_digest": statement["response"]["body_digest"],

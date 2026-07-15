@@ -249,7 +249,7 @@ def _api_json(page: Any, path: str) -> Any:
     result = page.evaluate(
         """
         async (path) => {
-          const token = sessionStorage.getItem('serverware.adminToken') || '';
+          const token = document.querySelector('#admin-token')?.value || '';
           const response = await fetch(path, {
             headers: {
               'X-Serverware-Admin-Token': token,
@@ -517,7 +517,7 @@ def _assert_stripe_uses_manual_credential_flow(
     cancelled = page.evaluate(
         """
         async ({sessionId, revision}) => {
-          const token = sessionStorage.getItem('serverware.adminToken') || '';
+          const token = document.querySelector('#admin-token')?.value || '';
           const response = await fetch(`/api/setup/sessions/${encodeURIComponent(sessionId)}/cancel`, {
             method: 'POST',
             headers: {
@@ -588,6 +588,12 @@ def _connect_oauth(
     page.wait_for_url(
         re.compile(rf"^{re.escape(public_url)}/(?:\?.*)?$"), timeout=DEFAULT_TIMEOUT_MS
     )
+    _require(
+        page.locator("#admin-token").input_value() == "",
+        "manual admin token unexpectedly survived the OAuth navigation",
+    )
+    page.locator("#admin-token").fill(ADMIN_TOKEN)
+    page.locator("#admin-token").dispatch_event("change")
     _wait_for_portal(page, public_url)
     page.wait_for_function(
         """
@@ -623,14 +629,33 @@ def _preview_stage_activate_policy(
     page.locator("#policy-principal").select_option("agent:demo")
     page.locator("#policy-credential").select_option(credential_id)
     page.locator("#policy-route-form button[type='submit']").click()
-    page.wait_for_function(
-        """
-        () => document.querySelector('#policy-candidate-summary')?.textContent.includes(
-          '2/2 dry-run checks passed'
+    try:
+        page.wait_for_function(
+            """
+            (routeId) => state.policyCandidate?.routeId === routeId
+              && state.policyCandidate?.report?.dryRun?.passed === true
+              && document.querySelector('#policy-candidate-summary')?.textContent.includes(
+                '2/2 dry-run checks passed'
+              )
+            """,
+            arg=route_id,
+            timeout=DEFAULT_TIMEOUT_MS,
         )
-        """,
-        timeout=DEFAULT_TIMEOUT_MS,
-    )
+    except Exception as exc:
+        diagnostics = page.evaluate(
+            """
+            () => ({
+              status: document.querySelector('#operator-status')?.textContent || '',
+              authStatus: document.querySelector('#operator-auth-status')?.textContent || '',
+              candidateSummary: document.querySelector('#policy-candidate-summary')?.textContent || '',
+              candidateOutput: document.querySelector('#policy-candidate-output')?.value || '',
+              tokenLength: document.querySelector('#admin-token')?.value?.length || 0
+            })
+            """
+        )
+        raise AssertionError(
+            f"{route_id} candidate preview did not complete: {diagnostics}"
+        ) from exc
     preview = json.loads(page.locator("#policy-candidate-output").input_value())
     report = preview.get("candidate") or {}
     checks = (report.get("dryRun") or {}).get("results") or []
@@ -892,9 +917,6 @@ def _run_browser_journey(
             timezone_id="UTC",
             reduced_motion="reduce",
         )
-        context.add_init_script(
-            f"sessionStorage.setItem('serverware.adminToken', {json.dumps(ADMIN_TOKEN)});"
-        )
         page = context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT_MS)
 
@@ -924,6 +946,49 @@ def _run_browser_journey(
                 response is not None and response.status == 200,
                 "portal did not return HTTP 200",
             )
+            response_headers = response.headers
+            expected_headers = {
+                "cache-control": "no-store",
+                "x-content-type-options": "nosniff",
+                "x-frame-options": "DENY",
+                "referrer-policy": "no-referrer",
+                "cross-origin-opener-policy": "same-origin",
+                "cross-origin-resource-policy": "same-origin",
+            }
+            for name, expected in expected_headers.items():
+                _require(
+                    response_headers.get(name) == expected,
+                    f"portal security header {name} was not {expected!r}",
+                )
+            _require(
+                "frame-ancestors 'none'" in response_headers.get(
+                    "content-security-policy", ""
+                ),
+                "portal CSP does not deny framing",
+            )
+            _require(
+                response_headers.get("strict-transport-security", "").startswith(
+                    "max-age=31536000"
+                ),
+                "HTTPS portal response omitted HSTS",
+            )
+            page.locator("#admin-token").fill(ADMIN_TOKEN)
+            page.locator("#admin-token").dispatch_event("change")
+            _wait_for_portal(page, public_url)
+            token_storage = page.evaluate(
+                "() => JSON.stringify({session: {...sessionStorage}, local: {...localStorage}})"
+            )
+            _require(
+                ADMIN_TOKEN not in token_storage,
+                "manually entered operator token was written to Web Storage",
+            )
+            page.reload(wait_until="domcontentloaded")
+            _require(
+                page.locator("#admin-token").input_value() == "",
+                "manually entered operator token survived a portal reload",
+            )
+            page.locator("#admin-token").fill(ADMIN_TOKEN)
+            page.locator("#admin-token").dispatch_event("change")
             _wait_for_portal(page, public_url)
             _assert_no_horizontal_overflow(page, label="desktop initial")
 

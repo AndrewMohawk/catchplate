@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -40,6 +41,70 @@ def detail(result: subprocess.CompletedProcess[bytes]) -> str:
     return result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
 
 
+def proof_policy_bundle(
+    *,
+    agent_id: str = "production-proof-agent",
+    principal_id: str = "agent:production-proof",
+    scheme: str = "https",
+    host: str = "proof-target.prod.internal",
+    port: int = 443,
+    methods: list[str] | None = None,
+    paths: list[str] | None = None,
+) -> dict[str, object]:
+    return {
+        "apiVersion": "serverware.policy/v1",
+        "kind": "PolicyBundle",
+        "metadata": {
+            "id": "production-proof-policy",
+            "sequence": 1,
+            "rollbackEpoch": 1,
+        },
+        "defaults": {
+            "action": "deny",
+            "failMode": "closed",
+            "unknownHosts": "block",
+            "unknownPaths": "block",
+            "validationFailure": "block",
+        },
+        "principals": [
+            {
+                "id": principal_id,
+                "requiredHeaders": {"X-Serverware-Agent": agent_id},
+            }
+        ],
+        "credentials": [],
+        "routes": [
+            {
+                "id": "production.proof.health",
+                "principals": [principal_id],
+                "match": {
+                    "scheme": scheme,
+                    "host": host,
+                    "port": port,
+                    "methods": methods or ["GET"],
+                    "paths": paths or ["/health"],
+                },
+                "adapter": {
+                    "type": "generic.rest",
+                    "config": {
+                        "request": {
+                            "allowedHeaders": ["accept", "user-agent"],
+                            "allowedQueryKeys": [],
+                            "bodyMode": "none",
+                            "maxBodyBytes": 0,
+                        },
+                        "response": {
+                            "mode": "json",
+                            "maxBodyBytes": 65536,
+                            "allowedFields": ["status"],
+                        },
+                    },
+                },
+            }
+        ],
+    }
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw)
@@ -63,11 +128,19 @@ def main() -> None:
             "--reproducible-build-trusted-public-key",
             str(tmp / "reproducible-build.pub.pem"),
         )
+        policy_bundle_path = tmp / "policy-bundle.json"
+        policy_bundle_path.write_text(
+            canonical_json(proof_policy_bundle()) + "\n",
+            encoding="utf-8",
+        )
         trust_paths = {
             "release_provenance_trusted_public_key": tmp / "release-provenance.pub.pem",
             "sigstore_trusted_public_key": tmp / "sigstore.pub.pem",
             "rekor_trusted_public_key": tmp / "rekor.pub.pem",
             "external_checkpoint_trusted_public_key": tmp / "external-checkpoint.pub.pem",
+            "control_plane_response_signing_public_key": (
+                tmp / "response-online-signing.pub.pem"
+            ),
         }
         for path in trust_paths.values():
             path.write_bytes(production_readiness_test.trusted_public_key_file(path.name).read_bytes())
@@ -82,6 +155,12 @@ def main() -> None:
             "managed-prod-log",
             "--external-checkpoint-trusted-public-key",
             str(trust_paths["external_checkpoint_trusted_public_key"]),
+            "--control-plane-response-signing-public-key",
+            str(trust_paths["control_plane_response_signing_public_key"]),
+            "--control-plane-response-signing-public-key-id",
+            production_readiness_test.trusted_public_key_id(
+                "response-online-signing.pub.pem"
+            ),
         )
         security_args = (*artifact_args, *trust_args)
         final_challenge_receipt = tmp / "final-challenge-receipt.json"
@@ -143,6 +222,7 @@ def main() -> None:
                 "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY": str(tmp / "proxy-verifier.pub.pem"),
                 "SERVERWARE_DATA_PLANE_INSTANCE_ID": "spiffe://prod.serverware.internal/decision-gate/instance-01",
                 "SERVERWARE_PROXY_PROOF_AGENT_ID": "production-proof-agent",
+                "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID": "agent:production-proof",
                 "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS": "240",
         }
         write_env(minimal_env, minimal_values)
@@ -209,6 +289,8 @@ def main() -> None:
             != str(tmp / "proxy-verifier.pub.pem")
             or collector_argv[collector_argv.index("--expected-server-instance-id") + 1]
             != "spiffe://prod.serverware.internal/decision-gate/instance-01"
+            or collector_argv[collector_argv.index("--expected-principal-id") + 1]
+            != "agent:production-proof"
             or collector_argv[collector_argv.index("--max-age-seconds") + 1] != "240"
             or "--production-readiness-config" not in completion_argv
             or "--production-readiness-env" not in completion_argv
@@ -235,6 +317,18 @@ def main() -> None:
             or "--reproducible-build-signature" not in completion_argv
             or "/etc/serverware/kms-materials.json" not in completion_argv
             or "--proxy-response-proof" not in completion_argv
+            or completion_argv[
+                completion_argv.index("--control-plane-response-signing-public-key")
+                + 1
+            ]
+            != str(trust_paths["control_plane_response_signing_public_key"])
+            or completion_argv[
+                completion_argv.index("--control-plane-response-signing-public-key-id")
+                + 1
+            ]
+            != production_readiness_test.trusted_public_key_id(
+                "response-online-signing.pub.pem"
+            )
             or "--proxy-proof-verifier-public-key" not in completion_argv
             or "--proxy-collector-public-key" not in completion_argv
             or "--proxy-server-instance-id" not in completion_argv
@@ -261,6 +355,82 @@ def main() -> None:
         if key_material in dry_run.stdout.decode("utf-8"):
             raise AssertionError(f"runner dry-run leaked trusted public-key material: {plan}")
 
+        mismatched_identity_env = tmp / "mismatched-proof-identity.env"
+        write_env(
+            mismatched_identity_env,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID": "agent:different-proof-principal",
+            },
+        )
+        mismatched_identity = run_runner(
+            "--env-file",
+            str(mismatched_identity_env),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            mismatched_identity.returncode == 0
+            or "do not map to the same unique principal" not in detail(mismatched_identity)
+        ):
+            raise AssertionError(
+                "runner accepted mismatched proxy proof agent and principal IDs: "
+                + detail(mismatched_identity)
+            )
+
+        unauthorized_proof_urls = {
+            "scheme": "http://proof-target.prod.internal/health",
+            "host": "https://different-proof-target.prod.internal/health",
+            "port": "https://proof-target.prod.internal:444/health",
+            "path": "https://proof-target.prod.internal/status",
+        }
+        for component, proof_url in unauthorized_proof_urls.items():
+            unauthorized_env = tmp / f"unauthorized-proof-{component}.env"
+            write_env(
+                unauthorized_env,
+                {
+                    **minimal_values,
+                    "SERVERWARE_PROXY_PROOF_URL": proof_url,
+                },
+            )
+            unauthorized = run_runner(
+                "--env-file",
+                str(unauthorized_env),
+                "--dry-run",
+                *security_args,
+            )
+            if (
+                unauthorized.returncode == 0
+                or "is not authorized for the GET proof URL" not in detail(unauthorized)
+            ):
+                raise AssertionError(
+                    f"runner accepted an unauthorized proof URL {component}: {detail(unauthorized)}"
+                )
+
+        post_only_policy_path = tmp / "post-only-proof-policy.json"
+        post_only_policy_path.write_text(
+            canonical_json(proof_policy_bundle(methods=["POST"])) + "\n",
+            encoding="utf-8",
+        )
+        post_only_security_args = list(security_args)
+        post_only_security_args[
+            post_only_security_args.index("--policy-bundle") + 1
+        ] = str(post_only_policy_path)
+        post_only = run_runner(
+            "--env-file",
+            str(minimal_env),
+            "--dry-run",
+            *post_only_security_args,
+        )
+        if (
+            post_only.returncode == 0
+            or "is not authorized for the GET proof URL" not in detail(post_only)
+        ):
+            raise AssertionError(
+                "runner accepted a proof route that does not authorize GET: "
+                + detail(post_only)
+            )
+
         env_trust_file = tmp / "env-trust.env"
         env_trust_values = {
             **minimal_values,
@@ -272,6 +442,14 @@ def main() -> None:
             "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER": "managed-prod-log",
             "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY": str(
                 trust_paths["external_checkpoint_trusted_public_key"]
+            ),
+            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY": str(
+                trust_paths["control_plane_response_signing_public_key"]
+            ),
+            "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID": (
+                production_readiness_test.trusted_public_key_id(
+                    "response-online-signing.pub.pem"
+                )
             ),
         }
         write_env(env_trust_file, env_trust_values)
@@ -602,6 +780,10 @@ def main() -> None:
         config_run = run_runner(
             "--env-file",
             str(config_env),
+            "--expected-control-plane-uid",
+            str(os.getuid()),
+            "--expected-control-plane-gid",
+            str(os.getgid()),
             "--config-only",
             "--config-out",
             str(config_out),

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+
 from serverware import db
+from serverware.attestation import quote_public_key_info
 from serverware.ca_material import ensure_mitm_ca_material
 from serverware.config import (
     ATOMIC_RELEASE_AUTHORIZATION_ENABLED,
@@ -10,9 +13,11 @@ from serverware.config import (
     CONTROL_PLANE_TWO_PERSON_REQUIRED,
     MASTER_KEY_UNSEAL_COMMAND,
     NITRO_NSM_UNSEAL_COMMAND_TEMPLATE,
+    OIDC_SESSION_WEBAUTHN_REQUIRED,
     RELEASE_CHANNEL,
     RELEASE_AUTHORIZATION_RECONCILE_LIMIT,
     WEBAUTHN_BOOTSTRAP_TOKEN,
+    WEBAUTHN_RECOVERY_ENABLED,
     WEB_TLS_CERT_FILE,
     WEB_TLS_KEY_FILE,
     ensure_data_dirs,
@@ -22,15 +27,27 @@ from serverware.policy_bundle import (
     enforce_policy_high_water,
     get_policy_snapshot,
     policy_uses_atomic_release_authorization,
+    policy_public_key_hash,
 )
+from serverware.response_identity import response_public_key_info
 from serverware.setup_receipt_service import (
     SetupReceiptTrustConfigurationError,
     setup_receipt_trust_profile,
 )
+from serverware.webauthn import (
+    WebAuthnError,
+    validate_webauthn_recovery_configuration,
+)
 from serverware.webauthn_trust import reconcile_trust_publications
+from serverware.webauthn_trust import trust_public_key_hash
 
 
 _DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
+_STARTUP_VALIDATED_PID_ENV = "SERVERWARE_CONTROL_PLANE_STARTUP_VALIDATED_PID"
+
+
+def control_plane_startup_required() -> bool:
+    return os.getenv(_STARTUP_VALIDATED_PID_ENV) != str(os.getpid())
 
 
 def production_release() -> bool:
@@ -48,6 +65,29 @@ def validate_control_plane_configuration() -> None:
         raise RuntimeError("production control plane requires configured TLS certificate and key")
 
     validate_internal_service_auth()
+    try:
+        online_key_ids = (
+            {
+                "response signing key": response_public_key_info()["spki_sha256"],
+                "policy signing key": policy_public_key_hash(),
+                "development quote signing key": quote_public_key_info()[
+                    "spki_sha256"
+                ],
+                "WebAuthn trust signing key": trust_public_key_hash(),
+            }
+            if WEBAUTHN_RECOVERY_ENABLED
+            else {}
+        )
+        validate_webauthn_recovery_configuration(
+            production=production,
+            additional_online_key_ids=online_key_ids,
+        )
+        if WEBAUTHN_RECOVERY_ENABLED:
+            db.require_independent_recovery_witness(production=production)
+    except (WebAuthnError, db.RecoveryWitnessError) as exc:
+        raise RuntimeError(
+            "WebAuthn recovery is not securely configured"
+        ) from exc
     if not production:
         return
 
@@ -57,6 +97,8 @@ def validate_control_plane_configuration() -> None:
         )
     if not CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED:
         raise RuntimeError("production requires control-plane WebAuthn mutation authorization")
+    if not OIDC_SESSION_WEBAUTHN_REQUIRED:
+        raise RuntimeError("production requires WebAuthn-bound OIDC browser sessions")
     if not CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION:
         raise RuntimeError(
             "production requires hardware-attested control-plane WebAuthn authorization"
@@ -90,6 +132,11 @@ def validate_control_plane_startup() -> None:
     validate_control_plane_configuration()
     ensure_data_dirs()
     db.init_db()
+    if OIDC_SESSION_WEBAUTHN_REQUIRED:
+        db.revoke_unbound_oidc_browser_sessions(
+            actor_id="system:startup",
+            reason="WebAuthn-bound OIDC browser sessions are required",
+        )
     try:
         reconcile_trust_publications()
     except Exception as exc:
@@ -138,3 +185,4 @@ def validate_control_plane_startup() -> None:
             RELEASE_AUTHORIZATION_RECONCILE_LIMIT
         )
     ensure_mitm_ca_material()
+    os.environ[_STARTUP_VALIDATED_PID_ENV] = str(os.getpid())

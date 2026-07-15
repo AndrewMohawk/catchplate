@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.parse
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -49,12 +50,16 @@ METADATA_TABLES = (
     "credentials",
     "pending_oauth_credentials",
     "oidc_login_states",
+    "oidc_browser_sessions",
     "oauth_revocation_work",
     "routes",
     "approval_requests",
     "control_plane_approvals",
     "webauthn_credentials",
     "webauthn_challenges",
+    "webauthn_recovery_ceremonies",
+    "webauthn_recovery_revocations",
+    "webauthn_recovery_root_state",
     "webauthn_trust_publications",
     "metadata_audit_outbox",
     "gmail_message_cache",
@@ -67,6 +72,10 @@ METADATA_TABLES = (
 )
 GRANT_TABLES = ("approval_grants", "approval_grant_consumptions")
 AUDIT_TABLES = ("serverware_audit_events",)
+RECOVERY_WITNESS_TABLES = (
+    "serverware_recovery_authorization_claims",
+    "serverware_recovery_witness_heads",
+)
 KMS_KEY_PREFIXES = (
     "awskms://",
     "gcpkms://",
@@ -89,6 +98,9 @@ MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
 MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES = 65536
 MAX_FINAL_CHALLENGE_RECEIPT_FILE_BYTES = 1048576
 MAX_HARDWARE_ASSURANCE_FILE_BYTES = 1048576
+CONTROL_PLANE_RUNTIME_UID = 65532
+CONTROL_PLANE_RUNTIME_GID = 65532
+MAX_POSIX_ID = (1 << 32) - 2
 HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
 HARDWARE_PROOF_MAX_AGE_SECONDS = 900
 HARDWARE_PROOF_FUTURE_SKEW_SECONDS = 30
@@ -98,6 +110,7 @@ SETUP_TRUST_KEY_SETTINGS = (
     "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY",
     "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY",
     "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY",
+    "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY",
 )
 RELEASE_TRUST_KEY_SETTINGS = (
     "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
@@ -106,6 +119,15 @@ RELEASE_TRUST_KEY_SETTINGS = (
     "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
     "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY",
     "SERVERWARE_FINAL_CHALLENGE_AUTHORITY_PUBLIC_KEY",
+    "SERVERWARE_POLICY_SIGNING_PUBLIC_KEY",
+    "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY",
+    "SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY",
+    "SERVERWARE_TEE_QUOTE_SIGNING_PUBLIC_KEY",
+)
+REQUIRED_ONLINE_SIGNING_PUBLIC_KEYS = (
+    "SERVERWARE_POLICY_SIGNING_PUBLIC_KEY",
+    "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY",
+    "SERVERWARE_WEBAUTHN_TRUST_SIGNING_PUBLIC_KEY",
 )
 RELEASE_IDENTITY_FIELDS = {
     "source_tree_digest",
@@ -215,6 +237,32 @@ def require_integer(value: Any, label: str) -> int:
         f"{label} must be an integer",
     )
     return value
+
+
+def bounded_non_root_id(value: str) -> int:
+    try:
+        parsed = int(value, 10)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("must be a decimal integer") from exc
+    if not 1 <= parsed <= MAX_POSIX_ID:
+        raise argparse.ArgumentTypeError(
+            f"must be between 1 and {MAX_POSIX_ID}"
+        )
+    return parsed
+
+
+def file_readable_by_identity(
+    file_stat: os.stat_result,
+    *,
+    uid: int,
+    gid: int,
+) -> bool:
+    mode = stat.S_IMODE(file_stat.st_mode)
+    if file_stat.st_uid == uid:
+        return bool(mode & stat.S_IRUSR)
+    if file_stat.st_gid == gid:
+        return bool(mode & stat.S_IRGRP)
+    return bool(mode & stat.S_IROTH)
 
 
 def decode_canonical_base64url(value: Any, label: str) -> bytes:
@@ -1072,7 +1120,14 @@ def read_bounded_regular_file(
     *,
     file_label: str,
     max_bytes: int,
+    allowed_modes: set[int] | None = None,
+    required_read_uid: int | None = None,
+    required_read_gid: int | None = None,
 ) -> bytes | None:
+    require_valid(
+        (required_read_uid is None) == (required_read_gid is None),
+        "required file reader UID and GID must be configured together",
+    )
     raw_path = env.get(setting_name, "").strip()
     add(failures, bool(raw_path), f"{setting_name} must be configured")
     if not raw_path:
@@ -1088,13 +1143,22 @@ def read_bounded_regular_file(
         return None
     regular_file = stat.S_ISREG(file_stat.st_mode)
     add(failures, regular_file, f"{setting_name} must reference a regular, non-symlink {file_label} file")
+    file_mode = stat.S_IMODE(file_stat.st_mode)
+    mode_allowed = allowed_modes is None or file_mode in allowed_modes
+    if allowed_modes is not None:
+        expected_modes = " or ".join(f"{mode:04o}" for mode in sorted(allowed_modes))
+        add(
+            failures,
+            mode_allowed,
+            f"{setting_name} must use mode {expected_modes}",
+        )
     bounded_file = 1 <= file_stat.st_size <= max_bytes
     add(
         failures,
         bounded_file,
         f"{setting_name} must contain between 1 and {max_bytes} bytes",
     )
-    if not regular_file or not bounded_file:
+    if not regular_file or not bounded_file or not mode_allowed:
         return None
     try:
         descriptor = os.open(
@@ -1115,6 +1179,7 @@ def read_bounded_regular_file(
             chunks.append(chunk)
             remaining -= len(chunk)
         payload = b"".join(chunks)
+        final_stat = os.fstat(descriptor)
     except OSError:
         failures.append(f"{setting_name} must reference a readable {file_label} file")
         return None
@@ -1125,11 +1190,36 @@ def read_bounded_regular_file(
         and opened_stat.st_dev == file_stat.st_dev
         and opened_stat.st_ino == file_stat.st_ino
         and opened_stat.st_size == file_stat.st_size
+        and stat.S_IMODE(opened_stat.st_mode) == file_mode
+        and opened_stat.st_uid == file_stat.st_uid
+        and opened_stat.st_gid == file_stat.st_gid
+        and final_stat.st_dev == opened_stat.st_dev
+        and final_stat.st_ino == opened_stat.st_ino
+        and final_stat.st_size == opened_stat.st_size
+        and final_stat.st_mode == opened_stat.st_mode
+        and final_stat.st_uid == opened_stat.st_uid
+        and final_stat.st_gid == opened_stat.st_gid
+        and final_stat.st_mtime_ns == opened_stat.st_mtime_ns
+        and final_stat.st_ctime_ns == opened_stat.st_ctime_ns
         and len(payload) == opened_stat.st_size
     )
     add(failures, stable_file, f"{setting_name} changed while its {file_label} file was being validated")
     if not stable_file:
         return None
+    if required_read_uid is not None and required_read_gid is not None:
+        runtime_readable = file_readable_by_identity(
+            final_stat,
+            uid=required_read_uid,
+            gid=required_read_gid,
+        )
+        add(
+            failures,
+            runtime_readable,
+            f"{setting_name} must be readable by production control-plane "
+            f"UID/GID {required_read_uid}:{required_read_gid}",
+        )
+        if not runtime_readable:
+            return None
     return payload
 
 
@@ -1192,7 +1282,21 @@ def check_cross_domain_trust_key_separation(
     env: dict[str, str], failures: list[str]
 ) -> None:
     key_ids: dict[str, str] = {}
+    for setting_name in REQUIRED_ONLINE_SIGNING_PUBLIC_KEYS:
+        add(
+            failures,
+            bool(env.get(setting_name, "").strip()),
+            f"{setting_name} must expose the online signing public identity for separation checks",
+        )
+        if env.get(setting_name, "").strip():
+            key_id = check_trusted_public_key_file(
+                env, setting_name, failures, require_ed25519=True
+            )
+            if key_id is not None:
+                key_ids[setting_name] = key_id
     for setting_name in (*SETUP_TRUST_KEY_SETTINGS, *RELEASE_TRUST_KEY_SETTINGS):
+        if setting_name in key_ids:
+            continue
         if not env.get(setting_name, "").strip():
             continue
         ignored_failures: list[str] = []
@@ -1201,6 +1305,19 @@ def check_cross_domain_trust_key_separation(
         )
         if key_id is not None:
             key_ids[setting_name] = key_id
+    configured_setup_keys = [
+        (setting_name, key_ids[setting_name])
+        for setting_name in SETUP_TRUST_KEY_SETTINGS
+        if setting_name in key_ids
+    ]
+    for index, (left_setting, left_key_id) in enumerate(configured_setup_keys):
+        for right_setting, right_key_id in configured_setup_keys[index + 1 :]:
+            add(
+                failures,
+                not hmac.compare_digest(left_key_id, right_key_id),
+                "cross-domain trust key reuse is forbidden: "
+                f"{left_setting} and {right_setting} must use distinct keys",
+            )
     for setup_setting in SETUP_TRUST_KEY_SETTINGS:
         setup_key_id = key_ids.get(setup_setting)
         if setup_key_id is None:
@@ -1419,6 +1536,103 @@ def check_oauth_providers(env: dict[str, str], failures: list[str]) -> None:
         300 <= oidc_session_ttl <= 43_200,
         "SERVERWARE_OIDC_SESSION_TTL_SECONDS must be between 300 and 43200 seconds",
     )
+    add(
+        failures,
+        env_bool(env, "SERVERWARE_OIDC_SESSION_WEBAUTHN_REQUIRED"),
+        "production OIDC browser sessions must require WebAuthn binding",
+    )
+    try:
+        oidc_session_webauthn_ttl = int(
+            env.get("SERVERWARE_OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS", "")
+        )
+    except ValueError:
+        oidc_session_webauthn_ttl = 0
+    add(
+        failures,
+        30 <= oidc_session_webauthn_ttl <= 300,
+        "SERVERWARE_OIDC_SESSION_WEBAUTHN_CHALLENGE_TTL_SECONDS must be between 30 and 300 seconds",
+    )
+    try:
+        oidc_session_pending_ttl = int(
+            env.get("SERVERWARE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS", "")
+        )
+    except ValueError:
+        oidc_session_pending_ttl = 0
+    add(
+        failures,
+        60 <= oidc_session_pending_ttl <= 300,
+        "SERVERWARE_OIDC_SESSION_WEBAUTHN_PENDING_TTL_SECONDS must be between 60 and 300 seconds",
+    )
+    add(
+        failures,
+        env_bool(env, "SERVERWARE_WEBAUTHN_RECOVERY_ENABLED"),
+        "production must enable offline WebAuthn recovery",
+    )
+    recovery_key_id = check_trusted_public_key_file(
+        env,
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY",
+        failures,
+        require_ed25519=True,
+    )
+    expected_recovery_key_id = env.get(
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_KEY_ID", ""
+    ).strip()
+    add(
+        failures,
+        bool(recovery_key_id)
+        and SHA256_RE.fullmatch(expected_recovery_key_id) is not None
+        and hmac.compare_digest(recovery_key_id or "", expected_recovery_key_id),
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_KEY_ID must match the offline root SPKI digest",
+    )
+    recovery_key_path = Path(
+        env.get("SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY", "")
+    )
+    try:
+        recovery_key_mode = stat.S_IMODE(recovery_key_path.lstat().st_mode)
+    except OSError:
+        recovery_key_mode = 0o777
+    add(
+        failures,
+        recovery_key_mode & 0o022 == 0,
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY must not be group/world writable",
+    )
+    recovery_provider = env.get(
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PROVIDER", ""
+    ).strip()
+    add(
+        failures,
+        3 <= len(recovery_provider) <= 128
+        and "replace" not in recovery_provider.lower()
+        and "example" not in recovery_provider.lower(),
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PROVIDER must identify the offline authority",
+    )
+    recovery_audience = env.get("SERVERWARE_WEBAUTHN_RECOVERY_AUDIENCE", "").strip()
+    parsed_recovery_audience = urllib.parse.urlparse(recovery_audience)
+    add(
+        failures,
+        recovery_audience == public_url
+        and parsed_recovery_audience.scheme == "https"
+        and not placeholder_hostname(parsed_recovery_audience.hostname),
+        "SERVERWARE_WEBAUTHN_RECOVERY_AUDIENCE must exactly match the production public URL",
+    )
+    try:
+        recovery_ttl = int(env.get("SERVERWARE_WEBAUTHN_RECOVERY_TTL_SECONDS", ""))
+        recovery_max_live = int(
+            env.get("SERVERWARE_WEBAUTHN_RECOVERY_MAX_LIVE", "")
+        )
+    except ValueError:
+        recovery_ttl = 0
+        recovery_max_live = 0
+    add(
+        failures,
+        30 <= recovery_ttl <= min(300, oidc_session_pending_ttl),
+        "SERVERWARE_WEBAUTHN_RECOVERY_TTL_SECONDS must be between 30 seconds and the pending-session TTL",
+    )
+    add(
+        failures,
+        1 <= recovery_max_live <= 10_000,
+        "SERVERWARE_WEBAUTHN_RECOVERY_MAX_LIVE must be between 1 and 10000",
+    )
 
 
 def check_nitro(env: dict[str, str], failures: list[str]) -> None:
@@ -1592,6 +1806,17 @@ def check_attested_credential_delivery(env: dict[str, str], failures: list[str])
         bool(env.get("SERVERWARE_PROXY_PROOF_AGENT_ID", "").strip()),
         "SERVERWARE_PROXY_PROOF_AGENT_ID is required",
     )
+    proof_principal_id = env.get("SERVERWARE_PROXY_PROOF_PRINCIPAL_ID", "").strip()
+    add(
+        failures,
+        bool(proof_principal_id)
+        and len(proof_principal_id) <= 256
+        and not any(
+            character.isspace() or not character.isprintable()
+            for character in proof_principal_id
+        ),
+        "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID must be a bounded canonical principal ID",
+    )
     for name in (
         "SERVERWARE_PROXY_RESPONSE_PROOF_FILE",
         "SERVERWARE_PROXY_PROOF_CA_BUNDLE",
@@ -1663,7 +1888,13 @@ def check_attested_credential_delivery(env: dict[str, str], failures: list[str])
     )
 
 
-def check_release_completion_trust(env: dict[str, str], failures: list[str]) -> None:
+def check_release_completion_trust(
+    env: dict[str, str],
+    failures: list[str],
+    *,
+    expected_control_plane_uid: int = CONTROL_PLANE_RUNTIME_UID,
+    expected_control_plane_gid: int = CONTROL_PLANE_RUNTIME_GID,
+) -> None:
     provider = env.get("SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER", "").strip()
     expected_provider = env.get("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER", "").strip()
     add(failures, bool(provider), "SERVERWARE_EXTERNAL_CHECKPOINT_PROVIDER must be configured")
@@ -1704,6 +1935,77 @@ def check_release_completion_trust(env: dict[str, str], failures: list[str]) -> 
             key_id is not None and key_id == expected_key_id,
             f"{setting_name} SPKI public-key digest must match {expected_id_name}",
         )
+    response_key_id = check_trusted_public_key_file(
+        env,
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY",
+        failures,
+        require_ed25519=True,
+    )
+    expected_response_key_id = env.get(
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID",
+        "",
+    ).strip()
+    add(
+        failures,
+        SHA256_RE.fullmatch(expected_response_key_id) is not None,
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID must be a sha256: SPKI public-key digest",
+    )
+    add(
+        failures,
+        response_key_id is not None
+        and hmac.compare_digest(response_key_id, expected_response_key_id),
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY SPKI identity must match SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID",
+    )
+    online_response_key_id = check_trusted_public_key_file(
+        env,
+        "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY",
+        failures,
+        require_ed25519=True,
+    )
+    response_private_key_bytes = read_bounded_regular_file(
+        env,
+        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE",
+        failures,
+        file_label="response-signing private-key",
+        max_bytes=MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES,
+        allowed_modes={0o400, 0o600},
+        required_read_uid=expected_control_plane_uid,
+        required_read_gid=expected_control_plane_gid,
+    )
+    response_private_key_id = None
+    if response_private_key_bytes is not None:
+        try:
+            response_private_key = serialization.load_pem_private_key(
+                response_private_key_bytes,
+                password=None,
+            )
+            response_private_public_key = response_private_key.public_key()
+            if not isinstance(response_private_public_key, Ed25519PublicKey):
+                raise ValueError("not Ed25519")
+            response_private_key_id = sha256_prefixed_bytes(
+                response_private_public_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+            )
+        except (TypeError, ValueError):
+            failures.append(
+                "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE must contain an unencrypted Ed25519 PKCS#8 private key"
+            )
+    add(
+        failures,
+        response_key_id is not None
+        and online_response_key_id is not None
+        and hmac.compare_digest(response_key_id, online_response_key_id),
+        "the release verifier control-plane response key must match the online response-signing public identity",
+    )
+    add(
+        failures,
+        response_private_key_id is not None
+        and online_response_key_id is not None
+        and hmac.compare_digest(response_private_key_id, online_response_key_id),
+        "the provisioned response-signing private key must match the online response-signing public identity",
+    )
 
 
 def check_final_challenge_authority(env: dict[str, str], failures: list[str]) -> None:
@@ -2056,6 +2358,49 @@ def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
     )
     add(failures, env.get("SERVERWARE_AUDIT_STORE_BACKEND") == "postgres", "audit store must be postgres")
     add(failures, bool(env.get("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", "").strip()), "audit Postgres DSN must be configured")
+    witness_dsn = env.get(
+        "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN", ""
+    ).strip()
+    add(
+        failures,
+        env.get("SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_BACKEND") == "postgres",
+        "recovery authorization witness must use Postgres",
+    )
+    add(
+        failures,
+        bool(witness_dsn),
+        "recovery authorization witness Postgres DSN must be configured",
+    )
+    add(
+        failures,
+        bool(metadata_dsn)
+        and bool(witness_dsn)
+        and not hmac.compare_digest(metadata_dsn, witness_dsn),
+        "recovery authorization witness must not reuse the metadata DSN",
+    )
+    metadata_fault_domain = env.get("SERVERWARE_METADATA_STORE_FAULT_DOMAIN_ID", "").strip()
+    witness_fault_domain = env.get(
+        "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_FAULT_DOMAIN_ID", ""
+    ).strip()
+    for label, value in (
+        ("metadata store", metadata_fault_domain),
+        ("recovery witness", witness_fault_domain),
+    ):
+        add(
+            failures,
+            bool(value)
+            and len(value) <= 256
+            and value.isascii()
+            and all(character.isprintable() and not character.isspace() for character in value),
+            f"{label} fault-domain identity must be configured as bounded printable ASCII without whitespace",
+        )
+    add(
+        failures,
+        bool(metadata_fault_domain)
+        and bool(witness_fault_domain)
+        and not hmac.compare_digest(metadata_fault_domain, witness_fault_domain),
+        "recovery authorization witness must use an independently provisioned fault-domain identity",
+    )
     add(
         failures,
         env_bool(env, "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"),
@@ -2387,7 +2732,12 @@ def postgres_table_probe(label: str, dsn: str, required_tables: tuple[str, ...])
         with psycopg.connect(dsn, connect_timeout=5, row_factory=dict_row) as conn:
             conn.read_only = True
             with conn.cursor() as cur:
-                cur.execute("SELECT current_database() AS database, current_user AS user")
+                cur.execute(
+                    "SELECT current_database() AS database, current_user AS user, "
+                    "COALESCE(inet_server_addr()::text, '') AS server_address, "
+                    "COALESCE(inet_server_port(), 0) AS server_port, "
+                    "system_identifier FROM pg_control_system()"
+                )
                 identity = dict(cur.fetchone() or {})
                 missing: list[str] = []
                 for table in required_tables:
@@ -2404,6 +2754,9 @@ def postgres_table_probe(label: str, dsn: str, required_tables: tuple[str, ...])
             "ok": True,
             "database": identity.get("database"),
             "user": identity.get("user"),
+            "server_address": identity.get("server_address"),
+            "server_port": identity.get("server_port"),
+            "system_identifier": identity.get("system_identifier"),
             "tables": list(required_tables),
         }
     except Exception as exc:
@@ -2432,12 +2785,38 @@ def run_shared_store_probe(env: dict[str, str]) -> dict[str, Any]:
             env.get("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", "").strip(),
             AUDIT_TABLES,
         ),
+        "recovery_witness": (
+            env.get(
+                "SERVERWARE_WEBAUTHN_RECOVERY_WITNESS_POSTGRES_DSN", ""
+            ).strip(),
+            RECOVERY_WITNESS_TABLES,
+        ),
     }
     results: dict[str, Any] = {}
     for label, (dsn, tables) in stores.items():
         if not dsn:
             raise RuntimeError(f"{label} Postgres DSN must be configured for live shared-store probe")
         results[label] = postgres_table_probe(label, dsn, tables)
+    metadata_identity = (
+        results["metadata"].get("server_address"),
+        int(results["metadata"].get("server_port") or 0),
+    )
+    witness_identity = (
+        results["recovery_witness"].get("server_address"),
+        int(results["recovery_witness"].get("server_port") or 0),
+    )
+    if metadata_identity == witness_identity:
+        raise RuntimeError(
+            "recovery authorization witness must use a non-colocated Postgres server"
+        )
+    metadata_cluster = str(results["metadata"].get("system_identifier") or "")
+    witness_cluster = str(results["recovery_witness"].get("system_identifier") or "")
+    if not metadata_cluster or not witness_cluster:
+        raise RuntimeError("Postgres system_identifier is required for recovery witness separation")
+    if hmac.compare_digest(metadata_cluster, witness_cluster):
+        raise RuntimeError(
+            "recovery authorization witness must use an independent Postgres cluster"
+        )
     return {"ok": True, "stores": results}
 
 
@@ -2519,6 +2898,18 @@ def main() -> None:
     parser.add_argument("--mode", choices=("config", "live"), default="config")
     parser.add_argument("--claims-file", default=None)
     parser.add_argument("--nitro-evidence-file", default=None)
+    parser.add_argument(
+        "--expected-control-plane-uid",
+        type=bounded_non_root_id,
+        default=CONTROL_PLANE_RUNTIME_UID,
+        help="production control-plane UID expected to read runtime secrets",
+    )
+    parser.add_argument(
+        "--expected-control-plane-gid",
+        type=bounded_non_root_id,
+        default=CONTROL_PLANE_RUNTIME_GID,
+        help="production control-plane GID expected to read runtime secrets",
+    )
     parser.add_argument("--out", default=None, help="write the full readiness result JSON to this path")
     args = parser.parse_args()
 
@@ -2530,7 +2921,11 @@ def main() -> None:
         check_oauth_providers,
         check_nitro,
         check_attested_credential_delivery,
-        check_release_completion_trust,
+        partial(
+            check_release_completion_trust,
+            expected_control_plane_uid=args.expected_control_plane_uid,
+            expected_control_plane_gid=args.expected_control_plane_gid,
+        ),
         check_final_challenge_authority,
         check_cosign,
         check_transparency,

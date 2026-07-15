@@ -953,6 +953,7 @@
           "response": {
             "allowedFields": [
               "package",
+              "version",
               "published",
               "tag",
               "dist_tag_written",
@@ -993,6 +994,50 @@
           "description": "Only publish and dist-tag writes may reach this JIT-protected npm route.",
           "id": "npm-sensitive-operation-allowlist",
           "type": "operationPolicy"
+        },
+        {
+          "bindings": [
+            {
+              "comparison": "exactString",
+              "id": "package-name",
+              "operationField": "packageName",
+              "responseField": "package"
+            },
+            {
+              "comparison": "exactString",
+              "id": "package-version",
+              "operationField": "packageVersion",
+              "responseField": "version"
+            }
+          ],
+          "contentTypes": [
+            "application/json"
+          ],
+          "id": "npm-publish-identity-binding",
+          "operations": [
+            "npm.publish"
+          ],
+          "phase": "response",
+          "successStatusCodes": [
+            200
+          ],
+          "type": "responseBinding"
+        },
+        {
+          "fields": {
+            "published": {
+              "equals": true,
+              "required": true,
+              "type": "boolean"
+            }
+          },
+          "id": "npm-publish-success",
+          "operations": [
+            "npm.publish"
+          ],
+          "phase": "response",
+          "required": true,
+          "type": "responseJson"
         }
       ],
       "credentialRef": "cred-demo-bearer",

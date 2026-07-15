@@ -106,10 +106,6 @@ def main() -> None:
             "set -euo pipefail",
             "SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/",
             'scripts/generate_agent_enrollment.py --verify-packet "$ENROLLMENT_PACKET"',
-            "api('/api/setup/receipt-trust')",
-            "--sign-setup-receipt",
-            "--expected-assignment-digest",
-            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_SIGNING_KEY",
             "--expected-packet-sha256",
             "--expected-principal",
             "--expected-nonce",
@@ -160,6 +156,14 @@ def main() -> None:
             raise AssertionError("portal must download and verify the exact enrollment packet before CA install")
         if "dev-admin-token" in enrollment_verifier_fn or "SERVERWARE_ADMIN_TOKEN" in enrollment_verifier_fn:
             raise AssertionError("portal enrollment handoff must not require or embed an admin secret")
+        if (
+            "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_SIGNING_KEY" in enrollment_verifier_fn
+            or "--sign-setup-receipt" in enrollment_verifier_fn
+            or "--setup-receipt-signing-key" in enrollment_verifier_fn
+        ):
+            raise AssertionError(
+                "portal agent handoff must not expose or invoke the independent verifier signing key"
+            )
         if "JSON.stringify(packet" in enrollment_verifier_fn:
             raise AssertionError("portal enrollment handoff must reference the downloaded packet instead of embedding it")
 
@@ -214,17 +218,19 @@ def main() -> None:
         if "localStorage" in ui_html:
             raise AssertionError("portal must not persist operator or mutation state in localStorage")
         auth_markers = (
-            "sessionStorage.getItem(tokenKey)",
-            "sessionStorage.setItem(tokenKey, adminToken())",
-            "sessionStorage.removeItem(tokenKey)",
+            "$('admin-token').value = '';",
             "'X-Serverware-Admin-Token': token",
             "'Authorization': `Bearer ${token}`",
             'id="operator-sign-in"',
+            'id="operator-session-verify"',
             'id="operator-sign-out"',
             "fetch('/api/auth/status'",
             "fetch('/api/auth/oidc/start'",
             "window.location.assign(payload.authorizationUrl)",
-            "api('/api/auth/logout', {method: 'POST'})",
+            "sessionApi('/api/auth/logout')",
+            "sessionApi('/api/auth/session/webauthn/options')",
+            "sessionApi('/api/auth/session/webauthn/verify'",
+            "navigator.credentials.get({publicKey: prepareRequestOptions(options)})",
             "async function ensureCsrfToken()",
             "'X-Serverware-CSRF-Token': csrf",
             "credentials: 'same-origin'",
@@ -232,6 +238,8 @@ def main() -> None:
         for marker in auth_markers:
             if marker not in ui_html:
                 raise AssertionError(f"portal dual admin/OIDC session auth marker missing: {marker}")
+        if "serverware.adminToken" in ui_html or "tokenKey" in ui_html:
+            raise AssertionError("portal must keep manually entered operator tokens in memory only")
 
         preservation_markers = (
             "function captureControlState()",

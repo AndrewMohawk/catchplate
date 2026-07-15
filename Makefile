@@ -1,4 +1,4 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PLAYWRIGHT_RUN ?= uv run --isolated --python 3.11 --with-requirements requirements.lock --with playwright==1.61.0
@@ -143,6 +143,7 @@ bench-gate-rs:
 		docker compose exec -T serverware python scripts/test_break_glass_grants.py
 		docker compose exec -T serverware python scripts/test_approval_denial_reason.py
 		docker compose exec -T serverware python scripts/test_approval_review.py
+		docker compose exec -T serverware python scripts/test_webauthn_recovery.py
 		docker compose exec -T serverware python scripts/test_policy_publish_workflow.py
 		docker compose exec -T serverware python scripts/test_policy_canary_workflow.py
 		docker compose exec -T serverware python scripts/test_audit_search.py
@@ -155,6 +156,8 @@ bench-gate-rs:
 		docker compose exec -T serverware python scripts/test_prepare_aws_kms_materials.py
 		python3 scripts/test_production_readiness_claims.py
 		python3 scripts/test_production_readiness.py
+		$(MAKE) verify-production-readiness-runner
+		$(MAKE) verify-release-completion
 		docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
 		./scripts/test_audit_anchor.sh
 	docker compose exec -T \
@@ -303,6 +306,8 @@ deploy-production:
 production-release-proof:
 	$(MAKE) verify-credential-policy-contracts
 	$(MAKE) verify-control-plane-startup
+	$(MAKE) verify-control-plane-oidc
+	$(MAKE) verify-webauthn-recovery
 	$(MAKE) verify-portal-browser-oauth
 	$(MAKE) validate-production-policy-identity
 	$(MAKE) validate-policy-activation-evidence
@@ -436,6 +441,10 @@ verify-control-plane-csrf:
 verify-control-plane-oidc:
 	docker compose up -d --build serverware
 	docker compose exec -T serverware python scripts/test_control_plane_oidc.py
+
+verify-webauthn-recovery:
+	docker compose up -d --build serverware
+	docker compose exec -T serverware python scripts/test_webauthn_recovery.py
 
 verify-oauth-credentials:
 	docker compose up -d --build serverware

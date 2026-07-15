@@ -254,12 +254,14 @@ def verify_streaming_contract() -> None:
     original_backend = db.AUDIT_STORE_BACKEND
     original_metadata_backend = db.METADATA_STORE_BACKEND
     original_db_path = db.DB_PATH
+    original_recovery_witness_path = db.WEBAUTHN_RECOVERY_WITNESS_PATH
     original_ensure_data_dirs = db.ensure_data_dirs
     try:
         with tempfile.TemporaryDirectory() as tmp:
             db.AUDIT_STORE_BACKEND = "sqlite"
             db.METADATA_STORE_BACKEND = "sqlite"
             db.DB_PATH = Path(tmp) / "legacy-audit.sqlite3"
+            db.WEBAUTHN_RECOVERY_WITNESS_PATH = Path(tmp) / "recovery-witness.sqlite3"
             db.ensure_data_dirs = lambda: None
             connection = sqlite3.connect(db.DB_PATH)
             connection.execute(
@@ -512,6 +514,7 @@ def verify_streaming_contract() -> None:
         db.AUDIT_STORE_BACKEND = original_backend
         db.METADATA_STORE_BACKEND = original_metadata_backend
         db.DB_PATH = original_db_path
+        db.WEBAUTHN_RECOVERY_WITNESS_PATH = original_recovery_witness_path
         db.ensure_data_dirs = original_ensure_data_dirs
 
 

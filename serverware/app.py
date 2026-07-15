@@ -1050,6 +1050,13 @@ def index() -> str:
     return UI_HTML
 
 
+@app.get("/approvals/{approval_id}", response_class=HTMLResponse)
+def approval_index(approval_id: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}", approval_id) is None:
+        raise HTTPException(status_code=404, detail="approval not found")
+    return UI_HTML
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, Any]:
     ca_path = MITMPROXY_CONF_DIR / "mitmproxy-ca-cert.pem"
@@ -11866,7 +11873,18 @@ UI_HTML = r"""
     const canonicalValue = (value) => Array.isArray(value) ? value.map(canonicalValue) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map((key) => [key, canonicalValue(value[key])])) : value;
     const oauthDraftKey = 'serverware.oauthDraft';
     const pendingMutationKey = 'serverware.pendingMutation';
+    let resolvedApprovalDeepLink = null;
     let csrfToken = null;
+    function approvalIdFromLocation() {
+      const match = window.location.pathname.match(/^\/approvals\/([^/]+)$/);
+      if (!match) return null;
+      try {
+        const id = decodeURIComponent(match[1]);
+        return /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(id) ? id : null;
+      } catch (_) {
+        return null;
+      }
+    }
     const routeTemplates = {
       gmail_recent: {
         label: 'Gmail last 30 days',
@@ -12621,7 +12639,23 @@ UI_HTML = r"""
         state.setupSessions = setupSessions;
         state.setupSession = setupSession;
         state.approvalReview = latest.approvalReview && state.approvals.some((item) => item.id === latest.approvalReview.id) ? latest.approvalReview : null;
+        const directApprovalId = approvalIdFromLocation();
+        let directApprovalError = null;
+        if (directApprovalId && state.approvalReview?.id !== directApprovalId && resolvedApprovalDeepLink !== directApprovalId) {
+          try {
+            state.approvalReview = await api(`/api/approvals/${encodeURIComponent(directApprovalId)}/review`);
+            resolvedApprovalDeepLink = directApprovalId;
+          } catch (error) {
+            if (error.status !== 401) resolvedApprovalDeepLink = directApprovalId;
+            directApprovalError = error;
+          }
+        }
         render(controlState);
+        if (directApprovalError) {
+          setStatus(`Approval link could not be loaded: ${directApprovalError.message}`, 'error');
+        } else if (directApprovalId && state.approvalReview?.id === directApprovalId) {
+          focusApprovalReview(false);
+        }
       })();
       try {
         return await refreshInFlight;
@@ -14172,14 +14206,19 @@ UI_HTML = r"""
       if (!completed.pending) await finishMutation(completed.mutation, completed.result);
       return completed;
     }
-    async function loadApprovalReview(id) {
-      state.approvalReview = await api(`/api/approvals/${id}/review`);
-      render();
+    function focusApprovalReview(smooth = true) {
       requestAnimationFrame(() => {
         $('approval-review').focus({preventScroll: true});
         const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
-        $('approval-review').scrollIntoView({behavior: reducedMotion ? 'auto' : 'smooth', block: 'start'});
+        $('approval-review').scrollIntoView({behavior: smooth && !reducedMotion ? 'smooth' : 'auto', block: 'start'});
       });
+    }
+    async function loadApprovalReview(id) {
+      state.approvalReview = await api(`/api/approvals/${encodeURIComponent(id)}/review`);
+      resolvedApprovalDeepLink = id;
+      window.history.replaceState({}, '', `/approvals/${encodeURIComponent(id)}`);
+      render();
+      focusApprovalReview(true);
     }
     function approvalReviewBlockReason(item) {
       const review = state.approvalReview;

@@ -676,6 +676,28 @@ def main() -> None:
         "type": "header",
         "name": "X-Api-Key",
     }
+    assert example_snapshot.credentials["cred-basic-structured"].injection == {
+        "type": "basic",
+        "username": "service-account",
+        "field": "password",
+    }
+    assert example_snapshot.credentials["cred-query-structured"].injection == {
+        "type": "query",
+        "name": "api_key",
+        "field": "credentials.api_key",
+    }
+    assert example_snapshot.credentials["cred-cookie-structured"].injection == {
+        "type": "cookie",
+        "name": "session_token",
+        "field": "session.token",
+    }
+    example_route_ids = {route.id for route in example_snapshot.routes}
+    for route_id in (
+        "example.basic.structured_secret_read",
+        "example.query.structured_secret_read",
+        "example.cookie.structured_secret_read",
+    ):
+        assert route_id in example_route_ids
     valid_injections = (
         {"type": "bearer"},
         {"type": "bearer", "header": "Authorization", "field": "access_token", "prefix": "Bearer "},
@@ -1516,6 +1538,35 @@ def main() -> None:
         "requireHardwareAttestation"
     ] = False
     assert_policy_rejected(invalid, "compiler accepted npm writes without hardware attestation", validate_schema=validate_schema)
+
+    public_npm = copy.deepcopy(demo_bundle)
+    public_npm_route = next(
+        item for item in public_npm["routes"] if item["id"] == npm_route_raw["id"]
+    )
+    public_npm_route["match"]["host"] = "registry.npmjs.org"
+    public_npm_route["constraints"] = [
+        constraint
+        for constraint in public_npm_route["constraints"]
+        if constraint["type"] not in {"responseBinding", "responseJson"}
+    ]
+    compile_policy_bundle(
+        sign_policy_bundle(public_npm),
+        verify_signature=True,
+        validate_schema=validate_schema,
+    )
+
+    non_public_without_response_identity = copy.deepcopy(public_npm)
+    non_public_route = next(
+        item
+        for item in non_public_without_response_identity["routes"]
+        if item["id"] == npm_route_raw["id"]
+    )
+    non_public_route["match"]["host"] = "registry.example.test"
+    assert_signed_policy_rejected_reason(
+        non_public_without_response_identity,
+        f"route {npm_route_raw['id']} signed npm.publish requires a responseBinding scoped only to npm.publish",
+        validate_schema=validate_schema,
+    )
 
     invalid = copy.deepcopy(demo_bundle)
     invalid_npm = next(item for item in invalid["routes"] if item["id"] == npm_route_raw["id"])

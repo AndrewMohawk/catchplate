@@ -61,9 +61,17 @@ from serverware.config import (
     ensure_data_dirs,
 )
 from serverware.crypto import (
+    BoundSecretKeyring,
+    bound_secret_envelope_key_id,
+    build_bound_secret_keyring,
+    decrypt_bound_secret,
+    decrypt_legacy_secret_with_keyring,
     decrypt_secret,
     decrypt_secret_envelope,
+    encrypt_bound_secret,
+    encrypt_secret,
     encrypt_secret_envelope,
+    load_bound_secret_keyring,
     load_master_key,
 )
 
@@ -107,6 +115,189 @@ def loads(value: str | None, fallback: Any) -> Any:
     if not value:
         return fallback
     return json.loads(value)
+
+
+def _approval_json_digest(payload_json: str) -> str:
+    return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
+
+
+def _encrypt_approval_json(payload_json: str) -> str:
+    return (
+        "v2:"
+        + _approval_json_digest(payload_json)
+        + ":"
+        + encrypt_secret(payload_json)
+    )
+
+
+def _decrypt_approval_json(stored: str) -> str:
+    if stored.startswith("v2:"):
+        try:
+            _, expected_digest, encrypted = stored.split(":", 2)
+        except ValueError as exc:
+            raise ValueError("malformed encrypted approval review payload") from exc
+        payload_json = decrypt_secret(encrypted)
+        if not hmac.compare_digest(
+            expected_digest, _approval_json_digest(payload_json)
+        ):
+            raise ValueError("approval review payload digest mismatch")
+        return payload_json
+    if stored.startswith("v1:"):
+        return decrypt_secret(stored)
+    return stored
+
+
+def _stored_approval_json_digest(stored: str) -> str:
+    if stored.startswith("v2:"):
+        try:
+            _, digest, _ = stored.split(":", 2)
+        except ValueError as exc:
+            raise ValueError("malformed encrypted approval review payload") from exc
+        if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise ValueError("approval review payload digest is invalid")
+        return digest
+    return _approval_json_digest(_decrypt_approval_json(stored))
+
+
+def _approval_url_commitment(url: str) -> str:
+    return "sha256:" + hashlib.sha256(url.encode("utf-8")).hexdigest()
+
+
+def _operation_digest(operation: str | None) -> str | None:
+    if operation is None:
+        return None
+    return "sha256:" + hashlib.sha256(operation.encode("utf-8")).hexdigest()
+
+
+def _operation_commitment(operation: str) -> dict[str, Any]:
+    return {
+        "type": "serverware.operation_commitment",
+        "version": 1,
+        "algorithm": "sha256",
+        "digest": _operation_digest(operation),
+    }
+
+
+def _is_typed_operation_commitment(operation: Any) -> bool:
+    return (
+        isinstance(operation, dict)
+        and set(operation) == {"type", "version", "algorithm", "digest"}
+        and operation.get("type") == "serverware.operation_commitment"
+        and operation.get("version") == 1
+        and operation.get("algorithm") == "sha256"
+        and isinstance(operation.get("digest"), str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", operation["digest"]) is not None
+    )
+
+
+def _audit_event_for_storage(
+    event_type: str, event: dict[str, Any]
+) -> dict[str, Any]:
+    if event_type not in _RATE_LIMIT_AUDIT_EVENT_TYPES:
+        return event
+    operation = event.get("operation")
+    if operation is None:
+        return event
+    if _is_typed_operation_commitment(operation):
+        return event
+    if not isinstance(operation, str):
+        raise AuditStoreError(
+            "rate-limit audit operation must be a string, typed commitment, or null"
+        )
+    stored = dict(event)
+    stored["operation"] = _operation_commitment(operation)
+    return stored
+
+
+def _operation_storage_binding(
+    *,
+    table_kind: str,
+    counter_key: str,
+    attempt_id: str | None,
+    storage_version: int,
+    operation_digest: str,
+) -> dict[str, Any]:
+    return {
+        "table_kind": table_kind,
+        "counter_key": counter_key,
+        "attempt_id": attempt_id,
+        "storage_version": storage_version,
+        "operation_commitment": operation_digest,
+    }
+
+
+def _encrypt_operation(
+    operation: str | None,
+    *,
+    table_kind: str,
+    counter_key: str,
+    attempt_id: str | None,
+    keyring: BoundSecretKeyring,
+) -> str | None:
+    if operation is None:
+        return None
+    digest = _operation_digest(operation)
+    assert digest is not None
+    return encrypt_bound_secret(
+        operation,
+        purpose="rate-quota-operation-recovery",
+        binding=_operation_storage_binding(
+            table_kind=table_kind,
+            counter_key=counter_key,
+            attempt_id=attempt_id,
+            storage_version=_OPERATION_STORAGE_VERSION,
+            operation_digest=digest,
+        ),
+        keyring=keyring,
+    )
+
+
+def _stored_operation(
+    row: Any, *, table_kind: str, keyring: BoundSecretKeyring | None
+) -> str | None:
+    version = row["operation_storage_version"]
+    if version is None:
+        if row["encrypted_operation"] is not None:
+            raise MetadataStoreError("legacy stored operation has unexpected ciphertext")
+        return row["operation"]
+    if int(version) != _OPERATION_STORAGE_VERSION:
+        raise MetadataStoreError("stored operation has an unsupported storage version")
+    digest = row["operation"]
+    encrypted = row["encrypted_operation"]
+    if digest is None and encrypted is None:
+        return None
+    if (
+        not isinstance(digest, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
+        or encrypted is None
+    ):
+        raise MetadataStoreError("stored operation commitment is incomplete")
+    if keyring is None:
+        raise MetadataStoreError("stored operation encryption key was not preloaded")
+    attempt_id = row["attempt_id"] if table_kind == "quota_reservation" else None
+    try:
+        operation = decrypt_bound_secret(
+            str(encrypted),
+            purpose="rate-quota-operation-recovery",
+            binding=_operation_storage_binding(
+                table_kind=table_kind,
+                counter_key=str(row["counter_key"]),
+                attempt_id=str(attempt_id) if attempt_id is not None else None,
+                storage_version=int(version),
+                operation_digest=digest,
+            ),
+            keyring=keyring,
+        )
+    except Exception as exc:
+        raise MetadataStoreError("stored operation recovery value is invalid") from exc
+    calculated = _operation_digest(operation)
+    if calculated is None or not hmac.compare_digest(digest, calculated):
+        raise MetadataStoreError("stored operation commitment does not match recovery value")
+    return operation
+
+
+def _release_operation(row: Any, *, keyring: BoundSecretKeyring) -> str | None:
+    return _stored_operation(row, table_kind="quota_reservation", keyring=keyring)
 
 
 def _audit_hash(
@@ -229,6 +420,24 @@ class SetupSessionStaleRevisionError(SetupSessionError):
         )
 
 
+_RATE_LIMIT_AUDIT_EVENT_TYPES = frozenset(
+    {"rate_limit.consumed", "rate_limit.denied"}
+)
+_AUDIT_STORAGE_REDACTION_MIGRATION = (
+    "rate_limit_audit_chain_preserving_bound_preimage_redaction"
+)
+_METADATA_STORAGE_REDACTION_MIGRATION = (
+    "rate_limit_metadata_bound_operation_redaction"
+)
+_AUDIT_BOUND_KEY_GATE_PREFIX = "audit_bound_secret_active_key:"
+_METADATA_BOUND_KEY_GATE_PREFIX = "metadata_bound_secret_active_key:"
+_STORAGE_REDACTION_MIGRATION_VERSION = 2
+_AUDIT_STORAGE_FORMAT_VERSION = 2
+_OPERATION_STORAGE_VERSION = 2
+_AUDIT_LOCK_WAIT_MS = max(
+    100,
+    min(60_000, int(os.getenv("SERVERWARE_AUDIT_LOCK_WAIT_MS", "5000"))),
+)
 _AUDIT_CHAIN_LOCK_KEY = 0x5357524155444348
 _AUDIT_MIGRATION_LOCK_KEY = 0x5357524155444D47
 _CREDENTIAL_LEASE_REPLAY_LOCK_KEY = 0x5357524C45415345
@@ -681,6 +890,83 @@ def _audit_pg_connect():
         connect_timeout=AUDIT_STORE_CONNECT_TIMEOUT_SECONDS,
         row_factory=dict_row,
     )
+
+
+def _postgres_audit_lock_key(conn: Any, purpose: str) -> int:
+    with conn.cursor() as cur:
+        identity = cur.execute(
+            "SELECT current_database() AS database_name, "
+            "current_schema() AS schema_name"
+        ).fetchone()
+    material = dumps(
+        {
+            "database": str(identity["database_name"]),
+            "schema": str(identity["schema_name"]),
+            "purpose": purpose,
+        }
+    ).encode("utf-8")
+    return int.from_bytes(hashlib.sha256(material).digest()[:8], "big", signed=True)
+
+
+def _lock_postgres_audit(conn: Any, purpose: str) -> None:
+    legacy_lock_keys = {
+        "chain": _AUDIT_CHAIN_LOCK_KEY,
+        "migration": _AUDIT_MIGRATION_LOCK_KEY,
+    }
+    legacy_lock_key = legacy_lock_keys.get(purpose)
+    if legacy_lock_key is None:
+        raise AuditStoreError("PostgreSQL audit lock purpose is invalid")
+    lock_key = _postgres_audit_lock_key(conn, purpose)
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET LOCAL lock_timeout = '{_AUDIT_LOCK_WAIT_MS}ms'")
+            # Rolling old writers take this fixed key exclusively. New writers use
+            # shared compatibility mode, then serialize per schema on the new key.
+            cur.execute(
+                "SELECT pg_advisory_xact_lock_shared(%s)",
+                (legacy_lock_key,),
+            )
+            cur.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+    except Exception as exc:
+        if getattr(exc, "sqlstate", None) in {"55P03", "57014"}:
+            raise AuditStoreError(
+                "timed out acquiring compatible legacy/namespaced PostgreSQL "
+                f"audit {purpose} locks"
+            ) from exc
+        raise
+
+
+def _lock_postgres_audit_migration_tables(conn: Any) -> None:
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SET LOCAL lock_timeout = '{_AUDIT_LOCK_WAIT_MS}ms'")
+            cur.execute(
+                "LOCK TABLE serverware_audit_events IN ACCESS EXCLUSIVE MODE"
+            )
+    except Exception as exc:
+        if getattr(exc, "sqlstate", None) in {"55P03", "57014"}:
+            raise AuditStoreError(
+                "timed out acquiring PostgreSQL audit migration table lock"
+            ) from exc
+        raise
+
+
+def _lock_postgres_metadata_migration_tables(conn: Any) -> None:
+    if not isinstance(conn, PostgresMetadataConnection):
+        return
+    try:
+        conn.execute(f"SET LOCAL lock_timeout = '{_AUDIT_LOCK_WAIT_MS}ms'")
+        conn.execute(
+            "LOCK TABLE metadata_audit_outbox, rate_limit_counters, "
+            "release_authorization_quota_reservations "
+            "IN ACCESS EXCLUSIVE MODE"
+        )
+    except Exception as exc:
+        if getattr(exc, "sqlstate", None) in {"55P03", "57014"}:
+            raise MetadataStoreError(
+                "timed out acquiring PostgreSQL metadata migration table locks"
+            ) from exc
+        raise
 
 
 def _recovery_witness_pg_connect():
@@ -1279,49 +1565,1580 @@ def _backfill_pending_approval_keys(conn: Any) -> None:
             )
 
 
+def _legacy_rate_limit_audit_event_json(
+    event_type: str, event_json: str
+) -> str | None:
+    if event_type not in _RATE_LIMIT_AUDIT_EVENT_TYPES:
+        return None
+    try:
+        event = loads(event_json, {})
+    except (TypeError, ValueError) as exc:
+        raise AuditStoreError(
+            "legacy rate-limit audit event is not valid JSON"
+        ) from exc
+    if not isinstance(event, dict):
+        raise AuditStoreError("legacy rate-limit audit event must be an object")
+    stored = _audit_event_for_storage(event_type, event)
+    if stored is event:
+        return None
+    return dumps(stored)
+
+
+def _audit_json_digest(event_json: str) -> str:
+    return "sha256:" + hashlib.sha256(event_json.encode("utf-8")).hexdigest()
+
+
+def _row_value(row: Any, key: str, default: Any = None) -> Any:
+    try:
+        return row[key]
+    except (IndexError, KeyError):
+        return default
+
+
+def _audit_preimage_binding(row: Any) -> dict[str, Any]:
+    return {
+        "event_id": str(row["id"]),
+        "event_hash": str(row["event_hash"]),
+        "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
+    }
+
+
+def _canonical_audit_event_json(
+    row: Any,
+    *,
+    keyring: BoundSecretKeyring | None,
+    allow_legacy_envelope: bool = False,
+) -> str:
+    visible_event_json = str(row["event_json"])
+    encrypted = _row_value(row, "encrypted_canonical_event_json")
+    storage_version = _row_value(row, "storage_format_version")
+    if encrypted is None:
+        if storage_version is not None and int(storage_version) != _AUDIT_STORAGE_FORMAT_VERSION:
+            raise AuditStoreError("audit_storage_format_unsupported")
+        if storage_version == _AUDIT_STORAGE_FORMAT_VERSION:
+            replacement = _legacy_rate_limit_audit_event_json(
+                str(row["event_type"]), visible_event_json
+            )
+            if replacement is not None:
+                raise AuditStoreError("redacted_projection_invalid")
+        return visible_event_json
+    try:
+        if keyring is None:
+            raise AuditStoreError("audit preimage encryption key was not preloaded")
+        if storage_version == _AUDIT_STORAGE_FORMAT_VERSION:
+            canonical_event_json = decrypt_bound_secret(
+                str(encrypted),
+                purpose="audit-canonical-event-preimage",
+                binding=_audit_preimage_binding(row),
+                keyring=keyring,
+            )
+        elif allow_legacy_envelope and storage_version is None:
+            canonical_event_json = decrypt_legacy_secret_with_keyring(
+                str(encrypted), keyring=keyring
+            )
+        else:
+            raise AuditStoreError("audit_storage_format_unsupported")
+    except Exception as exc:
+        if isinstance(exc, AuditStoreError):
+            raise
+        raise AuditStoreError("canonical_preimage_invalid") from exc
+    redacted_event_json = _legacy_rate_limit_audit_event_json(
+        str(row["event_type"]), canonical_event_json
+    )
+    if redacted_event_json is None:
+        raise AuditStoreError("canonical_preimage_projection_invalid")
+    if not hmac.compare_digest(visible_event_json, redacted_event_json):
+        raise AuditStoreError("redacted_projection_mismatch")
+    return canonical_event_json
+
+
+def _validated_audit_row_hash(
+    row: Any,
+    previous_hash: str | None,
+    *,
+    keyring: BoundSecretKeyring | None,
+    allow_legacy_envelope: bool = False,
+) -> str:
+    visible_event_json = str(row["event_json"])
+    canonical_event_json = _canonical_audit_event_json(
+        row,
+        keyring=keyring,
+        allow_legacy_envelope=allow_legacy_envelope,
+    )
+    if (
+        len(visible_event_json.encode("utf-8")) > _AUDIT_EVENT_JSON_STORED_MAX_BYTES
+        or len(canonical_event_json.encode("utf-8"))
+        > _AUDIT_EVENT_JSON_STORED_MAX_BYTES
+        or (
+            row["encrypted_canonical_event_json"] is not None
+            and len(str(row["encrypted_canonical_event_json"]).encode("utf-8"))
+            > _AUDIT_EVENT_JSON_STORED_MAX_BYTES
+        )
+    ):
+        raise AuditStoreError("event_size_exceeded")
+    expected_hash = _audit_hash(
+        event_id=row["id"],
+        event_type=row["event_type"],
+        actor_type=row["actor_type"],
+        actor_id=row["actor_id"],
+        event_json=canonical_event_json,
+        prev_event_hash=row["prev_event_hash"],
+        created_at=row["created_at"],
+    )
+    if row["prev_event_hash"] != previous_hash or row["event_hash"] != expected_hash:
+        raise AuditStoreError(f"audit chain validation failed at event {row['id']}")
+    return str(row["event_hash"])
+
+
+def _audit_storage_redaction_marker(
+    *,
+    old_head_event_id: str,
+    old_head_event_hash: str,
+    old_event_count: int,
+    affected_event_count: int,
+    manifest_digest: str,
+) -> dict[str, str]:
+    marker_id = str(uuid.uuid4())
+    marker_created_at = iso_now()
+    marker_event = {
+        "schema": "serverware.auditStorageRedaction/v1",
+        "reason": "legacy_rate_limit_operation_plaintext_redaction",
+        "old_head_event_id": old_head_event_id,
+        "old_head_event_hash": old_head_event_hash,
+        "old_event_count": old_event_count,
+        "affected_event_count": affected_event_count,
+        "manifest_schema": "serverware.auditStorageRedactionManifest/v1",
+        "manifest_digest": manifest_digest,
+    }
+    marker_json = dumps(marker_event)
+    _validate_audit_event_json(marker_json)
+    marker_hash = _audit_hash(
+        event_id=marker_id,
+        event_type="audit.storage_redacted",
+        actor_type="system",
+        actor_id="audit-storage-redaction",
+        event_json=marker_json,
+        prev_event_hash=old_head_event_hash,
+        created_at=marker_created_at,
+    )
+    return {
+        "id": marker_id,
+        "event_type": "audit.storage_redacted",
+        "actor_type": "system",
+        "actor_id": "audit-storage-redaction",
+        "event_json": marker_json,
+        "prev_event_hash": old_head_event_hash,
+        "event_hash": marker_hash,
+        "created_at": marker_created_at,
+    }
+
+
+def _store_migration_version(conn: Any, migration: str) -> int:
+    row = conn.execute(
+        "SELECT version FROM serverware_store_migrations WHERE migration = ?",
+        (migration,),
+    ).fetchone()
+    return int(row["version"]) if row is not None else 0
+
+
+def _migration_gate_complete(version: int, *, migration: str) -> bool:
+    if version == 0:
+        return False
+    if version > _STORAGE_REDACTION_MIGRATION_VERSION:
+        raise RuntimeError(
+            f"store migration {migration} has unsupported future version {version}"
+        )
+    if version != _STORAGE_REDACTION_MIGRATION_VERSION:
+        raise RuntimeError(
+            f"store migration {migration} has unsupported version {version}"
+        )
+    return True
+
+
+def _record_store_migration(conn: Any, migration: str) -> None:
+    conn.execute(
+        "INSERT INTO serverware_store_migrations (migration, version, applied_at) "
+        "VALUES (?, ?, ?) ON CONFLICT (migration) DO NOTHING",
+        (migration, _STORAGE_REDACTION_MIGRATION_VERSION, iso_now()),
+    )
+    version = _store_migration_version(conn, migration)
+    if not _migration_gate_complete(version, migration=migration):
+        raise RuntimeError(f"store migration {migration} gate was not committed")
+
+
+def _bound_key_gate_name(prefix: str, keyring: BoundSecretKeyring) -> str:
+    return prefix + keyring.active_key_id
+
+
+def _bound_key_rewrap_required(
+    conn: Any, *, prefix: str, keyring: BoundSecretKeyring | None
+) -> bool:
+    if keyring is None:
+        return False
+    migration = _bound_key_gate_name(prefix, keyring)
+    version = _store_migration_version(conn, migration)
+    return not _migration_gate_complete(version, migration=migration)
+
+
+def _record_bound_key_gate(
+    conn: Any, *, prefix: str, keyring: BoundSecretKeyring | None
+) -> None:
+    if keyring is not None:
+        conn.execute(
+            "DELETE FROM serverware_store_migrations WHERE migration LIKE ?",
+            (prefix + "%",),
+        )
+        _record_store_migration(conn, _bound_key_gate_name(prefix, keyring))
+
+
+def _assert_no_sqlite_destructive_audit_rewrite(conn: sqlite3.Connection) -> None:
+    evidence = conn.execute(
+        "SELECT id FROM audit_events WHERE event_type = 'audit.chain.superseded' LIMIT 1"
+    ).fetchone()
+    if evidence is not None:
+        raise AuditStoreError(
+            "destructive audit-chain rewrite evidence detected; restore from a "
+            "pre-rewrite backup"
+        )
+
+
+def _validate_sqlite_audit_gate_postconditions(
+    conn: sqlite3.Connection, *, keyring: BoundSecretKeyring | None
+) -> None:
+    trigger_count = int(
+        conn.execute(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'trigger' "
+            "AND name IN ('audit_storage_epoch_insert', 'audit_storage_epoch_update')"
+        ).fetchone()["count"]
+    )
+    if trigger_count != 2:
+        raise AuditStoreError("audit storage migration guard triggers are missing")
+    incomplete = int(
+        conn.execute(
+            "SELECT COUNT(*) AS count FROM audit_events WHERE event_type IN (?, ?) "
+            "AND storage_format_version IS NOT ?",
+            (*tuple(sorted(_RATE_LIMIT_AUDIT_EVENT_TYPES)), _AUDIT_STORAGE_FORMAT_VERSION),
+        ).fetchone()["count"]
+    )
+    if incomplete:
+        raise AuditStoreError("audit storage migration postconditions are incomplete")
+    for row in conn.execute(
+        "SELECT * FROM audit_events WHERE event_type IN (?, ?)",
+        tuple(sorted(_RATE_LIMIT_AUDIT_EVENT_TYPES)),
+    ).fetchall():
+        _canonical_audit_event_json(row, keyring=keyring)
+
+
+def _active_bound_secret_keyring(
+    keyring: BoundSecretKeyring,
+) -> BoundSecretKeyring:
+    active_key = keyring.keys.get(keyring.active_key_id)
+    if active_key is None:
+        raise ValueError("bound secret keyring has no active key")
+    return build_bound_secret_keyring(active_key)
+
+
+def _audit_preimage_requires_rewrap(
+    encrypted: Any, *, keyring: BoundSecretKeyring
+) -> bool:
+    try:
+        return not hmac.compare_digest(
+            bound_secret_envelope_key_id(str(encrypted)),
+            keyring.active_key_id,
+        )
+    except Exception as exc:
+        raise AuditStoreError("canonical_preimage_invalid") from exc
+
+
+def _rewrap_sqlite_audit_preimages(
+    conn: sqlite3.Connection, *, keyring: BoundSecretKeyring | None
+) -> None:
+    rows = conn.execute("SELECT * FROM audit_events ORDER BY rowid ASC").fetchall()
+    previous_hash = None
+    candidates: list[tuple[str, str, str]] = []
+    for row in rows:
+        previous_hash = _validated_audit_row_hash(
+            row, previous_hash, keyring=keyring
+        )
+        encrypted = _row_value(row, "encrypted_canonical_event_json")
+        if encrypted is None:
+            continue
+        if keyring is None:
+            raise AuditStoreError("audit preimage encryption key was not preloaded")
+        canonical_event_json = _canonical_audit_event_json(row, keyring=keyring)
+        if _audit_preimage_requires_rewrap(encrypted, keyring=keyring):
+            candidates.append(
+                (str(row["id"]), str(row["event_hash"]), canonical_event_json)
+            )
+    if not candidates:
+        return
+    assert keyring is not None
+    active_keyring = _active_bound_secret_keyring(keyring)
+    for event_id, event_hash, canonical_event_json in candidates:
+        encrypted = encrypt_bound_secret(
+            canonical_event_json,
+            purpose="audit-canonical-event-preimage",
+            binding={
+                "event_id": event_id,
+                "event_hash": event_hash,
+                "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
+            },
+            keyring=active_keyring,
+        )
+        updated = conn.execute(
+            "UPDATE audit_events SET encrypted_canonical_event_json = ? "
+            "WHERE id = ? AND event_hash = ?",
+            (encrypted, event_id, event_hash),
+        )
+        if updated.rowcount != 1:
+            raise AuditStoreError("audit preimage rewrap candidate changed")
+    previous_hash = None
+    for row in conn.execute("SELECT * FROM audit_events ORDER BY rowid ASC").fetchall():
+        previous_hash = _validated_audit_row_hash(
+            row, previous_hash, keyring=active_keyring
+        )
+
+
+def _remediate_sqlite_audit_operations(
+    conn: sqlite3.Connection, *, keyring: BoundSecretKeyring | None
+) -> None:
+    _assert_no_sqlite_destructive_audit_rewrite(conn)
+    if not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+    version = _store_migration_version(conn, _AUDIT_STORAGE_REDACTION_MIGRATION)
+    if _migration_gate_complete(version, migration=_AUDIT_STORAGE_REDACTION_MIGRATION):
+        if _bound_key_rewrap_required(
+            conn, prefix=_AUDIT_BOUND_KEY_GATE_PREFIX, keyring=keyring
+        ):
+            _rewrap_sqlite_audit_preimages(conn, keyring=keyring)
+            _record_bound_key_gate(
+                conn, prefix=_AUDIT_BOUND_KEY_GATE_PREFIX, keyring=keyring
+            )
+        _validate_sqlite_audit_gate_postconditions(conn, keyring=keyring)
+        return
+    _assert_no_sqlite_destructive_audit_rewrite(conn)
+    version = _store_migration_version(conn, _AUDIT_STORAGE_REDACTION_MIGRATION)
+    if _migration_gate_complete(version, migration=_AUDIT_STORAGE_REDACTION_MIGRATION):
+        if _bound_key_rewrap_required(
+            conn, prefix=_AUDIT_BOUND_KEY_GATE_PREFIX, keyring=keyring
+        ):
+            _rewrap_sqlite_audit_preimages(conn, keyring=keyring)
+            _record_bound_key_gate(
+                conn, prefix=_AUDIT_BOUND_KEY_GATE_PREFIX, keyring=keyring
+            )
+        _validate_sqlite_audit_gate_postconditions(conn, keyring=keyring)
+        return
+    max_event_json_bytes = int(
+        conn.execute(
+            "SELECT COALESCE(MAX(CASE WHEN visible_bytes >= encrypted_bytes "
+            "THEN visible_bytes ELSE encrypted_bytes END), 0) AS max_bytes FROM ("
+            "SELECT length(CAST(event_json AS BLOB)) AS visible_bytes, "
+            "COALESCE(length(CAST(encrypted_canonical_event_json AS BLOB)), 0) "
+            "AS encrypted_bytes FROM audit_events) AS audit_sizes"
+        ).fetchone()["max_bytes"]
+    )
+    batch_size = _audit_verify_batch_size(max_event_json_bytes)
+    candidates: list[dict[str, str]] = []
+    format_updates: list[str] = []
+    previous_hash = None
+    old_event_count = 0
+    old_head_event_id = None
+    validation = conn.execute("SELECT * FROM audit_events ORDER BY rowid ASC")
+    while rows := validation.fetchmany(batch_size):
+        for row in rows:
+            previous_hash = _validated_audit_row_hash(
+                row,
+                previous_hash,
+                keyring=keyring,
+                allow_legacy_envelope=True,
+            )
+            old_event_count += 1
+            old_head_event_id = str(row["id"])
+            if str(row["event_type"]) not in _RATE_LIMIT_AUDIT_EVENT_TYPES:
+                continue
+            storage_version = _row_value(row, "storage_format_version")
+            if storage_version == _AUDIT_STORAGE_FORMAT_VERSION:
+                continue
+            original_event_json = _canonical_audit_event_json(
+                row,
+                keyring=keyring,
+                allow_legacy_envelope=True,
+            )
+            redacted_event_json = _legacy_rate_limit_audit_event_json(
+                str(row["event_type"]), original_event_json
+            )
+            if redacted_event_json is not None:
+                candidates.append(
+                    {
+                        "id": str(row["id"]),
+                        "event_hash": str(row["event_hash"]),
+                        "original_event_json_digest": _audit_json_digest(
+                            original_event_json
+                        ),
+                        "redacted_event_json_digest": _audit_json_digest(
+                            redacted_event_json
+                        ),
+                    }
+                )
+            elif row["encrypted_canonical_event_json"] is not None:
+                raise AuditStoreError("canonical_preimage_projection_invalid")
+            else:
+                format_updates.append(str(row["id"]))
+    if candidates and (old_head_event_id is None or previous_hash is None):
+        raise AuditStoreError("audit storage redaction found no chain head")
+
+    manifest_digest = _audit_json_digest(dumps(candidates))
+    for candidate in candidates:
+        row = conn.execute(
+            "SELECT * FROM audit_events WHERE id = ?", (candidate["id"],)
+        ).fetchone()
+        if row is None or _row_value(row, "storage_format_version") is not None:
+            raise AuditStoreError("audit storage redaction candidate changed")
+        if keyring is None:
+            raise AuditStoreError("audit preimage encryption key was not preloaded")
+        original_event_json = _canonical_audit_event_json(
+            row,
+            keyring=keyring,
+            allow_legacy_envelope=True,
+        )
+        redacted_event_json = _legacy_rate_limit_audit_event_json(
+            str(row["event_type"]), original_event_json
+        )
+        if (
+            redacted_event_json is None
+            or str(row["event_hash"]) != candidate["event_hash"]
+            or _audit_json_digest(original_event_json)
+            != candidate["original_event_json_digest"]
+            or _audit_json_digest(redacted_event_json)
+            != candidate["redacted_event_json_digest"]
+        ):
+            raise AuditStoreError("audit storage redaction candidate changed")
+        encrypted_preimage = encrypt_bound_secret(
+            original_event_json,
+            purpose="audit-canonical-event-preimage",
+            binding={
+                "event_id": candidate["id"],
+                "event_hash": candidate["event_hash"],
+                "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
+            },
+            keyring=keyring,
+        )
+        if len(encrypted_preimage.encode("utf-8")) > _AUDIT_EVENT_JSON_STORED_MAX_BYTES:
+            raise AuditStoreError("event_size_exceeded")
+        updated = conn.execute(
+            "UPDATE audit_events SET event_json = ?, "
+            "encrypted_canonical_event_json = ?, storage_format_version = ? "
+            "WHERE id = ? AND event_hash = ? AND storage_format_version IS NULL",
+            (
+                redacted_event_json,
+                encrypted_preimage,
+                _AUDIT_STORAGE_FORMAT_VERSION,
+                candidate["id"],
+                candidate["event_hash"],
+            ),
+        )
+        if updated.rowcount != 1:
+            raise AuditStoreError("audit storage redaction candidate changed")
+
+    for event_id in format_updates:
+        updated = conn.execute(
+            "UPDATE audit_events SET storage_format_version = ? WHERE id = ? "
+            "AND storage_format_version IS NULL",
+            (_AUDIT_STORAGE_FORMAT_VERSION, event_id),
+        )
+        if updated.rowcount != 1:
+            raise AuditStoreError("audit storage format candidate changed")
+    if candidates:
+        assert old_head_event_id is not None and previous_hash is not None
+        marker = _audit_storage_redaction_marker(
+            old_head_event_id=old_head_event_id,
+            old_head_event_hash=previous_hash,
+            old_event_count=old_event_count,
+            affected_event_count=len(candidates),
+            manifest_digest=manifest_digest,
+        )
+        conn.execute(
+            "INSERT INTO audit_events (id, event_type, actor_type, actor_id, "
+            "event_json, storage_format_version, prev_event_hash, event_hash, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                marker["id"], marker["event_type"], marker["actor_type"],
+                marker["actor_id"], marker["event_json"],
+                _AUDIT_STORAGE_FORMAT_VERSION, marker["prev_event_hash"],
+                marker["event_hash"], marker["created_at"],
+            ),
+        )
+    _rewrap_sqlite_audit_preimages(conn, keyring=keyring)
+    _validate_sqlite_audit_gate_postconditions(conn, keyring=keyring)
+    _record_store_migration(conn, _AUDIT_STORAGE_REDACTION_MIGRATION)
+    _record_bound_key_gate(
+        conn, prefix=_AUDIT_BOUND_KEY_GATE_PREFIX, keyring=keyring
+    )
+
+
+def _postgres_audit_migration_version(conn: Any) -> int:
+    with conn.cursor() as cur:
+        row = cur.execute(
+            "SELECT version FROM serverware_store_migrations WHERE migration = %s",
+            (_AUDIT_STORAGE_REDACTION_MIGRATION,),
+        ).fetchone()
+    return int(row["version"]) if row is not None else 0
+
+
+def _postgres_bound_key_rewrap_required(
+    conn: Any, *, prefix: str, keyring: BoundSecretKeyring | None
+) -> bool:
+    if keyring is None:
+        return False
+    migration = _bound_key_gate_name(prefix, keyring)
+    with conn.cursor() as cur:
+        row = cur.execute(
+            "SELECT version FROM serverware_store_migrations WHERE migration = %s",
+            (migration,),
+        ).fetchone()
+    version = int(row["version"]) if row is not None else 0
+    return not _migration_gate_complete(version, migration=migration)
+
+
+def _record_postgres_bound_key_gate(
+    conn: Any, *, prefix: str, keyring: BoundSecretKeyring | None
+) -> None:
+    if keyring is None:
+        return
+    migration = _bound_key_gate_name(prefix, keyring)
+    with conn.cursor() as cur:
+        cur.execute(
+            "DELETE FROM serverware_store_migrations WHERE migration LIKE %s",
+            (prefix + "%",),
+        )
+        cur.execute(
+            "INSERT INTO serverware_store_migrations "
+            "(migration, version, applied_at) VALUES (%s, %s, %s) "
+            "ON CONFLICT (migration) DO NOTHING",
+            (migration, _STORAGE_REDACTION_MIGRATION_VERSION, iso_now()),
+        )
+        row = cur.execute(
+            "SELECT version FROM serverware_store_migrations WHERE migration = %s",
+            (migration,),
+        ).fetchone()
+    version = int(row["version"]) if row is not None else 0
+    if not _migration_gate_complete(version, migration=migration):
+        raise RuntimeError("audit bound-key gate was not committed")
+
+
+def _record_postgres_audit_migration(conn: Any) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO serverware_store_migrations (migration, version, applied_at) "
+            "VALUES (%s, %s, %s) ON CONFLICT (migration) DO NOTHING",
+            (
+                _AUDIT_STORAGE_REDACTION_MIGRATION,
+                _STORAGE_REDACTION_MIGRATION_VERSION,
+                iso_now(),
+            ),
+        )
+    version = _postgres_audit_migration_version(conn)
+    if not _migration_gate_complete(
+        version, migration=_AUDIT_STORAGE_REDACTION_MIGRATION
+    ):
+        raise RuntimeError("audit storage migration gate was not committed")
+
+
+def _assert_no_postgres_destructive_audit_rewrite(conn: Any) -> None:
+    with conn.cursor() as cur:
+        evidence = cur.execute(
+            "SELECT id FROM serverware_audit_events "
+            "WHERE event_type = 'audit.chain.superseded' LIMIT 1"
+        ).fetchone()
+    if evidence is not None:
+        raise AuditStoreError(
+            "destructive audit-chain rewrite evidence detected; restore from a "
+            "pre-rewrite backup"
+        )
+
+
+def _validate_postgres_audit_gate_postconditions(
+    conn: Any, *, keyring: BoundSecretKeyring | None
+) -> None:
+    with conn.cursor() as cur:
+        count = int(
+            cur.execute(
+                "SELECT COUNT(*)::bigint AS count FROM pg_trigger AS trigger "
+                "JOIN pg_class AS relation ON relation.oid = trigger.tgrelid "
+                "JOIN pg_namespace AS namespace "
+                "ON namespace.oid = relation.relnamespace "
+                "WHERE namespace.nspname = current_schema() "
+                "AND relation.relname = 'serverware_audit_events' "
+                "AND trigger.tgname = 'serverware_audit_storage_epoch_guard' "
+                "AND NOT trigger.tgisinternal"
+            ).fetchone()["count"]
+        )
+    if count != 1:
+        raise AuditStoreError("audit storage migration guard trigger is missing")
+    with conn.cursor() as cur:
+        incomplete = int(
+            cur.execute(
+                "SELECT COUNT(*)::bigint AS count FROM serverware_audit_events "
+                "WHERE event_type IN ('rate_limit.consumed', 'rate_limit.denied') "
+                "AND storage_format_version IS DISTINCT FROM %s",
+                (_AUDIT_STORAGE_FORMAT_VERSION,),
+            ).fetchone()["count"]
+        )
+    if incomplete:
+        raise AuditStoreError("audit storage migration postconditions are incomplete")
+    with conn.cursor() as cur:
+        rows = cur.execute(
+            "SELECT id, event_type, actor_type, actor_id, event_json, "
+            "encrypted_canonical_event_json, storage_format_version, prev_event_hash, "
+            "event_hash, created_at FROM serverware_audit_events "
+            "WHERE event_type IN ('rate_limit.consumed', 'rate_limit.denied')"
+        ).fetchall()
+    for row in rows:
+        _canonical_audit_event_json(row, keyring=keyring)
+
+
+def _rewrap_postgres_audit_preimages(
+    conn: Any, *, keyring: BoundSecretKeyring | None
+) -> None:
+    with conn.cursor() as cur:
+        rows = cur.execute(
+            "SELECT id, event_type, actor_type, actor_id, event_json, "
+            "encrypted_canonical_event_json, storage_format_version, "
+            "prev_event_hash, event_hash, created_at "
+            "FROM serverware_audit_events ORDER BY sequence ASC FOR UPDATE"
+        ).fetchall()
+    previous_hash = None
+    candidates: list[tuple[str, str, str]] = []
+    for row in rows:
+        previous_hash = _validated_audit_row_hash(
+            row, previous_hash, keyring=keyring
+        )
+        encrypted = row["encrypted_canonical_event_json"]
+        if encrypted is None:
+            continue
+        if keyring is None:
+            raise AuditStoreError("audit preimage encryption key was not preloaded")
+        canonical_event_json = _canonical_audit_event_json(row, keyring=keyring)
+        if _audit_preimage_requires_rewrap(encrypted, keyring=keyring):
+            candidates.append(
+                (str(row["id"]), str(row["event_hash"]), canonical_event_json)
+            )
+    if not candidates:
+        return
+    assert keyring is not None
+    active_keyring = _active_bound_secret_keyring(keyring)
+    with conn.cursor() as cur:
+        for event_id, event_hash, canonical_event_json in candidates:
+            encrypted = encrypt_bound_secret(
+                canonical_event_json,
+                purpose="audit-canonical-event-preimage",
+                binding={
+                    "event_id": event_id,
+                    "event_hash": event_hash,
+                    "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
+                },
+                keyring=active_keyring,
+            )
+            updated = cur.execute(
+                "UPDATE serverware_audit_events "
+                "SET encrypted_canonical_event_json = %s "
+                "WHERE id = %s AND event_hash = %s",
+                (encrypted, event_id, event_hash),
+            )
+            if updated.rowcount != 1:
+                raise AuditStoreError("audit preimage rewrap candidate changed")
+        rows = cur.execute(
+            "SELECT id, event_type, actor_type, actor_id, event_json, "
+            "encrypted_canonical_event_json, storage_format_version, "
+            "prev_event_hash, event_hash, created_at "
+            "FROM serverware_audit_events ORDER BY sequence ASC"
+        ).fetchall()
+    previous_hash = None
+    for row in rows:
+        previous_hash = _validated_audit_row_hash(
+            row, previous_hash, keyring=active_keyring
+        )
+
+
+def _remediate_postgres_audit_operations(
+    conn: Any, *, keyring: BoundSecretKeyring | None
+) -> None:
+    _assert_no_postgres_destructive_audit_rewrite(conn)
+    with conn.cursor() as query:
+        max_event_json_bytes = int(
+            query.execute(
+                "SELECT COALESCE(MAX(GREATEST(octet_length(event_json), "
+                "COALESCE(octet_length(encrypted_canonical_event_json), 0))), 0)"
+                "::bigint AS max_bytes FROM serverware_audit_events"
+            ).fetchone()["max_bytes"]
+        )
+    batch_size = _audit_verify_batch_size(max_event_json_bytes)
+    candidates: list[dict[str, str]] = []
+    format_updates: list[str] = []
+    previous_hash = None
+    old_event_count = 0
+    old_head_event_id = None
+    with conn.cursor(name="serverware_audit_storage_redaction_validation") as source:
+        source.execute(
+            "SELECT id, event_type, actor_type, actor_id, event_json, "
+            "encrypted_canonical_event_json, storage_format_version, prev_event_hash, "
+            "event_hash, created_at "
+            "FROM serverware_audit_events ORDER BY sequence ASC FOR UPDATE"
+        )
+        while rows := source.fetchmany(batch_size):
+            for row in rows:
+                previous_hash = _validated_audit_row_hash(
+                    row,
+                    previous_hash,
+                    keyring=keyring,
+                    allow_legacy_envelope=True,
+                )
+                old_event_count += 1
+                old_head_event_id = str(row["id"])
+                if str(row["event_type"]) not in _RATE_LIMIT_AUDIT_EVENT_TYPES:
+                    continue
+                if row["storage_format_version"] == _AUDIT_STORAGE_FORMAT_VERSION:
+                    continue
+                original_event_json = _canonical_audit_event_json(
+                    row,
+                    keyring=keyring,
+                    allow_legacy_envelope=True,
+                )
+                redacted_event_json = _legacy_rate_limit_audit_event_json(
+                    str(row["event_type"]), original_event_json
+                )
+                if redacted_event_json is not None:
+                    candidates.append(
+                        {
+                            "id": str(row["id"]),
+                            "event_hash": str(row["event_hash"]),
+                            "original_event_json_digest": _audit_json_digest(
+                                original_event_json
+                            ),
+                            "redacted_event_json_digest": _audit_json_digest(
+                                redacted_event_json
+                            ),
+                        }
+                    )
+                elif row["encrypted_canonical_event_json"] is not None:
+                    raise AuditStoreError("canonical_preimage_projection_invalid")
+                else:
+                    format_updates.append(str(row["id"]))
+    if candidates and (old_head_event_id is None or previous_hash is None):
+        raise AuditStoreError("audit storage redaction found no chain head")
+
+    manifest_digest = _audit_json_digest(dumps(candidates))
+    with conn.cursor() as writer:
+        for candidate in candidates:
+            row = writer.execute(
+                "SELECT id, event_type, event_json, encrypted_canonical_event_json, "
+                "storage_format_version, event_hash FROM serverware_audit_events "
+                "WHERE id = %s FOR UPDATE",
+                (candidate["id"],),
+            ).fetchone()
+            if row is None or row["storage_format_version"] is not None:
+                raise AuditStoreError("audit storage redaction candidate changed")
+            if keyring is None:
+                raise AuditStoreError("audit preimage encryption key was not preloaded")
+            original_event_json = _canonical_audit_event_json(
+                row,
+                keyring=keyring,
+                allow_legacy_envelope=True,
+            )
+            redacted_event_json = _legacy_rate_limit_audit_event_json(
+                str(row["event_type"]), original_event_json
+            )
+            if (
+                redacted_event_json is None
+                or str(row["event_hash"]) != candidate["event_hash"]
+                or _audit_json_digest(original_event_json)
+                != candidate["original_event_json_digest"]
+                or _audit_json_digest(redacted_event_json)
+                != candidate["redacted_event_json_digest"]
+            ):
+                raise AuditStoreError("audit storage redaction candidate changed")
+            encrypted_preimage = encrypt_bound_secret(
+                original_event_json,
+                purpose="audit-canonical-event-preimage",
+                binding={
+                    "event_id": candidate["id"],
+                    "event_hash": candidate["event_hash"],
+                    "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
+                },
+                keyring=keyring,
+            )
+            if len(encrypted_preimage.encode("utf-8")) > _AUDIT_EVENT_JSON_STORED_MAX_BYTES:
+                raise AuditStoreError("event_size_exceeded")
+            updated = writer.execute(
+                "UPDATE serverware_audit_events SET event_json = %s, "
+                "encrypted_canonical_event_json = %s, storage_format_version = %s "
+                "WHERE id = %s AND event_hash = %s AND storage_format_version IS NULL",
+                (
+                    redacted_event_json,
+                    encrypted_preimage,
+                    _AUDIT_STORAGE_FORMAT_VERSION,
+                    candidate["id"],
+                    candidate["event_hash"],
+                ),
+            )
+            if updated.rowcount != 1:
+                raise AuditStoreError("audit storage redaction candidate changed")
+        for event_id in format_updates:
+            updated = writer.execute(
+                "UPDATE serverware_audit_events SET storage_format_version = %s "
+                "WHERE id = %s AND storage_format_version IS NULL",
+                (_AUDIT_STORAGE_FORMAT_VERSION, event_id),
+            )
+            if updated.rowcount != 1:
+                raise AuditStoreError("audit storage format candidate changed")
+        if candidates:
+            assert old_head_event_id is not None and previous_hash is not None
+            marker = _audit_storage_redaction_marker(
+                old_head_event_id=old_head_event_id,
+                old_head_event_hash=previous_hash,
+                old_event_count=old_event_count,
+                affected_event_count=len(candidates),
+                manifest_digest=manifest_digest,
+            )
+            marker["storage_format_version"] = _AUDIT_STORAGE_FORMAT_VERSION
+            writer.execute(
+                "INSERT INTO serverware_audit_events (id, event_type, actor_type, "
+                "actor_id, event_json, storage_format_version, prev_event_hash, "
+                "event_hash, created_at) VALUES (%(id)s, %(event_type)s, "
+                "%(actor_type)s, %(actor_id)s, %(event_json)s, "
+                "%(storage_format_version)s, %(prev_event_hash)s, %(event_hash)s, "
+                "%(created_at)s)",
+                marker,
+            )
+    _rewrap_postgres_audit_preimages(conn, keyring=keyring)
+    _validate_postgres_audit_gate_postconditions(conn, keyring=keyring)
+    _record_postgres_audit_migration(conn)
+    _record_postgres_bound_key_gate(
+        conn, prefix=_AUDIT_BOUND_KEY_GATE_PREFIX, keyring=keyring
+    )
+
+
+def _install_metadata_storage_epoch_guards(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.executescript(
+            f"""
+            CREATE OR REPLACE FUNCTION serverware_metadata_storage_epoch_guard()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            DECLARE
+                payload JSONB;
+                committed_operation JSONB;
+            BEGIN
+                IF EXISTS (
+                    SELECT 1 FROM serverware_store_migrations
+                    WHERE migration = '{_METADATA_STORAGE_REDACTION_MIGRATION}'
+                      AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+                ) THEN
+                    IF TG_TABLE_NAME = 'metadata_audit_outbox' THEN
+                        IF NEW.event_type IN ('rate_limit.consumed', 'rate_limit.denied') THEN
+                            payload := NEW.event_json::jsonb;
+                            committed_operation := payload->'operation';
+                            IF NEW.storage_format_version IS DISTINCT FROM
+                                   {_AUDIT_STORAGE_FORMAT_VERSION}
+                               OR NOT (
+                                   committed_operation IS NULL
+                                   OR committed_operation = 'null'::jsonb
+                                   OR (
+                                       jsonb_typeof(committed_operation) = 'object'
+                                       AND (SELECT COUNT(*) FROM
+                                           jsonb_object_keys(committed_operation)) = 4
+                                       AND committed_operation->>'type' =
+                                           'serverware.operation_commitment'
+                                       AND committed_operation->>'version' = '1'
+                                       AND committed_operation->>'algorithm' = 'sha256'
+                                       AND committed_operation->>'digest' ~
+                                           '^sha256:[0-9a-f]{{64}}$'
+                                   )
+                               ) THEN
+                                RAISE EXCEPTION 'legacy metadata audit storage format is disabled';
+                            END IF;
+                        END IF;
+                    ELSIF NEW.operation_storage_version IS DISTINCT FROM
+                              {_OPERATION_STORAGE_VERSION}
+                          OR NOT (
+                              (NEW.operation IS NULL AND NEW.encrypted_operation IS NULL)
+                              OR (
+                                  NEW.operation ~ '^sha256:[0-9a-f]{{64}}$'
+                                  AND NEW.encrypted_operation IS NOT NULL
+                              )
+                          )
+                          OR (
+                              TG_OP = 'UPDATE'
+                              AND NEW.operation IS DISTINCT FROM OLD.operation
+                              AND NEW.encrypted_operation IS NOT DISTINCT FROM
+                                  OLD.encrypted_operation
+                          ) THEN
+                            RAISE EXCEPTION 'legacy operation storage format is disabled';
+                    END IF;
+                END IF;
+                RETURN NEW;
+            END;
+            $$;
+            DROP TRIGGER IF EXISTS serverware_metadata_audit_storage_epoch_guard
+                ON metadata_audit_outbox;
+            CREATE TRIGGER serverware_metadata_audit_storage_epoch_guard
+                BEFORE INSERT OR UPDATE ON metadata_audit_outbox
+                FOR EACH ROW EXECUTE FUNCTION serverware_metadata_storage_epoch_guard();
+            DROP TRIGGER IF EXISTS serverware_rate_counter_storage_epoch_guard
+                ON rate_limit_counters;
+            CREATE TRIGGER serverware_rate_counter_storage_epoch_guard
+                BEFORE INSERT OR UPDATE ON rate_limit_counters
+                FOR EACH ROW EXECUTE FUNCTION serverware_metadata_storage_epoch_guard();
+            DROP TRIGGER IF EXISTS serverware_quota_storage_epoch_guard
+                ON release_authorization_quota_reservations;
+            CREATE TRIGGER serverware_quota_storage_epoch_guard
+                BEFORE INSERT OR UPDATE ON release_authorization_quota_reservations
+                FOR EACH ROW EXECUTE FUNCTION serverware_metadata_storage_epoch_guard();
+            """
+        )
+        return
+    conn.executescript(
+        f"""
+        CREATE TRIGGER IF NOT EXISTS metadata_audit_storage_epoch_insert
+        BEFORE INSERT ON metadata_audit_outbox
+        WHEN NEW.event_type IN ('rate_limit.consumed', 'rate_limit.denied')
+         AND EXISTS (
+             SELECT 1 FROM serverware_store_migrations
+             WHERE migration = '{_METADATA_STORAGE_REDACTION_MIGRATION}'
+               AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+         )
+         AND (
+             NEW.storage_format_version IS NOT {_AUDIT_STORAGE_FORMAT_VERSION}
+             OR json_valid(NEW.event_json) = 0
+             OR NOT (
+                 json_type(NEW.event_json, '$.operation') IS NULL
+                 OR json_type(NEW.event_json, '$.operation') = 'null'
+                 OR (
+                     json_type(NEW.event_json, '$.operation') = 'object'
+                     AND (SELECT COUNT(*) FROM json_each(
+                         NEW.event_json, '$.operation')) = 4
+                     AND json_extract(NEW.event_json, '$.operation.type') =
+                         'serverware.operation_commitment'
+                     AND json_extract(NEW.event_json, '$.operation.version') = 1
+                     AND json_extract(NEW.event_json, '$.operation.algorithm') =
+                         'sha256'
+                     AND length(json_extract(
+                         NEW.event_json, '$.operation.digest')) = 71
+                     AND substr(json_extract(
+                         NEW.event_json, '$.operation.digest'), 1, 7) = 'sha256:'
+                     AND substr(json_extract(
+                         NEW.event_json, '$.operation.digest'), 8)
+                         NOT GLOB '*[^0-9a-f]*'
+                 )
+             )
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy metadata audit storage format is disabled');
+        END;
+        CREATE TRIGGER IF NOT EXISTS metadata_audit_storage_epoch_update
+        BEFORE UPDATE ON metadata_audit_outbox
+        WHEN NEW.event_type IN ('rate_limit.consumed', 'rate_limit.denied')
+         AND EXISTS (
+             SELECT 1 FROM serverware_store_migrations
+             WHERE migration = '{_METADATA_STORAGE_REDACTION_MIGRATION}'
+               AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+         )
+         AND (
+             NEW.storage_format_version IS NOT {_AUDIT_STORAGE_FORMAT_VERSION}
+             OR json_valid(NEW.event_json) = 0
+             OR NOT (
+                 json_type(NEW.event_json, '$.operation') IS NULL
+                 OR json_type(NEW.event_json, '$.operation') = 'null'
+                 OR (
+                     json_type(NEW.event_json, '$.operation') = 'object'
+                     AND (SELECT COUNT(*) FROM json_each(
+                         NEW.event_json, '$.operation')) = 4
+                     AND json_extract(NEW.event_json, '$.operation.type') =
+                         'serverware.operation_commitment'
+                     AND json_extract(NEW.event_json, '$.operation.version') = 1
+                     AND json_extract(NEW.event_json, '$.operation.algorithm') =
+                         'sha256'
+                     AND length(json_extract(
+                         NEW.event_json, '$.operation.digest')) = 71
+                     AND substr(json_extract(
+                         NEW.event_json, '$.operation.digest'), 1, 7) = 'sha256:'
+                     AND substr(json_extract(
+                         NEW.event_json, '$.operation.digest'), 8)
+                         NOT GLOB '*[^0-9a-f]*'
+                 )
+             )
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy metadata audit storage format is disabled');
+        END;
+        CREATE TRIGGER IF NOT EXISTS rate_counter_storage_epoch_insert
+        BEFORE INSERT ON rate_limit_counters
+        WHEN EXISTS (
+             SELECT 1 FROM serverware_store_migrations
+             WHERE migration = '{_METADATA_STORAGE_REDACTION_MIGRATION}'
+               AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+         )
+         AND (
+             NEW.operation_storage_version IS NOT {_OPERATION_STORAGE_VERSION}
+             OR NOT (
+                 (NEW.operation IS NULL AND NEW.encrypted_operation IS NULL)
+                 OR (
+                     length(NEW.operation) = 71
+                     AND substr(NEW.operation, 1, 7) = 'sha256:'
+                     AND substr(NEW.operation, 8) NOT GLOB '*[^0-9a-f]*'
+                     AND NEW.encrypted_operation IS NOT NULL
+                 )
+             )
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy operation storage format is disabled');
+        END;
+        CREATE TRIGGER IF NOT EXISTS rate_counter_storage_epoch_update
+        BEFORE UPDATE ON rate_limit_counters
+        WHEN EXISTS (
+             SELECT 1 FROM serverware_store_migrations
+             WHERE migration = '{_METADATA_STORAGE_REDACTION_MIGRATION}'
+               AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+         )
+         AND (
+             NEW.operation_storage_version IS NOT {_OPERATION_STORAGE_VERSION}
+             OR NOT (
+                 (NEW.operation IS NULL AND NEW.encrypted_operation IS NULL)
+                 OR (
+                     length(NEW.operation) = 71
+                     AND substr(NEW.operation, 1, 7) = 'sha256:'
+                     AND substr(NEW.operation, 8) NOT GLOB '*[^0-9a-f]*'
+                     AND NEW.encrypted_operation IS NOT NULL
+                 )
+             )
+             OR (
+                 NEW.operation IS NOT OLD.operation
+                 AND NEW.encrypted_operation IS OLD.encrypted_operation
+             )
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy operation storage format is disabled');
+        END;
+        CREATE TRIGGER IF NOT EXISTS quota_storage_epoch_insert
+        BEFORE INSERT ON release_authorization_quota_reservations
+        WHEN EXISTS (
+             SELECT 1 FROM serverware_store_migrations
+             WHERE migration = '{_METADATA_STORAGE_REDACTION_MIGRATION}'
+               AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+         )
+         AND (
+             NEW.operation_storage_version IS NOT {_OPERATION_STORAGE_VERSION}
+             OR NOT (
+                 (NEW.operation IS NULL AND NEW.encrypted_operation IS NULL)
+                 OR (
+                     length(NEW.operation) = 71
+                     AND substr(NEW.operation, 1, 7) = 'sha256:'
+                     AND substr(NEW.operation, 8) NOT GLOB '*[^0-9a-f]*'
+                     AND NEW.encrypted_operation IS NOT NULL
+                 )
+             )
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy operation storage format is disabled');
+        END;
+        CREATE TRIGGER IF NOT EXISTS quota_storage_epoch_update
+        BEFORE UPDATE ON release_authorization_quota_reservations
+        WHEN EXISTS (
+             SELECT 1 FROM serverware_store_migrations
+             WHERE migration = '{_METADATA_STORAGE_REDACTION_MIGRATION}'
+               AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+         )
+         AND (
+             NEW.operation_storage_version IS NOT {_OPERATION_STORAGE_VERSION}
+             OR NOT (
+                 (NEW.operation IS NULL AND NEW.encrypted_operation IS NULL)
+                 OR (
+                     length(NEW.operation) = 71
+                     AND substr(NEW.operation, 1, 7) = 'sha256:'
+                     AND substr(NEW.operation, 8) NOT GLOB '*[^0-9a-f]*'
+                     AND NEW.encrypted_operation IS NOT NULL
+                 )
+             )
+             OR (
+                 NEW.operation IS NOT OLD.operation
+                 AND NEW.encrypted_operation IS OLD.encrypted_operation
+             )
+         )
+        BEGIN
+            SELECT RAISE(ABORT, 'legacy operation storage format is disabled');
+        END;
+        """
+    )
+
+
+def _validate_metadata_storage_postconditions(
+    conn: Any, *, keyring: BoundSecretKeyring | None
+) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        count = int(
+            conn.execute(
+                "SELECT COUNT(*)::bigint AS count "
+                "FROM (VALUES "
+                "('metadata_audit_outbox', "
+                "'serverware_metadata_audit_storage_epoch_guard'), "
+                "('rate_limit_counters', "
+                "'serverware_rate_counter_storage_epoch_guard'), "
+                "('release_authorization_quota_reservations', "
+                "'serverware_quota_storage_epoch_guard')) "
+                "AS expected(relation_name, trigger_name) "
+                "JOIN pg_namespace AS namespace "
+                "ON namespace.nspname = current_schema() "
+                "JOIN pg_class AS relation "
+                "ON relation.relnamespace = namespace.oid "
+                "AND relation.relname = expected.relation_name "
+                "JOIN pg_trigger AS trigger "
+                "ON trigger.tgrelid = relation.oid "
+                "AND trigger.tgname = expected.trigger_name "
+                "AND NOT trigger.tgisinternal"
+            ).fetchone()["count"]
+        )
+        expected = 3
+    else:
+        count = int(
+            conn.execute(
+                "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'trigger' "
+                "AND name IN ('metadata_audit_storage_epoch_insert', "
+                "'metadata_audit_storage_epoch_update', "
+                "'rate_counter_storage_epoch_insert', "
+                "'rate_counter_storage_epoch_update', 'quota_storage_epoch_insert', "
+                "'quota_storage_epoch_update')"
+            ).fetchone()["count"]
+        )
+        expected = 6
+    if count != expected:
+        raise MetadataStoreError("metadata storage migration guard triggers are missing")
+    for row in conn.execute(
+        "SELECT event_type, event_json, storage_format_version "
+        "FROM metadata_audit_outbox WHERE event_type IN (?, ?)",
+        tuple(sorted(_RATE_LIMIT_AUDIT_EVENT_TYPES)),
+    ).fetchall():
+        if row["storage_format_version"] != _AUDIT_STORAGE_FORMAT_VERSION:
+            raise MetadataStoreError("metadata audit storage migration is incomplete")
+        if _legacy_rate_limit_audit_event_json(
+            str(row["event_type"]), str(row["event_json"])
+        ) is not None:
+            raise MetadataStoreError("metadata audit storage projection is invalid")
+    for row in conn.execute("SELECT * FROM rate_limit_counters").fetchall():
+        _stored_operation(row, table_kind="rate_counter", keyring=keyring)
+    for row in conn.execute(
+        "SELECT * FROM release_authorization_quota_reservations"
+    ).fetchall():
+        _stored_operation(row, table_kind="quota_reservation", keyring=keyring)
+
+
+def _rewrap_metadata_operations(
+    conn: Any, *, keyring: BoundSecretKeyring | None
+) -> None:
+    table_kinds = (
+        ("rate_limit_counters", "rate_counter"),
+        ("release_authorization_quota_reservations", "quota_reservation"),
+    )
+    candidates: list[tuple[str, Any, str]] = []
+    for table, table_kind in table_kinds:
+        for row in conn.execute(f"SELECT * FROM {table}").fetchall():
+            operation = _stored_operation(row, table_kind=table_kind, keyring=keyring)
+            encrypted = row["encrypted_operation"]
+            if encrypted is None:
+                continue
+            if keyring is None:
+                raise MetadataStoreError(
+                    "stored operation encryption key was not preloaded"
+                )
+            try:
+                key_id = bound_secret_envelope_key_id(str(encrypted))
+            except Exception as exc:
+                raise MetadataStoreError(
+                    "stored operation recovery value is invalid"
+                ) from exc
+            if not hmac.compare_digest(key_id, keyring.active_key_id):
+                candidates.append((table_kind, row, operation))
+    if not candidates:
+        return
+    assert keyring is not None
+    active_keyring = _active_bound_secret_keyring(keyring)
+    for table_kind, row, operation in candidates:
+        encrypted = _encrypt_operation(
+            operation,
+            table_kind=table_kind,
+            counter_key=str(row["counter_key"]),
+            attempt_id=(
+                str(row["attempt_id"])
+                if table_kind == "quota_reservation"
+                else None
+            ),
+            keyring=active_keyring,
+        )
+        if table_kind == "rate_counter":
+            updated = conn.execute(
+                "UPDATE rate_limit_counters SET encrypted_operation = ? "
+                "WHERE counter_key = ?",
+                (encrypted, row["counter_key"]),
+            )
+        else:
+            updated = conn.execute(
+                "UPDATE release_authorization_quota_reservations "
+                "SET encrypted_operation = ? WHERE attempt_id = ? AND counter_key = ?",
+                (encrypted, row["attempt_id"], row["counter_key"]),
+            )
+        if updated.rowcount != 1:
+            raise MetadataStoreError("stored operation rewrap candidate changed")
+    for table, table_kind in table_kinds:
+        for row in conn.execute(f"SELECT * FROM {table}").fetchall():
+            _stored_operation(row, table_kind=table_kind, keyring=active_keyring)
+
+
+def _remediate_metadata_rate_limit_storage(
+    conn: Any, *, keyring: BoundSecretKeyring | None
+) -> None:
+    version = _store_migration_version(conn, _METADATA_STORAGE_REDACTION_MIGRATION)
+    if _migration_gate_complete(
+        version, migration=_METADATA_STORAGE_REDACTION_MIGRATION
+    ):
+        if _bound_key_rewrap_required(
+            conn, prefix=_METADATA_BOUND_KEY_GATE_PREFIX, keyring=keyring
+        ):
+            _rewrap_metadata_operations(conn, keyring=keyring)
+            _record_bound_key_gate(
+                conn, prefix=_METADATA_BOUND_KEY_GATE_PREFIX, keyring=keyring
+            )
+        _validate_metadata_storage_postconditions(conn, keyring=keyring)
+        return
+    rows = conn.execute(
+        "SELECT id, event_type, event_json, storage_format_version "
+        "FROM metadata_audit_outbox "
+        "WHERE event_type IN (?, ?)",
+        tuple(sorted(_RATE_LIMIT_AUDIT_EVENT_TYPES)),
+    ).fetchall()
+    for row in rows:
+        if row["storage_format_version"] == _AUDIT_STORAGE_FORMAT_VERSION:
+            if _legacy_rate_limit_audit_event_json(
+                str(row["event_type"]), str(row["event_json"])
+            ) is not None:
+                raise MetadataStoreError("metadata audit storage projection is invalid")
+            continue
+        if row["storage_format_version"] is not None:
+            raise MetadataStoreError("metadata audit storage version is unsupported")
+        replacement = _legacy_rate_limit_audit_event_json(
+            str(row["event_type"]), str(row["event_json"])
+        )
+        conn.execute(
+            "UPDATE metadata_audit_outbox SET event_json = ?, "
+            "storage_format_version = ? WHERE id = ?",
+            (
+                replacement if replacement is not None else str(row["event_json"]),
+                _AUDIT_STORAGE_FORMAT_VERSION,
+                row["id"],
+            ),
+        )
+    for row in conn.execute(
+        "SELECT * FROM rate_limit_counters"
+    ).fetchall():
+        if row["operation_storage_version"] == _OPERATION_STORAGE_VERSION:
+            _stored_operation(row, table_kind="rate_counter", keyring=keyring)
+            continue
+        if row["operation_storage_version"] is not None:
+            raise MetadataStoreError("rate counter storage version is unsupported")
+        operation = str(row["operation"]) if row["operation"] is not None else None
+        if operation is not None and keyring is None:
+            raise MetadataStoreError("stored operation encryption key was not preloaded")
+        conn.execute(
+            "UPDATE rate_limit_counters SET operation = ?, encrypted_operation = ?, "
+            "operation_storage_version = ? WHERE counter_key = ?",
+            (
+                _operation_digest(operation),
+                _encrypt_operation(
+                    operation,
+                    table_kind="rate_counter",
+                    counter_key=str(row["counter_key"]),
+                    attempt_id=None,
+                    keyring=keyring,
+                ),
+                _OPERATION_STORAGE_VERSION,
+                row["counter_key"],
+            ),
+        )
+    for row in conn.execute(
+        "SELECT * FROM release_authorization_quota_reservations"
+    ).fetchall():
+        if row["operation_storage_version"] == _OPERATION_STORAGE_VERSION:
+            _stored_operation(row, table_kind="quota_reservation", keyring=keyring)
+            continue
+        if row["operation_storage_version"] is not None:
+            raise MetadataStoreError("quota reservation storage version is unsupported")
+        operation = str(row["operation"]) if row["operation"] is not None else None
+        if operation is not None and keyring is None:
+            raise MetadataStoreError("stored operation encryption key was not preloaded")
+        conn.execute(
+            "UPDATE release_authorization_quota_reservations "
+            "SET operation = ?, encrypted_operation = ?, operation_storage_version = ? "
+            "WHERE attempt_id = ? AND counter_key = ?",
+            (
+                _operation_digest(operation),
+                _encrypt_operation(
+                    operation,
+                    table_kind="quota_reservation",
+                    counter_key=str(row["counter_key"]),
+                    attempt_id=str(row["attempt_id"]),
+                    keyring=keyring,
+                ),
+                _OPERATION_STORAGE_VERSION,
+                row["attempt_id"],
+                row["counter_key"],
+            ),
+        )
+    _rewrap_metadata_operations(conn, keyring=keyring)
+    _validate_metadata_storage_postconditions(conn, keyring=keyring)
+    _record_store_migration(conn, _METADATA_STORAGE_REDACTION_MIGRATION)
+    _record_bound_key_gate(
+        conn, prefix=_METADATA_BOUND_KEY_GATE_PREFIX, keyring=keyring
+    )
+
+
+def _postgres_audit_crypto_required(conn: Any) -> bool:
+    with conn.cursor() as cur:
+        row = cur.execute(
+            "SELECT EXISTS (SELECT 1 FROM serverware_audit_events "
+            "WHERE encrypted_canonical_event_json IS NOT NULL OR "
+            "(event_type IN ('rate_limit.consumed', 'rate_limit.denied') AND "
+            "storage_format_version IS DISTINCT FROM %s) LIMIT 1) AS required",
+            (_AUDIT_STORAGE_FORMAT_VERSION,),
+        ).fetchone()
+    return bool(row["required"])
+
+
+def _sqlite_storage_crypto_required() -> bool:
+    if not DB_PATH.exists():
+        return False
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        tables = {
+            str(row[0])
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        if "audit_events" in tables:
+            audit_columns = {
+                str(row[1])
+                for row in conn.execute("PRAGMA table_info(audit_events)").fetchall()
+            }
+            encrypted_clause = (
+                "encrypted_canonical_event_json IS NOT NULL OR "
+                if "encrypted_canonical_event_json" in audit_columns
+                else ""
+            )
+            version_clause = (
+                "storage_format_version IS NOT ?"
+                if "storage_format_version" in audit_columns
+                else "1 = 1"
+            )
+            params: tuple[Any, ...] = (
+                (_AUDIT_STORAGE_FORMAT_VERSION,)
+                if "storage_format_version" in audit_columns
+                else ()
+            )
+            row = conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM audit_events WHERE "
+                + encrypted_clause
+                + "(event_type IN ('rate_limit.consumed', 'rate_limit.denied') "
+                f"AND {version_clause}) LIMIT 1)",
+                params,
+            ).fetchone()
+            if row and bool(row[0]):
+                return True
+        for table in (
+            "rate_limit_counters",
+            "release_authorization_quota_reservations",
+        ):
+            if table not in tables:
+                continue
+            columns = {
+                str(row[1])
+                for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+            }
+            encrypted_clause = (
+                " OR encrypted_operation IS NOT NULL"
+                if "encrypted_operation" in columns
+                else ""
+            )
+            row = conn.execute(
+                f"SELECT EXISTS (SELECT 1 FROM {table} WHERE operation IS NOT NULL "
+                f"{encrypted_clause} LIMIT 1)"
+            ).fetchone()
+            if row and bool(row[0]):
+                return True
+        return False
+    finally:
+        conn.close()
+
+
+def _postgres_metadata_crypto_required() -> bool:
+    if not metadata_uses_postgres():
+        return False
+    with connect() as conn:
+        for table in (
+            "rate_limit_counters",
+            "release_authorization_quota_reservations",
+        ):
+            exists = conn.execute(
+                "SELECT to_regclass(?) IS NOT NULL AS present", (table,)
+            ).fetchone()
+            if not exists or not bool(exists["present"]):
+                continue
+            columns = {
+                str(row["column_name"])
+                for row in conn.execute(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_schema = current_schema() AND table_name = ?",
+                    (table,),
+                ).fetchall()
+            }
+            encrypted_clause = (
+                " OR encrypted_operation IS NOT NULL"
+                if "encrypted_operation" in columns
+                else ""
+            )
+            row = conn.execute(
+                f"SELECT EXISTS (SELECT 1 FROM {table} WHERE operation IS NOT NULL "
+                f"{encrypted_clause} LIMIT 1) AS required"
+            ).fetchone()
+            if row and bool(row["required"]):
+                return True
+    return False
+
+
 def init_audit_store() -> None:
     if not audit_uses_postgres():
         return
+    # Schema bootstrap must commit before key release can emit its own audit event.
     with _audit_pg_connect() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT pg_advisory_xact_lock(%(lock_key)s)",
-                {"lock_key": _AUDIT_MIGRATION_LOCK_KEY},
-            )
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS serverware_audit_events (
-                    sequence BIGSERIAL PRIMARY KEY,
-                    id TEXT NOT NULL UNIQUE,
-                    event_type TEXT NOT NULL,
-                    actor_type TEXT NOT NULL,
-                    actor_id TEXT,
-                    event_json TEXT NOT NULL
-                        CONSTRAINT serverware_audit_events_event_json_size
-                        CHECK (octet_length(event_json) <= 8388608),
-                    prev_event_hash TEXT,
-                    event_hash TEXT NOT NULL UNIQUE,
-                    created_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS serverware_audit_events_created_at_desc
-                    ON serverware_audit_events (created_at DESC, sequence DESC);
-                CREATE INDEX IF NOT EXISTS serverware_audit_events_type_created_at
-                    ON serverware_audit_events (event_type, created_at DESC);
-                DO $$
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1
-                        FROM pg_constraint
-                        WHERE conname = 'serverware_audit_events_event_json_size'
-                          AND conrelid = 'serverware_audit_events'::regclass
-                    ) THEN
-                        ALTER TABLE serverware_audit_events
-                            ADD CONSTRAINT serverware_audit_events_event_json_size
-                            CHECK (octet_length(event_json) <= 8388608) NOT VALID;
-                    END IF;
-                END $$;
-                """
-            )
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS serverware_audit_events (
+                        sequence BIGSERIAL PRIMARY KEY,
+                        id TEXT NOT NULL UNIQUE,
+                        event_type TEXT NOT NULL,
+                        actor_type TEXT NOT NULL,
+                        actor_id TEXT,
+                        event_json TEXT NOT NULL
+                            CONSTRAINT serverware_audit_events_event_json_size
+                            CHECK (octet_length(event_json) <= 8388608),
+                        encrypted_canonical_event_json TEXT,
+                        storage_format_version BIGINT,
+                        prev_event_hash TEXT,
+                        event_hash TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL
+                    );
+                    ALTER TABLE serverware_audit_events
+                        ADD COLUMN IF NOT EXISTS encrypted_canonical_event_json TEXT;
+                    ALTER TABLE serverware_audit_events
+                        ADD COLUMN IF NOT EXISTS storage_format_version BIGINT;
+                    CREATE TABLE IF NOT EXISTS serverware_store_migrations (
+                        migration TEXT PRIMARY KEY,
+                        version BIGINT NOT NULL,
+                        applied_at TEXT NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS serverware_audit_events_created_at_desc
+                        ON serverware_audit_events (created_at DESC, sequence DESC);
+                    CREATE INDEX IF NOT EXISTS serverware_audit_events_type_created_at
+                        ON serverware_audit_events (event_type, created_at DESC);
+                    DO $$
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1
+                            FROM pg_constraint AS constraint_record
+                            JOIN pg_class AS relation
+                              ON relation.oid = constraint_record.conrelid
+                            JOIN pg_namespace AS namespace
+                              ON namespace.oid = relation.relnamespace
+                            WHERE namespace.nspname = current_schema()
+                              AND relation.relname = 'serverware_audit_events'
+                              AND constraint_record.conname =
+                                  'serverware_audit_events_event_json_size'
+                        ) THEN
+                            ALTER TABLE serverware_audit_events
+                                ADD CONSTRAINT serverware_audit_events_event_json_size
+                                CHECK (octet_length(event_json) <= 8388608) NOT VALID;
+                        END IF;
+                    END $$;
+                    CREATE OR REPLACE FUNCTION serverware_audit_storage_epoch_guard()
+                    RETURNS trigger LANGUAGE plpgsql AS $$
+                    DECLARE
+                        payload JSONB;
+                        committed_operation JSONB;
+                    BEGIN
+                        IF NEW.event_type IN ('rate_limit.consumed', 'rate_limit.denied')
+                           AND EXISTS (
+                               SELECT 1 FROM serverware_store_migrations
+                               WHERE migration = '{_AUDIT_STORAGE_REDACTION_MIGRATION}'
+                                 AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+                           ) THEN
+                            payload := NEW.event_json::jsonb;
+                            committed_operation := payload->'operation';
+                            IF NEW.storage_format_version IS DISTINCT FROM
+                                   {_AUDIT_STORAGE_FORMAT_VERSION}
+                               OR NOT (
+                                   committed_operation IS NULL
+                                   OR committed_operation = 'null'::jsonb
+                                   OR (
+                                       jsonb_typeof(committed_operation) = 'object'
+                                       AND (SELECT COUNT(*) FROM
+                                           jsonb_object_keys(committed_operation)) = 4
+                                       AND committed_operation->>'type' =
+                                           'serverware.operation_commitment'
+                                       AND committed_operation->>'version' = '1'
+                                       AND committed_operation->>'algorithm' = 'sha256'
+                                       AND committed_operation->>'digest' ~
+                                           '^sha256:[0-9a-f]{{64}}$'
+                                   )
+                               ) THEN
+                                RAISE EXCEPTION 'legacy audit storage format is disabled';
+                            END IF;
+                        END IF;
+                        RETURN NEW;
+                    END;
+                    $$;
+                    DROP TRIGGER IF EXISTS serverware_audit_storage_epoch_guard
+                        ON serverware_audit_events;
+                    CREATE TRIGGER serverware_audit_storage_epoch_guard
+                        BEFORE INSERT OR UPDATE ON serverware_audit_events
+                        FOR EACH ROW EXECUTE FUNCTION
+                            serverware_audit_storage_epoch_guard();
+                    """
+                )
+    with _audit_pg_connect() as conn:
+        crypto_required = _postgres_audit_crypto_required(conn)
+    keyring = load_bound_secret_keyring() if crypto_required else None
+    with _audit_pg_connect() as conn:
+        with conn.transaction():
+            _lock_postgres_audit(conn, "migration")
+            _lock_postgres_audit(conn, "chain")
+            _lock_postgres_audit_migration_tables(conn)
+            _assert_no_postgres_destructive_audit_rewrite(conn)
+            version = _postgres_audit_migration_version(conn)
+            if _migration_gate_complete(
+                version, migration=_AUDIT_STORAGE_REDACTION_MIGRATION
+            ):
+                if _postgres_bound_key_rewrap_required(
+                    conn,
+                    prefix=_AUDIT_BOUND_KEY_GATE_PREFIX,
+                    keyring=keyring,
+                ):
+                    _rewrap_postgres_audit_preimages(conn, keyring=keyring)
+                    _record_postgres_bound_key_gate(
+                        conn,
+                        prefix=_AUDIT_BOUND_KEY_GATE_PREFIX,
+                        keyring=keyring,
+                    )
+                _validate_postgres_audit_gate_postconditions(conn, keyring=keyring)
+                return
+            _remediate_postgres_audit_operations(conn, keyring=keyring)
 
 
 def _append_sqlite_audit_event(
@@ -1335,6 +3152,7 @@ def _append_sqlite_audit_event(
 ) -> dict[str, Any]:
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
+    event = _audit_event_for_storage(event_type, event)
     event_json = dumps(event)
     _validate_audit_event_json(event_json)
     event_id = idempotency_key or str(uuid.uuid4())
@@ -1380,9 +3198,9 @@ def _append_sqlite_audit_event(
         """
         INSERT INTO audit_events (
             id, event_type, actor_type, actor_id, event_json,
-            prev_event_hash, event_hash, created_at
+            storage_format_version, prev_event_hash, event_hash, created_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             event_id,
@@ -1390,6 +3208,7 @@ def _append_sqlite_audit_event(
             actor_type,
             actor_id,
             event_json,
+            _AUDIT_STORAGE_FORMAT_VERSION,
             prev_hash,
             event_hash,
             created_at,
@@ -1416,15 +3235,13 @@ def _append_postgres_audit_event(
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     event_id = idempotency_key or str(uuid.uuid4())
+    event = _audit_event_for_storage(event_type, event)
     event_json = dumps(event)
     _validate_audit_event_json(event_json)
     with _audit_pg_connect() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT pg_advisory_xact_lock(%(lock_key)s)",
-                    {"lock_key": _AUDIT_CHAIN_LOCK_KEY},
-                )
+                _lock_postgres_audit(conn, "chain")
                 if idempotency_key is not None:
                     existing = cur.execute(
                         "SELECT * FROM serverware_audit_events WHERE id = %(id)s",
@@ -1468,11 +3285,12 @@ def _append_postgres_audit_event(
                     """
                     INSERT INTO serverware_audit_events (
                         id, event_type, actor_type, actor_id, event_json,
-                        prev_event_hash, event_hash, created_at
+                        storage_format_version, prev_event_hash, event_hash, created_at
                     )
                     VALUES (
                         %(id)s, %(event_type)s, %(actor_type)s, %(actor_id)s, %(event_json)s,
-                        %(prev_event_hash)s, %(event_hash)s, %(created_at)s
+                        %(storage_format_version)s, %(prev_event_hash)s,
+                        %(event_hash)s, %(created_at)s
                     )
                     """,
                     {
@@ -1481,6 +3299,7 @@ def _append_postgres_audit_event(
                         "actor_type": actor_type,
                         "actor_id": actor_id,
                         "event_json": event_json,
+                        "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
                         "prev_event_hash": prev_hash,
                         "event_hash": event_hash,
                         "created_at": created_at,
@@ -1511,6 +3330,7 @@ def append_audit_event(
         not isinstance(idempotency_key, str) or not 1 <= len(idempotency_key) <= 256
     ):
         raise AuditStoreError("audit idempotency key must contain 1-256 characters")
+    event = _audit_event_for_storage(event_type, event)
     if audit_uses_postgres():
         return _stage_metadata_audit_event(
             conn,
@@ -1577,6 +3397,7 @@ def record_audit_event_batch(
             raise AuditStoreError("audit event_type must contain 1-128 characters")
         if not isinstance(event, dict):
             raise AuditStoreError("audit event must be an object")
+        event = _audit_event_for_storage(event_type, event)
         event_json = dumps(event)
         _validate_audit_event_json(event_json)
         prepared.append((event_type, event, event_json, str(uuid.uuid4())))
@@ -1603,10 +3424,7 @@ def record_audit_event_batch(
     with _audit_pg_connect() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT pg_advisory_xact_lock(%(lock_key)s)",
-                    {"lock_key": _AUDIT_CHAIN_LOCK_KEY},
-                )
+                _lock_postgres_audit(conn, "chain")
                 previous = cur.execute(
                     "SELECT event_hash FROM serverware_audit_events "
                     "ORDER BY sequence DESC LIMIT 1"
@@ -1627,12 +3445,12 @@ def record_audit_event_batch(
                         """
                         INSERT INTO serverware_audit_events (
                             id, event_type, actor_type, actor_id, event_json,
-                            prev_event_hash, event_hash, created_at
+                            storage_format_version, prev_event_hash, event_hash, created_at
                         )
                         VALUES (
                             %(id)s, %(event_type)s, %(actor_type)s, %(actor_id)s,
-                            %(event_json)s, %(prev_event_hash)s, %(event_hash)s,
-                            %(created_at)s
+                            %(event_json)s, %(storage_format_version)s,
+                            %(prev_event_hash)s, %(event_hash)s, %(created_at)s
                         )
                         """,
                         {
@@ -1641,6 +3459,7 @@ def record_audit_event_batch(
                             "actor_type": actor_type,
                             "actor_id": actor_id,
                             "event_json": event_json,
+                            "storage_format_version": _AUDIT_STORAGE_FORMAT_VERSION,
                             "prev_event_hash": prev_hash,
                             "event_hash": event_hash,
                             "created_at": created_at,
@@ -1693,6 +3512,7 @@ def _stage_metadata_audit_event(
     idempotency_key: str | None = None,
 ) -> dict[str, Any]:
     event_id = idempotency_key or str(uuid.uuid4())
+    event = _audit_event_for_storage(event_type, event)
     event_json = dumps(event)
     _validate_audit_event_json(event_json)
     _lock_metadata_audit_outbox(conn)
@@ -1729,11 +3549,20 @@ def _stage_metadata_audit_event(
     conn.execute(
         """
         INSERT INTO metadata_audit_outbox (
-            id, event_type, actor_type, actor_id, event_json, status, created_at
+            id, event_type, actor_type, actor_id, event_json,
+            storage_format_version, status, created_at
         )
-        VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
         """,
-        (event_id, event_type, actor_type, actor_id, event_json, created_at),
+        (
+            event_id,
+            event_type,
+            actor_type,
+            actor_id,
+            event_json,
+            _AUDIT_STORAGE_FORMAT_VERSION,
+            created_at,
+        ),
     )
     return {
         "id": event_id,
@@ -1947,11 +3776,138 @@ def _serialize_sqlite_metadata_migration(function):
     return wrapped
 
 
+def _bootstrap_sqlite_audit_store() -> None:
+    conn = sqlite3.connect(DB_PATH, timeout=10)
+    try:
+        conn.executescript(
+            f"""
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
+                event_json TEXT NOT NULL
+                    CHECK (length(CAST(event_json AS BLOB)) <= 8388608),
+                encrypted_canonical_event_json TEXT,
+                storage_format_version INTEGER,
+                prev_event_hash TEXT,
+                event_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS serverware_store_migrations (
+                migration TEXT PRIMARY KEY,
+                version BIGINT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS audit_events_type_created_at
+                ON audit_events (event_type, created_at);
+            """
+        )
+        columns = {
+            str(row[1]) for row in conn.execute("PRAGMA table_info(audit_events)")
+        }
+        if "encrypted_canonical_event_json" not in columns:
+            conn.execute(
+                "ALTER TABLE audit_events ADD COLUMN encrypted_canonical_event_json TEXT"
+            )
+        if "storage_format_version" not in columns:
+            conn.execute(
+                "ALTER TABLE audit_events ADD COLUMN storage_format_version INTEGER"
+            )
+        conn.executescript(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS audit_storage_epoch_insert
+            BEFORE INSERT ON audit_events
+            WHEN NEW.event_type IN ('rate_limit.consumed', 'rate_limit.denied')
+             AND EXISTS (
+                 SELECT 1 FROM serverware_store_migrations
+                 WHERE migration = '{_AUDIT_STORAGE_REDACTION_MIGRATION}'
+                   AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+             )
+             AND (
+                 NEW.storage_format_version IS NOT {_AUDIT_STORAGE_FORMAT_VERSION}
+                 OR json_valid(NEW.event_json) = 0
+                 OR NOT (
+                     json_type(NEW.event_json, '$.operation') IS NULL
+                     OR json_type(NEW.event_json, '$.operation') = 'null'
+                     OR (
+                         json_type(NEW.event_json, '$.operation') = 'object'
+                         AND (SELECT COUNT(*) FROM json_each(
+                             NEW.event_json, '$.operation')) = 4
+                         AND json_extract(NEW.event_json, '$.operation.type') =
+                             'serverware.operation_commitment'
+                         AND json_extract(NEW.event_json, '$.operation.version') = 1
+                         AND json_extract(NEW.event_json, '$.operation.algorithm') =
+                             'sha256'
+                         AND length(json_extract(
+                             NEW.event_json, '$.operation.digest')) = 71
+                         AND substr(json_extract(
+                             NEW.event_json, '$.operation.digest'), 1, 7) = 'sha256:'
+                         AND substr(json_extract(
+                             NEW.event_json, '$.operation.digest'), 8)
+                             NOT GLOB '*[^0-9a-f]*'
+                     )
+                 )
+             )
+            BEGIN
+                SELECT RAISE(ABORT, 'legacy audit storage format is disabled');
+            END;
+            CREATE TRIGGER IF NOT EXISTS audit_storage_epoch_update
+            BEFORE UPDATE ON audit_events
+            WHEN NEW.event_type IN ('rate_limit.consumed', 'rate_limit.denied')
+             AND EXISTS (
+                 SELECT 1 FROM serverware_store_migrations
+                 WHERE migration = '{_AUDIT_STORAGE_REDACTION_MIGRATION}'
+                   AND version = {_STORAGE_REDACTION_MIGRATION_VERSION}
+             )
+             AND (
+                 NEW.storage_format_version IS NOT {_AUDIT_STORAGE_FORMAT_VERSION}
+                 OR json_valid(NEW.event_json) = 0
+                 OR NOT (
+                     json_type(NEW.event_json, '$.operation') IS NULL
+                     OR json_type(NEW.event_json, '$.operation') = 'null'
+                     OR (
+                         json_type(NEW.event_json, '$.operation') = 'object'
+                         AND (SELECT COUNT(*) FROM json_each(
+                             NEW.event_json, '$.operation')) = 4
+                         AND json_extract(NEW.event_json, '$.operation.type') =
+                             'serverware.operation_commitment'
+                         AND json_extract(NEW.event_json, '$.operation.version') = 1
+                         AND json_extract(NEW.event_json, '$.operation.algorithm') =
+                             'sha256'
+                         AND length(json_extract(
+                             NEW.event_json, '$.operation.digest')) = 71
+                         AND substr(json_extract(
+                             NEW.event_json, '$.operation.digest'), 1, 7) = 'sha256:'
+                         AND substr(json_extract(
+                             NEW.event_json, '$.operation.digest'), 8)
+                             NOT GLOB '*[^0-9a-f]*'
+                     )
+                 )
+             )
+            BEGIN
+                SELECT RAISE(ABORT, 'legacy audit storage format is disabled');
+            END;
+            """
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 @_serialize_sqlite_metadata_migration
 def init_db(path: Path = DB_PATH) -> None:
     ensure_data_dirs()
     grants.init_grant_store()
     init_audit_store()
+    if not audit_uses_postgres():
+        _bootstrap_sqlite_audit_store()
+    crypto_required = False
+    if not audit_uses_postgres() or not metadata_uses_postgres():
+        crypto_required = _sqlite_storage_crypto_required()
+    if metadata_uses_postgres():
+        crypto_required = crypto_required or _postgres_metadata_crypto_required()
+    keyring = load_bound_secret_keyring() if crypto_required else None
     init_recovery_witness_store()
     with connect() as conn:
         if isinstance(conn, PostgresMetadataConnection):
@@ -1969,14 +3925,32 @@ def init_db(path: Path = DB_PATH) -> None:
                     actor_id TEXT,
                     event_json TEXT NOT NULL
                         CHECK (length(CAST(event_json AS BLOB)) <= 8388608),
+                    encrypted_canonical_event_json TEXT,
+                    storage_format_version INTEGER,
                     prev_event_hash TEXT,
                     event_hash TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 )
                 """
             )
+            _ensure_column(
+                conn, "audit_events", "encrypted_canonical_event_json", "TEXT"
+            )
+            _ensure_column(conn, "audit_events", "storage_format_version", "INTEGER")
+            conn.execute(
+                "CREATE TABLE IF NOT EXISTS serverware_store_migrations ("
+                "migration TEXT PRIMARY KEY, version BIGINT NOT NULL, "
+                "applied_at TEXT NOT NULL)"
+            )
+            _remediate_sqlite_audit_operations(conn, keyring=keyring)
         conn.executescript(
             """
+            CREATE TABLE IF NOT EXISTS serverware_store_migrations (
+                migration TEXT PRIMARY KEY,
+                version BIGINT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS credentials (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
@@ -2142,6 +4116,7 @@ def init_db(path: Path = DB_PATH) -> None:
                 actor_type TEXT NOT NULL,
                 actor_id TEXT,
                 event_json TEXT NOT NULL,
+                storage_format_version BIGINT,
                 status TEXT NOT NULL,
                 claim_id TEXT,
                 claimed_at TEXT,
@@ -2392,6 +4367,8 @@ def init_db(path: Path = DB_PATH) -> None:
                 actor_type TEXT NOT NULL,
                 actor_id TEXT,
                 event_json TEXT NOT NULL,
+                encrypted_canonical_event_json TEXT,
+                storage_format_version BIGINT,
                 prev_event_hash TEXT,
                 event_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL
@@ -2406,6 +4383,8 @@ def init_db(path: Path = DB_PATH) -> None:
                 policy_hash TEXT,
                 constraint_id TEXT,
                 operation TEXT,
+                encrypted_operation TEXT,
+                operation_storage_version BIGINT,
                 window_start_epoch_ms BIGINT NOT NULL,
                 window_seconds INTEGER NOT NULL,
                 max_count INTEGER NOT NULL,
@@ -2455,6 +4434,8 @@ def init_db(path: Path = DB_PATH) -> None:
                 counter_key TEXT NOT NULL,
                 constraint_id TEXT NOT NULL,
                 operation TEXT,
+                encrypted_operation TEXT,
+                operation_storage_version BIGINT,
                 window_start_epoch_ms BIGINT NOT NULL,
                 window_seconds INTEGER NOT NULL,
                 max_count INTEGER NOT NULL,
@@ -2778,6 +4759,28 @@ def init_db(path: Path = DB_PATH) -> None:
                 ON webauthn_recovery_revocations (status, expires_at);
             """
         )
+        _lock_postgres_metadata_migration_tables(conn)
+        _ensure_column(
+            conn,
+            "release_authorization_quota_reservations",
+            "encrypted_operation",
+            "TEXT",
+        )
+        _ensure_column(
+            conn,
+            "release_authorization_quota_reservations",
+            "operation_storage_version",
+            "BIGINT",
+        )
+        _ensure_column(conn, "rate_limit_counters", "encrypted_operation", "TEXT")
+        _ensure_column(
+            conn, "rate_limit_counters", "operation_storage_version", "BIGINT"
+        )
+        _ensure_column(
+            conn, "metadata_audit_outbox", "storage_format_version", "BIGINT"
+        )
+        _install_metadata_storage_epoch_guards(conn)
+        _remediate_metadata_rate_limit_storage(conn, keyring=keyring)
         if not isinstance(conn, PostgresMetadataConnection):
             conn.executescript(
                 """
@@ -2804,6 +4807,79 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(conn, "approval_requests", "operation_digest", "TEXT")
         _ensure_column(conn, "approval_requests", "canonical_request", "TEXT")
         _ensure_column(conn, "approval_requests", "redacted_display", "TEXT")
+        for row in conn.execute(
+            "SELECT id, url, canonical_request, redacted_display FROM approval_requests"
+        ).fetchall():
+            stored_canonical = str(row["canonical_request"] or "")
+            stored_display = str(row["redacted_display"] or "")
+            if (
+                (not stored_canonical or stored_canonical.startswith("v2:"))
+                and (not stored_display or stored_display.startswith("v2:"))
+                and re.fullmatch(r"sha256:[0-9a-f]{64}", str(row["url"] or ""))
+            ):
+                continue
+            canonical = loads(_decrypt_approval_json(stored_canonical), None)
+            display = loads(_decrypt_approval_json(stored_display), None)
+            if stored_canonical and not isinstance(canonical, dict):
+                raise RuntimeError("stored approval canonical request is not a JSON object")
+            if stored_display and not isinstance(display, dict):
+                raise RuntimeError("stored approval redacted display is not a JSON object")
+            display_url = display.get("url") if isinstance(display, dict) else None
+            cleartext_url = display_url if isinstance(display_url, str) else str(row["url"])
+            conn.execute(
+                "UPDATE approval_requests SET url = ?, canonical_request = ?, "
+                "redacted_display = ? WHERE id = ?",
+                (
+                    _approval_url_commitment(cleartext_url),
+                    (
+                        stored_canonical
+                        if stored_canonical.startswith("v2:")
+                        else _encrypt_approval_json(dumps(canonical))
+                        if canonical is not None
+                        else None
+                    ),
+                    (
+                        stored_display
+                        if stored_display.startswith("v2:")
+                        else _encrypt_approval_json(dumps(display))
+                        if display is not None
+                        else None
+                    ),
+                    row["id"],
+                ),
+            )
+        for row in conn.execute(
+            "SELECT attempt_id, binding_digest, binding_json, operation_context_json "
+            "FROM release_authorization_attempts"
+        ).fetchall():
+            binding_digest = str(row["binding_digest"])
+            stored_binding = loads(str(row["binding_json"] or ""), {})
+            operation_context = loads(str(row["operation_context_json"] or ""), {})
+            binding_is_commitment = stored_binding == {"digest": binding_digest}
+            if (
+                isinstance(operation_context, dict)
+                and set(operation_context) == {"digest"}
+                and re.fullmatch(
+                    r"sha256:[0-9a-f]{64}", str(operation_context.get("digest") or "")
+                )
+            ):
+                operation_context_digest = str(operation_context["digest"])
+                if binding_is_commitment:
+                    continue
+            else:
+                operation_context_digest = (
+                    "sha256:"
+                    + hashlib.sha256(dumps(operation_context).encode("utf-8")).hexdigest()
+                )
+            conn.execute(
+                "UPDATE release_authorization_attempts SET binding_json = ?, "
+                "operation_context_json = ? WHERE attempt_id = ?",
+                (
+                    dumps({"digest": binding_digest}),
+                    dumps({"digest": operation_context_digest}),
+                    row["attempt_id"],
+                ),
+            )
         _ensure_column(conn, "approval_requests", "grant_ttl_seconds", "INTEGER")
         _ensure_column(conn, "approval_requests", "grant_max_uses", "INTEGER")
         _ensure_column(conn, "approval_requests", "approved_by", "TEXT")
@@ -8680,8 +10756,18 @@ def find_matching_route(host: str, path: str) -> dict[str, Any] | None:
 
 def row_to_approval(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
-    item["canonical_request"] = loads(item.get("canonical_request"), None)
-    item["redacted_display"] = loads(item.get("redacted_display"), None)
+    stored_canonical = item.get("canonical_request")
+    if isinstance(stored_canonical, str):
+        stored_canonical = _decrypt_approval_json(stored_canonical)
+    item["canonical_request"] = loads(stored_canonical, None)
+    stored_display = item.get("redacted_display")
+    if isinstance(stored_display, str):
+        stored_display = _decrypt_approval_json(stored_display)
+    item["redacted_display"] = loads(stored_display, None)
+    if isinstance(item["redacted_display"], dict) and isinstance(
+        item["redacted_display"].get("url"), str
+    ):
+        item["url"] = item["redacted_display"]["url"]
     item["approval_authn"] = loads(item.get("approval_authn"), None)
     return item
 
@@ -9317,13 +11403,19 @@ def _ensure_jit_approval_request_on_connection(
     ).fetchone()
     if existing:
         if (
-            existing["canonical_request"] != canonical_json
-            or existing["redacted_display"] != redacted_json
+            _stored_approval_json_digest(str(existing["canonical_request"] or ""))
+            != _approval_json_digest(canonical_json)
+            or _stored_approval_json_digest(str(existing["redacted_display"] or ""))
+            != _approval_json_digest(redacted_json)
         ):
             raise MetadataStoreError(
                 "pending approval immutable review payload does not match existing request"
             )
-        approval = row_to_approval(existing)
+        approval = dict(existing)
+        approval["canonical_request"] = canonical_request
+        approval["url"] = url
+        approval["redacted_display"] = redacted_display
+        approval["approval_authn"] = loads(approval.get("approval_authn"), None)
         approval["approval_created"] = False
         return approval
     if pending_count >= _PENDING_APPROVAL_MAX_COUNT:
@@ -9344,7 +11436,7 @@ def _ensure_jit_approval_request_on_connection(
             item_id,
             route_id,
             method,
-            url,
+            _approval_url_commitment(url),
             now_s,
             expires,
             principal_id,
@@ -9353,8 +11445,8 @@ def _ensure_jit_approval_request_on_connection(
             policy_hash,
             request_digest,
             operation_digest,
-            canonical_json,
-            redacted_json,
+            _encrypt_approval_json(canonical_json),
+            _encrypt_approval_json(redacted_json),
             grant_ttl_seconds,
             grant_max_uses,
             pending_key,
@@ -9536,7 +11628,7 @@ def has_active_approval(route_id: str, url: str | None = None) -> bool:
     url_clause = ""
     if url is not None:
         url_clause = "AND url = ?"
-        args.append(url)
+        args.append(_approval_url_commitment(url))
     with connect() as conn:
         row = conn.execute(
             f"""
@@ -10220,6 +12312,43 @@ def _consume_rate_limit_sqlite(
     now_epoch_ms: int,
 ) -> dict[str, Any]:
     now_s = datetime.fromtimestamp(now_epoch_ms / 1000, timezone.utc).isoformat()
+    preflight_row = None
+    if not consume:
+        with connect() as preflight:
+            preflight_row = preflight.execute(
+                "SELECT encrypted_operation FROM rate_limit_counters "
+                "WHERE counter_key = ?",
+                (counter_key,),
+            ).fetchone()
+        if preflight_row is None:
+            return _rate_limit_response(
+                allowed=True,
+                reason="available",
+                counter_key=counter_key,
+                window_start_epoch_ms=now_epoch_ms,
+                window_seconds=window_seconds,
+                max_count=max_count,
+                count=0,
+                now_epoch_ms=now_epoch_ms,
+                consumed=False,
+            )
+    crypto_required = operation is not None and (consume or preflight_row is not None)
+    crypto_required = crypto_required or bool(
+        preflight_row is not None and preflight_row["encrypted_operation"] is not None
+    )
+    keyring = load_bound_secret_keyring() if crypto_required else None
+    stored_operation = _operation_digest(operation)
+    encrypted_operation = (
+        _encrypt_operation(
+            operation,
+            table_kind="rate_counter",
+            counter_key=counter_key,
+            attempt_id=None,
+            keyring=keyring,
+        )
+        if operation is not None and keyring is not None
+        else None
+    )
     with connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
@@ -10233,10 +12362,11 @@ def _consume_rate_limit_sqlite(
                     """
                     INSERT INTO rate_limit_counters (
                         counter_key, principal_id, route_id, credential_id, credential_version,
-                        policy_hash, constraint_id, operation, window_start_epoch_ms,
+                        policy_hash, constraint_id, operation, encrypted_operation,
+                        operation_storage_version, window_start_epoch_ms,
                         window_seconds, max_count, count, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         counter_key,
@@ -10246,7 +12376,9 @@ def _consume_rate_limit_sqlite(
                         credential_version,
                         policy_hash,
                         constraint_id,
-                        operation,
+                        stored_operation,
+                        encrypted_operation,
+                        _OPERATION_STORAGE_VERSION,
                         now_epoch_ms,
                         window_seconds,
                         max_count,
@@ -10267,6 +12399,7 @@ def _consume_rate_limit_sqlite(
                 consumed=consume,
             )
 
+        _stored_operation(row, table_kind="rate_counter", keyring=keyring)
         window_start = int(row["window_start_epoch_ms"])
         count = int(row["count"])
         expired = now_epoch_ms >= window_start + int(row["window_seconds"]) * 1000
@@ -10296,6 +12429,7 @@ def _consume_rate_limit_sqlite(
                     UPDATE rate_limit_counters
                     SET principal_id = ?, route_id = ?, credential_id = ?, credential_version = ?,
                         policy_hash = ?, constraint_id = ?, operation = ?,
+                        encrypted_operation = ?, operation_storage_version = ?,
                         window_start_epoch_ms = ?, window_seconds = ?, max_count = ?,
                         count = ?, updated_at = ?
                     WHERE counter_key = ?
@@ -10307,7 +12441,9 @@ def _consume_rate_limit_sqlite(
                         credential_version,
                         policy_hash,
                         constraint_id,
-                        operation,
+                        stored_operation,
+                        encrypted_operation,
+                        _OPERATION_STORAGE_VERSION,
                         window_start,
                         window_seconds,
                         max_count,
@@ -10341,6 +12477,7 @@ def _consume_rate_limit_sqlite(
                 UPDATE rate_limit_counters
                 SET principal_id = ?, route_id = ?, credential_id = ?, credential_version = ?,
                     policy_hash = ?, constraint_id = ?, operation = ?,
+                    encrypted_operation = ?, operation_storage_version = ?,
                     window_start_epoch_ms = ?, window_seconds = ?, max_count = ?,
                     count = ?, updated_at = ?
                 WHERE counter_key = ?
@@ -10352,7 +12489,9 @@ def _consume_rate_limit_sqlite(
                     credential_version,
                     policy_hash,
                     constraint_id,
-                    operation,
+                    stored_operation,
+                    encrypted_operation,
+                    _OPERATION_STORAGE_VERSION,
                     window_start,
                     window_seconds,
                     max_count,
@@ -10390,6 +12529,43 @@ def _consume_rate_limit_postgres(
     now_epoch_ms: int,
 ) -> dict[str, Any]:
     now_s = datetime.fromtimestamp(now_epoch_ms / 1000, timezone.utc).isoformat()
+    preflight_row = None
+    if not consume:
+        with _metadata_pg_connect_raw() as preflight:
+            preflight_row = preflight.execute(
+                "SELECT encrypted_operation FROM rate_limit_counters "
+                "WHERE counter_key = %s",
+                (counter_key,),
+            ).fetchone()
+        if preflight_row is None:
+            return _rate_limit_response(
+                allowed=True,
+                reason="available",
+                counter_key=counter_key,
+                window_start_epoch_ms=now_epoch_ms,
+                window_seconds=window_seconds,
+                max_count=max_count,
+                count=0,
+                now_epoch_ms=now_epoch_ms,
+                consumed=False,
+            )
+    crypto_required = operation is not None and (consume or preflight_row is not None)
+    crypto_required = crypto_required or bool(
+        preflight_row is not None and preflight_row["encrypted_operation"] is not None
+    )
+    keyring = load_bound_secret_keyring() if crypto_required else None
+    stored_operation = _operation_digest(operation)
+    encrypted_operation = (
+        _encrypt_operation(
+            operation,
+            table_kind="rate_counter",
+            counter_key=counter_key,
+            attempt_id=None,
+            keyring=keyring,
+        )
+        if operation is not None and keyring is not None
+        else None
+    )
     with _metadata_pg_connect_raw() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
@@ -10398,12 +12574,14 @@ def _consume_rate_limit_postgres(
                         """
                         INSERT INTO rate_limit_counters (
                             counter_key, principal_id, route_id, credential_id, credential_version,
-                            policy_hash, constraint_id, operation, window_start_epoch_ms,
+                            policy_hash, constraint_id, operation, encrypted_operation,
+                            operation_storage_version, window_start_epoch_ms,
                             window_seconds, max_count, count, created_at, updated_at
                         )
                         VALUES (
                             %(counter_key)s, %(principal_id)s, %(route_id)s, %(credential_id)s,
                             %(credential_version)s, %(policy_hash)s, %(constraint_id)s, %(operation)s,
+                            %(encrypted_operation)s, %(operation_storage_version)s,
                             %(window_start_epoch_ms)s, %(window_seconds)s, %(max_count)s,
                             0, %(created_at)s, %(updated_at)s
                         )
@@ -10417,7 +12595,9 @@ def _consume_rate_limit_postgres(
                             "credential_version": credential_version,
                             "policy_hash": policy_hash,
                             "constraint_id": constraint_id,
-                            "operation": operation,
+                            "operation": stored_operation,
+                            "encrypted_operation": encrypted_operation,
+                            "operation_storage_version": _OPERATION_STORAGE_VERSION,
                             "window_start_epoch_ms": now_epoch_ms,
                             "window_seconds": window_seconds,
                             "max_count": max_count,
@@ -10427,7 +12607,7 @@ def _consume_rate_limit_postgres(
                     )
                 cur.execute(
                     """
-                    SELECT counter_key, window_start_epoch_ms, window_seconds, max_count, count
+                    SELECT *
                     FROM rate_limit_counters
                     WHERE counter_key = %(counter_key)s
                     FOR UPDATE
@@ -10452,6 +12632,7 @@ def _consume_rate_limit_postgres(
                         consumed=False,
                     )
 
+                _stored_operation(row, table_kind="rate_counter", keyring=keyring)
                 window_start = int(row["window_start_epoch_ms"])
                 count = int(row["count"])
                 expired = (
@@ -10488,6 +12669,8 @@ def _consume_rate_limit_postgres(
                                 policy_hash = %(policy_hash)s,
                                 constraint_id = %(constraint_id)s,
                                 operation = %(operation)s,
+                                encrypted_operation = %(encrypted_operation)s,
+                                operation_storage_version = %(operation_storage_version)s,
                                 window_start_epoch_ms = %(window_start_epoch_ms)s,
                                 window_seconds = %(window_seconds)s,
                                 max_count = %(max_count)s,
@@ -10503,7 +12686,9 @@ def _consume_rate_limit_postgres(
                                 "credential_version": credential_version,
                                 "policy_hash": policy_hash,
                                 "constraint_id": constraint_id,
-                                "operation": operation,
+                                "operation": stored_operation,
+                                "encrypted_operation": encrypted_operation,
+                                "operation_storage_version": _OPERATION_STORAGE_VERSION,
                                 "window_start_epoch_ms": window_start,
                                 "window_seconds": window_seconds,
                                 "max_count": max_count,
@@ -10541,6 +12726,8 @@ def _consume_rate_limit_postgres(
                             policy_hash = %(policy_hash)s,
                             constraint_id = %(constraint_id)s,
                             operation = %(operation)s,
+                            encrypted_operation = %(encrypted_operation)s,
+                            operation_storage_version = %(operation_storage_version)s,
                             window_start_epoch_ms = %(window_start_epoch_ms)s,
                             window_seconds = %(window_seconds)s,
                             max_count = %(max_count)s,
@@ -10556,7 +12743,9 @@ def _consume_rate_limit_postgres(
                             "credential_version": credential_version,
                             "policy_hash": policy_hash,
                             "constraint_id": constraint_id,
-                            "operation": operation,
+                            "operation": stored_operation,
+                            "encrypted_operation": encrypted_operation,
+                            "operation_storage_version": _OPERATION_STORAGE_VERSION,
                             "window_start_epoch_ms": window_start,
                             "window_seconds": window_seconds,
                             "max_count": max_count,
@@ -10865,12 +13054,14 @@ def _release_authorization_result(
     *,
     idempotent_replay: bool,
     reason: str | None = None,
+    keyring: BoundSecretKeyring | None = None,
 ) -> dict[str, Any]:
+    keyring = keyring or load_bound_secret_keyring()
     quotas = [
         {
             "counter_key": item["counter_key"],
             "constraint_id": item["constraint_id"],
-            "operation": item["operation"],
+            "operation": _release_operation(item, keyring=keyring),
             "window_start_epoch_ms": int(item["window_start_epoch_ms"]),
             "window_seconds": int(item["window_seconds"]),
             "max": int(item["max_count"]),
@@ -11052,9 +13243,14 @@ def reserve_release_authorization(
     )
     if not isinstance(operation_context, dict):
         raise ReleaseAuthorizationError("operation_context must be an object")
-    operation_context_json = dumps(operation_context)
-    if len(operation_context_json.encode("utf-8")) > _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES:
+    canonical_operation_context = dumps(operation_context)
+    if len(canonical_operation_context.encode("utf-8")) > _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES:
         raise ReleaseAuthorizationError("operation_context exceeds 64 KiB")
+    operation_context_digest = (
+        "sha256:"
+        + hashlib.sha256(canonical_operation_context.encode("utf-8")).hexdigest()
+    )
+    operation_context_json = dumps({"digest": operation_context_digest})
     if not isinstance(reservation_ttl_seconds, int) or not 1 <= reservation_ttl_seconds <= 300:
         raise ReleaseAuthorizationError("reservation TTL must be between 1 and 300 seconds")
     quotas = _prepare_release_quotas(shared_quotas)
@@ -11076,6 +13272,7 @@ def reserve_release_authorization(
     if len(binding_json.encode("utf-8")) > _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES:
         raise ReleaseAuthorizationError("release authorization binding exceeds 64 KiB")
     binding_digest = "sha256:" + hashlib.sha256(binding_json.encode("utf-8")).hexdigest()
+    persisted_binding_json = dumps({"digest": binding_digest})
     if now_epoch_ms is None:
         release_now = utcnow()
         now_ms = int(release_now.timestamp() * 1000)
@@ -11083,6 +13280,7 @@ def reserve_release_authorization(
         now_ms = _release_now_epoch_ms(now_epoch_ms)
         release_now = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
     now_s = release_now.isoformat()
+    keyring = load_bound_secret_keyring()
 
     try:
         with connect() as conn:
@@ -11095,7 +13293,7 @@ def reserve_release_authorization(
                     )
                 _validate_release_consumption_state(conn, existing)
                 return _release_authorization_result(
-                    conn, existing, idempotent_replay=True
+                    conn, existing, idempotent_replay=True, keyring=keyring
                 )
 
             if require_jit_grant:
@@ -11116,7 +13314,7 @@ def reserve_release_authorization(
                     )
                 _validate_release_consumption_state(conn, existing)
                 return _release_authorization_result(
-                    conn, existing, idempotent_replay=True
+                    conn, existing, idempotent_replay=True, keyring=keyring
                 )
             if _release_consumption_row(conn, attempt_id, for_update=True) is not None:
                 raise ReleaseAuthorizationError(
@@ -11238,15 +13436,23 @@ def reserve_release_authorization(
 
             prepared_counters: list[dict[str, Any]] = []
             for quota in quotas:
+                encrypted_counter_operation = _encrypt_operation(
+                    quota["operation"],
+                    table_kind="rate_counter",
+                    counter_key=quota["counter_key"],
+                    attempt_id=None,
+                    keyring=keyring,
+                )
                 conn.execute(
                     """
                     INSERT INTO rate_limit_counters (
                         counter_key, principal_id, route_id, credential_id,
                         credential_version, policy_hash, constraint_id, operation,
+                        encrypted_operation, operation_storage_version,
                         window_start_epoch_ms, window_seconds, max_count, count,
                         created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                     ON CONFLICT (counter_key) DO NOTHING
                     """,
                     (
@@ -11257,7 +13463,9 @@ def reserve_release_authorization(
                         credential_version,
                         policy_hash,
                         quota["constraint_id"],
-                        quota["operation"],
+                        _operation_digest(quota["operation"]),
+                        encrypted_counter_operation,
+                        _OPERATION_STORAGE_VERSION,
                         now_ms,
                         quota["window_seconds"],
                         quota["max_count"],
@@ -11277,6 +13485,9 @@ def reserve_release_authorization(
                     raise ReleaseAuthorizationError(
                         "shared quota counter could not be locked"
                     )
+                _stored_operation(
+                    counter, table_kind="rate_counter", keyring=keyring
+                )
                 window_start = int(counter["window_start_epoch_ms"])
                 count = int(counter["count"])
                 expired = now_ms >= (
@@ -11318,7 +13529,7 @@ def reserve_release_authorization(
                 (
                     attempt_id,
                     binding_digest,
-                    binding_json,
+                    persisted_binding_json,
                     flow_id,
                     principal_id,
                     route_id,
@@ -11365,7 +13576,9 @@ def reserve_release_authorization(
                     UPDATE rate_limit_counters
                     SET principal_id = ?, route_id = ?, credential_id = ?,
                         credential_version = ?, policy_hash = ?, constraint_id = ?,
-                        operation = ?, window_start_epoch_ms = ?, window_seconds = ?,
+                        operation = ?, encrypted_operation = ?,
+                        operation_storage_version = ?, window_start_epoch_ms = ?,
+                        window_seconds = ?,
                         max_count = ?, count = ?, updated_at = ?
                     WHERE counter_key = ?
                     """,
@@ -11376,7 +13589,15 @@ def reserve_release_authorization(
                         credential_version,
                         policy_hash,
                         quota["constraint_id"],
-                        quota["operation"],
+                        _operation_digest(quota["operation"]),
+                        _encrypt_operation(
+                            quota["operation"],
+                            table_kind="rate_counter",
+                            counter_key=quota["counter_key"],
+                            attempt_id=None,
+                            keyring=keyring,
+                        ),
+                        _OPERATION_STORAGE_VERSION,
                         quota["window_start_epoch_ms"],
                         quota["window_seconds"],
                         quota["max_count"],
@@ -11389,16 +13610,25 @@ def reserve_release_authorization(
                     """
                     INSERT INTO release_authorization_quota_reservations (
                         attempt_id, counter_key, constraint_id, operation,
+                        encrypted_operation, operation_storage_version,
                         window_start_epoch_ms, window_seconds, max_count,
                         count_after, reservation_state, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
                     """,
                     (
                         attempt_id,
                         quota["counter_key"],
                         quota["constraint_id"],
-                        quota["operation"],
+                        _operation_digest(quota["operation"]),
+                        _encrypt_operation(
+                            quota["operation"],
+                            table_kind="quota_reservation",
+                            counter_key=quota["counter_key"],
+                            attempt_id=attempt_id,
+                            keyring=keyring,
+                        ),
+                        _OPERATION_STORAGE_VERSION,
                         quota["window_start_epoch_ms"],
                         quota["window_seconds"],
                         quota["max_count"],
@@ -11435,7 +13665,11 @@ def reserve_release_authorization(
                     "release authorization reservation disappeared"
                 )
             return _release_authorization_result(
-                conn, row, idempotent_replay=False, reason="reserved"
+                conn,
+                row,
+                idempotent_replay=False,
+                reason="reserved",
+                keyring=keyring,
             )
     except _ReleaseAuthorizationDenied as denied:
         return denied.result
@@ -14691,7 +16925,8 @@ def list_audit_events(limit: int = 100) -> list[dict[str, Any]]:
                 cur.execute(
                     """
                     SELECT id, event_type, actor_type, actor_id, event_json,
-                           prev_event_hash, event_hash, created_at
+                           encrypted_canonical_event_json, prev_event_hash,
+                           event_hash, created_at
                     FROM serverware_audit_events
                     ORDER BY sequence DESC
                     LIMIT %(limit)s
@@ -14703,6 +16938,7 @@ def list_audit_events(limit: int = 100) -> list[dict[str, Any]]:
         for row in rows:
             item = dict(row)
             item["event"] = loads(item.pop("event_json"), {})
+            item.pop("encrypted_canonical_event_json", None)
             items.append(item)
         return items
 
@@ -14715,6 +16951,7 @@ def list_audit_events(limit: int = 100) -> list[dict[str, Any]]:
     for row in rows:
         item = dict(row)
         item["event"] = loads(item.pop("event_json"), {})
+        item.pop("encrypted_canonical_event_json", None)
         items.append(item)
     return items
 
@@ -14722,6 +16959,7 @@ def list_audit_events(limit: int = 100) -> list[dict[str, Any]]:
 def _audit_item_from_row(row: Any) -> dict[str, Any]:
     item = dict(row)
     item["event"] = loads(item.pop("event_json"), {})
+    item.pop("encrypted_canonical_event_json", None)
     return item
 
 
@@ -15046,6 +17284,8 @@ def _verify_audit_rows(
     batch_size: int,
     backend: str,
     ha: bool,
+    keyring: BoundSecretKeyring | None = None,
+    require_current_rate_storage: bool = False,
 ) -> dict[str, Any]:
     previous_hash = None
     processed = 0
@@ -15058,7 +17298,51 @@ def _verify_audit_rows(
         for row in rows:
             index = processed
             processed += 1
-            if len(row["event_json"].encode("utf-8")) > _AUDIT_EVENT_JSON_STORED_MAX_BYTES:
+            try:
+                if (
+                    require_current_rate_storage
+                    and str(row["event_type"]) in _RATE_LIMIT_AUDIT_EVENT_TYPES
+                    and _row_value(row, "storage_format_version")
+                    != _AUDIT_STORAGE_FORMAT_VERSION
+                ):
+                    raise AuditStoreError("audit_storage_format_unsupported")
+                encrypted_canonical_event_json = _row_value(
+                    row, "encrypted_canonical_event_json"
+                )
+                if encrypted_canonical_event_json is not None and keyring is None:
+                    try:
+                        keyring = load_bound_secret_keyring()
+                    except Exception as exc:
+                        raise AuditStoreError(
+                            "canonical_preimage_key_unavailable"
+                        ) from exc
+                canonical_event_json = _canonical_audit_event_json(
+                    row, keyring=keyring
+                )
+            except AuditStoreError as exc:
+                return {
+                    **common,
+                    "ok": False,
+                    "error": str(exc),
+                    "index": index,
+                    "event_id": row["id"],
+                    "complete": selected_count == total,
+                    "count": selected_count,
+                    "total": total,
+                }
+            if (
+                len(str(row["event_json"]).encode("utf-8"))
+                > _AUDIT_EVENT_JSON_STORED_MAX_BYTES
+                or len(canonical_event_json.encode("utf-8"))
+                > _AUDIT_EVENT_JSON_STORED_MAX_BYTES
+                or (
+                    encrypted_canonical_event_json is not None
+                    and len(
+                        str(encrypted_canonical_event_json).encode("utf-8")
+                    )
+                    > _AUDIT_EVENT_JSON_STORED_MAX_BYTES
+                )
+            ):
                 return {
                     **common,
                     "ok": False,
@@ -15074,7 +17358,7 @@ def _verify_audit_rows(
                 event_type=row["event_type"],
                 actor_type=row["actor_type"],
                 actor_id=row["actor_id"],
-                event_json=row["event_json"],
+                event_json=canonical_event_json,
                 prev_event_hash=row["prev_event_hash"],
                 created_at=row["created_at"],
             )
@@ -15128,13 +17412,45 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
                     "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
                 )
                 cur.execute(
-                    "SELECT COUNT(*)::bigint AS count FROM serverware_audit_events"
+                    "SELECT COUNT(*)::bigint AS count, COALESCE(("
+                    "SELECT version FROM serverware_store_migrations "
+                    "WHERE migration = %s), 0)::bigint AS storage_gate_version "
+                    "FROM serverware_audit_events",
+                    (_AUDIT_STORAGE_REDACTION_MIGRATION,),
                 )
-                total = int(cur.fetchone()["count"])
+                count_row = cur.fetchone()
+                total = int(count_row["count"])
+                storage_gate_version = int(
+                    _row_value(count_row, "storage_gate_version", 0)
+                )
+                try:
+                    storage_gate_complete = _migration_gate_complete(
+                        storage_gate_version,
+                        migration=_AUDIT_STORAGE_REDACTION_MIGRATION,
+                    )
+                except RuntimeError:
+                    return {
+                        "backend": "postgres",
+                        "ha": True,
+                        "serial_append": "pg_advisory_xact_lock",
+                        "ok": False,
+                        "error": "unsupported_storage_migration_version",
+                        "storage_migration_version": storage_gate_version,
+                        "complete": False,
+                        "count": 0,
+                        "total": total,
+                    }
                 size_query = """
-                    SELECT COALESCE(MAX(event_json_bytes), 0)::bigint AS max_bytes
+                    SELECT COALESCE(MAX(event_json_bytes), 0)::bigint AS max_bytes,
+                           COALESCE(MAX(storage_bytes), 0)::bigint AS max_storage_bytes
                     FROM (
-                        SELECT octet_length(event_json) AS event_json_bytes
+                        SELECT octet_length(event_json) AS event_json_bytes,
+                               GREATEST(
+                                   octet_length(event_json),
+                                   COALESCE(
+                                       octet_length(encrypted_canonical_event_json), 0
+                                   )
+                               ) AS storage_bytes
                         FROM serverware_audit_events
                         ORDER BY sequence ASC
                 """
@@ -15144,7 +17460,13 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
                     size_params["limit"] = limit
                 size_query += ") AS selected_audit_events"
                 cur.execute(size_query, size_params)
-                max_event_json_bytes = int(cur.fetchone()["max_bytes"])
+                size_row = cur.fetchone()
+                max_event_json_bytes = int(size_row["max_bytes"])
+                max_storage_bytes = int(
+                    _row_value(
+                        size_row, "max_storage_bytes", max_event_json_bytes
+                    )
+                )
             selected_count = total if limit is None else min(total, limit)
             if max_event_json_bytes > _AUDIT_EVENT_JSON_STORED_MAX_BYTES:
                 return {
@@ -15158,11 +17480,13 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
                     "total": total,
                     "max_event_json_bytes": max_event_json_bytes,
                 }
-            batch_size = _audit_verify_batch_size(max_event_json_bytes)
+            batch_size = _audit_verify_batch_size(max_storage_bytes)
             with conn.cursor(name="serverware_audit_verify") as cur:
                 query = """
                     SELECT id, event_type, actor_type, actor_id, event_json,
-                           prev_event_hash, event_hash, created_at
+                           encrypted_canonical_event_json, storage_format_version,
+                           prev_event_hash,
+                           event_hash, created_at
                     FROM serverware_audit_events
                     ORDER BY sequence ASC
                 """
@@ -15178,17 +17502,50 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
                     batch_size=batch_size,
                     backend="postgres",
                     ha=True,
+                    require_current_rate_storage=storage_gate_complete,
                 )
 
     with connect() as conn:
         conn.execute("BEGIN")
-        total = conn.execute("SELECT COUNT(*) AS count FROM audit_events").fetchone()[
-            "count"
-        ]
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS count, COALESCE((SELECT version FROM "
+            "serverware_store_migrations WHERE migration = ?), 0) "
+            "AS storage_gate_version FROM audit_events",
+            (_AUDIT_STORAGE_REDACTION_MIGRATION,),
+        ).fetchone()
+        total = count_row["count"]
+        storage_gate_version = int(count_row["storage_gate_version"])
+        try:
+            storage_gate_complete = _migration_gate_complete(
+                storage_gate_version,
+                migration=_AUDIT_STORAGE_REDACTION_MIGRATION,
+            )
+        except RuntimeError:
+            return {
+                "backend": "sqlite",
+                "ha": False,
+                "serial_append": "sqlite_begin_immediate",
+                "ok": False,
+                "error": "unsupported_storage_migration_version",
+                "storage_migration_version": storage_gate_version,
+                "complete": False,
+                "count": 0,
+                "total": total,
+            }
         size_query = """
-            SELECT COALESCE(MAX(event_json_bytes), 0) AS max_bytes
+            SELECT COALESCE(MAX(event_json_bytes), 0) AS max_bytes,
+                   COALESCE(MAX(storage_bytes), 0) AS max_storage_bytes
             FROM (
-                SELECT length(CAST(event_json AS BLOB)) AS event_json_bytes
+                SELECT length(CAST(event_json AS BLOB)) AS event_json_bytes,
+                       CASE
+                           WHEN length(CAST(event_json AS BLOB)) >= COALESCE(
+                               length(CAST(encrypted_canonical_event_json AS BLOB)), 0
+                           )
+                           THEN length(CAST(event_json AS BLOB))
+                           ELSE COALESCE(
+                               length(CAST(encrypted_canonical_event_json AS BLOB)), 0
+                           )
+                       END AS storage_bytes
                 FROM audit_events
                 ORDER BY rowid ASC
         """
@@ -15197,8 +17554,10 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
             size_query += " LIMIT ?"
             size_params = (limit,)
         size_query += ") AS selected_audit_events"
-        max_event_json_bytes = int(
-            conn.execute(size_query, size_params).fetchone()["max_bytes"]
+        size_row = conn.execute(size_query, size_params).fetchone()
+        max_event_json_bytes = int(size_row["max_bytes"])
+        max_storage_bytes = int(
+            _row_value(size_row, "max_storage_bytes", max_event_json_bytes)
         )
         selected_count = total if limit is None else min(total, limit)
         if max_event_json_bytes > _AUDIT_EVENT_JSON_STORED_MAX_BYTES:
@@ -15213,7 +17572,7 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
                 "total": total,
                 "max_event_json_bytes": max_event_json_bytes,
             }
-        batch_size = _audit_verify_batch_size(max_event_json_bytes)
+        batch_size = _audit_verify_batch_size(max_storage_bytes)
         query = "SELECT * FROM audit_events ORDER BY rowid ASC"
         params: tuple[Any, ...] = ()
         if limit is not None:
@@ -15227,6 +17586,7 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
             batch_size=batch_size,
             backend="sqlite",
             ha=False,
+            require_current_rate_storage=storage_gate_complete,
         )
 
 

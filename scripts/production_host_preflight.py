@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import json
 import os
 import platform
@@ -35,10 +36,406 @@ REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 TEST_ONLY_BYPASS_ENV = "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"
 CONTROL_PLANE_RUNTIME_UID = 65532
 MAX_OAUTH_SECRET_BYTES = 4096
+ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV = (
+    "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST"
+)
+ATTESTATION_HELPER_COMMAND_SETTINGS = (
+    "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE",
+    "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
+    "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
+    "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
+    "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
+    "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+)
+PROOF_COLLECTOR_COMMAND_SETTING = "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"
+PRODUCTION_PYTHON_EXECUTABLE_SETTING = "SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE"
+PRODUCTION_DOCKER_EXECUTABLE_SETTING = "SERVERWARE_DOCKER_EXECUTABLE"
+DOCKER_COMPOSE_PLUGIN_EXECUTABLE_SETTING = (
+    run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV
+)
+DOCKER_COMPOSE_PLUGIN_SHA256_SETTING = run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV
+PINNED_EXECUTABLE_COMMAND_SETTINGS = frozenset(
+    (
+        *ATTESTATION_HELPER_COMMAND_SETTINGS,
+        PROOF_COLLECTOR_COMMAND_SETTING,
+        PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+        PRODUCTION_DOCKER_EXECUTABLE_SETTING,
+    )
+)
+
+
+def secure_directory_failures(path: Path, label: str) -> list[str]:
+    failures: list[str] = []
+    if not path.is_absolute():
+        return [f"{label} must be absolute"]
+    current = Path(path.anchor)
+    for component in path.parts[1:]:
+        current /= component
+        try:
+            metadata = current.lstat()
+        except OSError as exc:
+            failures.append(f"{label} ancestor is unavailable: {current}: {exc}")
+            return failures
+        if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+            failures.append(f"{label} and every ancestor must be non-symlink directories: {current}")
+            return failures
+        mode = stat.S_IMODE(metadata.st_mode)
+        if current != path and mode & 0o022:
+            failures.append(f"{label} has a group/world-writable ancestor: {current}")
+    if failures:
+        return failures
+    final = path.lstat()
+    if final.st_uid not in {0, os.geteuid()}:
+        failures.append(f"{label} must be owned by root or UID {os.geteuid()}")
+    if stat.S_IMODE(final.st_mode) & 0o022:
+        failures.append(f"{label} must not be writable by group/other")
+    return failures
+
+
+def snapshot_pinned_executables(env: dict[str, str]) -> tuple[list[dict[str, Any]], list[str]]:
+    helper_dir = Path(env.get("SERVERWARE_ATTESTATION_HELPER_DIR", ""))
+    failures = secure_directory_failures(helper_dir, "attestation helper directory")
+    reports: list[dict[str, Any]] = []
+    digest_manifest: dict[str, str] = {}
+    raw_manifest = env.get(ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV)
+    if not isinstance(raw_manifest, str) or not raw_manifest:
+        failures.append(f"{ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV} must contain a complete JSON object")
+    else:
+        try:
+            parsed = json.loads(raw_manifest)
+        except json.JSONDecodeError as exc:
+            failures.append(f"{ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV} must be valid JSON: {exc}")
+        else:
+            if not isinstance(parsed, dict):
+                failures.append(f"{ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV} must be a JSON object")
+            else:
+                missing = sorted(PINNED_EXECUTABLE_COMMAND_SETTINGS - set(parsed))
+                extra = sorted(set(parsed) - PINNED_EXECUTABLE_COMMAND_SETTINGS)
+                if missing:
+                    failures.append(
+                        f"{ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV} is missing entries: {missing}"
+                    )
+                if extra:
+                    failures.append(
+                        f"{ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV} contains extra entries: {extra}"
+                    )
+                for setting in sorted(PINNED_EXECUTABLE_COMMAND_SETTINGS):
+                    pin = parsed.get(setting)
+                    if not isinstance(pin, str) or run_production_readiness.SHA256_RE.fullmatch(pin) is None:
+                        failures.append(
+                            f"{ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV} entry {setting} must be "
+                            "sha256:<64 lowercase hex>"
+                        )
+                    else:
+                        digest_manifest[setting] = pin
+
+    for setting in sorted(PINNED_EXECUTABLE_COMMAND_SETTINGS):
+        direct_path = setting in {
+            PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+            PRODUCTION_DOCKER_EXECUTABLE_SETTING,
+        }
+        collector = setting == PROOF_COLLECTOR_COMMAND_SETTING
+        try:
+            words = shlex.split(env.get(setting, ""))
+        except ValueError:
+            words = []
+        require_single_word = direct_path or collector
+        if (
+            not words
+            or (require_single_word and len(words) != 1)
+            or not Path(words[0]).is_absolute()
+            or (not direct_path and Path(words[0]).parent != Path("/opt/serverware/bin"))
+        ):
+            qualifier = "one " if require_single_word else "an "
+            location = "" if direct_path else " under /opt/serverware/bin"
+            failures.append(f"{setting} must name {qualifier}absolute executable{location}")
+            continue
+        host_path = Path(words[0]) if direct_path else helper_dir / Path(words[0]).name
+        label = (
+            "production Python executable"
+            if setting == PRODUCTION_PYTHON_EXECUTABLE_SETTING
+            else "Docker executable"
+            if setting == PRODUCTION_DOCKER_EXECUTABLE_SETTING
+            else "response-proof collector"
+            if collector
+            else "attestation helper"
+        )
+        try:
+            run_production_readiness.validate_secure_ancestors(host_path, label)
+            executable_bytes, metadata = run_production_readiness.read_regular_file_once(
+                host_path,
+                label,
+                max_bytes=run_production_readiness.MAX_EXECUTABLE_BYTES,
+                executable=True,
+            )
+        except (OSError, ValueError) as exc:
+            failures.append(f"{label} is missing, unsafe, or not executable: {host_path}: {exc}")
+            continue
+        if stat.S_IMODE(metadata.st_mode) & 0o022:
+            failures.append(f"{label} must not be writable by group/other: {host_path}")
+        if metadata.st_uid not in {0, os.geteuid()}:
+            failures.append(f"{label} must be owned by root or UID {os.geteuid()}: {host_path}")
+        actual_digest = "sha256:" + hashlib.sha256(executable_bytes).hexdigest()
+        expected_digest = digest_manifest.get(setting)
+        verified = expected_digest is not None and actual_digest == expected_digest
+        reports.append(
+            {
+                "setting": setting,
+                "executable": words[0],
+                "host_path": str(host_path),
+                "sha256": actual_digest,
+                "verified": verified,
+            }
+        )
+        if expected_digest is not None and not verified:
+            failures.append(
+                f"{label} SHA-256 does not match {ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV} "
+                f"entry {setting}: {host_path}"
+            )
+    return reports, failures
+
+
+def snapshot_pinned_python_scripts(env: dict[str, str]) -> tuple[list[dict[str, Any]], list[str]]:
+    reports: list[dict[str, Any]] = []
+    failures: list[str] = []
+    try:
+        pins = run_production_readiness.parse_python_script_digest_pins(env)
+    except ValueError as exc:
+        return reports, [str(exc)]
+    for path_text, (setting, expected_digest) in sorted(pins.items()):
+        try:
+            measured = run_production_readiness.open_measured_script(
+                Path(path_text), expected_digest, setting
+            )
+        except (OSError, ValueError) as exc:
+            failures.append(f"pinned Python script is missing or unsafe: {path_text}: {exc}")
+            continue
+        try:
+            reports.append(
+                {
+                    "setting": setting,
+                    "path": path_text,
+                    "sha256": measured.sha256,
+                    "verified": True,
+                }
+            )
+        finally:
+            measured.close()
+    return reports, failures
+
+
+def verify_current_preflight_script_binding(env: dict[str, str]) -> dict[str, Any]:
+    setting = run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV
+    expected_digest = env.get(setting)
+    if not isinstance(expected_digest, str) or run_production_readiness.SHA256_RE.fullmatch(
+        expected_digest
+    ) is None:
+        raise ValueError(f"{setting} must be sha256:<64 lowercase hex>")
+    raw_descriptor = os.environ.get("SERVERWARE_EXECUTING_SCRIPT_FD")
+    if not isinstance(raw_descriptor, str) or not raw_descriptor.isdigit():
+        raise ValueError(
+            "final production host preflight was not launched from a retained measured script descriptor"
+        )
+    descriptor = int(raw_descriptor)
+    try:
+        metadata = os.fstat(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        data = run_production_readiness.read_fd_bytes(
+            descriptor,
+            metadata,
+            "currently executing production host preflight script",
+            max_bytes=run_production_readiness.MAX_EXECUTABLE_BYTES,
+        )
+    except OSError as exc:
+        raise ValueError("production host preflight measured script descriptor is invalid") from exc
+    actual_digest = "sha256:" + hashlib.sha256(data).hexdigest()
+    if not hmac.compare_digest(actual_digest, expected_digest):
+        raise ValueError(
+            "currently executing production host preflight script does not match the hashed env pin"
+        )
+    configured_path = (ROOT / "scripts" / "production_host_preflight.py").resolve()
+    configured = run_production_readiness.open_measured_script(
+        configured_path,
+        expected_digest,
+        setting,
+    )
+    try:
+        if (metadata.st_dev, metadata.st_ino) != (
+            configured.metadata.st_dev,
+            configured.metadata.st_ino,
+        ):
+            raise ValueError(
+                "currently executing production host preflight script inode differs from the pinned path"
+            )
+    finally:
+        configured.close()
+    return {
+        "path": str(configured_path),
+        "sha256": actual_digest,
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "measured_from": f"/proc/self/fd/{descriptor}",
+        "matches_pinned_path_inode": True,
+    }
+
+
+def reexec_final_preflight_from_measured_descriptors(args: argparse.Namespace) -> None:
+    expected_path = args.launcher_trusted_production_env_path
+    expected_digest = args.launcher_trusted_production_env_sha256
+    if expected_path is None or expected_digest is None:
+        if args.skip_host_check and os.getenv(TEST_ONLY_BYPASS_ENV) == "1":
+            return
+        raise ValueError(
+            "production host preflight requires the root launcher env path and digest before parsing"
+        )
+    env_path = Path(args.env_file)
+    env_bytes, env_metadata = run_production_readiness.read_regular_file_once(
+        env_path,
+        "production readiness env",
+        max_bytes=run_production_readiness.MAX_PRODUCTION_ENV_BYTES,
+    )
+    run_production_readiness.validate_launcher_trusted_env(
+        env_path,
+        env_bytes,
+        env_metadata,
+        expected_path=expected_path,
+        expected_sha256=expected_digest,
+    )
+    loaded = run_production_readiness.load_env_bytes(env_bytes, env_path)
+    if loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") != "final":
+        return
+    run_production_readiness.validate_final_launcher_contract(loaded)
+    if os.environ.get("SERVERWARE_EXECUTING_SCRIPT_FD") is not None:
+        return
+    if not sys.platform.startswith("linux"):
+        raise ValueError("final production host preflight descriptor execution requires Linux")
+    executable_manifest = run_production_readiness.parse_executable_digest_manifest(
+        loaded,
+        expected_settings=set(PINNED_EXECUTABLE_COMMAND_SETTINGS),
+    )
+    script_pins = run_production_readiness.parse_python_script_digest_pins(loaded)
+    script_path = str((ROOT / "scripts" / "production_host_preflight.py").resolve())
+    script_setting, script_digest = script_pins[script_path]
+    python_executable = loaded.get(PRODUCTION_PYTHON_EXECUTABLE_SETTING, "")
+    if not Path(python_executable).is_absolute():
+        raise ValueError(f"{PRODUCTION_PYTHON_EXECUTABLE_SETTING} must be absolute")
+    child_env = run_production_readiness.build_final_child_environment(
+        loaded,
+        additions={
+            run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT: str(
+                args.launcher_trusted_production_env_path
+            ),
+            run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT: str(
+                args.launcher_trusted_production_env_sha256
+            ),
+        },
+    )
+    result = run_production_readiness.run_measured_python_script(
+        [python_executable, script_path, *sys.argv[1:]],
+        python_setting=PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+        python_expected_digest=executable_manifest[PRODUCTION_PYTHON_EXECUTABLE_SETTING],
+        script_setting=script_setting,
+        script_expected_digest=script_digest,
+        cwd=ROOT,
+        env=child_env,
+        check=False,
+    )
+    raise SystemExit(result.returncode)
+
+
+def snapshot_docker_toolchain(
+    env: dict[str, str],
+    *,
+    verify_daemon: bool,
+) -> tuple[dict[str, Any], list[str]]:
+    status: dict[str, Any] = {"ok": False}
+    failures: list[str] = []
+    try:
+        settings = run_production_readiness.validate_docker_toolchain_settings(env)
+        plugin = run_production_readiness.open_measured_executable(
+            Path(settings[DOCKER_COMPOSE_PLUGIN_EXECUTABLE_SETTING]),
+            settings[DOCKER_COMPOSE_PLUGIN_SHA256_SETTING],
+            DOCKER_COMPOSE_PLUGIN_EXECUTABLE_SETTING,
+        )
+        try:
+            status["compose_plugin"] = {
+                "path": str(plugin.path),
+                "sha256": plugin.sha256,
+                "verified": True,
+            }
+        finally:
+            plugin.close()
+        status["compose_project_name"] = settings[
+            run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV
+        ]
+        if verify_daemon:
+            manifest = run_production_readiness.parse_executable_digest_manifest(
+                env,
+                expected_settings=set(PINNED_EXECUTABLE_COMMAND_SETTINGS),
+            )
+            status["daemon"] = run_production_readiness.verify_docker_daemon_identity(
+                docker_executable=Path(env[PRODUCTION_DOCKER_EXECUTABLE_SETTING]),
+                docker_sha256=manifest[PRODUCTION_DOCKER_EXECUTABLE_SETTING],
+                socket_path=Path(settings[run_production_readiness.DOCKER_UNIX_SOCKET_ENV]),
+                expected_daemon_id=settings[run_production_readiness.DOCKER_DAEMON_ID_ENV],
+                base_env=run_production_readiness.build_final_child_environment(env),
+            )
+        status["ok"] = True
+    except (OSError, ValueError) as exc:
+        status["error"] = str(exc)
+        failures.append(f"Docker toolchain/daemon binding failed: {exc}")
+    return status, failures
 
 
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def sign_final_preflight(result: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    private_path = Path(
+        env.get(run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY_ENV, "")
+    )
+    public_path = Path(
+        env.get(run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV, "")
+    )
+    private_bytes, _, _ = snapshot_runtime_material(
+        private_path,
+        "production host preflight signing private key",
+        private=True,
+        max_bytes=64 * 1024,
+    )
+    public_bytes, _, _ = snapshot_runtime_material(
+        public_path,
+        "production host preflight signing public key",
+        max_bytes=64 * 1024,
+    )
+    private_key = serialization.load_pem_private_key(private_bytes, password=None)
+    public_key = serialization.load_pem_public_key(public_bytes)
+    if not isinstance(private_key, Ed25519PrivateKey) or not isinstance(public_key, Ed25519PublicKey):
+        raise ValueError("production host preflight signing keys must be Ed25519")
+    private_public_der = private_key.public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    public_der = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    if private_public_der != public_der:
+        raise ValueError("production host preflight signing private/public keys do not match")
+    key_id = "sha256:" + hashlib.sha256(public_der).hexdigest()
+    if key_id != env.get(run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV):
+        raise ValueError("production host preflight signing key does not match the hashed env key ID")
+    payload = canonical_json(result).encode("utf-8")
+    signature = "ed25519:" + base64.urlsafe_b64encode(private_key.sign(payload)).rstrip(b"=").decode("ascii")
+    return {
+        "apiVersion": "serverware.productionHostPreflightSignature/v1",
+        "algorithm": "ed25519",
+        "key_id": key_id,
+        "payload_sha256": "sha256:" + hashlib.sha256(payload).hexdigest(),
+        "signed_at_unix": int(time.time()),
+        "signature": signature,
+    }
 
 
 def write_result(path: Path, result: dict[str, Any]) -> None:
@@ -122,15 +519,27 @@ def oauth_secret_mounts_check(
         path = Path(env.get(setting, ""))
         item: dict[str, Any] = {"setting": setting, "path": str(path)}
         try:
-            file_stat = path.lstat()
-        except OSError:
-            failures.append(f"{setting} must reference an existing host secret file")
+            run_production_readiness.validate_secure_ancestors(path, setting)
+            secret_bytes, file_stat = run_production_readiness.read_regular_file_once(
+                path,
+                setting,
+                max_bytes=MAX_OAUTH_SECRET_BYTES,
+            )
+        except (OSError, ValueError) as exc:
+            failures.append(f"{setting} must reference a safe existing host secret file: {exc}")
             status["files"].append(item)
             continue
         mode = stat.S_IMODE(file_stat.st_mode)
-        item.update({"mode": oct(mode), "owner_uid": file_stat.st_uid, "bytes": file_stat.st_size})
-        if not path.is_absolute() or not stat.S_ISREG(file_stat.st_mode) or path.is_symlink():
-            failures.append(f"{setting} must reference an absolute regular, non-symlink host file")
+        item.update(
+            {
+                "mode": oct(mode),
+                "owner_uid": file_stat.st_uid,
+                "bytes": len(secret_bytes),
+                "sha256": "sha256:" + hashlib.sha256(secret_bytes).hexdigest(),
+                "nofollow": True,
+                "secure_ancestors": True,
+            }
+        )
         if mode not in {0o400, 0o600}:
             failures.append(f"{setting} must use mode 0400 or 0600")
         if file_stat.st_uid != CONTROL_PLANE_RUNTIME_UID:
@@ -142,6 +551,37 @@ def oauth_secret_mounts_check(
         status["files"].append(item)
     status["ok"] = not failures
     return status, failures
+
+
+def snapshot_runtime_material(
+    path: Path,
+    label: str,
+    *,
+    private: bool = False,
+    max_bytes: int = 8 * 1024 * 1024,
+) -> tuple[bytes, os.stat_result, dict[str, Any]]:
+    run_production_readiness.validate_secure_ancestors(path, label)
+    data, metadata = run_production_readiness.read_regular_file_once(
+        path,
+        label,
+        max_bytes=max_bytes,
+    )
+    if metadata.st_uid not in {0, os.geteuid()}:
+        raise ValueError(f"{label} must be owned by root or UID {os.geteuid()}")
+    mode = stat.S_IMODE(metadata.st_mode)
+    if mode & 0o022:
+        raise ValueError(f"{label} must not be writable by group/other")
+    if private and mode & 0o077:
+        raise ValueError(f"{label} must not grant group/world access")
+    return data, metadata, {
+        "path": str(path),
+        "sha256": "sha256:" + hashlib.sha256(data).hexdigest(),
+        "bytes": len(data),
+        "mode": oct(mode),
+        "owner_uid": metadata.st_uid,
+        "nofollow": True,
+        "secure_ancestors": True,
+    }
 
 
 def runtime_trust_materials_check(
@@ -163,6 +603,10 @@ def runtime_trust_materials_check(
         "anchor_tls_files": [],
         "proof_files": [],
         "proof_collector_files": [],
+        "executable_digests": [],
+        "python_script_digests": [],
+        "docker_toolchain": {},
+        "material_digests": {},
         "secret_values_redacted": True,
     }
     if skip_host_check:
@@ -170,35 +614,39 @@ def runtime_trust_materials_check(
         return status, []
 
     failures: list[str] = []
-    tls_files = {
-        "certificate": tls_dir / "serverware.crt",
-        "private_key": tls_dir / "serverware.key",
-        "ca_bundle": tls_dir / "ca.pem",
-    }
-    for label, path in tls_files.items():
-        if not path.is_file() or path.stat().st_size == 0:
-            failures.append(f"control-plane TLS {label} is missing or empty: {path}")
-        else:
-            status["tls_files"].append(path.name)
+    snapshots: dict[str, bytes] = {}
 
-    key_path = tls_files["private_key"]
-    if key_path.is_file():
-        key_mode = stat.S_IMODE(key_path.stat().st_mode)
-        status["private_key_mode"] = oct(key_mode)
-        if key_mode & 0o077:
-            failures.append("control-plane TLS private key must not be readable or writable by group/other")
-
-    if all(path.is_file() and path.stat().st_size > 0 for path in tls_files.values()):
+    def capture(key: str, path: Path, label: str, *, private: bool = False) -> None:
         try:
-            certificate = x509.load_pem_x509_certificate(tls_files["certificate"].read_bytes())
-            private_key = serialization.load_pem_private_key(tls_files["private_key"].read_bytes(), password=None)
+            data, metadata, report = snapshot_runtime_material(path, label, private=private)
+        except (OSError, ValueError) as exc:
+            failures.append(f"{label} is missing or unsafe: {path}: {exc}")
+            return
+        snapshots[key] = data
+        status["material_digests"][key] = report
+        if private:
+            status[f"{key}_mode"] = oct(stat.S_IMODE(metadata.st_mode))
+
+    tls_files = {
+        "control_plane_certificate": tls_dir / "serverware.crt",
+        "control_plane_private_key": tls_dir / "serverware.key",
+        "control_plane_ca_bundle": tls_dir / "ca.pem",
+    }
+    for key, path in tls_files.items():
+        capture(key, path, key.replace("_", " "), private=key.endswith("private_key"))
+        if key in snapshots:
+            status["tls_files"].append(path.name)
+    if set(tls_files) <= set(snapshots):
+        try:
+            certificate = x509.load_pem_x509_certificate(snapshots["control_plane_certificate"])
+            private_key = serialization.load_pem_private_key(
+                snapshots["control_plane_private_key"], password=None
+            )
             cert_public = certificate.public_key().public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
             )
             key_public = private_key.public_key().public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
             )
             if cert_public != key_public:
                 failures.append("control-plane TLS certificate does not match its private key")
@@ -214,42 +662,31 @@ def runtime_trust_materials_check(
             status["certificate_dns_names"] = sorted(dns_names)
             if "serverware" not in dns_names:
                 failures.append("control-plane TLS certificate must include the internal DNS SAN serverware")
-            issuers = x509.load_pem_x509_certificates(tls_files["ca_bundle"].read_bytes())
-            if not issuers:
-                failures.append("control-plane TLS CA bundle contains no certificates")
-            elif not any(_directly_issued_by(certificate, issuer) for issuer in issuers):
+            issuers = x509.load_pem_x509_certificates(snapshots["control_plane_ca_bundle"])
+            if not issuers or not any(_directly_issued_by(certificate, issuer) for issuer in issuers):
                 failures.append("control-plane TLS certificate is not directly issued by the supplied CA bundle")
             status["certificate_not_after"] = certificate.not_valid_after_utc.isoformat()
             status["ca_certificates"] = len(issuers)
         except Exception as exc:
             failures.append(f"control-plane TLS material is invalid: {exc}")
 
-    anchor_tls_files = {
-        "certificate": anchor_tls_dir / "audit-anchor.crt",
-        "private_key": anchor_tls_dir / "audit-anchor.key",
+    anchor_files = {
+        "anchor_certificate": anchor_tls_dir / "audit-anchor.crt",
+        "anchor_private_key": anchor_tls_dir / "audit-anchor.key",
     }
-    for label, path in anchor_tls_files.items():
-        if not path.is_file() or path.stat().st_size == 0:
-            failures.append(f"audit-anchor TLS {label} is missing or empty: {path}")
-        else:
+    for key, path in anchor_files.items():
+        capture(key, path, key.replace("_", " "), private=key.endswith("private_key"))
+        if key in snapshots:
             status["anchor_tls_files"].append(path.name)
-    anchor_key_path = anchor_tls_files["private_key"]
-    if anchor_key_path.is_file():
-        anchor_key_mode = stat.S_IMODE(anchor_key_path.stat().st_mode)
-        status["anchor_private_key_mode"] = oct(anchor_key_mode)
-        if anchor_key_mode & 0o077:
-            failures.append("audit-anchor TLS private key must not be readable or writable by group/other")
-    if all(path.is_file() and path.stat().st_size > 0 for path in anchor_tls_files.values()):
+    if set(anchor_files) <= set(snapshots):
         try:
-            certificate = x509.load_pem_x509_certificate(anchor_tls_files["certificate"].read_bytes())
-            private_key = serialization.load_pem_private_key(anchor_tls_files["private_key"].read_bytes(), password=None)
+            certificate = x509.load_pem_x509_certificate(snapshots["anchor_certificate"])
+            private_key = serialization.load_pem_private_key(snapshots["anchor_private_key"], password=None)
             cert_public = certificate.public_key().public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
             )
             key_public = private_key.public_key().public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
             )
             if cert_public != key_public:
                 failures.append("audit-anchor TLS certificate does not match its private key")
@@ -265,98 +702,71 @@ def runtime_trust_materials_check(
             status["anchor_certificate_dns_names"] = sorted(dns_names)
             if "audit-anchor" not in dns_names:
                 failures.append("audit-anchor TLS certificate must include the internal DNS SAN audit-anchor")
-            if tls_files["ca_bundle"].is_file():
-                issuers = x509.load_pem_x509_certificates(tls_files["ca_bundle"].read_bytes())
-                if not any(_directly_issued_by(certificate, issuer) for issuer in issuers):
-                    failures.append("audit-anchor TLS certificate is not directly issued by the control-plane CA bundle")
+            issuers = x509.load_pem_x509_certificates(snapshots["control_plane_ca_bundle"])
+            if not any(_directly_issued_by(certificate, issuer) for issuer in issuers):
+                failures.append("audit-anchor TLS certificate is not directly issued by the control-plane CA bundle")
             status["anchor_certificate_not_after"] = certificate.not_valid_after_utc.isoformat()
         except Exception as exc:
             failures.append(f"audit-anchor TLS material is invalid: {exc}")
 
-    helper_settings = (
-        "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE",
-        "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE",
-        "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND",
-        "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND",
-        "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND",
-        "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
+    executable_reports, executable_failures = snapshot_pinned_executables(env)
+    status["executable_digests"] = executable_reports
+    failures.extend(executable_failures)
+    status["helper_files"] = sorted(
+        Path(item["host_path"]).name
+        for item in executable_reports
+        if item["setting"] in ATTESTATION_HELPER_COMMAND_SETTINGS
     )
-    for name in helper_settings:
-        try:
-            words = shlex.split(env.get(name, ""))
-        except ValueError:
-            words = []
-        if not words or not Path(words[0]).is_absolute() or Path(words[0]).parent != Path("/opt/serverware/bin"):
-            failures.append(f"{name} must name an absolute executable under /opt/serverware/bin")
-            continue
-        host_path = helper_dir / Path(words[0]).name
-        if not host_path.is_file() or not os.access(host_path, os.X_OK):
-            failures.append(f"attestation helper is missing or not executable: {host_path}")
-            continue
-        helper_mode = stat.S_IMODE(host_path.stat().st_mode)
-        if helper_mode & 0o022:
-            failures.append(f"attestation helper must not be writable by group/other: {host_path}")
-        status["helper_files"].append(host_path.name)
-
-    try:
-        collector_words = shlex.split(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND", ""))
-    except ValueError:
-        collector_words = []
-    if (
-        len(collector_words) != 1
-        or not Path(collector_words[0]).is_absolute()
-        or Path(collector_words[0]).parent != Path("/opt/serverware/bin")
-    ):
-        failures.append("SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND must name one absolute executable under /opt/serverware/bin")
-    else:
-        collector_path = helper_dir / Path(collector_words[0]).name
-        if not collector_path.is_file() or not os.access(collector_path, os.X_OK):
-            failures.append(f"response-proof collector is missing or not executable: {collector_path}")
-        else:
-            collector_mode = stat.S_IMODE(collector_path.stat().st_mode)
-            if collector_mode & 0o022:
-                failures.append(f"response-proof collector must not be writable by group/other: {collector_path}")
-            status["proof_collector_files"].append(collector_path.name)
+    status["proof_collector_files"] = sorted(
+        Path(item["host_path"]).name
+        for item in executable_reports
+        if item["setting"] == PROOF_COLLECTOR_COMMAND_SETTING
+    )
+    if env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final":
+        script_reports, script_failures = snapshot_pinned_python_scripts(env)
+        status["python_script_digests"] = script_reports
+        failures.extend(script_failures)
+        docker_toolchain, docker_failures = snapshot_docker_toolchain(
+            env,
+            verify_daemon=True,
+        )
+        status["docker_toolchain"] = docker_toolchain
+        failures.extend(docker_failures)
 
     proof_paths = {
-        "ca_bundle": Path(env.get("SERVERWARE_PROXY_PROOF_CA_BUNDLE", "")),
-        "collector_private_key": Path(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY", "")),
-        "collector_public_key": Path(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY", "")),
-        "verifier_public_key": Path(env.get("SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY", "")),
+        "proof_ca_bundle": Path(env.get("SERVERWARE_PROXY_PROOF_CA_BUNDLE", "")),
+        "proof_collector_private_key": Path(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_PRIVATE_KEY", "")),
+        "proof_collector_public_key": Path(env.get("SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY", "")),
+        "proof_verifier_public_key": Path(env.get("SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY", "")),
     }
-    for label, path in proof_paths.items():
-        if not path.is_file() or path.stat().st_size == 0:
-            failures.append(f"response-proof {label} is missing or empty: {path}")
-        else:
+    for key, path in proof_paths.items():
+        capture(key, path, key.replace("_", " "), private=key.endswith("private_key"))
+        if key in snapshots:
             status["proof_files"].append(path.name)
-    collector_private_path = proof_paths["collector_private_key"]
-    if collector_private_path.is_file():
-        private_mode = stat.S_IMODE(collector_private_path.stat().st_mode)
-        status["proof_collector_private_key_mode"] = oct(private_mode)
-        if private_mode & 0o077:
-            failures.append("response-proof collector private key must not be readable or writable by group/other")
-    for label in ("collector_public_key", "verifier_public_key", "ca_bundle"):
-        path = proof_paths[label]
-        if path.is_file() and stat.S_IMODE(path.stat().st_mode) & 0o022:
-            failures.append(f"response-proof {label} must not be writable by group/other")
-
-    if proof_paths["ca_bundle"].is_file():
+    if "proof_ca_bundle" in snapshots:
         try:
-            proof_ca_certificates = x509.load_pem_x509_certificates(proof_paths["ca_bundle"].read_bytes())
+            proof_ca_certificates = x509.load_pem_x509_certificates(snapshots["proof_ca_bundle"])
             if not proof_ca_certificates:
                 raise ValueError("contains no certificates")
             status["proof_ca_certificates"] = len(proof_ca_certificates)
         except Exception as exc:
             failures.append(f"response-proof CA bundle is invalid: {exc}")
-
-    if all(proof_paths[label].is_file() for label in ("collector_private_key", "collector_public_key", "verifier_public_key")):
+    required_proof_keys = {
+        "proof_collector_private_key",
+        "proof_collector_public_key",
+        "proof_verifier_public_key",
+    }
+    if required_proof_keys <= set(snapshots):
         try:
             collector_private = serialization.load_pem_private_key(
-                proof_paths["collector_private_key"].read_bytes(),
-                password=None,
+                snapshots["proof_collector_private_key"], password=None
             )
-            collector_public = serialization.load_pem_public_key(proof_paths["collector_public_key"].read_bytes())
-            verifier_public = serialization.load_pem_public_key(proof_paths["verifier_public_key"].read_bytes())
+            collector_public = serialization.load_pem_public_key(
+                snapshots["proof_collector_public_key"]
+            )
+            verifier_public = serialization.load_pem_public_key(
+                snapshots["proof_verifier_public_key"]
+            )
             if not isinstance(collector_private, Ed25519PrivateKey):
                 raise ValueError("collector private key is not Ed25519")
             if not isinstance(collector_public, Ed25519PublicKey):
@@ -364,18 +774,15 @@ def runtime_trust_materials_check(
             if not isinstance(verifier_public, Ed25519PublicKey):
                 raise ValueError("vendor verifier public key is not Ed25519")
             collector_private_der = collector_private.public_key().public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
             )
             collector_public_der = collector_public.public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
             )
             if collector_private_der != collector_public_der:
                 raise ValueError("collector private and public keys do not match")
             verifier_public_der = verifier_public.public_bytes(
-                serialization.Encoding.DER,
-                serialization.PublicFormat.SubjectPublicKeyInfo,
+                serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
             )
             collector_key_id = "sha256:" + hashlib.sha256(collector_public_der).hexdigest()
             verifier_key_id = "sha256:" + hashlib.sha256(verifier_public_der).hexdigest()
@@ -388,11 +795,26 @@ def runtime_trust_materials_check(
         except Exception as exc:
             failures.append(f"response-proof signing material is invalid: {exc}")
 
-    status["tls_files"] = sorted(status["tls_files"])
-    status["anchor_tls_files"] = sorted(status["anchor_tls_files"])
-    status["helper_files"] = sorted(status["helper_files"])
-    status["proof_files"] = sorted(status["proof_files"])
-    status["proof_collector_files"] = sorted(status["proof_collector_files"])
+    if env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final":
+        capture(
+            "preflight_signing_public_key",
+            Path(
+                env.get(
+                    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV,
+                    "",
+                )
+            ),
+            "production host preflight signing public key",
+        )
+
+    for key in ("tls_files", "anchor_tls_files", "helper_files", "proof_files", "proof_collector_files"):
+        status[key] = sorted(status[key])
+    status["executable_digests"] = sorted(
+        status["executable_digests"], key=lambda item: item["setting"]
+    )
+    status["python_script_digests"] = sorted(
+        status["python_script_digests"], key=lambda item: item["setting"]
+    )
     status["ok"] = not failures
     return status, failures
 
@@ -411,6 +833,10 @@ def env_check(
     production_images_env: Path,
     config_out: Path,
     skip_config_gate: bool,
+    expected_control_plane_uid: int = CONTROL_PLANE_RUNTIME_UID,
+    expected_control_plane_gid: int = CONTROL_PLANE_RUNTIME_UID,
+    launcher_trusted_env_path: str | None = None,
+    launcher_trusted_env_sha256: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, str], list[str]]:
     status: dict[str, Any] = {
         "ok": False,
@@ -419,11 +845,41 @@ def env_check(
         "config_gate": {"skipped": skip_config_gate},
         "secret_values_redacted": True,
     }
-    if path.exists():
-        status["file"] = handoff.file_summary(path, "production-readiness-env")
     failures: list[str] = []
     try:
-        loaded = run_production_readiness.load_env_file(path)
+        env_bytes, env_metadata = run_production_readiness.read_regular_file_once(
+            path,
+            "production readiness env",
+            max_bytes=run_production_readiness.MAX_PRODUCTION_ENV_BYTES,
+        )
+        status["file"] = {
+            "path": str(path),
+            "sha256": "sha256:" + hashlib.sha256(env_bytes).hexdigest(),
+            "bytes": len(env_bytes),
+            "mode": oct(stat.S_IMODE(env_metadata.st_mode)),
+            "owner_uid": env_metadata.st_uid,
+            "nofollow": True,
+        }
+        if launcher_trusted_env_path is not None or launcher_trusted_env_sha256 is not None:
+            status["launcher_trust"] = run_production_readiness.validate_launcher_trusted_env(
+                path,
+                env_bytes,
+                env_metadata,
+                expected_path=launcher_trusted_env_path,
+                expected_sha256=launcher_trusted_env_sha256,
+            )
+        loaded = run_production_readiness.load_env_bytes(env_bytes, path)
+        if run_production_readiness.LAUNCHER_TRUST_INPUT_NAMES & set(loaded):
+            raise ValueError("out-of-band launcher trust inputs must not be defined inside the production env")
+        if loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final":
+            if "launcher_trust" not in status:
+                raise ValueError(
+                    "final production env requires out-of-band launcher trust path and digest inputs"
+                )
+            status["launcher_trust"]["startup_environment_contract"] = (
+                run_production_readiness.validate_final_launcher_contract(loaded)
+            )
+            status["executing_script"] = verify_current_preflight_script_binding(loaded)
     except Exception as exc:
         status["error"] = str(exc)
         return status, {}, [f"production readiness env is invalid: {exc}"]
@@ -431,25 +887,79 @@ def env_check(
     if skip_config_gate:
         status["ok"] = True
         return status, loaded, failures
-    env = os.environ.copy()
-    env.update(loaded)
-    set_readiness_env_metadata(env, env_file=path, production_images_env=production_images_env)
-    result = subprocess.run(
-        [
-            sys.executable,
-            "scripts/verify_production_readiness.py",
+    final_mode = loaded.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final"
+    if final_mode and (
+        expected_control_plane_uid != run_production_readiness.FINAL_CONTROL_PLANE_UID
+        or expected_control_plane_gid != run_production_readiness.FINAL_CONTROL_PLANE_GID
+    ):
+        status["error"] = "final control-plane UID/GID must be fixed at 65532:65532"
+        return status, loaded, [status["error"]]
+    try:
+        env = (
+            run_production_readiness.build_final_child_environment(loaded)
+            if final_mode
+            else {**os.environ, **loaded}
+        )
+    except ValueError as exc:
+        status["error"] = str(exc)
+        return status, loaded, [f"production readiness config gate child env is invalid: {exc}"]
+    env["SERVERWARE_PRODUCTION_READINESS_ENV_PATH"] = str(path)
+    env["SERVERWARE_PRODUCTION_READINESS_ENV_SHA256"] = status["file"]["sha256"]
+    env["SERVERWARE_PRODUCTION_IMAGES_ENV_PATH"] = str(production_images_env)
+    if production_images_env.exists():
+        env["SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"] = handoff.file_summary(
+            production_images_env, "production-images-env"
+        )["sha256"]
+    try:
+        executable_manifest = run_production_readiness.parse_executable_digest_manifest(
+            loaded,
+            expected_settings=set(PINNED_EXECUTABLE_COMMAND_SETTINGS),
+        )
+        python_executable = loaded.get(PRODUCTION_PYTHON_EXECUTABLE_SETTING, "")
+        if not Path(python_executable).is_absolute():
+            raise ValueError(f"{PRODUCTION_PYTHON_EXECUTABLE_SETTING} must be absolute")
+        script_pins = run_production_readiness.parse_python_script_digest_pins(loaded) if final_mode else {}
+    except Exception as exc:
+        status["error"] = str(exc)
+        return status, loaded, [f"production readiness config gate executable pin is invalid: {exc}"]
+    command = [
+        python_executable,
+        "scripts/verify_production_readiness.py",
             "--mode",
             "config",
+            "--expected-control-plane-uid",
+            str(expected_control_plane_uid),
+            "--expected-control-plane-gid",
+            str(expected_control_plane_gid),
             "--out",
             str(config_out),
-        ],
-        cwd=ROOT,
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-        text=True,
-    )
+    ]
+    common = {
+        "cwd": ROOT,
+        "env": env,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "check": False,
+        "text": True,
+    }
+    if final_mode:
+        script_path = str((ROOT / "scripts" / "verify_production_readiness.py").resolve())
+        script_setting, script_digest = script_pins[script_path]
+        result = run_production_readiness.run_measured_python_script(
+            command,
+            python_setting=PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+            python_expected_digest=executable_manifest[PRODUCTION_PYTHON_EXECUTABLE_SETTING],
+            script_setting=script_setting,
+            script_expected_digest=script_digest,
+            **common,
+        )
+    else:
+        result = run_production_readiness.run_measured_command(
+            command,
+            setting=PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+            expected_digest=executable_manifest[PRODUCTION_PYTHON_EXECUTABLE_SETTING],
+            **common,
+        )
     config_gate: dict[str, Any] = {
         "ok": result.returncode == 0,
         "out": str(config_out),
@@ -509,7 +1019,7 @@ def published_images_check(
     status: dict[str, Any] = {
         "ok": False,
         "path": str(path),
-        "exists": path.exists(),
+        "exists": False,
         "secret_values_redacted": True,
     }
     if not path.exists():
@@ -681,10 +1191,75 @@ def artifact_check(
 def release_security_evidence_check(
     args: argparse.Namespace,
     release_artifacts: dict[str, Any],
+    production_env: dict[str, str],
 ) -> tuple[dict[str, Any], list[str]]:
     status: dict[str, Any] = {"ok": False, "secret_values_redacted": True}
     failures: list[str] = []
     try:
+        final_mode = production_env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final"
+        trust_roots: dict[str, dict[str, Any]] = {}
+        if final_mode:
+            trust_roles = {
+                "policy_identity": (
+                    args.policy_trusted_public_key,
+                    args.policy_trusted_public_key_id,
+                    run_production_readiness.POLICY_TRUST_ROOT_ENV,
+                    run_production_readiness.POLICY_TRUST_ROOT_ID_ENV,
+                ),
+                "policy_activation": (
+                    args.policy_activation_trusted_public_key,
+                    args.policy_activation_trusted_public_key_id,
+                    run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV,
+                    run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV,
+                ),
+                "reproducible_build": (
+                    args.reproducible_build_trusted_public_key,
+                    args.reproducible_build_trusted_public_key_id,
+                    run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV,
+                    run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV,
+                ),
+            }
+            for role, (selected_path, selected_id, path_setting, id_setting) in trust_roles.items():
+                pinned_path = production_env.get(path_setting)
+                pinned_id = production_env.get(id_setting)
+                if selected_path != pinned_path:
+                    raise ValueError(
+                        f"selected {role} trust root path does not exactly match {path_setting}"
+                    )
+                if selected_id is not None and selected_id != pinned_id:
+                    raise ValueError(
+                        f"selected {role} trust root ID does not exactly match {id_setting}"
+                    )
+                if not isinstance(pinned_id, str) or run_production_readiness.SHA256_RE.fullmatch(
+                    pinned_id
+                ) is None:
+                    raise ValueError(f"{id_setting} must be sha256:<64 lowercase hex>")
+                key_bytes, _metadata, report = snapshot_runtime_material(
+                    Path(str(pinned_path)),
+                    f"{role} trust root",
+                    max_bytes=64 * 1024,
+                )
+                public_key = serialization.load_pem_public_key(key_bytes)
+                spki = public_key.public_bytes(
+                    serialization.Encoding.DER,
+                    serialization.PublicFormat.SubjectPublicKeyInfo,
+                )
+                actual_id = "sha256:" + hashlib.sha256(spki).hexdigest()
+                if not hmac.compare_digest(actual_id, pinned_id):
+                    raise ValueError(
+                        f"{role} trust root bytes do not match the hashed production env SPKI pin"
+                    )
+                trust_roots[role] = {
+                    **report,
+                    "spki_sha256": actual_id,
+                    "verified": True,
+                }
+            if len({item["spki_sha256"] for item in trust_roots.values()}) != len(
+                trust_roots
+            ):
+                raise ValueError(
+                    "policy identity, activation, and reproducible-build trust roots must be distinct"
+                )
         identity = verify_production_policy_identity.verify_persisted_report(
             bundle_path=Path(args.policy_bundle),
             trusted_public_key_path=Path(args.policy_trusted_public_key),
@@ -693,6 +1268,10 @@ def release_security_evidence_check(
         bench = release_artifacts.get("bench") or {}
         if bench.get("policy_hash") != identity["policyHash"]:
             raise ValueError("decision-gate benchmark policy hash does not match the identity-verified policy")
+        if final_mode and identity.get("trustedPublicKeySha256") != trust_roots[
+            "policy_identity"
+        ]["sha256"]:
+            raise ValueError("policy identity verifier did not use the snapshotted trust-root bytes")
 
         activation = production_release_input_preflight.verify_externally_signed_report(
             report_path=Path(args.policy_activation_verification),
@@ -706,6 +1285,10 @@ def release_security_evidence_check(
             raise ValueError("policy activation verification is not production evidence")
         if activation["report"].get("candidate_policy_hash") != identity["policyHash"]:
             raise ValueError("policy activation candidate hash does not match the identity-verified policy")
+        if final_mode and activation.get("trustedPublicKeySha256") != trust_roots[
+            "policy_activation"
+        ]["sha256"]:
+            raise ValueError("policy activation verifier did not use the snapshotted trust-root bytes")
 
         reproducibility = production_release_input_preflight.verify_externally_signed_report(
             report_path=Path(args.reproducible_build_verification),
@@ -746,8 +1329,13 @@ def release_security_evidence_check(
         )
         if reproduced_gate.get("rust_binary_sha256") != production_gate.get("binary_digest"):
             raise ValueError("reproducible-build Rust binary digest does not match the production build")
+        if final_mode and reproducibility.get("trustedPublicKeySha256") != trust_roots[
+            "reproducible_build"
+        ]["sha256"]:
+            raise ValueError("reproducible-build verifier did not use the snapshotted trust-root bytes")
         status.update(
             {
+                "trust_roots": trust_roots,
                 "policy_identity": identity,
                 "policy_activation": {key: value for key, value in activation.items() if key != "report"},
                 "reproducible_builds": {
@@ -826,6 +1414,7 @@ def production_compose_check(
     expected_images: list[dict[str, str]],
     expected_digest: str | None,
     skip_host_check: bool,
+    production_env: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], list[str]]:
     status: dict[str, Any] = {
         "ok": False,
@@ -837,17 +1426,124 @@ def production_compose_check(
         status["ok"] = True
         return status, []
     try:
+        if production_env is None:
+            production_env = run_production_readiness.load_env_file(env_file)
+        executable_manifest = run_production_readiness.parse_executable_digest_manifest(
+            production_env,
+            expected_settings=set(PINNED_EXECUTABLE_COMMAND_SETTINGS),
+        )
+        docker_executable = production_env.get(PRODUCTION_DOCKER_EXECUTABLE_SETTING, "")
+        if not Path(docker_executable).is_absolute():
+            raise ValueError(f"{PRODUCTION_DOCKER_EXECUTABLE_SETTING} must be absolute")
+        docker_toolchain = run_production_readiness.validate_docker_toolchain_settings(
+            production_env
+        )
+        compose_plugin = docker_toolchain[DOCKER_COMPOSE_PLUGIN_EXECUTABLE_SETTING]
+        compose_plugin_sha256 = docker_toolchain[DOCKER_COMPOSE_PLUGIN_SHA256_SETTING]
+        compose_project_name = docker_toolchain[
+            run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV
+        ]
+        docker_env = run_production_readiness.docker_subprocess_environment(
+            run_production_readiness.build_final_child_environment(production_env)
+            if production_env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final"
+            else dict(os.environ),
+            Path(docker_toolchain[run_production_readiness.DOCKER_UNIX_SOCKET_ENV]),
+        )
+        docker_socket_path = Path(
+            docker_toolchain[run_production_readiness.DOCKER_UNIX_SOCKET_ENV]
+        )
+        docker_endpoint = f"unix://{docker_socket_path}"
+        final_mode = production_env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final"
+        daemon_before = None
+        if final_mode:
+            daemon_before = run_production_readiness.verify_docker_daemon_identity(
+                docker_executable=Path(docker_executable),
+                docker_sha256=executable_manifest[PRODUCTION_DOCKER_EXECUTABLE_SETTING],
+                socket_path=docker_socket_path,
+                expected_daemon_id=docker_toolchain[
+                    run_production_readiness.DOCKER_DAEMON_ID_ENV
+                ],
+                base_env=run_production_readiness.build_final_child_environment(production_env),
+            )
         refs = {item.get("name"): item.get("ref") for item in expected_images}
         images = {
             "serverware-control": {"repo_digests": [refs["control"]]},
             "serverware-decision-gate": {"repo_digests": [refs["decision-gate"]]},
         }
-        _, summary = generate_release_provenance.production_compose_model(
-            compose_file=compose_file,
-            env_file=env_file,
-            images=images,
-        )
+        original_run = generate_release_provenance.run
+        original_load_env = generate_release_provenance.run_production_readiness.load_env_file
+
+        def measured_docker_run(args: list[str], *, input_bytes: bytes | None = None) -> str:
+            if len(args) < 2 or args[:2] != ["docker", "compose"]:
+                raise ValueError("production Compose renderer attempted an unpinned executable")
+            command = [
+                compose_plugin,
+                "--host",
+                docker_endpoint,
+                *args[2:],
+            ]
+            result = run_production_readiness.run_measured_command(
+                command,
+                setting=DOCKER_COMPOSE_PLUGIN_EXECUTABLE_SETTING,
+                expected_digest=compose_plugin_sha256,
+                cwd=ROOT,
+                env=docker_env,
+                input=input_bytes,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=input_bytes is None,
+            )
+            if result.returncode != 0:
+                detail = result.stderr.strip() or result.stdout.strip()
+                raise ValueError(f"pinned Docker command failed with exit {result.returncode}: {detail}")
+            return result.stdout.strip()
+
+        generate_release_provenance.run = measured_docker_run
+        generate_release_provenance.run_production_readiness.load_env_file = lambda _path: dict(production_env)
+        try:
+            canonical_model, summary = generate_release_provenance.production_compose_model(
+                compose_file=compose_file,
+                env_file=env_file,
+                images=images,
+            )
+        finally:
+            generate_release_provenance.run = original_run
+            generate_release_provenance.run_production_readiness.load_env_file = original_load_env
         status.update(summary)
+        rendered_model = json.loads(canonical_model)
+        runtime_model = run_production_readiness.normalize_compose_runtime_model(
+            rendered_model
+        )
+        status["runtime_model"] = runtime_model
+        status["runtime_model_sha256"] = runtime_model["sha256"]
+        if final_mode:
+            daemon_after = run_production_readiness.verify_docker_daemon_identity(
+                docker_executable=Path(docker_executable),
+                docker_sha256=executable_manifest[PRODUCTION_DOCKER_EXECUTABLE_SETTING],
+                socket_path=docker_socket_path,
+                expected_daemon_id=docker_toolchain[
+                    run_production_readiness.DOCKER_DAEMON_ID_ENV
+                ],
+                base_env=run_production_readiness.build_final_child_environment(production_env),
+            )
+            run_production_readiness.require_stable_docker_daemon_binding(
+                daemon_before,
+                daemon_after,
+            )
+            status["docker_daemon_before"] = daemon_before
+            status["docker_daemon_after"] = daemon_after
+        status["docker_executable"] = docker_executable
+        status["docker_sha256"] = executable_manifest[PRODUCTION_DOCKER_EXECUTABLE_SETTING]
+        status["compose_plugin_executable"] = compose_plugin
+        status["compose_plugin_sha256"] = compose_plugin_sha256
+        status["compose_project_name"] = compose_project_name
+        status["docker_unix_socket"] = docker_toolchain[
+            run_production_readiness.DOCKER_UNIX_SOCKET_ENV
+        ]
+        status["docker_daemon_id"] = docker_toolchain[
+            run_production_readiness.DOCKER_DAEMON_ID_ENV
+        ]
         if summary["sha256"] != expected_digest:
             raise ValueError(
                 "rendered production Compose digest does not match signed release provenance: "
@@ -863,9 +1559,12 @@ def production_compose_check(
 def ciphertext_blob(config: dict[str, Any], material: str) -> bytes:
     path = config.get("ciphertext_blob_path") or config.get("ciphertextBlobPath")
     if isinstance(path, str) and path:
-        if not Path(path).is_file():
-            raise ValueError(f"material {material} ciphertext blob path is not a file")
-        return Path(path).read_bytes()
+        data, _metadata, _report = snapshot_runtime_material(
+            Path(path),
+            f"material {material} ciphertext blob",
+            max_bytes=8 * 1024 * 1024,
+        )
+        return data
     raw = config.get("ciphertext_blob_b64") or config.get("ciphertextBlobB64")
     if not isinstance(raw, str) or not raw:
         raise ValueError(f"material {material} missing ciphertext blob")
@@ -884,14 +1583,17 @@ def kms_materials_check(path: Path) -> tuple[dict[str, Any], list[str]]:
         "secret_values_redacted": True,
     }
     failures: list[str] = []
-    if not path.exists():
-        return status, [f"KMS materials file does not exist: {path}"]
     try:
-        mode = stat.S_IMODE(path.stat().st_mode)
+        kms_bytes, kms_metadata, kms_report = snapshot_runtime_material(
+            path,
+            "KMS materials file",
+            private=True,
+            max_bytes=8 * 1024 * 1024,
+        )
+        mode = stat.S_IMODE(kms_metadata.st_mode)
+        status["exists"] = True
         status["mode"] = oct(mode)
-        if mode & 0o077:
-            failures.append("KMS materials file must not be readable by group/other")
-        parsed = json.loads(path.read_text(encoding="utf-8"))
+        parsed = json.loads(kms_bytes.decode("utf-8"))
         if not isinstance(parsed, dict):
             raise ValueError("KMS materials file must be a JSON object")
         prepare_aws_kms_materials.reject_secret_fields(parsed)
@@ -922,7 +1624,7 @@ def kms_materials_check(path: Path) -> tuple[dict[str, Any], list[str]]:
                 }
             )
         status["materials"] = materials
-        status["file"] = handoff.file_summary(path, "kms-materials")
+        status["file"] = kms_report
     except Exception as exc:
         failures.append(f"KMS materials file is invalid: {exc}")
     status["ok"] = not failures
@@ -932,6 +1634,14 @@ def kms_materials_check(path: Path) -> tuple[dict[str, Any], list[str]]:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Preflight the production host before running Serverware's final readiness proof.")
     parser.add_argument("--env-file", default="ops/production-readiness.env")
+    parser.add_argument(
+        "--launcher-trusted-production-env-path",
+        default=os.getenv(run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT),
+    )
+    parser.add_argument(
+        "--launcher-trusted-production-env-sha256",
+        default=os.getenv(run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT),
+    )
     parser.add_argument("--compose-file", default="docker-compose.production.yml")
     parser.add_argument("--production-images-env", default=".tmp/production-images.env")
     parser.add_argument("--production-images-published", default=".tmp/production-images-published.json")
@@ -943,21 +1653,30 @@ def main() -> None:
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
     parser.add_argument("--policy-bundle", required=True)
     parser.add_argument("--policy-trusted-public-key", required=True)
+    parser.add_argument("--policy-trusted-public-key-id", default=None)
     parser.add_argument("--policy-identity-verification", required=True)
     parser.add_argument("--policy-activation-verification", required=True)
     parser.add_argument("--policy-activation-signature", required=True)
     parser.add_argument("--policy-activation-trusted-public-key", required=True)
+    parser.add_argument("--policy-activation-trusted-public-key-id", default=None)
     parser.add_argument("--reproducible-build-verification", required=True)
     parser.add_argument("--reproducible-build-signature", required=True)
     parser.add_argument("--reproducible-build-trusted-public-key", required=True)
+    parser.add_argument("--reproducible-build-trusted-public-key-id", default=None)
     parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
+    parser.add_argument("--expected-control-plane-uid", type=int, default=CONTROL_PLANE_RUNTIME_UID)
+    parser.add_argument("--expected-control-plane-gid", type=int, default=CONTROL_PLANE_RUNTIME_UID)
     parser.add_argument("--config-out", default=".tmp/production-host-preflight-config.json")
     parser.add_argument("--out", default=".tmp/production-host-preflight.json")
     parser.add_argument("--skip-host-check", action="store_true", help="Test-only bypass for non-Nitro local fixture checks.")
     parser.add_argument("--skip-config-gate", action="store_true", help="Only validate env parsing, not the production config gate.")
     args = parser.parse_args()
     enforce_test_only_bypass(args)
-
+    try:
+        reexec_final_preflight_from_measured_descriptors(args)
+    except Exception as exc:
+        print(f"production host preflight launcher error: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     failures: list[str] = []
     host, host_failures = host_check(skip_host_check=args.skip_host_check)
     failures.extend(host_failures)
@@ -966,6 +1685,10 @@ def main() -> None:
         production_images_env=Path(args.production_images_env),
         config_out=Path(args.config_out),
         skip_config_gate=args.skip_config_gate,
+        expected_control_plane_uid=args.expected_control_plane_uid,
+        expected_control_plane_gid=args.expected_control_plane_gid,
+        launcher_trusted_env_path=args.launcher_trusted_production_env_path,
+        launcher_trusted_env_sha256=args.launcher_trusted_production_env_sha256,
     )
     failures.extend(env_failures)
     runtime_trust, runtime_trust_failures = runtime_trust_materials_check(
@@ -993,7 +1716,11 @@ def main() -> None:
         loaded_env,
     )
     failures.extend(artifact_failures)
-    release_security, release_security_failures = release_security_evidence_check(args, artifacts)
+    release_security, release_security_failures = release_security_evidence_check(
+        args,
+        artifacts,
+        loaded_env,
+    )
     failures.extend(release_security_failures)
     compose_status, compose_failures = production_compose_check(
         compose_file=Path(args.compose_file),
@@ -1001,6 +1728,7 @@ def main() -> None:
         expected_images=[item for item in expected_images if isinstance(item, dict)],
         expected_digest=(artifacts.get("release_provenance_document") or {}).get("compose_config_sha256"),
         skip_host_check=args.skip_host_check,
+        production_env=loaded_env,
     )
     failures.extend(compose_failures)
     artifact_mounts, artifact_mount_failures = release_artifact_mounts_check(
@@ -1034,6 +1762,13 @@ def main() -> None:
         "next_command": "make run-production-readiness PRODUCTION_READINESS_ENV=ops/production-readiness.env" if not failures else None,
         "secret_values_redacted": True,
     }
+    if loaded_env.get("SERVERWARE_COMPLETION_VERIFICATION_MODE") == "final":
+        try:
+            result["authenticity"] = sign_final_preflight(result, loaded_env)
+        except Exception as exc:
+            result["ok"] = False
+            result["failures"].append(f"production host preflight authenticity signing failed: {exc}")
+            result["next_command"] = None
     write_result(Path(args.out), result)
     print(canonical_json(result))
     raise SystemExit(0 if result["ok"] else 1)

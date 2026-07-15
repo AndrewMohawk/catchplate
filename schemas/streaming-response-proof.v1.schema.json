@@ -1,0 +1,739 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/streaming-response-proof.v1.schema.json",
+  "title": "Serverware Streaming Proxy Response Proof v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "external_capture",
+    "collector_signature",
+    "streaming_response_statement",
+    "server_signature",
+    "vendor_tee"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.streamingProxyResponseProof/v1"},
+    "kind": {"const": "ServerwareStreamingProxyResponseProof"},
+    "external_capture": {"$ref": "#/$defs/capture"},
+    "collector_signature": {"$ref": "#/$defs/ed25519Signature"},
+    "streaming_response_statement": {"$ref": "#/$defs/statement"},
+    "server_signature": {"$ref": "#/$defs/ed25519Signature"},
+    "vendor_tee": {"$ref": "#/$defs/vendorTee"}
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "base64url": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 131072,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "nonce": {
+      "type": "string",
+      "minLength": 43,
+      "maxLength": 43,
+      "pattern": "^[A-Za-z0-9_-]{43}$"
+    },
+    "boundedString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+    },
+    "identifier": {
+      "allOf": [
+        {"$ref": "#/$defs/boundedString"},
+        {"pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@-]*$"}
+      ]
+    },
+    "uint64": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 18446744073709551615
+    },
+    "positiveUint64": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 18446744073709551615
+    },
+    "status": {
+      "type": "integer",
+      "minimum": 200,
+      "maximum": 299
+    },
+    "ed25519Pem": {
+      "type": "string",
+      "minLength": 112,
+      "maxLength": 256,
+      "pattern": "^-----BEGIN PUBLIC KEY-----\n[A-Za-z0-9+/]{59}=\n-----END PUBLIC KEY-----\n$"
+    },
+    "ed25519SignatureText": {
+      "type": "string",
+      "pattern": "^ed25519:[A-Za-z0-9_-]{86}$"
+    },
+    "ed25519Signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "public_key_pem", "signature"],
+      "properties": {
+        "algorithm": {"const": "Ed25519"},
+        "key_id": {"$ref": "#/$defs/sha256"},
+        "public_key_pem": {"$ref": "#/$defs/ed25519Pem"},
+        "signature": {"$ref": "#/$defs/ed25519SignatureText"}
+      }
+    },
+    "trailerNames": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {"const": "X-Serverware-Stream-Proof-B64"},
+        {"const": "X-Serverware-Stream-Proof-SHA256"}
+      ],
+      "items": false
+    },
+    "releaseAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authority_mode",
+        "grant_id",
+        "approval_id",
+        "credential_ref",
+        "credential_version",
+        "request_digest",
+        "operation_digest",
+        "attempt_id",
+        "consumption_identity_digest",
+        "authorization_state_at_upstream_dispatch",
+        "authorization_state_observed_at_epoch_ms",
+        "reservation_expires_at_epoch_ms",
+        "dispatch_expires_at_epoch_ms"
+      ],
+      "properties": {
+        "authority_mode": {"const": "atomic"},
+        "grant_id": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "approval_id": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "credential_ref": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "credential_version": {"$ref": "#/$defs/uint64"},
+        "request_digest": {"$ref": "#/$defs/sha256"},
+        "operation_digest": {"$ref": "#/$defs/sha256"},
+        "attempt_id": {"$ref": "#/$defs/sha256"},
+        "consumption_identity_digest": {"$ref": "#/$defs/sha256"},
+        "authorization_state_at_upstream_dispatch": {"const": "dispatching"},
+        "authorization_state_observed_at_epoch_ms": {"$ref": "#/$defs/positiveUint64"},
+        "reservation_expires_at_epoch_ms": {
+          "anyOf": [{"$ref": "#/$defs/positiveUint64"}, {"type": "null"}]
+        },
+        "dispatch_expires_at_epoch_ms": {"$ref": "#/$defs/positiveUint64"}
+      }
+    },
+    "quota": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "counter_key",
+        "constraint_id",
+        "operation",
+        "window_seconds",
+        "max_count"
+      ],
+      "properties": {
+        "counter_key": {"$ref": "#/$defs/sha256"},
+        "constraint_id": {"$ref": "#/$defs/identifier"},
+        "operation": {
+          "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "window_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 31536000
+        },
+        "max_count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000
+        }
+      }
+    },
+    "authorizationBindingCommitment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "attempt_id",
+        "flow_id",
+        "principal_id",
+        "route_id",
+        "credential_id",
+        "credential_version",
+        "policy_hash",
+        "request_digest",
+        "operation_digest",
+        "operation_context_digest",
+        "require_jit_grant",
+        "shared_quotas"
+      ],
+      "properties": {
+        "attempt_id": {"$ref": "#/$defs/sha256"},
+        "flow_id": {"$ref": "#/$defs/sha256"},
+        "principal_id": {"$ref": "#/$defs/identifier"},
+        "route_id": {"$ref": "#/$defs/identifier"},
+        "credential_id": {
+          "anyOf": [{"const": ""}, {"$ref": "#/$defs/identifier"}]
+        },
+        "credential_version": {"$ref": "#/$defs/uint64"},
+        "policy_hash": {"$ref": "#/$defs/sha256"},
+        "request_digest": {"$ref": "#/$defs/sha256"},
+        "operation_digest": {"$ref": "#/$defs/sha256"},
+        "operation_context_digest": {"$ref": "#/$defs/sha256"},
+        "require_jit_grant": {"type": "boolean"},
+        "shared_quotas": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/quota"}
+        }
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "credential_id": {"const": ""},
+            "credential_version": {"const": 0}
+          }
+        },
+        {
+          "properties": {
+            "credential_id": {"$ref": "#/$defs/identifier"},
+            "credential_version": {"$ref": "#/$defs/positiveUint64"}
+          }
+        }
+      ]
+    },
+    "authorizationBindingValidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "binding_commitment", "binding_digest"],
+      "properties": {
+        "status": {"const": "validated"},
+        "binding_commitment": {"$ref": "#/$defs/authorizationBindingCommitment"},
+        "binding_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "receiptRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "path", "query", "nonce", "body_b64", "body_sha256"],
+      "properties": {
+        "method": {"const": "POST"},
+        "path": {"const": "/api/data-plane/release-authorizations/dispatch"},
+        "query": {"const": ""},
+        "nonce": {"$ref": "#/$defs/nonce"},
+        "body_b64": {"$ref": "#/$defs/base64url"},
+        "body_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "receiptResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "body_b64",
+        "body_sha256",
+        "response_signing_key_id",
+        "statement_b64",
+        "statement_sha256",
+        "signature"
+      ],
+      "properties": {
+        "status": {"const": 200},
+        "body_b64": {"$ref": "#/$defs/base64url"},
+        "body_sha256": {"$ref": "#/$defs/sha256"},
+        "response_signing_key_id": {"$ref": "#/$defs/sha256"},
+        "statement_b64": {"$ref": "#/$defs/base64url"},
+        "statement_sha256": {"$ref": "#/$defs/sha256"},
+        "signature": {"$ref": "#/$defs/ed25519SignatureText"}
+      }
+    },
+    "controlPlaneAuthorizationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "principal_id",
+        "route_id",
+        "release_authority",
+        "request",
+        "response"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.controlPlaneAuthorizationReceipt/v1"},
+        "kind": {"const": "ControlPlaneAuthorizationReceipt"},
+        "principal_id": {"$ref": "#/$defs/identifier"},
+        "route_id": {"$ref": "#/$defs/identifier"},
+        "release_authority": {"$ref": "#/$defs/releaseAuthority"},
+        "request": {"$ref": "#/$defs/receiptRequest"},
+        "response": {"$ref": "#/$defs/receiptResponse"}
+      }
+    },
+    "rawHeaderValues": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "string",
+        "maxLength": 10923,
+        "pattern": "^[A-Za-z0-9_-]*$"
+      }
+    },
+    "rawPolicyHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["content-encoding", "content-length", "content-type"],
+      "properties": {
+        "cache-control": {"$ref": "#/$defs/rawHeaderValues"},
+        "content-encoding": {"$ref": "#/$defs/rawHeaderValues"},
+        "content-language": {"$ref": "#/$defs/rawHeaderValues"},
+        "content-length": {"$ref": "#/$defs/rawHeaderValues"},
+        "content-type": {"$ref": "#/$defs/rawHeaderValues"},
+        "etag": {"$ref": "#/$defs/rawHeaderValues"},
+        "last-modified": {"$ref": "#/$defs/rawHeaderValues"},
+        "retry-after": {"$ref": "#/$defs/rawHeaderValues"},
+        "www-authenticate": {"$ref": "#/$defs/rawHeaderValues"}
+      }
+    },
+    "upstreamResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "selected_raw_policy_headers_b64",
+        "body_digest",
+        "body_bytes",
+        "canonical_digest"
+      ],
+      "properties": {
+        "status": {"$ref": "#/$defs/status"},
+        "selected_raw_policy_headers_b64": {"$ref": "#/$defs/rawPolicyHeaders"},
+        "body_digest": {"$ref": "#/$defs/sha256"},
+        "body_bytes": {"$ref": "#/$defs/uint64"},
+        "canonical_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "wireHeaders": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["connection", "content-type", "trailer", "transfer-encoding"],
+      "properties": {
+        "connection": {"const": "close"},
+        "content-type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "trailer": {
+          "const": "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256"
+        },
+        "transfer-encoding": {"const": "chunked"}
+      }
+    },
+    "releasedResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "content_type",
+        "selected_wire_headers",
+        "selected_wire_headers_digest",
+        "body_digest",
+        "body_bytes",
+        "framing",
+        "completion",
+        "trailer_names"
+      ],
+      "properties": {
+        "status": {"$ref": "#/$defs/status"},
+        "content_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "selected_wire_headers": {"$ref": "#/$defs/wireHeaders"},
+        "selected_wire_headers_digest": {"$ref": "#/$defs/sha256"},
+        "body_digest": {"$ref": "#/$defs/sha256"},
+        "body_bytes": {"$ref": "#/$defs/uint64"},
+        "framing": {"const": "http1.1-chunked-trailers"},
+        "completion": {"const": "normal-eof"},
+        "trailer_names": {"$ref": "#/$defs/trailerNames"}
+      }
+    },
+    "tlsChannelBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "exporter_label", "value"],
+      "properties": {
+        "type": {"const": "tls-exporter"},
+        "exporter_label": {"const": "EXPORTER-Serverware-Proxy-Stream-v1"},
+        "value": {"$ref": "#/$defs/nonce"}
+      }
+    },
+    "tlsPeer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spiffe_id", "leaf_certificate_sha256"],
+      "properties": {
+        "spiffe_id": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 256,
+          "pattern": "^spiffe://[^\\u0000-\\u0020\\u007F]+$"
+        },
+        "leaf_certificate_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "serverInstance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "identity_digest"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 256,
+          "pattern": "^spiffe://[^\\u0000-\\u0020\\u007F]+$"
+        },
+        "identity_digest": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "issued_at_unix",
+        "client_nonce",
+        "client_request_digest",
+        "principal_id",
+        "route_id",
+        "request_digest",
+        "operation_digest",
+        "release_authority",
+        "authorization_binding_validation",
+        "control_plane_authorization_receipt",
+        "control_plane_authorization_receipt_sha256",
+        "upstream_response",
+        "released_response",
+        "policy_digest",
+        "runtime_manifest_digest",
+        "data_plane_binary_digest",
+        "release_digest",
+        "server_instance",
+        "tls_channel_binding"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.streamingResponseStatement/v1"},
+        "issued_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "client_nonce": {"$ref": "#/$defs/nonce"},
+        "client_request_digest": {"$ref": "#/$defs/sha256"},
+        "principal_id": {"$ref": "#/$defs/identifier"},
+        "route_id": {"$ref": "#/$defs/identifier"},
+        "request_digest": {"$ref": "#/$defs/sha256"},
+        "operation_digest": {"$ref": "#/$defs/sha256"},
+        "release_authority": {"$ref": "#/$defs/releaseAuthority"},
+        "authorization_binding_validation": {"$ref": "#/$defs/authorizationBindingValidation"},
+        "control_plane_authorization_receipt": {"$ref": "#/$defs/controlPlaneAuthorizationReceipt"},
+        "control_plane_authorization_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "upstream_response": {"$ref": "#/$defs/upstreamResponse"},
+        "released_response": {"$ref": "#/$defs/releasedResponse"},
+        "policy_digest": {"$ref": "#/$defs/sha256"},
+        "runtime_manifest_digest": {"$ref": "#/$defs/sha256"},
+        "data_plane_binary_digest": {"$ref": "#/$defs/sha256"},
+        "release_digest": {"$ref": "#/$defs/sha256"},
+        "server_instance": {"$ref": "#/$defs/serverInstance"},
+        "tls_channel_binding": {"$ref": "#/$defs/tlsChannelBinding"}
+      }
+    },
+    "attestedClaims": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "streaming_response_statement_api_version",
+        "streaming_response_statement_sha256",
+        "issued_at_unix",
+        "client_nonce_sha256",
+        "client_request_digest",
+        "principal_id",
+        "route_id",
+        "request_digest",
+        "operation_digest",
+        "release_authority",
+        "authorization_binding_digest",
+        "control_plane_authorization_receipt_sha256",
+        "upstream_status",
+        "upstream_selected_raw_policy_headers_digest",
+        "upstream_body_digest",
+        "upstream_body_bytes",
+        "upstream_canonical_digest",
+        "released_response_status",
+        "released_response_content_type",
+        "selected_response_wire_headers_digest",
+        "released_response_body_digest",
+        "released_response_body_bytes",
+        "response_framing",
+        "response_completion",
+        "response_trailer_names",
+        "policy_digest",
+        "runtime_manifest_digest",
+        "data_plane_binary_digest",
+        "release_digest",
+        "server_instance_id",
+        "server_instance_identity_digest",
+        "tls_channel_binding_type",
+        "tls_exporter_label",
+        "tls_channel_binding_sha256",
+        "response_signing_key_id"
+      ],
+      "properties": {
+        "streaming_response_statement_api_version": {"const": "serverware.streamingResponseStatement/v1"},
+        "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "issued_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "client_nonce_sha256": {"$ref": "#/$defs/sha256"},
+        "client_request_digest": {"$ref": "#/$defs/sha256"},
+        "principal_id": {"$ref": "#/$defs/identifier"},
+        "route_id": {"$ref": "#/$defs/identifier"},
+        "request_digest": {"$ref": "#/$defs/sha256"},
+        "operation_digest": {"$ref": "#/$defs/sha256"},
+        "release_authority": {"$ref": "#/$defs/releaseAuthority"},
+        "authorization_binding_digest": {"$ref": "#/$defs/sha256"},
+        "control_plane_authorization_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "upstream_status": {"$ref": "#/$defs/status"},
+        "upstream_selected_raw_policy_headers_digest": {"$ref": "#/$defs/sha256"},
+        "upstream_body_digest": {"$ref": "#/$defs/sha256"},
+        "upstream_body_bytes": {"$ref": "#/$defs/uint64"},
+        "upstream_canonical_digest": {"$ref": "#/$defs/sha256"},
+        "released_response_status": {"$ref": "#/$defs/status"},
+        "released_response_content_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024,
+          "pattern": "^[^\\u0000-\\u001F\\u007F]+$"
+        },
+        "selected_response_wire_headers_digest": {"$ref": "#/$defs/sha256"},
+        "released_response_body_digest": {"$ref": "#/$defs/sha256"},
+        "released_response_body_bytes": {"$ref": "#/$defs/uint64"},
+        "response_framing": {"const": "http1.1-chunked-trailers"},
+        "response_completion": {"const": "normal-eof"},
+        "response_trailer_names": {"$ref": "#/$defs/trailerNames"},
+        "policy_digest": {"$ref": "#/$defs/sha256"},
+        "runtime_manifest_digest": {"$ref": "#/$defs/sha256"},
+        "data_plane_binary_digest": {"$ref": "#/$defs/sha256"},
+        "release_digest": {"$ref": "#/$defs/sha256"},
+        "server_instance_id": {
+          "type": "string",
+          "minLength": 10,
+          "maxLength": 256,
+          "pattern": "^spiffe://[^\\u0000-\\u0020\\u007F]+$"
+        },
+        "server_instance_identity_digest": {"$ref": "#/$defs/sha256"},
+        "tls_channel_binding_type": {"const": "tls-exporter"},
+        "tls_exporter_label": {"const": "EXPORTER-Serverware-Proxy-Stream-v1"},
+        "tls_channel_binding_sha256": {"$ref": "#/$defs/sha256"},
+        "response_signing_key_id": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "quote": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["format", "body_b64"],
+      "properties": {
+        "format": {"$ref": "#/$defs/identifier"},
+        "body_b64": {
+          "allOf": [
+            {"$ref": "#/$defs/base64url"},
+            {"minLength": 86}
+          ]
+        }
+      }
+    },
+    "developmentVerifierStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "environment",
+        "debug",
+        "streaming_response_statement_sha256",
+        "response_signing_key_id",
+        "attested_claims"
+      ],
+      "properties": {
+        "outcome": {"const": "development-fixture"},
+        "environment": {"const": "development"},
+        "debug": {"const": true},
+        "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "response_signing_key_id": {"$ref": "#/$defs/sha256"},
+        "attested_claims": {"$ref": "#/$defs/attestedClaims"}
+      }
+    },
+    "productionVerifierStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "verifier_key_id",
+        "outcome",
+        "environment",
+        "trust_basis",
+        "vendor_quote_verified",
+        "certificate_chain_verified",
+        "revocation_checked",
+        "debug",
+        "verified_at_unix",
+        "expires_at_unix",
+        "tee_platform",
+        "quote_provider",
+        "vendor_quote_sha256",
+        "streaming_response_statement_sha256",
+        "response_signing_key_id",
+        "attested_claims"
+      ],
+      "properties": {
+        "verifier_key_id": {"$ref": "#/$defs/sha256"},
+        "outcome": {"const": "verified"},
+        "environment": {"const": "production"},
+        "trust_basis": {"const": "vendor-root-certificate-chain"},
+        "vendor_quote_verified": {"const": true},
+        "certificate_chain_verified": {"const": true},
+        "revocation_checked": {"const": true},
+        "debug": {"const": false},
+        "verified_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "expires_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "tee_platform": {"$ref": "#/$defs/identifier"},
+        "quote_provider": {"$ref": "#/$defs/identifier"},
+        "vendor_quote_sha256": {"$ref": "#/$defs/sha256"},
+        "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "response_signing_key_id": {"$ref": "#/$defs/sha256"},
+        "attested_claims": {"$ref": "#/$defs/attestedClaims"}
+      }
+    },
+    "developmentTrustedVerifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {"const": "serverware.vendorTeeVerification/v1"},
+        "kind": {"const": "ServerwareVendorTeeVerification"},
+        "statement": {"$ref": "#/$defs/developmentVerifierStatement"},
+        "signature": {"type": "null"}
+      }
+    },
+    "productionTrustedVerifier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {"const": "serverware.vendorTeeVerification/v1"},
+        "kind": {"const": "ServerwareVendorTeeVerification"},
+        "statement": {"$ref": "#/$defs/productionVerifierStatement"},
+        "signature": {"$ref": "#/$defs/ed25519SignatureText"}
+      }
+    },
+    "vendorTee": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "provider", "quote_sha256", "quote", "trusted_verifier"],
+      "properties": {
+        "platform": {"$ref": "#/$defs/identifier"},
+        "provider": {"$ref": "#/$defs/identifier"},
+        "quote_sha256": {"$ref": "#/$defs/sha256"},
+        "quote": {"$ref": "#/$defs/quote"},
+        "trusted_verifier": {
+          "oneOf": [
+            {"$ref": "#/$defs/developmentTrustedVerifier"},
+            {"$ref": "#/$defs/productionTrustedVerifier"}
+          ]
+        }
+      }
+    },
+    "runtimeProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "streaming_response_statement",
+        "streaming_response_statement_sha256",
+        "server_signature",
+        "vendor_tee"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.streamingResponseRuntimeProof/v1"},
+        "kind": {"const": "ServerwareStreamingResponseRuntimeProof"},
+        "streaming_response_statement": {"$ref": "#/$defs/statement"},
+        "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "server_signature": {"$ref": "#/$defs/ed25519Signature"},
+        "vendor_tee": {"$ref": "#/$defs/vendorTee"}
+      }
+    },
+    "capture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "environment",
+        "collection_mode",
+        "classification",
+        "captured_at_unix",
+        "client_nonce",
+        "client_request_digest",
+        "principal_id",
+        "route_id",
+        "request_digest",
+        "operation_digest",
+        "release_authority",
+        "authorization_binding_commitment",
+        "control_plane_authorization_receipt",
+        "control_plane_authorization_receipt_sha256",
+        "upstream_response",
+        "released_response",
+        "tls_channel_binding",
+        "tls_peer",
+        "streaming_response_statement_sha256",
+        "runtime_proof_sha256"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.streamingProxyResponseCapture/v1"},
+        "environment": {"enum": ["development", "production"]},
+        "collection_mode": {"const": "strict-incremental-stream-capture"},
+        "classification": {"const": "verified-complete-stream"},
+        "captured_at_unix": {"$ref": "#/$defs/positiveUint64"},
+        "client_nonce": {"$ref": "#/$defs/nonce"},
+        "client_request_digest": {"$ref": "#/$defs/sha256"},
+        "principal_id": {"$ref": "#/$defs/identifier"},
+        "route_id": {"$ref": "#/$defs/identifier"},
+        "request_digest": {"$ref": "#/$defs/sha256"},
+        "operation_digest": {"$ref": "#/$defs/sha256"},
+        "release_authority": {"$ref": "#/$defs/releaseAuthority"},
+        "authorization_binding_commitment": {"$ref": "#/$defs/authorizationBindingCommitment"},
+        "control_plane_authorization_receipt": {"$ref": "#/$defs/controlPlaneAuthorizationReceipt"},
+        "control_plane_authorization_receipt_sha256": {"$ref": "#/$defs/sha256"},
+        "upstream_response": {"$ref": "#/$defs/upstreamResponse"},
+        "released_response": {"$ref": "#/$defs/releasedResponse"},
+        "tls_channel_binding": {"$ref": "#/$defs/tlsChannelBinding"},
+        "tls_peer": {"$ref": "#/$defs/tlsPeer"},
+        "streaming_response_statement_sha256": {"$ref": "#/$defs/sha256"},
+        "runtime_proof_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

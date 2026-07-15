@@ -124,6 +124,22 @@ def main() -> None:
             "provisionSeparately": True,
             "tokenId": "demo-sidecar-token",
         }, handoff
+        assert handoff["requestHandling"] == {
+            "approvalRequired": {
+                "statusCode": 428,
+                "approvalIdField": "approval_id",
+                "operatorPathField": "approval_url",
+                "operatorPathTemplate": "/approvals/{approval_id}",
+                "retryAfterField": "retry_after_seconds",
+                "retryRule": "retry-the-identical-request-only-after-human-approval",
+            },
+            "stopAndReportStatusCodes": [403],
+            "stopAndReportStatusClasses": [5],
+            "bypassForbidden": True,
+            "credentialHandling": "never-request-store-print-or-cache-provider-credentials",
+        }, handoff
+        assert any("HTTP 428" in step and "identical request" in step for step in handoff["sequence"]), handoff
+        assert any("HTTP 403 or 5xx" in step and "never bypass" in step for step in handoff["sequence"]), handoff
         assert len(handoff["allowedUrls"]) == sum(len(item["urls"]) for item in packet["allowedRoutes"]), handoff
 
         policy = packet["egress"]["kubernetesNetworkPolicy"]

@@ -2,13 +2,17 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import ExitStack
 import hashlib
+import hmac
 import json
 import os
+import re
 import sqlite3
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import uuid
@@ -30,8 +34,15 @@ def configure_sqlite(data_dir: str) -> None:
     os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
     os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
     os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
+    os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
     os.environ["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = "jit-transaction-test"
     os.environ["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"] = "jit-release-test-token"
+
+
+def postgres_schema_dsn(base_dsn: str, schema: str) -> str:
+    separator = "&" if "?" in base_dsn else "?"
+    options = quote(f"-csearch_path={schema}", safe="")
+    return f"{base_dsn}{separator}options={options}"
 
 
 def configure_postgres(base_dsn: str, data_dir: str) -> tuple[str, str]:
@@ -40,9 +51,7 @@ def configure_postgres(base_dsn: str, data_dir: str) -> tuple[str, str]:
     schema = f"serverware_jit_test_{uuid.uuid4().hex}"
     with psycopg.connect(base_dsn, autocommit=True) as conn:
         conn.execute(f'CREATE SCHEMA "{schema}"')
-    separator = "&" if "?" in base_dsn else "?"
-    options = quote(f"-csearch_path={schema}", safe="")
-    dsn = f"{base_dsn}{separator}options={options}"
+    dsn = postgres_schema_dsn(base_dsn, schema)
     os.environ["SERVERWARE_DATA_DIR"] = data_dir
     os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "postgres"
     os.environ["SERVERWARE_METADATA_STORE_POSTGRES_DSN"] = dsn
@@ -51,6 +60,7 @@ def configure_postgres(base_dsn: str, data_dir: str) -> tuple[str, str]:
     os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "postgres"
     os.environ["SERVERWARE_AUDIT_STORE_POSTGRES_DSN"] = dsn
     os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
+    os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
     os.environ["SERVERWARE_DATA_PLANE_INSTANCE_ID"] = "jit-transaction-test"
     os.environ["SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"] = "jit-release-test-token"
     return schema, dsn
@@ -61,6 +71,581 @@ def drop_postgres_schema(base_dsn: str, schema: str) -> None:
 
     with psycopg.connect(base_dsn, autocommit=True) as conn:
         conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def exercise_postgres_catalog_schema_isolation(db: Any, base_dsn: str) -> None:
+    import psycopg
+
+    suffix = uuid.uuid4().hex
+    table_name = f"serverware_catalog_shadow_{suffix}"
+    function_name = f"serverware_catalog_shadow_guard_{suffix}"
+    trigger_names = (
+        "serverware_audit_storage_epoch_guard",
+        "serverware_metadata_audit_storage_epoch_guard",
+        "serverware_rate_counter_storage_epoch_guard",
+        "serverware_quota_storage_epoch_guard",
+    )
+    with psycopg.connect(base_dsn, autocommit=True) as admin:
+        admin.execute(
+            f'''
+            CREATE TABLE public."{table_name}" (
+                value TEXT CONSTRAINT serverware_audit_events_event_json_size
+                    CHECK (octet_length(value) <= 8388608)
+            );
+            CREATE FUNCTION public."{function_name}"()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                RETURN NEW;
+            END;
+            $$;
+            '''
+        )
+        for trigger_name in trigger_names:
+            admin.execute(
+                f'CREATE TRIGGER "{trigger_name}" BEFORE INSERT OR UPDATE '
+                f'ON public."{table_name}" FOR EACH ROW EXECUTE FUNCTION '
+                f'public."{function_name}"()'
+            )
+    try:
+        db.init_db()
+        with psycopg.connect(base_dsn) as admin:
+            count = int(
+                admin.execute(
+                    "SELECT COUNT(*)::bigint AS count FROM pg_trigger AS trigger "
+                    "JOIN pg_class AS relation ON relation.oid = trigger.tgrelid "
+                    "JOIN pg_namespace AS namespace "
+                    "ON namespace.oid = relation.relnamespace "
+                    "WHERE namespace.nspname = 'public' "
+                    "AND relation.relname = %s AND trigger.tgname = ANY(%s) "
+                    "AND NOT trigger.tgisinternal",
+                    (table_name, list(trigger_names)),
+                ).fetchone()[0]
+            )
+        if count != len(trigger_names):
+            raise AssertionError(
+                f"public duplicate-trigger fixture was incomplete: {count}"
+            )
+    finally:
+        with psycopg.connect(base_dsn, autocommit=True) as admin:
+            admin.execute(f'DROP TABLE IF EXISTS public."{table_name}" CASCADE')
+            admin.execute(
+                f'DROP FUNCTION IF EXISTS public."{function_name}"() CASCADE'
+            )
+
+
+def exercise_postgres_audit_lock_namespace(db: Any, base_dsn: str) -> None:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    schemas = [f"serverware_lock_test_{uuid.uuid4().hex}" for _ in range(2)]
+    with psycopg.connect(base_dsn, autocommit=True) as admin:
+        for schema in schemas:
+            admin.execute(f'CREATE SCHEMA "{schema}"')
+    try:
+        dsns = [postgres_schema_dsn(base_dsn, schema) for schema in schemas]
+        with psycopg.connect(dsns[0], row_factory=dict_row) as first, psycopg.connect(
+            dsns[1], row_factory=dict_row
+        ) as second:
+            with first.transaction(), second.transaction():
+                for purpose in ("migration", "chain"):
+                    first_key = db._postgres_audit_lock_key(first, purpose)
+                    second_key = db._postgres_audit_lock_key(second, purpose)
+                    if first_key == second_key:
+                        raise AssertionError(
+                            f"PostgreSQL audit {purpose} lock was not schema namespaced"
+                        )
+                    db._lock_postgres_audit(first, purpose)
+                    db._lock_postgres_audit(second, purpose)
+
+        same_schema_dsn = dsns[0]
+        with psycopg.connect(
+            same_schema_dsn, row_factory=dict_row
+        ) as holder, psycopg.connect(same_schema_dsn, row_factory=dict_row) as waiter:
+            with holder.transaction():
+                db._lock_postgres_audit(holder, "chain")
+                try:
+                    with waiter.transaction(), patch.object(
+                        db, "_AUDIT_LOCK_WAIT_MS", 100
+                    ):
+                        db._lock_postgres_audit(waiter, "chain")
+                except db.AuditStoreError as exc:
+                    if (
+                        "timed out acquiring compatible legacy/namespaced "
+                        "PostgreSQL audit chain locks"
+                    ) not in str(exc):
+                        raise AssertionError(f"audit lock timeout failed unclearly: {exc}") from exc
+                else:
+                    raise AssertionError("same-schema audit lock did not honor its timeout")
+    finally:
+        with psycopg.connect(base_dsn, autocommit=True) as admin:
+            for schema in schemas:
+                admin.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def exercise_postgres_rolling_audit_lock_compatibility(
+    db: Any, dsn: str
+) -> None:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    old_started = threading.Event()
+    new_started = threading.Event()
+    old_event_id = f"rolling-old:{uuid.uuid4().hex}"
+    new_event_id = f"rolling-new:{uuid.uuid4().hex}"
+    with psycopg.connect(dsn, row_factory=dict_row) as old_conn:
+        old_conn.execute(
+            "SELECT pg_advisory_xact_lock(%s)", (db._AUDIT_CHAIN_LOCK_KEY,)
+        )
+        previous = old_conn.execute(
+            "SELECT event_hash FROM serverware_audit_events "
+            "ORDER BY sequence DESC LIMIT 1"
+        ).fetchone()
+        old_prev_hash = previous["event_hash"] if previous else None
+        old_created_at = db.iso_now()
+        old_event_json = db.dumps({"writer": "legacy-fixed-lock"})
+        old_event_hash = db._audit_hash(
+            event_id=old_event_id,
+            event_type="test.audit.rolling-old",
+            actor_type="test",
+            actor_id="test:rolling-old",
+            event_json=old_event_json,
+            prev_event_hash=old_prev_hash,
+            created_at=old_created_at,
+        )
+        old_started.set()
+
+        def append_new() -> dict[str, Any]:
+            if not old_started.wait(timeout=2):
+                raise AssertionError("legacy audit writer did not start")
+            new_started.set()
+            return db.record_audit_event(
+                "test.audit.rolling-new",
+                {"writer": "dual-lock"},
+                actor_type="test",
+                actor_id="test:rolling-new",
+                idempotency_key=new_event_id,
+            )
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(append_new)
+            if not new_started.wait(timeout=2):
+                raise AssertionError("new audit writer did not start")
+            time.sleep(0.15)
+            if future.done():
+                raise AssertionError(
+                    "new writer bypassed the legacy fixed audit-chain lock"
+                )
+            old_conn.execute(
+                "INSERT INTO serverware_audit_events "
+                "(id, event_type, actor_type, actor_id, event_json, "
+                "prev_event_hash, event_hash, created_at) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    old_event_id,
+                    "test.audit.rolling-old",
+                    "test",
+                    "test:rolling-old",
+                    old_event_json,
+                    old_prev_hash,
+                    old_event_hash,
+                    old_created_at,
+                ),
+            )
+            old_conn.commit()
+            new_result = future.result(timeout=5)
+
+    if new_result["prev_event_hash"] != old_event_hash:
+        raise AssertionError(
+            "rolling old/new audit writers produced sibling chain hashes: "
+            f"old={old_event_hash} new={new_result}"
+        )
+    with psycopg.connect(dsn, row_factory=dict_row) as check:
+        rows = check.execute(
+            "SELECT id, prev_event_hash, event_hash FROM serverware_audit_events "
+            "WHERE id IN (%s, %s) ORDER BY sequence ASC",
+            (old_event_id, new_event_id),
+        ).fetchall()
+    if (
+        [row["id"] for row in rows] != [old_event_id, new_event_id]
+        or rows[1]["prev_event_hash"] != rows[0]["event_hash"]
+    ):
+        raise AssertionError(f"rolling audit writer chain is invalid: {rows}")
+
+
+def exercise_postgres_inflight_legacy_migration_barrier(
+    db: Any, base_dsn: str
+) -> None:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    schema = f"serverware_inflight_legacy_{uuid.uuid4().hex}"
+    dsn = postgres_schema_dsn(base_dsn, schema)
+    keyring = db.load_bound_secret_keyring()
+    with psycopg.connect(base_dsn, autocommit=True) as admin:
+        admin.execute(f'CREATE SCHEMA "{schema}"')
+    try:
+        with psycopg.connect(dsn, row_factory=dict_row) as setup:
+            with setup.transaction():
+                setup.execute(
+                    """
+                    CREATE TABLE serverware_audit_events (
+                        sequence BIGSERIAL PRIMARY KEY,
+                        id TEXT NOT NULL UNIQUE,
+                        event_type TEXT NOT NULL,
+                        actor_type TEXT NOT NULL,
+                        actor_id TEXT,
+                        event_json TEXT NOT NULL,
+                        encrypted_canonical_event_json TEXT,
+                        storage_format_version BIGINT,
+                        prev_event_hash TEXT,
+                        event_hash TEXT NOT NULL UNIQUE,
+                        created_at TEXT NOT NULL
+                    );
+                    CREATE TABLE serverware_store_migrations (
+                        migration TEXT PRIMARY KEY,
+                        version BIGINT NOT NULL,
+                        applied_at TEXT NOT NULL
+                    );
+                    CREATE FUNCTION serverware_audit_storage_epoch_guard()
+                    RETURNS trigger LANGUAGE plpgsql AS $$
+                    BEGIN
+                        RETURN NEW;
+                    END;
+                    $$;
+                    CREATE TRIGGER serverware_audit_storage_epoch_guard
+                        BEFORE INSERT OR UPDATE ON serverware_audit_events
+                        FOR EACH ROW EXECUTE FUNCTION
+                            serverware_audit_storage_epoch_guard();
+                    CREATE TABLE metadata_audit_outbox (
+                        id TEXT PRIMARY KEY,
+                        event_type TEXT NOT NULL,
+                        event_json TEXT NOT NULL,
+                        storage_format_version BIGINT
+                    );
+                    CREATE TABLE rate_limit_counters (
+                        counter_key TEXT PRIMARY KEY,
+                        operation TEXT,
+                        encrypted_operation TEXT,
+                        operation_storage_version BIGINT
+                    );
+                    CREATE TABLE release_authorization_quota_reservations (
+                        attempt_id TEXT NOT NULL,
+                        counter_key TEXT NOT NULL,
+                        operation TEXT,
+                        encrypted_operation TEXT,
+                        operation_storage_version BIGINT,
+                        PRIMARY KEY (attempt_id, counter_key)
+                    );
+                    """
+                )
+                wrapper = db.PostgresMetadataConnection(setup)
+                db._install_metadata_storage_epoch_guards(wrapper)
+
+        audit_event_id = f"inflight-audit:{uuid.uuid4().hex}"
+        audit_operation = "legacy.inflight.audit.operation"
+        audit_event_json = db.dumps({"operation": audit_operation})
+        audit_created_at = db.iso_now()
+        audit_event_hash = db._audit_hash(
+            event_id=audit_event_id,
+            event_type="rate_limit.denied",
+            actor_type="test",
+            actor_id="test:inflight-legacy",
+            event_json=audit_event_json,
+            prev_event_hash=None,
+            created_at=audit_created_at,
+        )
+        with psycopg.connect(dsn, row_factory=dict_row) as legacy:
+            legacy.execute(
+                "INSERT INTO serverware_audit_events "
+                "(id, event_type, actor_type, actor_id, event_json, "
+                "prev_event_hash, event_hash, created_at) "
+                "VALUES (%s, 'rate_limit.denied', 'test', "
+                "'test:inflight-legacy', %s, NULL, %s, %s)",
+                (
+                    audit_event_id,
+                    audit_event_json,
+                    audit_event_hash,
+                    audit_created_at,
+                ),
+            )
+
+            def migrate_audit() -> None:
+                with psycopg.connect(dsn, row_factory=dict_row) as migration:
+                    with migration.transaction():
+                        db._lock_postgres_audit(migration, "migration")
+                        db._lock_postgres_audit(migration, "chain")
+                        db._lock_postgres_audit_migration_tables(migration)
+                        db._remediate_postgres_audit_operations(
+                            migration, keyring=keyring
+                        )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(migrate_audit)
+                time.sleep(0.15)
+                if future.done():
+                    raise AssertionError(
+                        "audit migration bypassed an in-flight legacy transaction"
+                    )
+                legacy.commit()
+                future.result(timeout=5)
+
+        with psycopg.connect(dsn, row_factory=dict_row) as check:
+            audit_row = check.execute(
+                "SELECT event_json, encrypted_canonical_event_json, "
+                "storage_format_version, event_hash FROM serverware_audit_events "
+                "WHERE id = %s",
+                (audit_event_id,),
+            ).fetchone()
+            audit_gate = check.execute(
+                "SELECT version FROM serverware_store_migrations "
+                "WHERE migration = %s",
+                (db._AUDIT_STORAGE_REDACTION_MIGRATION,),
+            ).fetchone()
+        if (
+            audit_row is None
+            or audit_row["storage_format_version"]
+            != db._AUDIT_STORAGE_FORMAT_VERSION
+            or audit_row["event_hash"] != audit_event_hash
+            or audit_operation in audit_row["event_json"]
+            or audit_operation in str(audit_row["encrypted_canonical_event_json"])
+            or audit_gate is None
+        ):
+            raise AssertionError(
+                f"in-flight legacy audit row escaped migration: {audit_row}"
+            )
+
+        counter_key = "sha256:" + hashlib.sha256(
+            b"inflight-legacy-metadata"
+        ).hexdigest()
+        metadata_operation = "legacy.inflight.metadata.operation"
+        with psycopg.connect(dsn, row_factory=dict_row) as legacy:
+            legacy.execute(
+                "INSERT INTO rate_limit_counters "
+                "(counter_key, operation) VALUES (%s, %s)",
+                (counter_key, metadata_operation),
+            )
+
+            def migrate_metadata() -> None:
+                with psycopg.connect(dsn, row_factory=dict_row) as migration:
+                    with migration.transaction():
+                        wrapper = db.PostgresMetadataConnection(migration)
+                        db._lock_postgres_metadata_migration_tables(wrapper)
+                        db._remediate_metadata_rate_limit_storage(
+                            wrapper, keyring=keyring
+                        )
+
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(migrate_metadata)
+                time.sleep(0.15)
+                if future.done():
+                    raise AssertionError(
+                        "metadata migration bypassed an in-flight legacy transaction"
+                    )
+                legacy.commit()
+                future.result(timeout=5)
+
+        with psycopg.connect(dsn, row_factory=dict_row) as check:
+            counter = check.execute(
+                "SELECT operation, encrypted_operation, operation_storage_version "
+                "FROM rate_limit_counters WHERE counter_key = %s",
+                (counter_key,),
+            ).fetchone()
+            metadata_gate = check.execute(
+                "SELECT version FROM serverware_store_migrations "
+                "WHERE migration = %s",
+                (db._METADATA_STORAGE_REDACTION_MIGRATION,),
+            ).fetchone()
+        if (
+            counter is None
+            or counter["operation"] != operation_digest(metadata_operation)
+            or counter["operation_storage_version"]
+            != db._OPERATION_STORAGE_VERSION
+            or metadata_operation in str(counter["encrypted_operation"])
+            or metadata_gate is None
+        ):
+            raise AssertionError(
+                f"in-flight legacy metadata row escaped migration: {counter}"
+            )
+    finally:
+        drop_postgres_schema(base_dsn, schema)
+
+
+def exercise_postgres_audit_migration_faults(db: Any, base_dsn: str) -> None:
+    import psycopg
+    from psycopg.rows import dict_row
+
+    keyring = db.load_bound_secret_keyring()
+
+    def run_case(label: str, fault: str) -> None:
+        schema = f"serverware_audit_fault_{uuid.uuid4().hex}"
+        dsn = postgres_schema_dsn(base_dsn, schema)
+        with psycopg.connect(base_dsn, autocommit=True) as admin:
+            admin.execute(f'CREATE SCHEMA "{schema}"')
+        try:
+            with psycopg.connect(dsn, row_factory=dict_row) as conn:
+                with conn.transaction():
+                    conn.execute(
+                        """
+                        CREATE TABLE serverware_audit_events (
+                            sequence BIGSERIAL PRIMARY KEY,
+                            id TEXT NOT NULL UNIQUE,
+                            event_type TEXT NOT NULL,
+                            actor_type TEXT NOT NULL,
+                            actor_id TEXT,
+                            event_json TEXT NOT NULL,
+                            encrypted_canonical_event_json TEXT,
+                            storage_format_version BIGINT,
+                            prev_event_hash TEXT,
+                            event_hash TEXT NOT NULL UNIQUE,
+                            created_at TEXT NOT NULL
+                        );
+                        CREATE TABLE serverware_store_migrations (
+                            migration TEXT PRIMARY KEY,
+                            version BIGINT NOT NULL,
+                            applied_at TEXT NOT NULL
+                        );
+                        CREATE FUNCTION serverware_fault_audit_guard()
+                        RETURNS trigger LANGUAGE plpgsql AS $$
+                        BEGIN
+                            RETURN NEW;
+                        END;
+                        $$;
+                        CREATE TRIGGER serverware_audit_storage_epoch_guard
+                            BEFORE INSERT OR UPDATE ON serverware_audit_events
+                            FOR EACH ROW EXECUTE FUNCTION serverware_fault_audit_guard();
+                        """
+                    )
+                    created_at = "2026-07-15T00:00:00+00:00"
+                    legacy_json = db.dumps(
+                        {"operation": f"legacy.postgres.{label}", "case": label}
+                    )
+                    first_hash = db._audit_hash(
+                        event_id=f"{label}:legacy",
+                        event_type="rate_limit.denied",
+                        actor_type="test",
+                        actor_id="test:postgres:fault",
+                        event_json=legacy_json,
+                        prev_event_hash=None,
+                        created_at=created_at,
+                    )
+                    tail_json = db.dumps({"case": label, "tail": True})
+                    tail_hash = db._audit_hash(
+                        event_id=f"{label}:tail",
+                        event_type="test.tail",
+                        actor_type="test",
+                        actor_id="test:postgres:fault",
+                        event_json=tail_json,
+                        prev_event_hash=first_hash,
+                        created_at=created_at,
+                    )
+                    if fault == "invalid_tail":
+                        tail_hash = "sha256:" + "0" * 64
+                    conn.execute(
+                        "INSERT INTO serverware_audit_events (id, event_type, "
+                        "actor_type, actor_id, event_json, prev_event_hash, event_hash, "
+                        "created_at) VALUES (%s, 'rate_limit.denied', 'test', "
+                        "'test:postgres:fault', %s, NULL, %s, %s)",
+                        (f"{label}:legacy", legacy_json, first_hash, created_at),
+                    )
+                    conn.execute(
+                        "INSERT INTO serverware_audit_events (id, event_type, "
+                        "actor_type, actor_id, event_json, prev_event_hash, event_hash, "
+                        "created_at) VALUES (%s, 'test.tail', 'test', "
+                        "'test:postgres:fault', %s, %s, %s, %s)",
+                        (
+                            f"{label}:tail",
+                            tail_json,
+                            first_hash,
+                            tail_hash,
+                            created_at,
+                        ),
+                    )
+
+            def snapshot() -> tuple[list[tuple[Any, ...]], int, int]:
+                with psycopg.connect(dsn, row_factory=dict_row) as check:
+                    rows = [
+                        (
+                            row["id"],
+                            row["event_json"],
+                            row["encrypted_canonical_event_json"],
+                            row["storage_format_version"],
+                            row["prev_event_hash"],
+                            row["event_hash"],
+                        )
+                        for row in check.execute(
+                            "SELECT * FROM serverware_audit_events ORDER BY sequence ASC"
+                        ).fetchall()
+                    ]
+                    markers = int(
+                        check.execute(
+                            "SELECT COUNT(*)::bigint AS count FROM "
+                            "serverware_audit_events WHERE event_type = "
+                            "'audit.storage_redacted'"
+                        ).fetchone()["count"]
+                    )
+                    gates = int(
+                        check.execute(
+                            "SELECT COUNT(*)::bigint AS count FROM "
+                            "serverware_store_migrations"
+                        ).fetchone()["count"]
+                    )
+                    return rows, markers, gates
+
+            before = snapshot()
+            patches = ExitStack()
+            with patches:
+                if fault == "encryption":
+                    patches.enter_context(
+                        patch.object(
+                            db,
+                            "encrypt_bound_secret",
+                            side_effect=RuntimeError("forced encryption failure"),
+                        )
+                    )
+                elif fault == "marker":
+                    patches.enter_context(
+                        patch.object(
+                            db,
+                            "_audit_storage_redaction_marker",
+                            side_effect=RuntimeError("forced marker failure"),
+                        )
+                    )
+                elif fault == "gate":
+                    patches.enter_context(
+                        patch.object(
+                            db,
+                            "_record_postgres_audit_migration",
+                            side_effect=RuntimeError("forced gate failure"),
+                        )
+                    )
+                try:
+                    with psycopg.connect(dsn, row_factory=dict_row) as conn:
+                        with conn.transaction():
+                            db._remediate_postgres_audit_operations(
+                                conn, keyring=keyring
+                            )
+                except (db.AuditStoreError, RuntimeError):
+                    pass
+                else:
+                    raise AssertionError(f"PostgreSQL {label} fault did not abort")
+            after = snapshot()
+            # These checks cover logical atomicity; MVCC/WAL and backups may retain
+            # historical physical bytes and are outside logical storage redaction.
+            if after != before or after[1:] != (0, 0):
+                raise AssertionError(
+                    f"PostgreSQL {label} fault partially committed: before={before} "
+                    f"after={after}"
+                )
+        finally:
+            drop_postgres_schema(base_dsn, schema)
+
+    for label, fault in (
+        ("invalid-tail", "invalid_tail"),
+        ("encryption-failure", "encryption"),
+        ("marker-failure", "marker"),
+        ("gate-failure", "gate"),
+    ):
+        run_case(label, fault)
 
 
 def approval_kwargs(suffix: str) -> dict[str, Any]:
@@ -90,9 +675,472 @@ def assert_raises(expected: type[BaseException], callback: Any, message: str) ->
     raise AssertionError(message)
 
 
+def exercise_bound_secret_key_rotation(crypto: Any) -> None:
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+    old_key = os.urandom(32)
+    new_key = os.urandom(32)
+    old_ring = crypto.build_bound_secret_keyring(old_key)
+    rotated_ring = crypto.build_bound_secret_keyring(new_key, [old_key])
+    retired_ring = crypto.build_bound_secret_keyring(new_key)
+    restored_ring = crypto.build_bound_secret_keyring(old_key)
+    binding = {
+        "event_id": "rotation-fixture",
+        "event_hash": "sha256:" + "a" * 64,
+        "storage_format_version": 2,
+    }
+    plaintext = "rotation.restore.canonical-preimage"
+    old_envelope = crypto.encrypt_bound_secret(
+        plaintext,
+        purpose="audit-canonical-event-preimage",
+        binding=binding,
+        keyring=old_ring,
+    )
+    if crypto.decrypt_bound_secret(
+        old_envelope,
+        purpose="audit-canonical-event-preimage",
+        binding=binding,
+        keyring=rotated_ring,
+    ) != plaintext:
+        raise AssertionError("rotated historical-key keyring could not verify old data")
+    reencrypted = crypto.encrypt_bound_secret(
+        plaintext,
+        purpose="audit-canonical-event-preimage",
+        binding=binding,
+        keyring=rotated_ring,
+    )
+    if crypto.decrypt_bound_secret(
+        reencrypted,
+        purpose="audit-canonical-event-preimage",
+        binding=binding,
+        keyring=retired_ring,
+    ) != plaintext:
+        raise AssertionError("re-encrypted data did not survive historical-key retirement")
+    if crypto.decrypt_bound_secret(
+        old_envelope,
+        purpose="audit-canonical-event-preimage",
+        binding=binding,
+        keyring=restored_ring,
+    ) != plaintext:
+        raise AssertionError("restored historical key could not verify the old envelope")
+    legacy_nonce = os.urandom(12)
+    legacy_ciphertext = AESGCM(old_key).encrypt(
+        legacy_nonce, plaintext.encode("utf-8"), None
+    )
+    legacy_envelope = (
+        "v1:"
+        + base64.urlsafe_b64encode(legacy_nonce).decode("ascii")
+        + ":"
+        + base64.urlsafe_b64encode(legacy_ciphertext).decode("ascii")
+    )
+    if crypto.decrypt_legacy_secret_with_keyring(
+        legacy_envelope, keyring=rotated_ring
+    ) != plaintext:
+        raise AssertionError(
+            "legacy v1 canonical preimage ignored the historical keyring"
+        )
+    try:
+        crypto.decrypt_legacy_secret_with_keyring(
+            legacy_envelope, keyring=retired_ring
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("legacy v1 canonical preimage survived key retirement")
+    for callback, label in (
+        (
+            lambda: crypto.decrypt_bound_secret(
+                old_envelope,
+                purpose="audit-canonical-event-preimage",
+                binding=binding,
+                keyring=retired_ring,
+            ),
+            "unknown retired key",
+        ),
+        (
+            lambda: crypto.decrypt_bound_secret(
+                old_envelope,
+                purpose="audit-canonical-event-preimage",
+                binding={**binding, "event_id": "transplanted"},
+                keyring=rotated_ring,
+            ),
+            "mismatched AAD binding",
+        ),
+    ):
+        try:
+            callback()
+        except ValueError as exc:
+            error = str(exc)
+            if old_key.hex() in error or new_key.hex() in error:
+                raise AssertionError("bound secret error disclosed key material") from exc
+        else:
+            raise AssertionError(f"bound secret accepted {label}")
+
+    historical_env = json.dumps(
+        {
+            "sha256:" + hashlib.sha256(old_key).hexdigest(): base64.urlsafe_b64encode(
+                old_key
+            ).decode("ascii")
+        }
+    )
+    with patch.object(crypto, "RELEASE_CHANNEL", "production"), patch.object(
+        crypto, "load_master_key", return_value=new_key
+    ), patch.dict(
+        os.environ,
+        {"SERVERWARE_HISTORICAL_MASTER_KEYS": historical_env},
+        clear=False,
+    ):
+        try:
+            crypto.load_bound_secret_keyring()
+        except ValueError as exc:
+            if "forbidden in production" not in str(exc):
+                raise AssertionError(
+                    f"production raw historical-key rejection was unclear: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("production accepted raw historical keys from env")
+
+    release_digest = "sha256:" + "d" * 64
+    receipt = crypto.build_bound_secret_historical_keyring_receipt(
+        active_key=new_key,
+        historical_keys=[old_key],
+        broker_release_receipt_digest=release_digest,
+    )
+    with tempfile.TemporaryDirectory() as tmp:
+        receipt_path = Path(tmp) / "historical-keyring.json"
+        receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+        receipt_path.chmod(0o600)
+
+        def load_production_receipt(path: Path) -> Any:
+            with patch.object(
+                crypto, "RELEASE_CHANNEL", "production"
+            ), patch.object(
+                crypto, "load_master_key", return_value=new_key
+            ), patch.object(
+                crypto, "_MASTER_KEY_RELEASE_RECEIPT_DIGEST", release_digest
+            ), patch.dict(
+                os.environ,
+                {
+                    "SERVERWARE_HISTORICAL_MASTER_KEYS": "",
+                    "SERVERWARE_HISTORICAL_MASTER_KEYRING_FILE": str(path),
+                },
+                clear=False,
+            ):
+                return crypto.load_bound_secret_keyring()
+
+        def expect_receipt_rejected(
+            name: str, document: dict[str, Any] | bytes, expected: str
+        ) -> None:
+            candidate = Path(tmp) / name
+            if isinstance(document, bytes):
+                candidate.write_bytes(document)
+            else:
+                candidate.write_text(json.dumps(document), encoding="utf-8")
+            candidate.chmod(0o600)
+            try:
+                load_production_receipt(candidate)
+            except ValueError as exc:
+                if expected not in str(exc):
+                    raise AssertionError(
+                        f"production historical-key receipt rejection was unclear: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError(
+                    f"production historical-key receipt accepted {name}"
+                )
+
+        released_ring = load_production_receipt(receipt_path)
+        if set(released_ring.keys) != set(rotated_ring.keys):
+            raise AssertionError(
+                "attested production historical-key receipt lost key material"
+            )
+
+        expect_receipt_rejected(
+            "bad-hmac.json",
+            {**receipt, "receipt_hmac": "sha256:" + "0" * 64},
+            "authentication failed",
+        )
+        expect_receipt_rejected(
+            "wrong-broker.json",
+            {
+                **receipt,
+                "broker_release_receipt_digest": "sha256:" + "e" * 64,
+            },
+            "binding is invalid",
+        )
+        expect_receipt_rejected(
+            "wrong-active.json",
+            {**receipt, "active_key_id": "sha256:" + "f" * 64},
+            "binding is invalid",
+        )
+        expect_receipt_rejected(
+            "future-version.json",
+            {**receipt, "version": "serverware.boundSecretHistoricalKeyring/v2"},
+            "binding is invalid",
+        )
+
+        wrong_entry = dict(receipt)
+        wrong_entry["historical_keys"] = {
+            "sha256:" + "1" * 64: base64.urlsafe_b64encode(old_key).decode("ascii")
+        }
+        payload = {
+            key: value for key, value in wrong_entry.items() if key != "receipt_hmac"
+        }
+        wrong_entry["receipt_hmac"] = "sha256:" + hmac.new(
+            new_key,
+            crypto.canonical_json_bytes(payload),
+            hashlib.sha256,
+        ).hexdigest()
+        expect_receipt_rejected(
+            "wrong-entry-binding.json",
+            wrong_entry,
+            "entry binding is invalid",
+        )
+
+        broad_path = Path(tmp) / "broad-permissions.json"
+        broad_path.write_text(json.dumps(receipt), encoding="utf-8")
+        broad_path.chmod(0o644)
+        try:
+            load_production_receipt(broad_path)
+        except ValueError as exc:
+            if "permissions are too broad" not in str(exc):
+                raise AssertionError(
+                    f"broad historical-key receipt rejection was unclear: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("production accepted a broadly readable key receipt")
+
+        symlink_path = Path(tmp) / "historical-keyring-link.json"
+        symlink_path.symlink_to(receipt_path)
+        try:
+            load_production_receipt(symlink_path)
+        except ValueError as exc:
+            if "could not be read" not in str(exc):
+                raise AssertionError(
+                    f"symlink historical-key receipt rejection was unclear: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("production followed a historical-key receipt symlink")
+
+        expect_receipt_rejected(
+            "oversized.json",
+            b"x" * (crypto._BOUND_SECRET_HISTORICAL_KEYRING_MAX_BYTES + 1),
+            "too large",
+        )
+
+
+def exercise_fresh_startup_key_release_order(db: Any) -> None:
+    with patch.object(
+        db,
+        "load_bound_secret_keyring",
+        side_effect=AssertionError(
+            "fresh startup requested key release before policy attestation"
+        ),
+    ):
+        db.init_db()
+
+
+def exercise_modern_audit_verification_without_key(db: Any, backend: str) -> None:
+    stored = db.record_audit_event(
+        "test.audit.modern",
+        {"backend": backend, "storage": "visible-canonical"},
+        actor_type="test",
+        actor_id=f"test:{backend}:lazy-audit-key",
+    )
+    with patch.object(
+        db,
+        "load_bound_secret_keyring",
+        side_effect=AssertionError(
+            "modern audit verification requested canonical-preimage keys"
+        ),
+    ):
+        verification = db.verify_audit_chain()
+    if (
+        not verification.get("ok")
+        or verification.get("head") != stored["event_hash"]
+    ):
+        raise AssertionError(
+            f"modern audit chain did not verify independently: {verification}"
+        )
+
+
+def exercise_audit_verification_keyring_cache(db: Any, backend: str) -> None:
+    keyring = db.load_bound_secret_keyring()
+    rows: list[dict[str, Any]] = []
+    previous_hash = None
+    for index in range(2):
+        event_id = f"lazy-key-cache:{backend}:{index}"
+        operation = f"legacy.lazy-key-cache.{index}"
+        canonical_event_json = db.dumps(
+            {"operation": operation, "fixture": "lazy-key-cache"}
+        )
+        visible_event_json = db.dumps(
+            {
+                "operation": operation_commitment(operation),
+                "fixture": "lazy-key-cache",
+            }
+        )
+        created_at = f"2026-07-15T00:00:0{index}+00:00"
+        event_hash = db._audit_hash(
+            event_id=event_id,
+            event_type="rate_limit.denied",
+            actor_type="test",
+            actor_id=f"test:{backend}:lazy-key-cache",
+            event_json=canonical_event_json,
+            prev_event_hash=previous_hash,
+            created_at=created_at,
+        )
+        rows.append(
+            {
+                "id": event_id,
+                "event_type": "rate_limit.denied",
+                "actor_type": "test",
+                "actor_id": f"test:{backend}:lazy-key-cache",
+                "event_json": visible_event_json,
+                "encrypted_canonical_event_json": db.encrypt_bound_secret(
+                    canonical_event_json,
+                    purpose="audit-canonical-event-preimage",
+                    binding={
+                        "event_id": event_id,
+                        "event_hash": event_hash,
+                        "storage_format_version": db._AUDIT_STORAGE_FORMAT_VERSION,
+                    },
+                    keyring=keyring,
+                ),
+                "storage_format_version": db._AUDIT_STORAGE_FORMAT_VERSION,
+                "prev_event_hash": previous_hash,
+                "event_hash": event_hash,
+                "created_at": created_at,
+            }
+        )
+        previous_hash = event_hash
+
+    class Cursor:
+        def __init__(self, values: list[dict[str, Any]] | None = None) -> None:
+            self.position = 0
+            self.values = values if values is not None else rows
+
+        def fetchmany(self, size: int) -> list[dict[str, Any]]:
+            batch = self.values[self.position : self.position + size]
+            self.position += len(batch)
+            return batch
+
+    with patch.object(
+        db, "load_bound_secret_keyring", return_value=keyring
+    ) as lazy_loader:
+        verification = db._verify_audit_rows(
+            Cursor(),
+            total=len(rows),
+            selected_count=len(rows),
+            batch_size=1,
+            backend=backend,
+            ha=backend == "postgres",
+        )
+    if not verification.get("ok") or lazy_loader.call_count != 1:
+        raise AssertionError(
+            "encrypted audit stream did not cache one lazy keyring: "
+            f"verification={verification} calls={lazy_loader.call_count}"
+        )
+    legacy_after_gate = dict(rows[0])
+    legacy_after_gate["storage_format_version"] = None
+    legacy_after_gate["encrypted_canonical_event_json"] = None
+    rejected = db._verify_audit_rows(
+        Cursor([legacy_after_gate]),
+        total=1,
+        selected_count=1,
+        batch_size=1,
+        backend=backend,
+        ha=backend == "postgres",
+        require_current_rate_storage=True,
+    )
+    if rejected.get("error") != "audit_storage_format_unsupported":
+        raise AssertionError(
+            f"completed audit gate accepted legacy rate storage: {rejected}"
+        )
+
+
+def exercise_pre_policy_rate_limit_storage(
+    crypto: Any, db: Any, backend: str
+) -> None:
+    counter_key = "sha256:" + hashlib.sha256(
+        f"pre-policy-rate-limit:{backend}".encode("utf-8")
+    ).hexdigest()
+    operation = "tweets.write.before-policy-activation"
+    kwargs = {
+        "counter_key": counter_key,
+        "principal_id": "agent:pre-policy",
+        "route_id": f"route:pre-policy:{backend}",
+        "credential_id": "credential:pre-policy",
+        "credential_version": 1,
+        "policy_hash": "sha256:" + "1" * 64,
+        "constraint_id": "constraint:pre-policy",
+        "operation": operation,
+        "window_seconds": 60,
+        "max_count": 1,
+        "audit": False,
+    }
+    original_required = os.environ.get("SERVERWARE_KEY_RELEASE_REQUIRED")
+    os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "1"
+    try:
+        with patch.object(
+            crypto,
+            "load_master_key",
+            side_effect=RuntimeError("rollback epoch is stale"),
+        ):
+            first = db.consume_rate_limit(**kwargs)
+            second = db.consume_rate_limit(**kwargs)
+            if not first.get("allowed") or first.get("count") != 1:
+                raise AssertionError(
+                    f"pre-policy encrypted rate-limit consume failed: {first}"
+                )
+            if second.get("allowed") or second.get("reason") != "rate_limited":
+                raise AssertionError(
+                    f"pre-policy encrypted rate-limit replay was not denied: {second}"
+                )
+            try:
+                crypto.load_master_key()
+            except RuntimeError as exc:
+                if str(exc) != "rollback epoch is stale":
+                    raise
+            else:
+                raise AssertionError("pre-policy storage disabled broker key release")
+            with patch.object(crypto, "RELEASE_CHANNEL", "production"):
+                try:
+                    crypto.load_bound_secret_keyring()
+                except RuntimeError as exc:
+                    if str(exc) != "rollback epoch is stale":
+                        raise
+                else:
+                    raise AssertionError(
+                        "production bound storage bypassed broker key release"
+                    )
+
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT operation, encrypted_operation, operation_storage_version "
+                "FROM rate_limit_counters WHERE counter_key = ?",
+                (counter_key,),
+            ).fetchone()
+        if row is None:
+            raise AssertionError("pre-policy rate-limit row was not persisted")
+        if row["operation"] != operation_digest(operation):
+            raise AssertionError("pre-policy rate-limit row retained a raw operation")
+        if operation in str(row["encrypted_operation"]):
+            raise AssertionError("pre-policy ciphertext exposed the operation plaintext")
+        db.clear_rate_limit_counters((kwargs["route_id"],))
+    finally:
+        if original_required is None:
+            os.environ.pop("SERVERWARE_KEY_RELEASE_REQUIRED", None)
+        else:
+            os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = original_required
+
+
 def exercise_policy_high_water(db: Any, backend: str) -> None:
     policy_id = f"serverware-{backend}"
-    digest = lambda value: "sha256:" + value * 64
+
+    def digest(value: str) -> str:
+        return "sha256:" + value * 64
+
     first = db.advance_policy_high_water(
         policy_id=policy_id,
         sequence=1,
@@ -402,6 +1450,1309 @@ def counter_count(db: Any, counter_key: str) -> int | None:
             (counter_key,),
         ).fetchone()
     return int(row["count"]) if row is not None else None
+
+
+def operation_digest(operation: str) -> str:
+    return "sha256:" + hashlib.sha256(operation.encode("utf-8")).hexdigest()
+
+
+def operation_commitment(operation: str) -> dict[str, Any]:
+    return {
+        "type": "serverware.operation_commitment",
+        "version": 1,
+        "algorithm": "sha256",
+        "digest": operation_digest(operation),
+    }
+
+
+def inject_legacy_rate_limit_audit_head(
+    db: Any, backend: str, operation: str
+) -> tuple[str, str, str, int]:
+    payload = {
+        "counter_key": "sha256:" + "d" * 64,
+        "operation": operation,
+        "reason": "legacy-fixture",
+    }
+    stored = db.record_audit_event(
+        "rate_limit.denied",
+        payload,
+        actor_type="test",
+        actor_id=f"test:{backend}:legacy-audit",
+    )
+    if payload["operation"] != operation:
+        raise AssertionError("audit storage normalization mutated the in-memory event")
+    if stored.get("event", {}).get("operation") != operation_commitment(operation):
+        raise AssertionError(f"new audit write retained raw operation: {stored}")
+
+    event_json = db.dumps(payload)
+    if backend == "postgres":
+        with db._audit_pg_connect() as conn:
+            with conn.transaction():
+                row = conn.execute(
+                    "SELECT * FROM serverware_audit_events WHERE id = %s",
+                    (stored["id"],),
+                ).fetchone()
+                old_head = db._audit_hash(
+                    event_id=row["id"],
+                    event_type=row["event_type"],
+                    actor_type=row["actor_type"],
+                    actor_id=row["actor_id"],
+                    event_json=event_json,
+                    prev_event_hash=row["prev_event_hash"],
+                    created_at=row["created_at"],
+                )
+                conn.execute(
+                    "UPDATE serverware_audit_events SET event_json = %s, "
+                    "storage_format_version = NULL, event_hash = %s WHERE id = %s",
+                    (event_json, old_head, stored["id"]),
+                )
+    else:
+        with db.connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM audit_events WHERE id = ?", (stored["id"],)
+            ).fetchone()
+            old_head = db._audit_hash(
+                event_id=row["id"],
+                event_type=row["event_type"],
+                actor_type=row["actor_type"],
+                actor_id=row["actor_id"],
+                event_json=event_json,
+                prev_event_hash=row["prev_event_hash"],
+                created_at=row["created_at"],
+            )
+            conn.execute(
+                "UPDATE audit_events SET event_json = ?, storage_format_version = NULL, "
+                "event_hash = ? WHERE id = ?",
+                (event_json, old_head, stored["id"]),
+            )
+    verification = db.verify_audit_chain()
+    if not verification.get("ok") or verification.get("head") != old_head:
+        raise AssertionError(
+            f"legacy audit fixture was not a valid old chain head: {verification}"
+        )
+    return stored["id"], old_head, event_json, int(verification["count"])
+
+
+def exercise_sqlite_audit_redaction_abort(db: Any) -> None:
+    def fixture_connection() -> sqlite3.Connection:
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.executescript(
+            """
+            CREATE TABLE audit_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
+                event_json TEXT NOT NULL,
+                encrypted_canonical_event_json TEXT,
+                storage_format_version INTEGER,
+                prev_event_hash TEXT,
+                event_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE serverware_store_migrations (
+                migration TEXT PRIMARY KEY,
+                version BIGINT NOT NULL,
+                applied_at TEXT NOT NULL
+            );
+            """
+        )
+        return conn
+
+    def insert_event(
+        conn: sqlite3.Connection,
+        *,
+        event_id: str,
+        event_type: str,
+        event_json: str,
+        prev_event_hash: str | None,
+        event_hash: str | None = None,
+    ) -> str:
+        created_at = "2026-07-15T00:00:00+00:00"
+        calculated = db._audit_hash(
+            event_id=event_id,
+            event_type=event_type,
+            actor_type="test",
+            actor_id="test:sqlite:redaction-abort",
+            event_json=event_json,
+            prev_event_hash=prev_event_hash,
+            created_at=created_at,
+        )
+        conn.execute(
+            "INSERT INTO audit_events (id, event_type, actor_type, actor_id, "
+            "event_json, prev_event_hash, event_hash, created_at) "
+            "VALUES (?, ?, 'test', 'test:sqlite:redaction-abort', ?, ?, ?, ?)",
+            (
+                event_id,
+                event_type,
+                event_json,
+                prev_event_hash,
+                event_hash or calculated,
+                created_at,
+            ),
+        )
+        return calculated
+
+    def snapshot(conn: sqlite3.Connection) -> list[tuple[Any, ...]]:
+        return [
+            tuple(row)
+            for row in conn.execute(
+                "SELECT id, event_json, encrypted_canonical_event_json, "
+                "prev_event_hash, event_hash FROM audit_events ORDER BY rowid ASC"
+            ).fetchall()
+        ]
+
+    invalid = fixture_connection()
+    try:
+        first_json = db.dumps(
+            {"operation": "legacy.sqlite.valid-before-invalid", "reason": "fixture"}
+        )
+        first_hash = insert_event(
+            invalid,
+            event_id="valid-candidate",
+            event_type="rate_limit.denied",
+            event_json=first_json,
+            prev_event_hash=None,
+        )
+        insert_event(
+            invalid,
+            event_id="invalid-tail",
+            event_type="test.invalid",
+            event_json=db.dumps({"invalid": True}),
+            prev_event_hash=first_hash,
+            event_hash="sha256:" + "0" * 64,
+        )
+        invalid.commit()
+        before = snapshot(invalid)
+        try:
+            db._remediate_sqlite_audit_operations(
+                invalid, keyring=db.load_bound_secret_keyring()
+            )
+        except db.AuditStoreError:
+            invalid.rollback()
+        else:
+            raise AssertionError("invalid legacy audit chain was migrated")
+        if snapshot(invalid) != before:
+            raise AssertionError("invalid legacy audit chain was partially mutated")
+    finally:
+        invalid.close()
+
+    oversized = fixture_connection()
+    try:
+        oversized_json = db.dumps(
+            {
+                "operation": "x" * (db._AUDIT_EVENT_JSON_STORED_MAX_BYTES + 1),
+                "reason": "oversized-fixture",
+            }
+        )
+        insert_event(
+            oversized,
+            event_id="oversized-candidate",
+            event_type="rate_limit.denied",
+            event_json=oversized_json,
+            prev_event_hash=None,
+        )
+        oversized.commit()
+        before = snapshot(oversized)
+        try:
+            db._remediate_sqlite_audit_operations(
+                oversized, keyring=db.load_bound_secret_keyring()
+            )
+        except db.AuditStoreError as exc:
+            oversized.rollback()
+            if str(exc) != "event_size_exceeded":
+                raise AssertionError(
+                    f"oversized audit chain failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("oversized legacy audit chain was migrated")
+        if snapshot(oversized) != before:
+            raise AssertionError("oversized legacy audit chain was partially mutated")
+    finally:
+        oversized.close()
+
+    destructive = fixture_connection()
+    try:
+        insert_event(
+            destructive,
+            event_id="destructive-rewrite-evidence",
+            event_type="audit.chain.superseded",
+            event_json=db.dumps({"reason": "legacy-destructive-rewrite"}),
+            prev_event_hash=None,
+        )
+        destructive.commit()
+        before = snapshot(destructive)
+        try:
+            db._remediate_sqlite_audit_operations(
+                destructive, keyring=db.load_bound_secret_keyring()
+            )
+        except db.AuditStoreError as exc:
+            destructive.rollback()
+            if "restore from a pre-rewrite backup" not in str(exc):
+                raise AssertionError(
+                    f"destructive rewrite evidence failed unclearly: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("destructive rewrite evidence was accepted")
+        if snapshot(destructive) != before:
+            raise AssertionError("destructive rewrite rejection mutated the chain")
+    finally:
+        destructive.close()
+
+
+def exercise_legacy_writer_storage_guards(
+    db: Any,
+    backend: str,
+    *,
+    existing_attempt_id: str,
+    existing_audit_id: str,
+    existing_outbox_id: str,
+    existing_counter_key: str,
+    existing_quota_counter_key: str,
+) -> None:
+    now = db.iso_now()
+
+    def legacy_outbox_insert() -> None:
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO metadata_audit_outbox (id, event_type, actor_type, "
+                "actor_id, event_json, status, created_at) VALUES (?, "
+                "'rate_limit.denied', 'legacy', 'legacy', ?, 'pending', ?)",
+                (
+                    f"legacy-writer:{backend}:outbox",
+                    db.dumps({"operation": "legacy.plaintext"}),
+                    now,
+                ),
+            )
+
+    def legacy_counter_insert() -> None:
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO rate_limit_counters (counter_key, operation, "
+                "window_start_epoch_ms, window_seconds, max_count, count, created_at, "
+                "updated_at) VALUES (?, ?, 0, 60, 1, 0, ?, ?)",
+                (
+                    "sha256:" + hashlib.sha256(
+                        f"{backend}:legacy-writer-counter".encode("utf-8")
+                    ).hexdigest(),
+                    "legacy.plaintext",
+                    now,
+                    now,
+                ),
+            )
+
+    def legacy_quota_insert() -> None:
+        with db.connect() as conn:
+            conn.execute(
+                "INSERT INTO release_authorization_quota_reservations "
+                "(attempt_id, counter_key, constraint_id, operation, "
+                "window_start_epoch_ms, window_seconds, max_count, count_after, "
+                "reservation_state, created_at, updated_at) VALUES (?, ?, 'legacy', "
+                "'legacy.plaintext', 0, 60, 1, 1, 'reserved', ?, ?)",
+                (
+                    existing_attempt_id,
+                    "sha256:" + hashlib.sha256(
+                        f"{backend}:legacy-writer-quota".encode("utf-8")
+                    ).hexdigest(),
+                    now,
+                    now,
+                ),
+            )
+
+    def legacy_audit_insert() -> None:
+        event_id = f"legacy-writer:{backend}:audit"
+        event_json = db.dumps({"operation": "legacy.plaintext"})
+        if backend == "postgres":
+            with db._audit_pg_connect() as conn:
+                with conn.transaction():
+                    conn.execute(
+                        "INSERT INTO serverware_audit_events (id, event_type, "
+                        "actor_type, actor_id, event_json, prev_event_hash, event_hash, "
+                        "created_at) VALUES (%s, 'rate_limit.denied', 'legacy', "
+                        "'legacy', %s, NULL, %s, %s)",
+                        (event_id, event_json, "sha256:" + "f" * 64, now),
+                    )
+        else:
+            with db.connect() as conn:
+                conn.execute(
+                    "INSERT INTO audit_events (id, event_type, actor_type, actor_id, "
+                    "event_json, prev_event_hash, event_hash, created_at) VALUES (?, "
+                    "'rate_limit.denied', 'legacy', 'legacy', ?, NULL, ?, ?)",
+                    (event_id, event_json, "sha256:" + "f" * 64, now),
+                )
+
+    def legacy_outbox_update() -> None:
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE metadata_audit_outbox SET event_json = ? WHERE id = ?",
+                (
+                    db.dumps({"operation": "legacy.update.plaintext"}),
+                    existing_outbox_id,
+                ),
+            )
+
+    def legacy_counter_update() -> None:
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE rate_limit_counters SET operation = ? WHERE counter_key = ?",
+                (
+                    operation_digest("legacy.update.digest-shaped-literal"),
+                    existing_counter_key,
+                ),
+            )
+
+    def legacy_quota_update() -> None:
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE release_authorization_quota_reservations SET operation = ? "
+                "WHERE attempt_id = ? AND counter_key = ?",
+                (
+                    operation_digest("legacy.update.quota-digest-shaped-literal"),
+                    existing_attempt_id,
+                    existing_quota_counter_key,
+                ),
+            )
+
+    def legacy_audit_update() -> None:
+        event_json = db.dumps({"operation": "legacy.update.plaintext"})
+        if backend == "postgres":
+            with db._audit_pg_connect() as conn:
+                with conn.transaction():
+                    conn.execute(
+                        "UPDATE serverware_audit_events SET event_json = %s "
+                        "WHERE id = %s",
+                        (event_json, existing_audit_id),
+                    )
+        else:
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE audit_events SET event_json = ? WHERE id = ?",
+                    (event_json, existing_audit_id),
+                )
+
+    for callback, label in (
+        (legacy_audit_insert, "audit"),
+        (legacy_outbox_insert, "metadata outbox"),
+        (legacy_counter_insert, "rate counter"),
+        (legacy_quota_insert, "quota reservation"),
+        (legacy_audit_update, "audit update"),
+        (legacy_outbox_update, "metadata outbox update"),
+        (legacy_counter_update, "rate counter update"),
+        (legacy_quota_update, "quota reservation update"),
+    ):
+        assert_raises(
+            Exception,
+            callback,
+            f"simulated rolling legacy {label} writer bypassed the storage epoch gate",
+        )
+
+
+def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
+    standalone_operation = f"custom.{backend}.standalone.plaintext"
+    standalone_key = (
+        "sha256:"
+        + hashlib.sha256(
+            f"{backend}:standalone-operation-storage".encode("utf-8")
+        ).hexdigest()
+    )
+    consumed = db.consume_rate_limit(
+        counter_key=standalone_key,
+        principal_id=f"agent:{backend}:operation-storage",
+        route_id=f"route:{backend}:operation-storage",
+        credential_id=f"credential:{backend}:operation-storage",
+        credential_version=1,
+        policy_hash="sha256:" + "9" * 64,
+        constraint_id=f"quota:{backend}:operation-storage",
+        operation=standalone_operation,
+        window_seconds=60,
+        max_count=2,
+    )
+    if (
+        not consumed.get("allowed")
+        or consumed.get("count") != 1
+        or not consumed.get("audit_event_hash")
+    ):
+        raise AssertionError(f"operation storage fixture was not consumed: {consumed}")
+    consumed_events = db.search_audit_events(
+        event_type="rate_limit.consumed", limit=100, scan_limit=5000
+    )
+    consumed_event = next(
+        (
+            item
+            for item in consumed_events.get("items") or []
+            if item.get("event_hash") == consumed["audit_event_hash"]
+        ),
+        None,
+    )
+    if (
+        consumed_event is None
+        or consumed_event.get("event", {}).get("operation")
+        != operation_commitment(standalone_operation)
+        or standalone_operation in json.dumps(consumed_event, sort_keys=True)
+    ):
+        raise AssertionError(
+            f"rate-limit audit retained raw operation: {consumed_event}"
+        )
+
+    collision_source = f"custom.{backend}.commitment-source"
+    digest_shaped_literal = operation_digest(collision_source)
+    direct_payload = {
+        "operation": digest_shaped_literal,
+        "path": "direct",
+    }
+    direct = db.record_audit_event(
+        "rate_limit.denied",
+        direct_payload,
+        actor_type="test",
+        actor_id=f"test:{backend}:direct-commitment",
+    )
+    batch_payload = {"operation": collision_source, "path": "batch"}
+    batch = db.record_audit_event_batch(
+        [("rate_limit.denied", batch_payload)],
+        actor_type="test",
+        actor_id=f"test:{backend}:batch-commitment",
+    )[0]
+    staged_payload = {
+        "operation": f"custom.{backend}.staged-commitment",
+        "path": "staged",
+    }
+    with db.connect() as conn:
+        staged = db.append_audit_event(
+            conn,
+            event_type="rate_limit.denied",
+            actor_type="test",
+            actor_id=f"test:{backend}:staged-commitment",
+            event=staged_payload,
+            idempotency_key=f"test:{backend}:staged-commitment",
+        )
+    if (
+        direct_payload["operation"] != digest_shaped_literal
+        or batch_payload["operation"] != collision_source
+        or staged_payload["operation"] != f"custom.{backend}.staged-commitment"
+        or direct.get("event", {}).get("operation")
+        != operation_commitment(digest_shaped_literal)
+        or batch.get("event", {}).get("operation")
+        != operation_commitment(collision_source)
+        or staged.get("event", {}).get("operation")
+        != operation_commitment(f"custom.{backend}.staged-commitment")
+        or direct["event"]["operation"] == batch["event"]["operation"]
+    ):
+        raise AssertionError(
+            "direct, batched, or staged audit commitment storage was ambiguous or "
+            "mutated caller data"
+        )
+
+    quota = quota_claim(f"{backend}-operation-storage", maximum=2)
+    atomic_operation = f"custom.{backend}.atomic.plaintext"
+    quota["operation"] = atomic_operation
+    attempt_id = f"attempt:{backend}:operation-storage"
+    binding = {
+        "principal_id": f"agent:{backend}:operation-storage",
+        "route_id": f"route:{backend}:operation-storage",
+        "credential_id": "",
+        "credential_version": 0,
+        "policy_hash": "sha256:" + "a" * 64,
+        "request_digest": "sha256:" + "b" * 64,
+        "operation_digest": None,
+    }
+    reserve_kwargs = release_reserve_kwargs(
+        binding,
+        attempt_id=attempt_id,
+        quotas=[quota],
+        require_jit_grant=False,
+    )
+    reserved = db.reserve_release_authorization(**reserve_kwargs)
+    if reserved.get("state") != "reserved":
+        raise AssertionError(f"operation storage reservation failed: {reserved}")
+    if [item.get("operation") for item in reserved.get("quotas") or []] != [
+        atomic_operation
+    ]:
+        raise AssertionError(f"quota operation API behavior changed: {reserved}")
+
+    with db.connect() as conn:
+        stored_standalone = conn.execute(
+            "SELECT operation, count FROM rate_limit_counters WHERE counter_key = ?",
+            (standalone_key,),
+        ).fetchone()
+        stored_atomic = conn.execute(
+            "SELECT operation, count FROM rate_limit_counters WHERE counter_key = ?",
+            (quota["counter_key"],),
+        ).fetchone()
+        stored_reservation = conn.execute(
+            "SELECT operation, encrypted_operation, reservation_state FROM "
+            "release_authorization_quota_reservations "
+            "WHERE attempt_id = ? AND counter_key = ?",
+            (attempt_id, quota["counter_key"]),
+        ).fetchone()
+    if (
+        stored_standalone is None
+        or stored_standalone["operation"] != operation_digest(standalone_operation)
+        or standalone_operation in str(stored_standalone["operation"])
+        or int(stored_standalone["count"]) != 1
+    ):
+        raise AssertionError(
+            f"new rate-limit operation was not committed at rest: {stored_standalone}"
+        )
+    if (
+        stored_atomic is None
+        or stored_atomic["operation"] != operation_digest(atomic_operation)
+        or atomic_operation in str(stored_atomic["operation"])
+        or int(stored_atomic["count"]) != 1
+        or stored_reservation is None
+        or stored_reservation["operation"] != operation_digest(atomic_operation)
+        or atomic_operation in str(stored_reservation["operation"])
+        or atomic_operation in str(stored_reservation["encrypted_operation"])
+        or stored_reservation["reservation_state"] != "reserved"
+    ):
+        raise AssertionError(
+            "new atomic quota operation was not committed at rest: "
+            f"counter={stored_atomic} reservation={stored_reservation}"
+        )
+
+    legacy_standalone = operation_digest(
+        f"legacy.{backend}.digest-shaped-literal-source"
+    )
+    legacy_atomic = f"legacy.{backend}.atomic.plaintext"
+    legacy_audit = f"legacy.{backend}.audit.plaintext"
+    with db.connect() as conn:
+        conn.execute(
+            "DELETE FROM serverware_store_migrations WHERE migration IN (?, ?)",
+            (
+                db._AUDIT_STORAGE_REDACTION_MIGRATION,
+                db._METADATA_STORAGE_REDACTION_MIGRATION,
+            ),
+        )
+    if backend == "postgres":
+        with db._audit_pg_connect() as conn:
+            with conn.transaction():
+                conn.execute(
+                    "DELETE FROM serverware_store_migrations WHERE migration = %s",
+                    (db._AUDIT_STORAGE_REDACTION_MIGRATION,),
+                )
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE rate_limit_counters SET operation = ?, encrypted_operation = NULL, "
+            "operation_storage_version = NULL WHERE counter_key = ?",
+            (legacy_standalone, standalone_key),
+        )
+        conn.execute(
+            "UPDATE rate_limit_counters SET operation = ?, encrypted_operation = NULL, "
+            "operation_storage_version = NULL WHERE counter_key = ?",
+            (legacy_atomic, quota["counter_key"]),
+        )
+        conn.execute(
+            "UPDATE release_authorization_quota_reservations "
+            "SET operation = ?, encrypted_operation = NULL, "
+            "operation_storage_version = NULL "
+            "WHERE attempt_id = ? AND counter_key = ?",
+            (legacy_atomic, attempt_id, quota["counter_key"]),
+        )
+    legacy_api_before = db.reserve_release_authorization(**reserve_kwargs)
+    if (
+        [item.get("operation") for item in legacy_api_before.get("quotas") or []]
+        != [legacy_atomic]
+        or legacy_api_before.get("quotas", [{}])[0].get("count") != 1
+    ):
+        raise AssertionError(
+            f"legacy quota API fixture did not retain raw semantics: {legacy_api_before}"
+        )
+    (
+        legacy_audit_event_id,
+        old_audit_head,
+        original_event_json,
+        old_audit_count,
+    ) = inject_legacy_rate_limit_audit_head(db, backend, legacy_audit)
+    setup = db.create_setup_session(
+        owner_id=f"owner:{backend}:audit-storage-redaction",
+        actor_id=f"owner:{backend}:audit-storage-redaction",
+    )
+    legacy_outbox_operation = f"legacy.{backend}.outbox.plaintext"
+    legacy_outbox_event_json = db.dumps(
+        {
+            "operation": legacy_outbox_operation,
+            "reason": "legacy-outbox-fixture",
+        }
+    )
+    outbox_id = f"legacy:{backend}:rate-limit-outbox"
+    with db.connect() as conn:
+        setup_event = conn.execute(
+            "SELECT id FROM setup_session_events WHERE session_id = ? "
+            "ORDER BY sequence ASC LIMIT 1",
+            (setup["id"],),
+        ).fetchone()
+        release_event = conn.execute(
+            "SELECT id FROM release_authorization_events WHERE attempt_id = ? "
+            "ORDER BY created_at ASC, id ASC LIMIT 1",
+            (attempt_id,),
+        ).fetchone()
+        if setup_event is None or release_event is None:
+            raise AssertionError("durable audit reference fixtures were not created")
+        conn.execute(
+            "UPDATE setup_session_events SET audit_status = 'audited', audited_at = ?, "
+            "audit_event_hash = ? WHERE id = ?",
+            (db.iso_now(), old_audit_head, setup_event["id"]),
+        )
+        conn.execute(
+            "UPDATE release_authorization_events SET audited_at = ?, "
+            "audit_event_hash = ? WHERE id = ?",
+            (db.iso_now(), old_audit_head, release_event["id"]),
+        )
+        conn.execute(
+            "INSERT INTO metadata_audit_outbox (id, event_type, actor_type, actor_id, "
+            "event_json, status, audited_at, audit_event_hash, created_at) "
+            "VALUES (?, 'rate_limit.denied', 'test', ?, ?, 'audited', ?, ?, ?)",
+            (
+                outbox_id,
+                f"test:{backend}:legacy-outbox",
+                legacy_outbox_event_json,
+                db.iso_now(),
+                old_audit_head,
+                db.iso_now(),
+            ),
+        )
+        durable_reference_ids = {
+            "setup": str(setup_event["id"]),
+            "release": str(release_event["id"]),
+        }
+    if backend == "postgres":
+        with db._audit_pg_connect() as conn:
+            old_audit_row = conn.execute(
+                "SELECT prev_event_hash FROM serverware_audit_events WHERE id = %s",
+                (legacy_audit_event_id,),
+            ).fetchone()
+            old_prefix_hashes = {
+                str(row["id"]): str(row["event_hash"])
+                for row in conn.execute(
+                    "SELECT id, event_hash FROM serverware_audit_events "
+                    "ORDER BY sequence ASC"
+                ).fetchall()
+            }
+    else:
+        with db.connect() as conn:
+            old_audit_row = conn.execute(
+                "SELECT prev_event_hash FROM audit_events WHERE id = ?",
+                (legacy_audit_event_id,),
+            ).fetchone()
+            old_prefix_hashes = {
+                str(row["id"]): str(row["event_hash"])
+                for row in conn.execute(
+                    "SELECT id, event_hash FROM audit_events ORDER BY rowid ASC"
+                ).fetchall()
+            }
+    old_prev_event_hash = old_audit_row["prev_event_hash"]
+
+    preloaded_keyring = db.load_bound_secret_keyring()
+    preload_event: dict[str, Any] | None = None
+
+    def simulate_first_key_release_audit() -> Any:
+        nonlocal preload_event
+        if preload_event is None:
+            preload_event = db.record_audit_event(
+                "key_release.material_released",
+                {"material": "test-migration-preload"},
+                actor_type="system",
+                actor_id=f"test:{backend}:migration-key-preload",
+            )
+        return preloaded_keyring
+
+    with patch.object(
+        db,
+        "load_bound_secret_keyring",
+        side_effect=simulate_first_key_release_audit,
+    ):
+        db.init_db()
+    if preload_event is None:
+        raise AssertionError("migration did not preload encryption material")
+    pre_migration_head = preload_event["event_hash"]
+    pre_migration_count = old_audit_count + 1
+    old_prefix_hashes[str(preload_event["id"])] = str(pre_migration_head)
+    with db.connect() as conn:
+        migrated_standalone = conn.execute(
+            "SELECT operation, encrypted_operation, operation_storage_version, count "
+            "FROM rate_limit_counters WHERE counter_key = ?",
+            (standalone_key,),
+        ).fetchone()
+        migrated_atomic = conn.execute(
+            "SELECT operation, encrypted_operation, operation_storage_version, count "
+            "FROM rate_limit_counters WHERE counter_key = ?",
+            (quota["counter_key"],),
+        ).fetchone()
+        migrated_reservation = conn.execute(
+            "SELECT operation, encrypted_operation, operation_storage_version, "
+            "reservation_state FROM "
+            "release_authorization_quota_reservations "
+            "WHERE attempt_id = ? AND counter_key = ?",
+            (attempt_id, quota["counter_key"]),
+        ).fetchone()
+        durable_references = {
+            "setup": conn.execute(
+                "SELECT audit_event_hash FROM setup_session_events WHERE id = ?",
+                (durable_reference_ids["setup"],),
+            ).fetchone()["audit_event_hash"],
+            "release": conn.execute(
+                "SELECT audit_event_hash FROM release_authorization_events WHERE id = ?",
+                (durable_reference_ids["release"],),
+            ).fetchone()["audit_event_hash"],
+            "outbox": conn.execute(
+                "SELECT audit_event_hash FROM metadata_audit_outbox WHERE id = ?",
+                (outbox_id,),
+            ).fetchone()["audit_event_hash"],
+        }
+        migrated_outbox = conn.execute(
+            "SELECT event_json FROM metadata_audit_outbox WHERE id = ?", (outbox_id,)
+        ).fetchone()
+        metadata_gate = conn.execute(
+            "SELECT version FROM serverware_store_migrations WHERE migration = ?",
+            (db._METADATA_STORAGE_REDACTION_MIGRATION,),
+        ).fetchone()
+    if backend == "postgres":
+        with db._audit_pg_connect() as conn:
+            migrated_audit_row = conn.execute(
+                "SELECT event_json, encrypted_canonical_event_json, prev_event_hash, "
+                "event_hash, storage_format_version FROM serverware_audit_events "
+                "WHERE id = %s",
+                (legacy_audit_event_id,),
+            ).fetchone()
+            audit_gate = conn.execute(
+                "SELECT version FROM serverware_store_migrations WHERE migration = %s",
+                (db._AUDIT_STORAGE_REDACTION_MIGRATION,),
+            ).fetchone()
+            migrated_prefix_hashes = {
+                str(row["id"]): str(row["event_hash"])
+                for row in conn.execute(
+                    "SELECT id, event_hash FROM serverware_audit_events "
+                    "ORDER BY sequence ASC LIMIT %s",
+                    (pre_migration_count,),
+                ).fetchall()
+            }
+    else:
+        with db.connect() as conn:
+            migrated_audit_row = conn.execute(
+                "SELECT event_json, encrypted_canonical_event_json, prev_event_hash, "
+                "event_hash, storage_format_version FROM audit_events WHERE id = ?",
+                (legacy_audit_event_id,),
+            ).fetchone()
+            audit_gate = conn.execute(
+                "SELECT version FROM serverware_store_migrations WHERE migration = ?",
+                (db._AUDIT_STORAGE_REDACTION_MIGRATION,),
+            ).fetchone()
+            migrated_prefix_hashes = {
+                str(row["id"]): str(row["event_hash"])
+                for row in conn.execute(
+                    "SELECT id, event_hash FROM audit_events ORDER BY rowid ASC LIMIT ?",
+                    (pre_migration_count,),
+                ).fetchall()
+            }
+    with patch.object(
+        db,
+        "load_bound_secret_keyring",
+        side_effect=RuntimeError("forced canonical-preimage key failure"),
+    ):
+        unavailable_key_verification = db.verify_audit_chain()
+    if (
+        unavailable_key_verification.get("ok") is not False
+        or unavailable_key_verification.get("error")
+        != "canonical_preimage_key_unavailable"
+        or unavailable_key_verification.get("event_id") != legacy_audit_event_id
+    ):
+        raise AssertionError(
+            "encrypted canonical preimage did not fail closed without its key: "
+            f"{unavailable_key_verification}"
+        )
+    with patch.object(
+        db,
+        "load_bound_secret_keyring",
+        wraps=db.load_bound_secret_keyring,
+    ) as lazy_keyring_loader:
+        audit_verification = db.verify_audit_chain()
+    if lazy_keyring_loader.call_count != 1:
+        raise AssertionError(
+            "audit verification did not cache its lazy canonical-preimage keyring: "
+            f"calls={lazy_keyring_loader.call_count}"
+        )
+    prefix_verification = db.verify_audit_chain(limit=pre_migration_count)
+    audit_events = db.list_audit_events(limit=5000)
+    markers = [
+        item
+        for item in audit_events
+        if item.get("event_type") == "audit.storage_redacted"
+    ]
+    legacy_event = next(
+        (item for item in audit_events if item.get("id") == legacy_audit_event_id),
+        None,
+    )
+    expected_redacted_event_json = db.dumps(
+        {
+            "counter_key": "sha256:" + "d" * 64,
+            "operation": operation_commitment(legacy_audit),
+            "reason": "legacy-fixture",
+        }
+    )
+    expected_manifest = [
+        {
+            "id": legacy_audit_event_id,
+            "event_hash": old_audit_head,
+            "original_event_json_digest": operation_digest(original_event_json),
+            "redacted_event_json_digest": operation_digest(
+                expected_redacted_event_json
+            ),
+        }
+    ]
+    outbox_event = json.loads(migrated_outbox["event_json"])
+    canonical_original = db.decrypt_bound_secret(
+        migrated_audit_row["encrypted_canonical_event_json"],
+        purpose="audit-canonical-event-preimage",
+        binding={
+            "event_id": legacy_audit_event_id,
+            "event_hash": old_audit_head,
+            "storage_format_version": db._AUDIT_STORAGE_FORMAT_VERSION,
+        },
+        keyring=db.load_bound_secret_keyring(),
+    )
+    if (
+        not audit_verification.get("ok")
+        or audit_verification.get("head") == pre_migration_head
+        or audit_verification.get("count") != pre_migration_count + 1
+        or migrated_prefix_hashes != old_prefix_hashes
+        or not prefix_verification.get("ok")
+        or prefix_verification.get("head") != pre_migration_head
+        or legacy_event is None
+        or "encrypted_canonical_event_json" in legacy_event
+        or legacy_event.get("event", {}).get("operation")
+        != operation_commitment(legacy_audit)
+        or legacy_audit in json.dumps(audit_events, sort_keys=True)
+        or migrated_audit_row["event_hash"] != old_audit_head
+        or migrated_audit_row["prev_event_hash"] != old_prev_event_hash
+        or migrated_audit_row["event_json"] != expected_redacted_event_json
+        or canonical_original != original_event_json
+        or migrated_audit_row["storage_format_version"]
+        != db._AUDIT_STORAGE_FORMAT_VERSION
+        or legacy_audit in migrated_audit_row["event_json"]
+        or legacy_audit in migrated_audit_row["encrypted_canonical_event_json"]
+        or outbox_event.get("operation")
+        != operation_commitment(legacy_outbox_operation)
+        or legacy_outbox_operation in migrated_outbox["event_json"]
+        or set(durable_references.values()) != {old_audit_head}
+        or int(metadata_gate["version"]) != db._STORAGE_REDACTION_MIGRATION_VERSION
+        or int(audit_gate["version"]) != db._STORAGE_REDACTION_MIGRATION_VERSION
+        or len(markers) != 1
+        or markers[0].get("event", {}).get("old_head_event_hash")
+        != pre_migration_head
+        or markers[0].get("event", {}).get("affected_event_count") != 1
+        or markers[0].get("event", {}).get("manifest_digest")
+        != operation_digest(db.dumps(expected_manifest))
+        or markers[0].get("prev_event_hash") != pre_migration_head
+    ):
+        raise AssertionError(
+            "legacy audit storage redaction did not preserve the canonical chain: "
+            f"verification={audit_verification} prefix={prefix_verification} "
+            f"legacy={legacy_event} markers={markers} refs={durable_references}"
+        )
+    remediated_head = audit_verification["head"]
+    remediated_count = audit_verification["count"]
+    with patch.object(
+        db,
+        "_validated_audit_row_hash",
+        side_effect=AssertionError("durable audit migration gate was bypassed"),
+    ), patch.object(
+        db,
+        "_encrypt_operation",
+        side_effect=AssertionError("durable metadata migration gate was bypassed"),
+    ):
+        db.init_db()
+    repeated_verification = db.verify_audit_chain()
+    if (
+        not repeated_verification.get("ok")
+        or repeated_verification.get("head") != remediated_head
+        or repeated_verification.get("count") != remediated_count
+    ):
+        raise AssertionError(
+            f"audit storage redaction was not idempotent: {repeated_verification}"
+        )
+    exercise_legacy_writer_storage_guards(
+        db,
+        backend,
+        existing_attempt_id=attempt_id,
+        existing_audit_id=legacy_audit_event_id,
+        existing_outbox_id=outbox_id,
+        existing_counter_key=standalone_key,
+        existing_quota_counter_key=quota["counter_key"],
+    )
+
+    def update_legacy_audit_storage(
+        event_json: str, encrypted_canonical_event_json: str
+    ) -> None:
+        if backend == "postgres":
+            with db._audit_pg_connect() as conn:
+                with conn.transaction():
+                    conn.execute(
+                        "UPDATE serverware_audit_events SET event_json = %s, "
+                        "encrypted_canonical_event_json = %s WHERE id = %s",
+                        (
+                            event_json,
+                            encrypted_canonical_event_json,
+                            legacy_audit_event_id,
+                        ),
+                    )
+        else:
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE audit_events SET event_json = ?, "
+                    "encrypted_canonical_event_json = ? WHERE id = ?",
+                    (
+                        event_json,
+                        encrypted_canonical_event_json,
+                        legacy_audit_event_id,
+                    ),
+                )
+
+    tampered_visible = json.loads(expected_redacted_event_json)
+    tampered_visible["operation"]["digest"] = operation_digest("visible-tamper")
+    update_legacy_audit_storage(
+        db.dumps(tampered_visible),
+        migrated_audit_row["encrypted_canonical_event_json"],
+    )
+    visible_tamper_verification = db.verify_audit_chain()
+    assert_raises(
+        db.AuditStoreError,
+        db.init_db,
+        "completed audit migration gate ignored a broken visible projection",
+    )
+    update_legacy_audit_storage(
+        expected_redacted_event_json,
+        migrated_audit_row["encrypted_canonical_event_json"],
+    )
+    update_legacy_audit_storage(expected_redacted_event_json, "v1:AA:AA")
+    ciphertext_tamper_verification = db.verify_audit_chain()
+    update_legacy_audit_storage(
+        expected_redacted_event_json,
+        migrated_audit_row["encrypted_canonical_event_json"],
+    )
+    restored_verification = db.verify_audit_chain()
+    if (
+        visible_tamper_verification.get("ok")
+        or visible_tamper_verification.get("error")
+        != "redacted_projection_mismatch"
+        or ciphertext_tamper_verification.get("ok")
+        or ciphertext_tamper_verification.get("error")
+        != "canonical_preimage_invalid"
+        or not restored_verification.get("ok")
+        or restored_verification.get("head") != remediated_head
+    ):
+        raise AssertionError(
+            "visible or encrypted canonical audit tampering was not detected: "
+            f"visible={visible_tamper_verification} "
+            f"ciphertext={ciphertext_tamper_verification} "
+            f"restored={restored_verification}"
+        )
+    if (
+        migrated_standalone["operation"] != operation_digest(legacy_standalone)
+        or legacy_standalone in str(migrated_standalone["operation"])
+        or migrated_standalone["operation_storage_version"]
+        != db._OPERATION_STORAGE_VERSION
+        or legacy_standalone in str(migrated_standalone["encrypted_operation"])
+        or int(migrated_standalone["count"]) != 1
+        or migrated_atomic["operation"] != operation_digest(legacy_atomic)
+        or legacy_atomic in str(migrated_atomic["operation"])
+        or migrated_atomic["operation_storage_version"]
+        != db._OPERATION_STORAGE_VERSION
+        or int(migrated_atomic["count"]) != 1
+        or migrated_reservation["operation"] != operation_digest(legacy_atomic)
+        or legacy_atomic in str(migrated_reservation["operation"])
+        or legacy_atomic in str(migrated_reservation["encrypted_operation"])
+        or migrated_reservation["operation_storage_version"]
+        != db._OPERATION_STORAGE_VERSION
+        or migrated_reservation["reservation_state"] != "reserved"
+    ):
+        raise AssertionError(
+            "legacy plaintext quota operations were not migrated without state loss: "
+            f"standalone={migrated_standalone} counter={migrated_atomic} "
+            f"reservation={migrated_reservation}"
+        )
+
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE rate_limit_counters SET encrypted_operation = ? "
+            "WHERE counter_key = ?",
+            (migrated_reservation["encrypted_operation"], standalone_key),
+        )
+    assert_raises(
+        db.MetadataStoreError,
+        db.init_db,
+        "completed metadata migration gate ignored transplanted ciphertext",
+    )
+    assert_raises(
+        Exception,
+        lambda: db.consume_rate_limit(
+            counter_key=standalone_key,
+            principal_id=f"agent:{backend}:operation-storage",
+            route_id=f"route:{backend}:operation-storage",
+            credential_id=f"credential:{backend}:operation-storage",
+            credential_version=1,
+            policy_hash="sha256:" + "9" * 64,
+            constraint_id=f"quota:{backend}:operation-storage",
+            operation=standalone_operation,
+            window_seconds=60,
+            max_count=2,
+            consume=False,
+            audit=False,
+        ),
+        "transplanted rate-counter recovery ciphertext was accepted",
+    )
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE rate_limit_counters SET encrypted_operation = ? "
+            "WHERE counter_key = ?",
+            (migrated_standalone["encrypted_operation"], standalone_key),
+        )
+        conn.execute(
+            "UPDATE release_authorization_quota_reservations "
+            "SET encrypted_operation = ? WHERE attempt_id = ? AND counter_key = ?",
+            (migrated_atomic["encrypted_operation"], attempt_id, quota["counter_key"]),
+        )
+    assert_raises(
+        Exception,
+        lambda: db.reserve_release_authorization(**reserve_kwargs),
+        "transplanted quota recovery ciphertext was accepted",
+    )
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE release_authorization_quota_reservations "
+            "SET encrypted_operation = ? WHERE attempt_id = ? AND counter_key = ?",
+            (
+                migrated_reservation["encrypted_operation"],
+                attempt_id,
+                quota["counter_key"],
+            ),
+        )
+
+    replayed = db.reserve_release_authorization(**reserve_kwargs)
+    available = db.consume_rate_limit(
+        counter_key=standalone_key,
+        principal_id=f"agent:{backend}:operation-storage",
+        route_id=f"route:{backend}:operation-storage",
+        credential_id=f"credential:{backend}:operation-storage",
+        credential_version=1,
+        policy_hash="sha256:" + "9" * 64,
+        constraint_id=f"quota:{backend}:operation-storage",
+        operation=standalone_operation,
+        window_seconds=60,
+        max_count=2,
+        consume=False,
+        audit=False,
+    )
+    if (
+        replayed.get("state") != "reserved"
+        or replayed.get("binding_digest") != reserved.get("binding_digest")
+        or [item.get("operation") for item in replayed.get("quotas") or []]
+        != [item.get("operation") for item in legacy_api_before.get("quotas") or []]
+        or replayed.get("quotas", [{}])[0].get("count") != 1
+        or not available.get("allowed")
+        or available.get("count") != 1
+    ):
+        raise AssertionError(
+            "operation remediation changed quota state or raw API behavior: "
+            f"replayed={replayed} available={available}"
+        )
+
+    cancelled = db.complete_release_authorization(
+        attempt_id=attempt_id,
+        binding_digest=reserved["binding_digest"],
+        outcome="not_forwarded",
+    )
+    if (
+        cancelled.get("state") != "cancelled"
+        or counter_count(db, quota["counter_key"]) != 0
+    ):
+        raise AssertionError(
+            f"migrated quota reservation no longer refunded correctly: {cancelled}"
+        )
+
+    chain_before_future_gate = db.verify_audit_chain()
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE serverware_store_migrations SET version = ? WHERE migration = ?",
+            (
+                db._STORAGE_REDACTION_MIGRATION_VERSION + 1,
+                db._AUDIT_STORAGE_REDACTION_MIGRATION,
+            ),
+        )
+    rejected_chain = db.verify_audit_chain()
+    if (
+        rejected_chain.get("ok") is not False
+        or rejected_chain.get("error")
+        != "unsupported_storage_migration_version"
+        or rejected_chain.get("storage_migration_version")
+        != db._STORAGE_REDACTION_MIGRATION_VERSION + 1
+    ):
+        raise AssertionError(
+            "audit verification accepted an unsupported future migration gate: "
+            f"{rejected_chain}"
+        )
+    try:
+        db.init_db()
+    except RuntimeError as exc:
+        if "unsupported future version" not in str(exc):
+            raise AssertionError(f"future migration gate failed unclearly: {exc}") from exc
+    else:
+        raise AssertionError("future audit migration gate version was accepted")
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE serverware_store_migrations SET version = ? WHERE migration = ?",
+            (
+                db._STORAGE_REDACTION_MIGRATION_VERSION,
+                db._AUDIT_STORAGE_REDACTION_MIGRATION,
+            ),
+        )
+    chain_after_future_gate = db.verify_audit_chain()
+    if chain_after_future_gate != chain_before_future_gate:
+        raise AssertionError("future migration gate failure mutated the audit chain")
+
+
+def exercise_transactional_bound_storage_rewrap(
+    crypto: Any, db: Any, backend: str
+) -> None:
+    original_ring = db.load_bound_secret_keyring()
+    original_key = original_ring.keys[original_ring.active_key_id]
+    rotated_key = os.urandom(32)
+    rollback_key = os.urandom(32)
+    rotated_ring = crypto.build_bound_secret_keyring(
+        rotated_key, [original_key]
+    )
+    rotated_only = crypto.build_bound_secret_keyring(rotated_key)
+
+    def snapshot() -> dict[str, Any]:
+        if backend == "postgres":
+            with db._audit_pg_connect() as conn:
+                audit_rows = conn.execute(
+                    "SELECT id, encrypted_canonical_event_json FROM "
+                    "serverware_audit_events WHERE "
+                    "encrypted_canonical_event_json IS NOT NULL ORDER BY sequence"
+                ).fetchall()
+        else:
+            with db.connect() as conn:
+                audit_rows = conn.execute(
+                    "SELECT id, encrypted_canonical_event_json FROM audit_events "
+                    "WHERE encrypted_canonical_event_json IS NOT NULL ORDER BY rowid"
+                ).fetchall()
+        with db.connect() as conn:
+            counters = conn.execute(
+                "SELECT counter_key, encrypted_operation FROM rate_limit_counters "
+                "WHERE encrypted_operation IS NOT NULL ORDER BY counter_key"
+            ).fetchall()
+            quotas = conn.execute(
+                "SELECT attempt_id, counter_key, encrypted_operation FROM "
+                "release_authorization_quota_reservations "
+                "WHERE encrypted_operation IS NOT NULL "
+                "ORDER BY attempt_id, counter_key"
+            ).fetchall()
+            gates = conn.execute(
+                "SELECT migration, version FROM serverware_store_migrations "
+                "WHERE migration LIKE ? OR migration LIKE ? ORDER BY migration",
+                (
+                    db._AUDIT_BOUND_KEY_GATE_PREFIX + "%",
+                    db._METADATA_BOUND_KEY_GATE_PREFIX + "%",
+                ),
+            ).fetchall()
+        return {
+            "audit": [dict(row) for row in audit_rows],
+            "counters": [dict(row) for row in counters],
+            "quotas": [dict(row) for row in quotas],
+            "gates": [dict(row) for row in gates],
+        }
+
+    def assert_active_key(snapshot_value: dict[str, Any], key_id: str) -> None:
+        encrypted_values = [
+            row["encrypted_canonical_event_json"]
+            for row in snapshot_value["audit"]
+        ] + [
+            row["encrypted_operation"]
+            for row in snapshot_value["counters"] + snapshot_value["quotas"]
+        ]
+        if not encrypted_values:
+            raise AssertionError("bound storage rewrap fixture has no ciphertext")
+        actual = {
+            crypto.bound_secret_envelope_key_id(str(value))
+            for value in encrypted_values
+        }
+        if actual != {key_id}:
+            raise AssertionError(
+                f"bound storage rewrap retained non-active key IDs: {actual}"
+            )
+
+    with patch.object(db, "load_bound_secret_keyring", return_value=rotated_ring):
+        db.init_db()
+    rotated_snapshot = snapshot()
+    assert_active_key(rotated_snapshot, rotated_ring.active_key_id)
+    with patch.object(db, "load_bound_secret_keyring", return_value=rotated_only):
+        db.init_db()
+        verification = db.verify_audit_chain()
+    if not verification.get("ok"):
+        raise AssertionError(
+            f"historical-key retirement broke rewrapped audit data: {verification}"
+        )
+
+    rollback_ring = crypto.build_bound_secret_keyring(
+        rollback_key, [rotated_key]
+    )
+    before_audit_failure = snapshot()
+    with patch.object(
+        db, "load_bound_secret_keyring", return_value=rollback_ring
+    ), patch.object(
+        db,
+        "encrypt_bound_secret",
+        side_effect=RuntimeError("forced audit rewrap failure"),
+    ):
+        assert_raises(
+            RuntimeError,
+            db.init_db,
+            "audit rewrap failure committed partial ciphertext",
+        )
+    if snapshot() != before_audit_failure:
+        raise AssertionError("failed audit rewrap mutated ciphertext or key gates")
+
+    before_metadata_failure = snapshot()
+    try:
+        with patch.object(
+            db,
+            "_encrypt_operation",
+            side_effect=RuntimeError("forced metadata rewrap failure"),
+        ):
+            with db.connect() as conn:
+                db._lock_postgres_metadata_migration_tables(conn)
+                db._rewrap_metadata_operations(conn, keyring=rollback_ring)
+                db._record_bound_key_gate(
+                    conn,
+                    prefix=db._METADATA_BOUND_KEY_GATE_PREFIX,
+                    keyring=rollback_ring,
+                )
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("metadata rewrap fault did not abort")
+    if snapshot() != before_metadata_failure:
+        raise AssertionError("failed metadata rewrap mutated ciphertext or key gates")
+
+    restored_ring = crypto.build_bound_secret_keyring(
+        original_key, [rotated_key]
+    )
+    with patch.object(db, "load_bound_secret_keyring", return_value=restored_ring):
+        db.init_db()
+    restored_snapshot = snapshot()
+    assert_active_key(restored_snapshot, restored_ring.active_key_id)
+    with patch.object(
+        db,
+        "load_bound_secret_keyring",
+        return_value=crypto.build_bound_secret_keyring(original_key),
+    ):
+        db.init_db()
+        restored_verification = db.verify_audit_chain()
+    if not restored_verification.get("ok"):
+        raise AssertionError(
+            "restored active key could not verify after historical removal: "
+            f"{restored_verification}"
+        )
 
 
 def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
@@ -820,7 +3171,8 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
 
     with db.connect() as reopened:
         durable = reopened.execute(
-            "SELECT state, binding_digest FROM release_authorization_attempts "
+            "SELECT state, binding_digest, binding_json, operation_context_json "
+            "FROM release_authorization_attempts "
             "WHERE attempt_id = ?",
             (commit_attempt,),
         ).fetchone()
@@ -831,6 +3183,14 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
         ).fetchall()
     if durable is None or durable["state"] != "committed":
         raise AssertionError("release state did not survive connection close and reopen")
+    retained_operation_context = json.loads(durable["operation_context_json"])
+    if set(retained_operation_context) != {"digest"} or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", str(retained_operation_context.get("digest") or "")
+    ):
+        raise AssertionError("release state persisted raw operation context")
+    retained_binding = json.loads(durable["binding_json"])
+    if retained_binding != {"digest": durable["binding_digest"]}:
+        raise AssertionError("release state persisted raw authorization binding")
     event_types = {item["event_type"] for item in event_rows}
     if event_types != {
         "release_authorization.reserved",
@@ -921,6 +3281,29 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
         raise AssertionError(
             "authoritative grant consumption evidence was duplicated or not acknowledged"
         )
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE release_authorization_attempts SET binding_json = ?, "
+            "operation_context_json = ? WHERE attempt_id = ?",
+            (
+                json.dumps({"operation_context": {"reset_token": "legacy-secret"}}),
+                json.dumps({"reset_token": "legacy-secret"}),
+                commit_attempt,
+            ),
+        )
+    db.init_db()
+    with db.connect() as conn:
+        migrated = conn.execute(
+            "SELECT binding_digest, binding_json, operation_context_json "
+            "FROM release_authorization_attempts WHERE attempt_id = ?",
+            (commit_attempt,),
+        ).fetchone()
+    if json.loads(migrated["binding_json"]) != {
+        "digest": migrated["binding_digest"]
+    } or set(json.loads(migrated["operation_context_json"])) != {"digest"}:
+        raise AssertionError("legacy release authorization material was not migrated")
+    if "legacy-secret" in migrated["binding_json"] + migrated["operation_context_json"]:
+        raise AssertionError("legacy release authorization migration retained plaintext")
 
 
 def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) -> None:
@@ -1276,6 +3659,21 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
         raise AssertionError(
             f"control plane did not persist the derived canonical approval: {approval}"
         )
+    with db.connect() as conn:
+        stored_approval = conn.execute(
+            "SELECT url, canonical_request, redacted_display FROM approval_requests WHERE id = ?",
+            (approval_id,),
+        ).fetchone()
+    encrypted_canonical = str(stored_approval["canonical_request"] or "")
+    encrypted_display = str(stored_approval["redacted_display"] or "")
+    if (
+        not encrypted_canonical.startswith("v2:")
+        or not encrypted_display.startswith("v2:")
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(stored_approval["url"] or ""))
+        or "must-not-be-presented" in encrypted_canonical
+        or "actual/request" in encrypted_display
+    ):
+        raise AssertionError("approval review material was not encrypted at rest")
     if "must-not-be-presented" in json.dumps(expected_display, sort_keys=True):
         raise AssertionError("derived approval presentation retained a sensitive query value")
 
@@ -2338,6 +4736,12 @@ def exercise_proxy_atomic_backend_integration(
             or pending.decision.payload.get("error") != "serverware_approval_required"
         ):
             raise AssertionError(f"atomic proxy did not create a retry approval: {pending.decision}")
+        if pending.decision.payload.get("approval_url") != (
+            f"/approvals/{pending.decision.payload['approval_id']}"
+        ):
+            raise AssertionError(
+                f"atomic proxy did not return an exact operator approval link: {pending.decision}"
+            )
         approved = db.approve_request(
             pending.decision.payload["approval_id"],
             ttl_seconds=60,
@@ -2365,7 +4769,7 @@ def exercise_proxy_atomic_backend_integration(
 
 def exercise_webauthn_state(db: Any, backend: str) -> None:
     user_id = f"user:{backend}"
-    challenge = f"challenge-{backend}"
+    challenge = f"challenge-{backend}-".ljust(32, "x")
     payload = {"binding": backend, "request_digest": "sha256:" + "e" * 64}
     db.create_webauthn_challenge(
         challenge=challenge,
@@ -2387,7 +4791,7 @@ def exercise_webauthn_state(db: Any, backend: str) -> None:
     ) is not None:
         raise AssertionError("WebAuthn challenge was claimable twice")
 
-    bound_challenge = f"challenge-bound-{backend}"
+    bound_challenge = f"challenge-bound-{backend}-".ljust(32, "x")
     db.create_webauthn_challenge(
         challenge=bound_challenge,
         challenge_type="approval",
@@ -2412,7 +4816,7 @@ def exercise_webauthn_state(db: Any, backend: str) -> None:
     if not correct_binding or correct_binding["approval_request_id"] != "approval-bound":
         raise AssertionError("failed binding did not leave challenge available for the bound request")
 
-    race_challenge = f"challenge-race-{backend}"
+    race_challenge = f"challenge-race-{backend}-".ljust(32, "x")
     db.create_webauthn_challenge(
         challenge=race_challenge,
         challenge_type="registration",
@@ -2485,7 +4889,8 @@ def main() -> None:
                 sys.modules["mitmproxy.http"] = http_module
 
             from serverware import app as app_module
-            from serverware import db, grants, policy_engine
+            from serverware import crypto, db, grants, policy_engine
+            from serverware.crypto import load_master_key
             from serverware.policy_bundle import (
                 CredentialPolicy,
                 PolicyBundleError,
@@ -2493,7 +4898,23 @@ def main() -> None:
                 demo_policy_bundle,
             )
 
-            db.init_db()
+            exercise_fresh_startup_key_release_order(db)
+            exercise_modern_audit_verification_without_key(db, backend)
+            exercise_pre_policy_rate_limit_storage(crypto, db, backend)
+            load_master_key()
+            exercise_bound_secret_key_rotation(crypto)
+            exercise_audit_verification_keyring_cache(db, backend)
+            if args.postgres_dsn:
+                exercise_postgres_catalog_schema_isolation(db, args.postgres_dsn)
+                exercise_postgres_audit_lock_namespace(db, args.postgres_dsn)
+                assert postgres_dsn is not None
+                exercise_postgres_rolling_audit_lock_compatibility(
+                    db, postgres_dsn
+                )
+                exercise_postgres_inflight_legacy_migration_barrier(
+                    db, args.postgres_dsn
+                )
+                exercise_postgres_audit_migration_faults(db, args.postgres_dsn)
             exercise_policy_high_water(db, backend)
             state = exercise_atomic_approval(db, grants, backend)
             exercise_grant_consumption(
@@ -2503,6 +4924,12 @@ def main() -> None:
                 state["approval"],
                 state["lookup"],
                 postgres_dsn,
+            )
+            if backend == "sqlite":
+                exercise_sqlite_audit_redaction_abort(db)
+            exercise_operation_storage_commitments(db, backend)
+            exercise_transactional_bound_storage_rewrap(
+                crypto, db, backend
             )
             exercise_atomic_release_authorization(db, backend)
             exercise_control_plane_jit_approval(app_module, db, backend)

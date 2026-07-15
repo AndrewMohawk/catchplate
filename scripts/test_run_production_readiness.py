@@ -2,18 +2,21 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shlex
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_production_readiness as production_readiness_test  # noqa: E402
 import test_nitro_kms_evidence as nitro_evidence_test  # noqa: E402
+import run_production_readiness  # noqa: E402
 
 
 def canonical_json(value: object) -> str:
@@ -25,15 +28,54 @@ def write_env(path: Path, env: dict[str, str]) -> None:
     for key in sorted(env):
         lines.append(f"{key}={shlex.quote(str(env[key]))}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    path.chmod(0o600)
 
 
 def run_runner(*args: str) -> subprocess.CompletedProcess[bytes]:
+    argv = list(args)
+    if "--verification-mode" in argv and argv[argv.index("--verification-mode") + 1] == "final":
+        env_path = Path(argv[argv.index("--env-file") + 1])
+        if "--launcher-trusted-production-env-path" not in argv:
+            argv.extend(
+                [
+                    "--launcher-trusted-production-env-path",
+                    str(env_path),
+                    "--launcher-trusted-production-env-sha256",
+                    "sha256:" + hashlib.sha256(env_path.read_bytes()).hexdigest(),
+                ]
+            )
     return subprocess.run(
-        [sys.executable, "scripts/run_production_readiness.py", *args],
+        [sys.executable, "scripts/run_production_readiness.py", *argv],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         check=False,
+    )
+
+
+def run_runner_in_environment(
+    environment: dict[str, str],
+    *args: str,
+) -> subprocess.CompletedProcess[bytes]:
+    argv = list(args)
+    if "--verification-mode" in argv and argv[argv.index("--verification-mode") + 1] == "final":
+        env_path = Path(argv[argv.index("--env-file") + 1])
+        if "--launcher-trusted-production-env-path" not in argv:
+            argv.extend(
+                [
+                    "--launcher-trusted-production-env-path",
+                    str(env_path),
+                    "--launcher-trusted-production-env-sha256",
+                    "sha256:" + hashlib.sha256(env_path.read_bytes()).hexdigest(),
+                ]
+            )
+    return subprocess.run(
+        [sys.executable, "scripts/run_production_readiness.py", *argv],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        env=environment,
     )
 
 
@@ -107,7 +149,10 @@ def proof_policy_bundle(
 
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_raw:
-        tmp = Path(tmp_raw)
+        tmp = Path(tmp_raw).resolve()
+        expected_client_request_digest = "sha256:" + "a" * 64
+        expected_request_digest = "sha256:" + "b" * 64
+        expected_operation_digest = "sha256:" + "c" * 64
         artifact_args = (
             "--policy-bundle",
             str(tmp / "policy-bundle.json"),
@@ -224,6 +269,10 @@ def main() -> None:
                 "SERVERWARE_PROXY_PROOF_AGENT_ID": "production-proof-agent",
                 "SERVERWARE_PROXY_PROOF_PRINCIPAL_ID": "agent:production-proof",
                 "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS": "240",
+                "SERVERWARE_COMPLETION_P99_LIMIT_MS": "20.0",
+                "SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST": expected_client_request_digest,
+                "SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST": expected_request_digest,
+                "SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST": expected_operation_digest,
         }
         write_env(minimal_env, minimal_values)
         runner_claims = tmp / "runner-claims.json"
@@ -333,6 +382,7 @@ def main() -> None:
             or "--proxy-collector-public-key" not in completion_argv
             or "--proxy-server-instance-id" not in completion_argv
             or "--proxy-client-nonce" not in completion_argv
+            or "--proxy-client-request-digest" not in completion_argv
             or "--proxy-request-digest" not in completion_argv
             or "--proxy-operation-digest" not in completion_argv
             or "--proxy-tls-channel-binding" not in completion_argv
@@ -340,9 +390,13 @@ def main() -> None:
             or collector_nonce != completion_nonce
             or len(collector_nonce) != 43
             or completion_argv[completion_argv.index("--proxy-request-digest") + 1]
-            != "$COLLECTOR_SUMMARY.request_digest"
+            != expected_request_digest
+            or completion_argv[
+                completion_argv.index("--proxy-client-request-digest") + 1
+            ]
+            != expected_client_request_digest
             or completion_argv[completion_argv.index("--proxy-operation-digest") + 1]
-            != "$COLLECTOR_SUMMARY.operation_digest"
+            != expected_operation_digest
             or completion_argv[completion_argv.index("--proxy-tls-channel-binding") + 1]
             != "$COLLECTOR_SUMMARY.tls_channel_binding"
         ):
@@ -354,6 +408,132 @@ def main() -> None:
         key_material = trust_paths["sigstore_trusted_public_key"].read_text(encoding="ascii").strip()
         if key_material in dry_run.stdout.decode("utf-8"):
             raise AssertionError(f"runner dry-run leaked trusted public-key material: {plan}")
+
+        collector_proof = tmp / "collector-proof.json"
+        collector_proof.write_bytes(b'{"fixture":"proof"}\n')
+        collector_summary_path = tmp / "collector-summary.json"
+        collector_summary = {
+            "ok": True,
+            "client_nonce": "n" * 43,
+            "client_request_digest": expected_client_request_digest,
+            "request_digest": expected_request_digest,
+            "operation_digest": expected_operation_digest,
+            "tls_channel_binding": "t" * 43,
+            "server_instance_id": "spiffe://prod/instance",
+            "proof_path": str(collector_proof),
+            "proof_sha256": run_production_readiness.sha256_prefixed_file(collector_proof),
+        }
+        collector_args = SimpleNamespace(
+            proxy_client_nonce="n" * 43,
+            proxy_client_request_digest=expected_client_request_digest,
+            proxy_request_digest=expected_request_digest,
+            proxy_operation_digest=expected_operation_digest,
+            proxy_server_instance_id="spiffe://prod/instance",
+            proxy_response_proof=str(collector_proof),
+            proxy_proof_summary_out=str(collector_summary_path),
+        )
+        collector_command = {
+            "label": "fixture-collector",
+            "argv": [
+                sys.executable,
+                "-c",
+                f"import json; print(json.dumps({collector_summary!r}))",
+            ],
+        }
+        accepted_summary = run_production_readiness.run_collector(
+            collector_command,
+            collector_args,
+            os.environ.copy(),
+        )
+        if accepted_summary != collector_summary or not collector_summary_path.is_file():
+            raise AssertionError("runner rejected a collector summary matching every independent digest pin")
+
+        mismatched_collector_summary = {
+            **collector_summary,
+            "operation_digest": "sha256:" + "d" * 64,
+        }
+        mismatched_collector_command = {
+            "label": "fixture-mismatched-collector",
+            "argv": [
+                sys.executable,
+                "-c",
+                f"import json; print(json.dumps({mismatched_collector_summary!r}))",
+            ],
+        }
+        mismatched_summary_path = tmp / "mismatched-collector-summary.json"
+        collector_args.proxy_proof_summary_out = str(mismatched_summary_path)
+        try:
+            run_production_readiness.run_collector(
+                mismatched_collector_command,
+                collector_args,
+                os.environ.copy(),
+            )
+        except ValueError as exc:
+            if "does not match the independent expected pin" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a collector-derived operation digest over the independent pin")
+        if mismatched_summary_path.exists():
+            raise AssertionError("runner persisted a collector summary after an expected digest mismatch")
+
+        collector_derived_pin = run_runner(
+            "--env-file",
+            str(minimal_env),
+            "--dry-run",
+            "--proxy-request-digest",
+            "$COLLECTOR_SUMMARY.request_digest",
+            *security_args,
+        )
+        if (
+            collector_derived_pin.returncode == 0
+            or "must be sha256:<64 lowercase hex>" not in detail(collector_derived_pin)
+        ):
+            raise AssertionError(
+                "runner accepted a collector-derived expected request digest: "
+                + detail(collector_derived_pin)
+            )
+
+        missing_digest_pin_values = dict(minimal_values)
+        missing_digest_pin_values.pop("SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST")
+        missing_digest_pin_env = tmp / "missing-digest-pin.env"
+        write_env(missing_digest_pin_env, missing_digest_pin_values)
+        missing_digest_pin = run_runner(
+            "--env-file",
+            str(missing_digest_pin_env),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            missing_digest_pin.returncode == 0
+            or "SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST" not in detail(missing_digest_pin)
+        ):
+            raise AssertionError(
+                "runner accepted a collection plan without an independent operation digest pin: "
+                + detail(missing_digest_pin)
+            )
+
+        uppercase_digest_pin_env = tmp / "uppercase-digest-pin.env"
+        write_env(
+            uppercase_digest_pin_env,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST": "sha256:" + "A" * 64,
+            },
+        )
+        uppercase_digest_pin = run_runner(
+            "--env-file",
+            str(uppercase_digest_pin_env),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            uppercase_digest_pin.returncode == 0
+            or "must be sha256:<64 lowercase hex>" not in detail(uppercase_digest_pin)
+        ):
+            raise AssertionError(
+                "runner accepted a non-canonical uppercase request digest pin: "
+                + detail(uppercase_digest_pin)
+            )
 
         mismatched_identity_env = tmp / "mismatched-proof-identity.env"
         write_env(
@@ -475,9 +655,94 @@ def main() -> None:
         if missing_final_mode.returncode == 0 or "must be pinned" not in detail(missing_final_mode):
             raise AssertionError(f"runner accepted final mode absent from the hashed env: {detail(missing_final_mode)}")
 
+        production_python = str(Path(sys.executable).resolve())
+        executable_manifest = {
+            setting: "sha256:" + "0" * 64
+            for setting in run_production_readiness.PINNED_EXECUTABLE_COMMAND_SETTINGS
+        }
+        executable_manifest[run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV] = (
+            "sha256:" + hashlib.sha256(Path(production_python).read_bytes()).hexdigest()
+        )
+        executable_manifest[run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV] = (
+            executable_manifest[run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV]
+        )
+        pinned_compose_plugin = tmp / "pinned-compose-plugin"
+        pinned_compose_plugin.write_bytes(Path(production_python).read_bytes())
+        pinned_compose_plugin.chmod(0o700)
         final_mode_trust_values = {
             **env_trust_values,
             "SERVERWARE_COMPLETION_VERIFICATION_MODE": "final",
+            run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV: (
+                run_production_readiness.FINAL_LAUNCHER_CONTRACT
+            ),
+            run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV: production_python,
+            run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV: production_python,
+            run_production_readiness.EXECUTABLE_DIGEST_MANIFEST_ENV: canonical_json(
+                executable_manifest
+            ),
+            run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV: str(pinned_compose_plugin),
+            run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV: (
+                "sha256:" + hashlib.sha256(pinned_compose_plugin.read_bytes()).hexdigest()
+            ),
+            run_production_readiness.DOCKER_UNIX_SOCKET_ENV: "/run/docker.sock",
+            run_production_readiness.DOCKER_DAEMON_ID_ENV: "fixture-daemon-id",
+            run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV: (
+                "serverware-production"
+            ),
+            run_production_readiness.POLICY_TRUST_ROOT_ENV: str(
+                tmp / "policy-signing.pub.pem"
+            ),
+            run_production_readiness.POLICY_TRUST_ROOT_ID_ENV: (
+                production_readiness_test.trusted_public_key_id(
+                    "policy-signing.pub.pem"
+                )
+            ),
+            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV: str(
+                tmp / "policy-activation.pub.pem"
+            ),
+            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV: (
+                production_readiness_test.trusted_public_key_id(
+                    "policy-activation.pub.pem"
+                )
+            ),
+            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV: str(
+                tmp / "reproducible-build.pub.pem"
+            ),
+            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV: (
+                production_readiness_test.trusted_public_key_id(
+                    "reproducible-build.pub.pem"
+                )
+            ),
+            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV: (
+                "sha256:"
+                + hashlib.sha256(
+                    (ROOT / "scripts" / "production_host_preflight.py").read_bytes()
+                ).hexdigest()
+            ),
+            run_production_readiness.VERIFY_PRODUCTION_READINESS_SCRIPT_SHA256_ENV: (
+                "sha256:"
+                + hashlib.sha256(
+                    (ROOT / "scripts" / "verify_production_readiness.py").read_bytes()
+                ).hexdigest()
+            ),
+            run_production_readiness.VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV: (
+                "sha256:"
+                + hashlib.sha256(
+                    (ROOT / "scripts" / "verify_release_completion.py").read_bytes()
+                ).hexdigest()
+            ),
+            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY_ENV: str(
+                final_challenge_authority_key
+            ),
+            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV: str(
+                final_challenge_authority_key
+            ),
+            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV: (
+                production_readiness_test.trusted_public_key_id(
+                    final_challenge_authority_key.name
+                )
+            ),
+            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV: "300",
         }
         final_mode_trust_file = tmp / "final-mode-trust.env"
         write_env(final_mode_trust_file, final_mode_trust_values)
@@ -598,6 +863,174 @@ def main() -> None:
         )
         if final_run.returncode != 0:
             raise AssertionError(f"runner rejected env-pinned final authority inputs: {detail(final_run)}")
+        alternate_policy_args = list(security_args)
+        alternate_policy_args[
+            alternate_policy_args.index("--policy-trusted-public-key") + 1
+        ] = str(tmp / "caller-selected-policy.pub.pem")
+        rejected_policy_path = run_runner(
+            "--env-file",
+            str(final_env_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *alternate_policy_args,
+        )
+        if (
+            rejected_policy_path.returncode == 0
+            or run_production_readiness.POLICY_TRUST_ROOT_ENV
+            not in detail(rejected_policy_path)
+        ):
+            raise AssertionError(
+                "runner accepted a caller-selected final policy trust-root path: "
+                + detail(rejected_policy_path)
+            )
+        rejected_policy_id = run_runner(
+            "--env-file",
+            str(final_env_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            "--policy-trusted-public-key-id",
+            "sha256:" + "0" * 64,
+            *security_args,
+        )
+        if (
+            rejected_policy_id.returncode == 0
+            or run_production_readiness.POLICY_TRUST_ROOT_ID_ENV
+            not in detail(rejected_policy_id)
+        ):
+            raise AssertionError(
+                "runner accepted a caller-selected final policy SPKI pin: "
+                + detail(rejected_policy_id)
+            )
+        for injected_name in ("PYTHONPATH", "LD_PRELOAD", "DOCKER_CONTEXT", "COMPOSE_FILE"):
+            injected_environment = {**os.environ, injected_name: "/tmp/attacker-selected-runtime"}
+            injected = run_runner_in_environment(
+                injected_environment,
+                "--env-file",
+                str(final_env_file),
+                "--dry-run",
+                "--verification-mode",
+                "final",
+                *security_args,
+            )
+            if injected.returncode == 0 or "forbidden runtime/loader injection" not in detail(injected):
+                raise AssertionError(
+                    f"runner accepted ambient final process injection {injected_name}: {detail(injected)}"
+                )
+        non_serverware_env = tmp / "non-serverware-final.env"
+        write_env(non_serverware_env, {**final_env_values, "PYTHONHOME": "/tmp/attacker-python"})
+        rejected_non_serverware = run_runner(
+            "--env-file",
+            str(non_serverware_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if rejected_non_serverware.returncode == 0 or "non-SERVERWARE" not in detail(
+            rejected_non_serverware
+        ):
+            raise AssertionError(
+                "runner accepted a runtime injection setting from the hashed production env: "
+                + detail(rejected_non_serverware)
+            )
+        missing_launcher_contract_env = tmp / "missing-launcher-contract.env"
+        write_env(
+            missing_launcher_contract_env,
+            {
+                key: value
+                for key, value in final_env_values.items()
+                if key != run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV
+            },
+        )
+        rejected_missing_launcher_contract = run_runner(
+            "--env-file",
+            str(missing_launcher_contract_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if (
+            rejected_missing_launcher_contract.returncode == 0
+            or run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV
+            not in detail(rejected_missing_launcher_contract)
+        ):
+            raise AssertionError(
+                "runner accepted final mode without the external startup contract declaration: "
+                + detail(rejected_missing_launcher_contract)
+            )
+        wrong_script_env = tmp / "wrong-script-pin.env"
+        write_env(
+            wrong_script_env,
+            {
+                **final_env_values,
+                run_production_readiness.VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV: (
+                    "sha256:" + "f" * 64
+                ),
+            },
+        )
+        rejected_wrong_script = run_runner(
+            "--env-file",
+            str(wrong_script_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if rejected_wrong_script.returncode == 0 or "script pin" not in detail(rejected_wrong_script):
+            raise AssertionError(
+                f"runner accepted replaced verifier script bytes: {detail(rejected_wrong_script)}"
+            )
+        wrong_preflight_script_env = tmp / "wrong-preflight-script-pin.env"
+        write_env(
+            wrong_preflight_script_env,
+            {
+                **final_env_values,
+                run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV: (
+                    "sha256:" + "d" * 64
+                ),
+            },
+        )
+        rejected_wrong_preflight_script = run_runner(
+            "--env-file",
+            str(wrong_preflight_script_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if (
+            rejected_wrong_preflight_script.returncode == 0
+            or "script pin" not in detail(rejected_wrong_preflight_script)
+        ):
+            raise AssertionError(
+                "runner accepted replaced production host preflight script bytes: "
+                + detail(rejected_wrong_preflight_script)
+            )
+        wrong_plugin_env = tmp / "wrong-compose-pin.env"
+        write_env(
+            wrong_plugin_env,
+            {
+                **final_env_values,
+                run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV: (
+                    "sha256:" + "e" * 64
+                ),
+            },
+        )
+        rejected_wrong_plugin = run_runner(
+            "--env-file",
+            str(wrong_plugin_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if rejected_wrong_plugin.returncode == 0 or "executable pin" not in detail(rejected_wrong_plugin):
+            raise AssertionError(
+                f"runner accepted replaced Compose plugin bytes: {detail(rejected_wrong_plugin)}"
+            )
         final_argv = json.loads(final_run.stdout.decode("utf-8"))["commands"][-1]["argv"]
         if (
             final_argv[final_argv.index("--verification-mode") + 1] != "final"
@@ -617,8 +1050,200 @@ def main() -> None:
             )
             or final_argv[final_argv.index("--hardware-assurance-expected-challenge-nonce") + 1]
             != expected_hardware_challenge
+            or final_argv[final_argv.index("--policy-trusted-public-key-id") + 1]
+            != final_env_values[run_production_readiness.POLICY_TRUST_ROOT_ID_ENV]
+            or final_argv[
+                final_argv.index("--policy-activation-trusted-public-key-id") + 1
+            ]
+            != final_env_values[
+                run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV
+            ]
+            or final_argv[
+                final_argv.index("--reproducible-build-trusted-public-key-id") + 1
+            ]
+            != final_env_values[
+                run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV
+            ]
         ):
             raise AssertionError(f"runner did not propagate env-pinned final inputs: {final_argv}")
+
+        alternate_env_file = tmp / "alternate-final-authority.env"
+        write_env(alternate_env_file, {**final_env_values, "SERVERWARE_RELEASE_CHANNEL": "alternate-prod"})
+        alternate_self_consistent = run_runner(
+            "--env-file",
+            str(alternate_env_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            "--launcher-trusted-production-env-path",
+            str(final_env_file),
+            "--launcher-trusted-production-env-sha256",
+            "sha256:" + hashlib.sha256(final_env_file.read_bytes()).hexdigest(),
+            *security_args,
+        )
+        if (
+            alternate_self_consistent.returncode == 0
+            or "out-of-band launcher trust path" not in detail(alternate_self_consistent)
+        ):
+            raise AssertionError(
+                "runner accepted an alternate self-consistent final env outside the launcher trust root: "
+                + detail(alternate_self_consistent)
+            )
+
+        final_proxy_overrides = {
+            "--python": str(tmp / "caller-python"),
+            "--proxy-response-proof": str(tmp / "caller-proof.json"),
+            "--proxy-proof-collector-command": str(tmp / "caller-collector"),
+            "--proxy-address": "caller.proxy.internal:9443",
+            "--proxy-proof-url": "https://caller-proof.internal/health",
+            "--proxy-proof-ca": str(tmp / "caller-ca.pem"),
+            "--proxy-collector-key": str(tmp / "caller-collector.key"),
+            "--proxy-collector-public-key": str(tmp / "caller-collector.pub"),
+            "--proxy-proof-verifier-public-key": str(tmp / "caller-verifier.pub"),
+            "--proxy-server-instance-id": "spiffe://caller/instance",
+            "--proxy-agent-id": "caller-agent",
+            "--proxy-principal-id": "agent:caller",
+            "--proxy-client-request-digest": "sha256:" + "d" * 64,
+            "--proxy-request-digest": "sha256:" + "e" * 64,
+            "--proxy-operation-digest": "sha256:" + "f" * 64,
+            "--proxy-proof-max-age-seconds": "239",
+            "--p99-limit-ms": "19.0",
+            "--docker-executable": str(tmp / "caller-docker"),
+            "--docker-compose-plugin-executable": str(tmp / "caller-compose"),
+            "--docker-unix-socket": "/run/caller-docker.sock",
+            "--docker-daemon-id": "caller-daemon",
+        }
+        for option, caller_value in final_proxy_overrides.items():
+            substituted = run_runner(
+                "--env-file",
+                str(final_env_file),
+                "--dry-run",
+                "--verification-mode",
+                "final",
+                option,
+                caller_value,
+                *security_args,
+            )
+            if substituted.returncode == 0 or "must match" not in detail(substituted):
+                raise AssertionError(
+                    f"runner accepted caller-selected final setting {option}: {detail(substituted)}"
+                )
+
+        substituted_digest_pin = run_runner(
+            "--env-file",
+            str(final_env_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            "--proxy-operation-digest",
+            "sha256:" + "d" * 64,
+            *security_args,
+        )
+        if substituted_digest_pin.returncode == 0 or "must match SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST" not in detail(
+            substituted_digest_pin
+        ):
+            raise AssertionError(
+                "runner accepted a caller-substituted final operation digest pin: "
+                + detail(substituted_digest_pin)
+            )
+
+        pinned_executable = tmp / "post-preflight-executable"
+        pinned_executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+        pinned_executable.chmod(0o755)
+        executable_pin = "sha256:" + hashlib.sha256(pinned_executable.read_bytes()).hexdigest()
+        pin_map = {
+            str(pinned_executable): (
+                run_production_readiness.PROOF_COLLECTOR_COMMAND_SETTING,
+                executable_pin,
+            )
+        }
+        run_production_readiness.remeasure_command_before_use(
+            [str(pinned_executable)],
+            pin_map,
+        )
+        pinned_executable.write_bytes(b"#!/bin/sh\nexit 7\n")
+        pinned_executable.chmod(0o755)
+        try:
+            run_production_readiness.remeasure_command_before_use(
+                [str(pinned_executable)],
+                pin_map,
+            )
+        except ValueError as exc:
+            if "do not match" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted executable bytes replaced after preflight")
+
+        measured_race = tmp / "measured-race"
+        replacement = tmp / "measured-race-replacement"
+        measured_race.write_bytes(b"#!/bin/sh\nprintf 'measured-bytes\\n'\n")
+        replacement.write_bytes(b"#!/bin/sh\nprintf 'replacement-bytes\\n'\n")
+        measured_race.chmod(0o700)
+        replacement.chmod(0o700)
+        measured_race_digest = "sha256:" + hashlib.sha256(measured_race.read_bytes()).hexdigest()
+
+        def replace_after_open(_measured: run_production_readiness.MeasuredExecutable) -> None:
+            os.replace(replacement, measured_race)
+
+        if sys.platform.startswith("linux"):
+            measured_execution = run_production_readiness.run_measured_command(
+                [str(measured_race)],
+                setting=run_production_readiness.PROOF_COLLECTOR_COMMAND_SETTING,
+                expected_digest=measured_race_digest,
+                after_open=replace_after_open,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=True,
+            )
+            if measured_execution.returncode != 0 or measured_execution.stdout != "measured-bytes\n":
+                raise AssertionError(
+                    "descriptor execution reopened replacement bytes after measurement: "
+                    f"returncode={measured_execution.returncode} stdout={measured_execution.stdout!r} "
+                    f"stderr={measured_execution.stderr!r}"
+                )
+            measured_script = tmp / "measured-script.py"
+            replacement_script = tmp / "replacement-script.py"
+            measured_script.write_text("print('measured-script-bytes')\n", encoding="ascii")
+            replacement_script.write_text("print('replacement-script-bytes')\n", encoding="ascii")
+            measured_script_digest = (
+                "sha256:" + hashlib.sha256(measured_script.read_bytes()).hexdigest()
+            )
+
+            def replace_script_after_open(
+                _measured: run_production_readiness.MeasuredScript,
+            ) -> None:
+                os.replace(replacement_script, measured_script)
+
+            measured_script_execution = run_production_readiness.run_measured_python_script(
+                [str(Path(sys.executable).resolve()), str(measured_script)],
+                python_setting=run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV,
+                python_expected_digest=(
+                    "sha256:"
+                    + hashlib.sha256(Path(sys.executable).resolve().read_bytes()).hexdigest()
+                ),
+                script_setting=(
+                    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV
+                ),
+                script_expected_digest=measured_script_digest,
+                after_script_open=replace_script_after_open,
+                cwd=ROOT,
+                env=dict(run_production_readiness.FINAL_CHILD_FIXED_ENV),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+                text=True,
+            )
+            if (
+                measured_script_execution.returncode != 0
+                or measured_script_execution.stdout != "measured-script-bytes\n"
+            ):
+                raise AssertionError(
+                    "isolated Python reopened replacement script bytes after measurement: "
+                    f"returncode={measured_script_execution.returncode} "
+                    f"stdout={measured_script_execution.stdout!r} "
+                    f"stderr={measured_script_execution.stderr!r}"
+                )
 
         malformed_hardware_id_env = tmp / "malformed-hardware-id.env"
         write_env(

@@ -3,13 +3,17 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import os
+import shlex
 import subprocess
 import sys
 import tempfile
+import tarfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -17,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import build_production_images
+import production_host_preflight as production_host_preflight_module
 import production_release_input_preflight
 import run_production_readiness
 import test_production_policy_identity
@@ -243,6 +248,40 @@ def test_final_file_snapshots() -> None:
                     f"final verification accepted symlinked {symlinked_name} input"
                 )
 
+        raced_path = tmp / "raced-input.json"
+        replacement_path = tmp / "raced-input-replacement.json"
+        raced_original = b'{"generation":"original"}\n'
+        raced_replacement = b'{"generation":"replacement"}\n'
+        raced_path.write_bytes(raced_original)
+        replacement_path.write_bytes(raced_replacement)
+        original_os_read = verify_release_completion.os.read
+        replaced = False
+
+        def replace_path_after_open(descriptor: int, size: int) -> bytes:
+            nonlocal replaced
+            if not replaced:
+                replaced = True
+                os.replace(replacement_path, raced_path)
+            return original_os_read(descriptor, size)
+
+        verify_release_completion.os.read = replace_path_after_open
+        try:
+            try:
+                verify_release_completion.snapshot_regular_file(
+                    raced_path,
+                    "raced completion input",
+                    max_bytes=1024,
+                )
+            except ValueError as exc:
+                if "changed while" not in str(exc):
+                    raise
+            else:
+                raise AssertionError("completion input snapshot accepted a path replacement race")
+        finally:
+            verify_release_completion.os.read = original_os_read
+        if raced_path.read_bytes() != raced_replacement:
+            raise AssertionError("completion input race fixture did not replace the source path")
+
         oversized_path = tmp / "oversized-final-receipt.json"
         oversized_path.write_bytes(b"x" * 65)
         try:
@@ -256,6 +295,62 @@ def test_final_file_snapshots() -> None:
                 raise AssertionError(f"oversized final input failed for the wrong reason: {exc}") from exc
         else:
             raise AssertionError("final verification accepted an oversized input")
+
+
+def test_measured_preflight_module_replacement_race() -> None:
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        tmp = Path(tmp_raw).resolve()
+        scripts_dir = tmp / "scripts"
+        scripts_dir.mkdir()
+        verifier_path = scripts_dir / "verify_release_completion.py"
+        verifier_path.write_text("# fixture verifier location\n", encoding="ascii")
+        preflight_path = scripts_dir / "production_host_preflight.py"
+        replacement_path = scripts_dir / "replacement-production_host_preflight.py"
+        preflight_path.write_text("MARKER = 'measured'\n", encoding="ascii")
+        replacement_path.write_text("MARKER = 'replacement'\n", encoding="ascii")
+        expected_digest = sha256_file(preflight_path)
+
+        def replace_after_open(_measured: run_production_readiness.MeasuredScript) -> None:
+            os.replace(replacement_path, preflight_path)
+
+        original_file = verify_release_completion.__file__
+        original_module = verify_release_completion._MEASURED_PREFLIGHT_MODULE
+        original_digest = verify_release_completion._MEASURED_PREFLIGHT_MODULE_SHA256
+        original_sys_module = sys.modules.get(
+            "_serverware_measured_production_host_preflight"
+        )
+        try:
+            verify_release_completion.__file__ = str(verifier_path)
+            verify_release_completion._MEASURED_PREFLIGHT_MODULE = None
+            verify_release_completion._MEASURED_PREFLIGHT_MODULE_SHA256 = None
+            try:
+                module = verify_release_completion.load_production_host_preflight_module(
+                    {
+                        run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV: (
+                            expected_digest
+                        )
+                    },
+                    final=True,
+                    after_open=replace_after_open,
+                )
+            except ValueError as exc:
+                if "changed while being read" not in str(exc):
+                    raise
+            else:
+                if module.MARKER != "measured":
+                    raise AssertionError(
+                        "completion loaded replacement production host preflight bytes after measurement"
+                    )
+        finally:
+            verify_release_completion.__file__ = original_file
+            verify_release_completion._MEASURED_PREFLIGHT_MODULE = original_module
+            verify_release_completion._MEASURED_PREFLIGHT_MODULE_SHA256 = original_digest
+            if original_sys_module is None:
+                sys.modules.pop("_serverware_measured_production_host_preflight", None)
+            else:
+                sys.modules[
+                    "_serverware_measured_production_host_preflight"
+                ] = original_sys_module
 
 
 HARDWARE_ASSURANCE_CHALLENGE_BYTES = b"hardware-assurance-fixture-nonce"
@@ -337,6 +432,21 @@ def control_plane_response_signing_key_info() -> dict[str, Any]:
 
 def alternate_control_plane_response_signing_key_info() -> dict[str, Any]:
     key = Ed25519PrivateKey.from_private_bytes(b"\x0d" * 32)
+    return ed25519_key_info(key)
+
+
+def preflight_signing_key_info() -> dict[str, Any]:
+    key = Ed25519PrivateKey.from_private_bytes(b"\x0e" * 32)
+    return ed25519_key_info(key)
+
+
+def policy_activation_key_info() -> dict[str, Any]:
+    key = Ed25519PrivateKey.from_private_bytes(b"\x10" * 32)
+    return ed25519_key_info(key)
+
+
+def reproducible_build_key_info() -> dict[str, Any]:
+    key = Ed25519PrivateKey.from_private_bytes(b"\x11" * 32)
     return ed25519_key_info(key)
 
 
@@ -441,6 +551,30 @@ def digest(char: str) -> str:
     return "sha256:" + char * 64
 
 
+PINNED_EXECUTABLE_NAMES = {
+    "SERVERWARE_NITRO_NSM_ATTEST_COMMAND_TEMPLATE": "nsm-attest",
+    "SERVERWARE_NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": "nsm-unseal",
+    "SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND": "lease-recipient-attest",
+    "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND": "response-proof-attest",
+    "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND": "lease-recipient-verify",
+    "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND": "control-plane-attestation-verify",
+    "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "serverware-proof-client",
+    "SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE": "production-python",
+    "SERVERWARE_DOCKER_EXECUTABLE": "production-docker",
+}
+
+
+def fixture_executable_bytes(setting: str) -> bytes:
+    return f"#!/bin/sh\n# {setting}\nexit 0\n".encode("ascii")
+
+
+def fixture_executable_digest_manifest() -> dict[str, str]:
+    return {
+        setting: sha256_prefixed_bytes(fixture_executable_bytes(setting))
+        for setting in sorted(PINNED_EXECUTABLE_NAMES)
+    }
+
+
 POLICY_DIGEST = digest("8")
 
 
@@ -448,6 +582,18 @@ PROXY_PRINCIPAL_ID = "agent:payments"
 ALTERNATE_PROXY_PRINCIPAL_ID = "agent:billing"
 PROXY_CLIENT_NONCE = b64e(b"n" * 32)
 PROXY_TLS_CHANNEL_BINDING = b64e(b"t" * 32)
+PROXY_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
+    {
+        "apiVersion": "serverware.clientProofRequest/v1",
+        "method": "GET",
+        "scheme": "https",
+        "authority": "demo-upstream:8443",
+        "path": "/echo",
+        "query": [],
+        "headers": {"accept": "application/json"},
+        "body_sha256": sha256_prefixed_bytes(b""),
+    }
+)
 PROXY_REQUEST_DIGEST = digest("1")
 PROXY_OPERATION_DIGEST = digest("2")
 PROXY_SERVER_INSTANCE_ID = "spiffe://prod.serverware.dev/decision-gate/instance-01"
@@ -607,17 +753,7 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
     captured_at = int(time.time()) if now is None else now
     body = b'{"ok":true,"source":"production-proxy"}'
     body_digest = sha256_prefixed_bytes(body)
-    client_request = {
-        "apiVersion": "serverware.clientProofRequest/v1",
-        "method": "GET",
-        "scheme": "https",
-        "authority": "demo-upstream:8443",
-        "path": "/echo",
-        "query": [],
-        "headers": {"accept": "application/json"},
-        "body_sha256": sha256_prefixed_bytes(b""),
-    }
-    client_request_digest = sha256_prefixed_json(client_request)
+    client_request_digest = PROXY_CLIENT_REQUEST_DIGEST
     selected_headers = {
         "content-length": str(len(body)),
         "content-type": "application/json",
@@ -671,7 +807,6 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
             "collection_mode": "external-client-capture",
             "captured_at_unix": captured_at,
             "client_nonce": PROXY_CLIENT_NONCE,
-            "client_request": client_request,
             "client_request_digest": client_request_digest,
             "principal_id": PROXY_PRINCIPAL_ID,
             "route_id": "demo.echo",
@@ -929,9 +1064,64 @@ def write_production_env_files(
 ) -> None:
     selected_images_value = images_value or production_images_env_value()
     selected_readiness_value = readiness_value or selected_images_value
+    executable_digest_manifest = canonical_json(fixture_executable_digest_manifest())
+    policy_key_path = tmp / "policy-signing.pub.pem"
+    activation_key_path = tmp / "policy-activation-verification.pub.pem"
+    reproducible_key_path = tmp / "reproducible-build-verification.pub.pem"
+    policy_key_id = (
+        verify_release_completion.release_public_key_id(
+            policy_key_path.read_text(encoding="ascii")
+        )
+        if policy_key_path.is_file()
+        else release_key_info()["key_id"]
+    )
+    activation_key_id = (
+        verify_release_completion.release_public_key_id(
+            activation_key_path.read_text(encoding="ascii")
+        )
+        if activation_key_path.is_file()
+        else policy_activation_key_info()["key_id"]
+    )
+    reproducible_key_id = (
+        verify_release_completion.release_public_key_id(
+            reproducible_key_path.read_text(encoding="ascii")
+        )
+        if reproducible_key_path.is_file()
+        else reproducible_build_key_info()["key_id"]
+    )
+    helper_dir = tmp.resolve() / "attestation-helpers"
+    helper_dir.mkdir(mode=0o755, exist_ok=True)
+    production_python = tmp.resolve() / PINNED_EXECUTABLE_NAMES[
+        production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING
+    ]
+    production_docker = tmp.resolve() / PINNED_EXECUTABLE_NAMES[
+        production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING
+    ]
+    production_compose_plugin = tmp.resolve() / "production-docker-compose"
+    for setting, name in PINNED_EXECUTABLE_NAMES.items():
+        executable = (
+            production_python
+            if setting == production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING
+            else production_docker
+            if setting == production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING
+            else helper_dir / name
+        )
+        executable.write_bytes(fixture_executable_bytes(setting))
+        executable.chmod(0o755)
+    production_compose_plugin.write_bytes(b"#!/bin/sh\n# pinned Compose fixture\nexit 0\n")
+    production_compose_plugin.chmod(0o755)
     (tmp / "production-images.env").write_text(
         f"SERVERWARE_PRODUCTION_IMAGES={selected_images_value}\n",
         encoding="utf-8",
+    )
+    executable_commands = "".join(
+        f"{setting}=/opt/serverware/bin/{name}\n"
+        for setting, name in PINNED_EXECUTABLE_NAMES.items()
+        if setting
+        not in {
+            production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+            production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING,
+        }
     )
     (tmp / "production.env").write_text(
         f"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST={digest('9')}\n"
@@ -939,6 +1129,29 @@ def write_production_env_files(
         f"{verify_release_completion.PROXY_PRINCIPAL_ENV_KEY}={PROXY_PRINCIPAL_ID}\n"
         f"SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID={proxy_collector_key_info()['key_id']}\n"
         f"SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID={proxy_vendor_verifier_key_info()['key_id']}\n"
+        f"SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST={PROXY_CLIENT_REQUEST_DIGEST}\n"
+        f"SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST={PROXY_REQUEST_DIGEST}\n"
+        f"SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST={PROXY_OPERATION_DIGEST}\n"
+        f"SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS=300\n"
+        f"SERVERWARE_COMPLETION_P99_LIMIT_MS=20.0\n"
+        f"{run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV}={run_production_readiness.FINAL_LAUNCHER_CONTRACT}\n"
+        f"SERVERWARE_ATTESTATION_HELPER_DIR={helper_dir}\n"
+        f"SERVERWARE_PRODUCTION_PYTHON_EXECUTABLE={production_python}\n"
+        f"SERVERWARE_DOCKER_EXECUTABLE={production_docker}\n"
+        f"{run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV}={production_compose_plugin}\n"
+        f"{run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV}={sha256_file(production_compose_plugin)}\n"
+        f"{run_production_readiness.DOCKER_UNIX_SOCKET_ENV}=/run/docker.sock\n"
+        f"{run_production_readiness.DOCKER_DAEMON_ID_ENV}=fixture-daemon-id\n"
+        f"{run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV}=serverware-production\n"
+        f"{run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV}={sha256_file(ROOT / 'scripts' / 'production_host_preflight.py')}\n"
+        f"{run_production_readiness.VERIFY_PRODUCTION_READINESS_SCRIPT_SHA256_ENV}={sha256_file(ROOT / 'scripts' / 'verify_production_readiness.py')}\n"
+        f"{run_production_readiness.VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV}={sha256_file(ROOT / 'scripts' / 'verify_release_completion.py')}\n"
+        f"{run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY_ENV}={tmp / 'preflight-signing.key.pem'}\n"
+        f"{run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV}={tmp / 'preflight-signing.pub.pem'}\n"
+        f"{run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV}={preflight_signing_key_info()['key_id']}\n"
+        f"{run_production_readiness.PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV}=300\n"
+        f"{executable_commands}"
+        f"{production_host_preflight_module.ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV}='{executable_digest_manifest}'\n"
         f"{verify_release_completion.RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY}={tmp / 'release-signing.pub.pem'}\n"
         f"{verify_release_completion.SIGSTORE_TRUST_ROOT_ENV_KEY}={tmp / 'sigstore-signing.pub.pem'}\n"
         f"{verify_release_completion.REKOR_TRUST_ROOT_ENV_KEY}={tmp / 'rekor.pub.pem'}\n"
@@ -946,9 +1159,16 @@ def write_production_env_files(
         f"{verify_release_completion.EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY}=managed-prod-log\n"
         f"{verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNING_KEY_ENV_KEY}={tmp / 'control-plane-response-signing.pub.pem'}\n"
         f"{verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY}={control_plane_response_signing_key_info()['key_id']}\n"
+        f"{run_production_readiness.POLICY_TRUST_ROOT_ENV}={tmp / 'policy-signing.pub.pem'}\n"
+        f"{run_production_readiness.POLICY_TRUST_ROOT_ID_ENV}={policy_key_id}\n"
+        f"{run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV}={tmp / 'policy-activation-verification.pub.pem'}\n"
+        f"{run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV}={activation_key_id}\n"
+        f"{run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV}={tmp / 'reproducible-build-verification.pub.pem'}\n"
+        f"{run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV}={reproducible_key_id}\n"
         f"SERVERWARE_PRODUCTION_IMAGES={selected_readiness_value}\n",
         encoding="utf-8",
     )
+    (tmp / "production.env").chmod(0o600)
     write_production_config_files(tmp)
 
 
@@ -987,9 +1207,10 @@ def write_final_production_env_file(
     for name in omitted or set():
         configured.pop(name, None)
     (tmp / "production.env").write_text(
-        "".join(f"{name}={value}\n" for name, value in configured.items()),
+        "".join(f"{name}={shlex.quote(value)}\n" for name, value in configured.items()),
         encoding="utf-8",
     )
+    (tmp / "production.env").chmod(0o600)
     write_production_config_files(tmp)
     return configured
 
@@ -1012,9 +1233,54 @@ def final_env_binding_summaries(
         "production_image_refs": refs,
         "production_env_keys": sorted(configured),
         "benchmark_binary_digest": digest("9"),
+        "production_compose_renderer": {
+            "path": configured[
+                run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV
+            ],
+            "sha256": configured[
+                run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV
+            ],
+        },
+        "production_compose_project_name": configured[
+            run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV
+        ],
+        "release_security_evidence": {
+            "trust_roots": {
+                "policy_identity": {
+                    "path": str(tmp / "policy-signing.pub.pem"),
+                    "sha256": sha256_file(tmp / "policy-signing.pub.pem"),
+                    "spki_sha256": configured[
+                        run_production_readiness.POLICY_TRUST_ROOT_ID_ENV
+                    ],
+                },
+                "policy_activation": {
+                    "path": str(tmp / "policy-activation-verification.pub.pem"),
+                    "sha256": sha256_file(
+                        tmp / "policy-activation-verification.pub.pem"
+                    ),
+                    "spki_sha256": configured[
+                        run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV
+                    ],
+                },
+                "reproducible_build": {
+                    "path": str(tmp / "reproducible-build-verification.pub.pem"),
+                    "sha256": sha256_file(
+                        tmp / "reproducible-build-verification.pub.pem"
+                    ),
+                    "spki_sha256": configured[
+                        run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV
+                    ],
+                },
+            }
+        },
         "runtime_trust_materials": {
             "proof_collector_key_id": proxy_collector_key_info()["key_id"],
             "proof_verifier_key_id": proxy_vendor_verifier_key_info()["key_id"],
+            "executable_digests": fixture_executable_digest_manifest(),
+            "python_script_digests": {
+                setting: configured[setting]
+                for setting in run_production_readiness.PINNED_PYTHON_SCRIPTS.values()
+            },
         },
         **environment,
     }
@@ -1024,7 +1290,7 @@ def final_env_binding_summaries(
 
 def test_final_production_env_binding() -> None:
     with tempfile.TemporaryDirectory() as tmp_raw:
-        tmp = Path(tmp_raw)
+        tmp = Path(tmp_raw).resolve()
         (tmp / "release-signing.pub.pem").write_text(release_key_info()["public_key_pem"], encoding="ascii")
         (tmp / "sigstore-signing.pub.pem").write_text(
             sigstore_signing_key_info()["public_key_pem"],
@@ -1046,6 +1312,19 @@ def test_final_production_env_binding() -> None:
         (tmp / "control-plane-response-signing.pub.pem").write_text(
             control_plane_response_signing_key_info()["public_key_pem"],
             encoding="ascii",
+        )
+        (tmp / "preflight-signing.pub.pem").write_text(
+            preflight_signing_key_info()["public_key_pem"],
+            encoding="ascii",
+        )
+        (tmp / "policy-signing.pub.pem").write_text(
+            release_key_info()["public_key_pem"], encoding="ascii"
+        )
+        (tmp / "policy-activation-verification.pub.pem").write_text(
+            policy_activation_key_info()["public_key_pem"], encoding="ascii"
+        )
+        (tmp / "reproducible-build-verification.pub.pem").write_text(
+            reproducible_build_key_info()["public_key_pem"], encoding="ascii"
         )
 
         configured = write_final_production_env_file(tmp)
@@ -1074,6 +1353,12 @@ def test_final_production_env_binding() -> None:
             verify_release_completion.EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY,
             verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNING_KEY_ENV_KEY,
             verify_release_completion.CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY,
+            run_production_readiness.POLICY_TRUST_ROOT_ENV,
+            run_production_readiness.POLICY_TRUST_ROOT_ID_ENV,
+            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV,
+            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV,
+            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV,
+            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV,
         )
         final_inputs = {name: configured.get(name) for name in final_input_names}
         release_trust_inputs = {name: configured.get(name) for name in release_trust_input_names}
@@ -1081,30 +1366,55 @@ def test_final_production_env_binding() -> None:
         def verify_binding(
             selected: dict[str, str | None] | None = None,
             selected_release_trust: dict[str, str | None] | None = None,
+            selected_proxy_digests: dict[str, str | None] | None = None,
+            selected_launcher_trust: dict[str, str | None] | None = None,
+            selected_proxy_max_age: int = 300,
+            selected_p99_limit: float = 20.0,
+            selected_docker_executable: str | None = None,
+            selected_compose_plugin: str | None = None,
+            selected_docker_socket: str | None = None,
+            selected_daemon_id: str | None = None,
+            remeasure_runtime: bool = False,
             snapshots_override: dict[
                 str, verify_release_completion.FileSnapshot
             ]
             | None = None,
         ) -> dict[str, Any]:
-            final_file_snapshots = snapshots_override or {
-                "hardware_assurance_trusted_public_key": verify_release_completion.snapshot_regular_file(
-                    tmp / "hardware-assurance-verifier.pub.pem",
-                    "hardware assurance trust root",
-                    max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
-                ),
-                "final_challenge_authority_public_key": verify_release_completion.snapshot_regular_file(
-                    tmp / "final-challenge-authority.pub.pem",
-                    "final challenge authority trust root",
-                    max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
-                ),
-                "control_plane_response_signing_public_key": verify_release_completion.snapshot_regular_file(
-                    tmp / "control-plane-response-signing.pub.pem",
-                    "control-plane response signing trust root",
-                    max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
-                ),
+            snapshot_registry = verify_release_completion.InputSnapshots()
+            snapshot_paths = {
+                "production_readiness_env": tmp / "production.env",
+                "production_images_env": tmp / "production-images.env",
+                "release_provenance_trusted_public_key": tmp / "release-signing.pub.pem",
+                "sigstore_trusted_public_key": tmp / "sigstore-signing.pub.pem",
+                "rekor_trusted_public_key": tmp / "rekor.pub.pem",
+                "external_checkpoint_trusted_public_key": tmp / "external-checkpoint.pub.pem",
+                "hardware_assurance_trusted_public_key": tmp / "hardware-assurance-verifier.pub.pem",
+                "final_challenge_authority_public_key": tmp / "final-challenge-authority.pub.pem",
+                "control_plane_response_signing_public_key": tmp / "control-plane-response-signing.pub.pem",
+                "production_host_preflight_signing_public_key": tmp / "preflight-signing.pub.pem",
+                "policy_trusted_public_key": tmp / "policy-signing.pub.pem",
+                "policy_activation_trusted_public_key": tmp
+                / "policy-activation-verification.pub.pem",
+                "reproducible_build_trusted_public_key": tmp
+                / "reproducible-build-verification.pub.pem",
             }
+            for key, path in snapshot_paths.items():
+                snapshot_registry.capture(
+                    key,
+                    path,
+                    key.replace("_", " "),
+                    max_bytes=(
+                        verify_release_completion.ENV_INPUT_MAX_BYTES
+                        if key in {"production_readiness_env", "production_images_env"}
+                        else verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES
+                    ),
+                )
+            for key, snapshot in (snapshots_override or {}).items():
+                snapshot_registry.by_key[key] = snapshot
+            final_file_snapshots = snapshot_registry.by_key
             return verify_release_completion.verify_current_production_env_binding(
                 paths,
+                snapshot_registry,
                 readiness_summary,
                 preflight_summary,
                 config_summary,
@@ -1112,6 +1422,42 @@ def test_final_production_env_binding() -> None:
                 release_trust_inputs=selected_release_trust or release_trust_inputs,
                 final_inputs=selected or final_inputs,
                 final_file_snapshots=final_file_snapshots,
+                proxy_digest_inputs={
+                    "proxy_client_request_digest": PROXY_CLIENT_REQUEST_DIGEST,
+                    "proxy_request_digest": PROXY_REQUEST_DIGEST,
+                    "proxy_operation_digest": PROXY_OPERATION_DIGEST,
+                }
+                if selected_proxy_digests is None
+                else selected_proxy_digests,
+                launcher_trust_inputs=selected_launcher_trust
+                or {
+                    run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT: str(
+                        tmp / "production.env"
+                    ),
+                    run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT: sha256_file(
+                        tmp / "production.env"
+                    ),
+                },
+                proxy_proof_max_age_seconds=selected_proxy_max_age,
+                p99_limit_ms=selected_p99_limit,
+                docker_executable=selected_docker_executable
+                or configured[
+                    production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING
+                ],
+                docker_compose_plugin_executable=selected_compose_plugin
+                or configured[run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV],
+                docker_unix_socket=selected_docker_socket
+                or configured[run_production_readiness.DOCKER_UNIX_SOCKET_ENV],
+                docker_daemon_id=selected_daemon_id
+                or configured[run_production_readiness.DOCKER_DAEMON_ID_ENV],
+                preflight_signing_public_key=configured[
+                    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV
+                ],
+                preflight_signing_key_id=configured[
+                    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV
+                ],
+                preflight_max_age_seconds=300,
+                remeasure_runtime_trust=remeasure_runtime,
             )
 
         def expect_failure(
@@ -1138,14 +1484,196 @@ def test_final_production_env_binding() -> None:
             != external_receipt_key_info()["key_id"]
             or binding.get("control_plane_response_signing_public_key_id")
             != control_plane_response_signing_key_info()["key_id"]
+            or binding.get("policy_trusted_public_key_id")
+            != release_key_info()["key_id"]
+            or binding.get("policy_activation_trusted_public_key_id")
+            != policy_activation_key_info()["key_id"]
+            or binding.get("reproducible_build_trusted_public_key_id")
+            != reproducible_build_key_info()["key_id"]
             or binding.get("expected_proxy_principal_id") != PROXY_PRINCIPAL_ID
             or binding.get("hardware_assurance_trusted_public_key_id")
             != hardware_verifier_key_info()["key_id"]
             or binding.get("final_challenge_authority_public_key_id")
             != final_challenge_authority_key_info()["key_id"]
             or binding.get("hardware_assurance_expected_challenge_selector") != "nonce"
+            or binding.get("SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST")
+            != PROXY_CLIENT_REQUEST_DIGEST
+            or binding.get("SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST")
+            != PROXY_REQUEST_DIGEST
+            or binding.get("SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST")
+            != PROXY_OPERATION_DIGEST
+            or (binding.get("launcher_trust") or {}).get("path")
+            != str(tmp / "production.env")
+            or binding.get("proxy_proof_max_age_seconds") != 300
+            or binding.get("p99_limit_ms") != 20.0
+            or binding.get("docker_executable")
+            != configured[production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING]
+            or binding.get("docker_compose_project_name")
+            != "serverware-production"
         ):
             raise AssertionError(f"valid final env binding omitted trust-root identities: {binding}")
+
+        if sys.platform.startswith("linux"):
+            current_python = Path(sys.executable).resolve()
+            current_python_digest = sha256_file(current_python)
+            interpreter_binding = verify_release_completion.verify_current_interpreter_binding(
+                {
+                    run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV: str(
+                        current_python
+                    )
+                },
+                {
+                    run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV: current_python_digest
+                },
+            )
+            if interpreter_binding.get("matches_pinned_path_inode") is not True:
+                raise AssertionError(
+                    f"direct final verifier did not bind its executing interpreter: {interpreter_binding}"
+                )
+            copied_python = tmp / "same-bytes-different-python-inode"
+            copied_python.write_bytes(current_python.read_bytes())
+            copied_python.chmod(0o700)
+            try:
+                verify_release_completion.verify_current_interpreter_binding(
+                    {
+                        run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV: str(
+                            copied_python
+                        )
+                    },
+                    {
+                        run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV: current_python_digest
+                    },
+                )
+            except ValueError as exc:
+                if "inode does not match" not in str(exc):
+                    raise
+            else:
+                raise AssertionError(
+                    "direct final verifier accepted matching bytes from a different interpreter inode"
+                )
+
+        for attribute in verify_release_completion.PROXY_EXPECTED_DIGEST_ENV_KEYS:
+            mismatched = {
+                "proxy_client_request_digest": PROXY_CLIENT_REQUEST_DIGEST,
+                "proxy_request_digest": PROXY_REQUEST_DIGEST,
+                "proxy_operation_digest": PROXY_OPERATION_DIGEST,
+            }
+            mismatched[attribute] = digest("f")
+            try:
+                verify_binding(selected_proxy_digests=mismatched)
+            except ValueError as exc:
+                if "does not exactly match" not in str(exc):
+                    raise
+            else:
+                raise AssertionError(f"direct final verifier accepted mismatched {attribute}")
+
+        for label, kwargs in (
+            ("proxy proof max age", {"selected_proxy_max_age": 299}),
+            ("p99 limit", {"selected_p99_limit": 19.0}),
+            (
+                "Docker executable",
+                {"selected_docker_executable": str(tmp / "caller-selected-docker")},
+            ),
+            (
+                "Compose plugin",
+                {"selected_compose_plugin": str(tmp / "caller-selected-compose")},
+            ),
+            ("Docker socket", {"selected_docker_socket": "/run/caller.sock"}),
+            ("Docker daemon", {"selected_daemon_id": "caller-daemon"}),
+        ):
+            try:
+                verify_binding(**kwargs)
+            except ValueError as exc:
+                if "does not exactly match" not in str(exc):
+                    raise
+            else:
+                raise AssertionError(f"direct final verifier accepted mismatched {label}")
+
+        try:
+            verify_binding(
+                selected_launcher_trust={
+                    run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT: str(
+                        tmp / "alternate-production.env"
+                    ),
+                    run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT: sha256_file(
+                        tmp / "production.env"
+                    ),
+                }
+            )
+        except ValueError as exc:
+            if "out-of-band launcher trust path" not in str(exc):
+                raise
+        else:
+            raise AssertionError("direct final verifier accepted an alternate launcher env path")
+
+        changed_helper = tmp.resolve() / "attestation-helpers" / "serverware-proof-client"
+        original_helper = changed_helper.read_bytes()
+        changed_helper.write_bytes(b"#!/bin/sh\nexit 9\n")
+        changed_helper.chmod(0o755)
+        try:
+            verify_binding()
+        except ValueError as exc:
+            if "current pinned executable remeasurement failed" not in str(exc):
+                raise
+        else:
+            raise AssertionError("direct final verifier accepted collector replacement after preflight")
+        changed_helper.write_bytes(original_helper)
+        changed_helper.chmod(0o755)
+
+        changed_compose_plugin = Path(
+            configured[run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV]
+        )
+        original_compose_plugin = changed_compose_plugin.read_bytes()
+        changed_compose_plugin.write_bytes(b"replaced Compose plugin\n")
+        changed_compose_plugin.chmod(0o755)
+        try:
+            verify_binding()
+        except ValueError as exc:
+            if "executable pin" not in str(exc):
+                raise
+        else:
+            raise AssertionError("direct final verifier accepted Compose plugin replacement")
+        changed_compose_plugin.write_bytes(original_compose_plugin)
+        changed_compose_plugin.chmod(0o755)
+
+        preflight_runtime = preflight_summary["runtime_trust_materials"]
+        preflight_runtime["material_digests"] = {
+            "control_plane_certificate": {"sha256": digest("1")}
+        }
+        preflight_runtime["docker_toolchain"] = {"ok": True, "daemon": {"daemon_id": "fixture-daemon-id"}}
+        measured_preflight_module = (
+            verify_release_completion.load_production_host_preflight_module(
+                configured,
+                final=True,
+            )
+        )
+        original_runtime_check = measured_preflight_module.runtime_trust_materials_check
+        measured_preflight_module.runtime_trust_materials_check = lambda *_args, **_kwargs: (
+            {
+                "ok": True,
+                "material_digests": {
+                    "control_plane_certificate": {"sha256": digest("2")}
+                },
+                "proof_collector_key_id": preflight_runtime["proof_collector_key_id"],
+                "proof_verifier_key_id": preflight_runtime["proof_verifier_key_id"],
+                "docker_toolchain": preflight_runtime["docker_toolchain"],
+            },
+            [],
+        )
+        try:
+            try:
+                verify_binding(remeasure_runtime=True)
+            except ValueError as exc:
+                if "current TLS/audit/proof material bytes differ" not in str(exc):
+                    raise
+            else:
+                raise AssertionError(
+                    "direct final verifier accepted runtime TLS material changed after preflight"
+                )
+        finally:
+            measured_preflight_module.runtime_trust_materials_check = original_runtime_check
+            preflight_runtime.pop("material_digests", None)
+            preflight_runtime.pop("docker_toolchain", None)
 
         frozen_key_snapshots = {
             "hardware_assurance_trusted_public_key": verify_release_completion.snapshot_regular_file(
@@ -1295,6 +1823,49 @@ def test_final_production_env_binding() -> None:
             selected_release_trust=substituted_checkpoint_provider,
         )
 
+        substituted_policy_trust = dict(release_trust_inputs)
+        substituted_policy_trust[
+            run_production_readiness.POLICY_TRUST_ROOT_ENV
+        ] = str(tmp / "caller-selected-policy-key.pub.pem")
+        expect_failure(
+            "policy identity trust root does not exactly match",
+            selected_release_trust=substituted_policy_trust,
+        )
+
+        substituted_policy_id = dict(release_trust_inputs)
+        substituted_policy_id[
+            run_production_readiness.POLICY_TRUST_ROOT_ID_ENV
+        ] = digest("0")
+        expect_failure(
+            "policy identity expected SPKI identity does not exactly match",
+            selected_release_trust=substituted_policy_id,
+        )
+
+        wrong_policy_id_configured = write_final_production_env_file(
+            tmp,
+            overrides={
+                run_production_readiness.POLICY_TRUST_ROOT_ID_ENV: digest("0")
+            },
+        )
+        readiness_summary, preflight_summary, config_summary = (
+            final_env_binding_summaries(tmp)
+        )
+        wrong_policy_release_inputs = {
+            name: wrong_policy_id_configured.get(name)
+            for name in release_trust_input_names
+        }
+        expect_failure(
+            "policy_identity trust-root bytes do not match the hashed production env SPKI pin",
+            selected_release_trust=wrong_policy_release_inputs,
+        )
+        configured = write_final_production_env_file(tmp)
+        readiness_summary, preflight_summary, config_summary = (
+            final_env_binding_summaries(tmp)
+        )
+        release_trust_inputs = {
+            name: configured.get(name) for name in release_trust_input_names
+        }
+
         rogue_hardware_key = ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x14" * 32))
         rogue_hardware_path = tmp / "rogue-hardware-verifier.pub.pem"
         rogue_hardware_path.write_text(rogue_hardware_key["public_key_pem"], encoding="ascii")
@@ -1411,6 +1982,93 @@ def test_final_production_env_binding() -> None:
             "current production readiness env digest does not match production host preflight",
             rewritten_inputs,
         )
+
+
+def test_preflight_authenticity_and_freshness() -> None:
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        tmp = Path(tmp_raw).resolve()
+        key_info = preflight_signing_key_info()
+        private_path = tmp / "preflight-signing.key.pem"
+        public_path = tmp / "preflight-signing.pub.pem"
+        private_path.write_bytes(
+            key_info["key"].private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        private_path.chmod(0o600)
+        public_path.write_text(key_info["public_key_pem"], encoding="ascii")
+        public_path.chmod(0o600)
+        signing_env = {
+            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PRIVATE_KEY_ENV: str(
+                private_path
+            ),
+            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV: str(
+                public_path
+            ),
+            run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV: key_info[
+                "key_id"
+            ],
+        }
+
+        def signed(generated_at: int) -> dict[str, Any]:
+            document: dict[str, Any] = {
+                "apiVersion": "serverware.productionHostPreflight/v1",
+                "kind": "ProductionHostPreflight",
+                "ok": True,
+                "generated_at_unix": generated_at,
+                "checks": {},
+                "failures": [],
+                "next_command": "fixture",
+                "secret_values_redacted": True,
+            }
+            document["authenticity"] = production_host_preflight_module.sign_final_preflight(
+                document,
+                signing_env,
+            )
+            return document
+
+        snapshot = verify_release_completion.snapshot_regular_file(
+            public_path,
+            "preflight signing public key",
+            max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+        )
+        current = signed(int(time.time()))
+        verified = verify_release_completion.verify_preflight_authenticity(
+            current,
+            trusted_public_key=snapshot,
+            expected_key_id=key_info["key_id"],
+            max_age_seconds=300,
+        )
+        if verified.get("verified") is not True:
+            raise AssertionError(f"valid signed preflight was rejected: {verified}")
+        fabricated = json.loads(json.dumps(current))
+        fabricated["checks"]["fabricated"] = True
+        try:
+            verify_release_completion.verify_preflight_authenticity(
+                fabricated,
+                trusted_public_key=snapshot,
+                expected_key_id=key_info["key_id"],
+                max_age_seconds=300,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("fabricated signed preflight payload was accepted")
+        stale = signed(int(time.time()) - 301)
+        try:
+            verify_release_completion.verify_preflight_authenticity(
+                stale,
+                trusted_public_key=snapshot,
+                expected_key_id=key_info["key_id"],
+                max_age_seconds=300,
+            )
+        except ValueError as exc:
+            if "stale" not in str(exc):
+                raise
+        else:
+            raise AssertionError("stale signed production host preflight was accepted")
 
 
 def redacted_environment_summary(tmp: Path) -> dict[str, Any]:
@@ -2276,6 +2934,7 @@ def file_summary(path: Path, label: str) -> dict[str, Any]:
 def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_DIGEST) -> dict[str, Any]:
     control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64
     gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64
+    configured = run_production_readiness.load_env_file(tmp / "production.env")
     policy_identity = verify_production_policy_identity.verify_persisted_report(
         bundle_path=tmp / "policy-bundle.json",
         trusted_public_key_path=tmp / "policy-signing.pub.pem",
@@ -2331,6 +2990,35 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                     "proxy-proof-verifier.pub.pem",
                 ],
                 "proof_collector_files": ["serverware-proof-client"],
+                "executable_digests": [
+                    {
+                        "setting": setting,
+                        "executable": (
+                            str(tmp.resolve() / PINNED_EXECUTABLE_NAMES[setting])
+                            if setting == production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING
+                            else f"/opt/serverware/bin/{PINNED_EXECUTABLE_NAMES[setting]}"
+                        ),
+                        "host_path": (
+                            str(tmp.resolve() / PINNED_EXECUTABLE_NAMES[setting])
+                            if setting == production_host_preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING
+                            else str(tmp.resolve() / "attestation-helpers" / PINNED_EXECUTABLE_NAMES[setting])
+                        ),
+                        "sha256": fixture_executable_digest_manifest()[setting],
+                        "verified": True,
+                    }
+                    for setting in sorted(PINNED_EXECUTABLE_NAMES)
+                ],
+                "python_script_digests": [
+                    {
+                        "setting": setting,
+                        "path": str((ROOT / "scripts" / script_name).resolve()),
+                        "sha256": configured[setting],
+                        "verified": True,
+                    }
+                    for script_name, setting in sorted(
+                        run_production_readiness.PINNED_PYTHON_SCRIPTS.items()
+                    )
+                ],
                 "proof_collector_private_key_mode": "0o600",
                 "proof_collector_key_id": proxy_collector_key_info()["key_id"],
                 "proof_verifier_key_id": proxy_vendor_verifier_key_info()["key_id"],
@@ -2342,7 +3030,17 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
                 "ok": True,
                 "path": str(tmp / "production.env"),
                 "file": file_summary(tmp / "production.env", "production-readiness-env"),
-                "env_keys": sorted(run_production_readiness.load_env_file(tmp / "production.env")),
+                "env_keys": sorted(configured),
+                "executing_script": {
+                    "path": str((ROOT / "scripts" / "production_host_preflight.py").resolve()),
+                    "sha256": configured[
+                        run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV
+                    ],
+                    "device": (ROOT / "scripts" / "production_host_preflight.py").stat().st_dev,
+                    "inode": (ROOT / "scripts" / "production_host_preflight.py").stat().st_ino,
+                    "measured_from": "/proc/self/fd/fixture",
+                    "matches_pinned_path_inode": True,
+                },
                 "config_gate": {
                     "ok": True,
                     "out": str(tmp / "production-host-preflight-config.json"),
@@ -2510,6 +3208,8 @@ def run_verifier(
             PROXY_SERVER_INSTANCE_ID,
             "--proxy-client-nonce",
             PROXY_CLIENT_NONCE,
+            "--proxy-client-request-digest",
+            PROXY_CLIENT_REQUEST_DIGEST,
             "--proxy-request-digest",
             PROXY_REQUEST_DIGEST,
             "--proxy-operation-digest",
@@ -2597,6 +3297,10 @@ def run_verifier(
             str(tmp / "policy-bundle.json"),
             "--policy-trusted-public-key",
             str(tmp / "policy-signing.pub.pem"),
+            "--policy-trusted-public-key-id",
+            verify_release_completion.release_public_key_id(
+                (tmp / "policy-signing.pub.pem").read_text(encoding="ascii")
+            ),
             "--policy-identity-verification",
             str(tmp / "production-policy-identity-verification.json"),
             "--policy-activation-verification",
@@ -2605,12 +3309,24 @@ def run_verifier(
             str(tmp / "policy-activation-verification.signature.json"),
             "--policy-activation-trusted-public-key",
             str(tmp / "policy-activation-verification.pub.pem"),
+            "--policy-activation-trusted-public-key-id",
+            verify_release_completion.release_public_key_id(
+                (tmp / "policy-activation-verification.pub.pem").read_text(
+                    encoding="ascii"
+                )
+            ),
             "--reproducible-build-verification",
             str(tmp / "reproducible-build-verification.json"),
             "--reproducible-build-signature",
             str(tmp / "reproducible-build-verification.signature.json"),
             "--reproducible-build-trusted-public-key",
             str(tmp / "reproducible-build-verification.pub.pem"),
+            "--reproducible-build-trusted-public-key-id",
+            verify_release_completion.release_public_key_id(
+                (tmp / "reproducible-build-verification.pub.pem").read_text(
+                    encoding="ascii"
+                )
+            ),
             "--kms-materials",
             str(tmp / "kms-materials.json"),
             *control_plane_response_signing_args,
@@ -2918,13 +3634,13 @@ def test_proxy_response_proof_requirements(
     )
 
     tampered_client_request = clone_document(valid_document)
-    tampered_client_request["external_capture"]["client_request"]["path"] = "/v1/other-resource"
+    tampered_client_request["external_capture"]["client_request_digest"] = digest("0")
     sign_proxy_external_capture(tampered_client_request)
     expect_proxy_proof_failure(
         tmp,
         tampered_client_request,
-        "independently matched policy route did not match exactly one signed route",
-        "a collector-signed capture with a tampered client request",
+        "does not match the independently supplied client commitment",
+        "a collector-signed capture with a tampered client request digest",
     )
 
     substituted_route = clone_document(valid_document)
@@ -2933,7 +3649,7 @@ def test_proxy_response_proof_requirements(
     expect_proxy_proof_failure(
         tmp,
         substituted_route,
-        "external capture route ID does not match the independently matched signed policy route",
+        "route identity is absent or ambiguous in the signed policy",
         "a collector-signed route ID substitution",
     )
 
@@ -3282,13 +3998,16 @@ def test_proxy_response_proof_requirements(
     )
 
     head_request = clone_document(valid_document)
-    head_request["external_capture"]["client_request"]["method"] = "HEAD"
+    head_request["external_capture"]["client_request"] = {
+        "method": "HEAD",
+        "authorization": "must-not-be-persisted",
+    }
     resign_proxy_response_proof(head_request)
     expect_proxy_proof_failure(
         tmp,
         head_request,
-        "proxy response proof request method is not GET",
-        "a HEAD request in the GET-only response-proof contract",
+        "proxy response external capture fields do not match the contract",
+        "a proof artifact that persists raw client request material",
     )
 
     inconsistent_grant = clone_document(valid_document)
@@ -3579,14 +4298,335 @@ def test_proxy_response_proof_requirements(
     write(tmp / "proxy-response-proof.json", valid_document)
 
 
+def test_live_runtime_projection_and_container_artifact_binding() -> None:
+    project_name = "serverware-production"
+    project_directory = ROOT
+    value_hash = lambda value: sha256_prefixed_bytes(value.encode("utf-8"))
+    service_model = {
+        "image": "registry.example/control@" + digest("6"),
+        "compose_user": "",
+        "required_runtime_user": "nonroot:nonroot",
+        "entrypoint": None,
+        "command": ["serve"],
+        "working_dir": "",
+        "environment": [{"name": "MODE", "value_sha256": value_hash("approved")}],
+        "devices": [
+            {"source": "/dev/nsm", "target": "/dev/nsm", "permissions": "rwm"}
+        ],
+        "networks": ["default"],
+        "mounts": [
+            {
+                "type": "bind",
+                "source": "/approved/release.json",
+                "target": "/run/release.json",
+                "read_only": True,
+                "bind": {},
+                "volume": {},
+                "tmpfs": {},
+                "consistency": "",
+            },
+            {
+                "type": "volume",
+                "source": "data",
+                "target": "/data",
+                "read_only": False,
+                "bind": {},
+                "volume": {},
+                "tmpfs": {},
+                "consistency": "",
+            },
+        ],
+        "tmpfs": [],
+        "ports": [
+            {
+                "target": 3000,
+                "published": "3000",
+                "host_ip": "127.0.0.1",
+                "protocol": "tcp",
+                "mode": "ingress",
+            }
+        ],
+        "links": [],
+        "external_links": [],
+        "host_config": {
+            "read_only": True,
+            "privileged": False,
+            "cap_add": [],
+            "cap_drop": ["ALL"],
+            "security_opt": ["no-new-privileges:true"],
+            "pids_limit": 128,
+            "memory": 268435456,
+            "init": True,
+            "group_add": [],
+            "volumes_from": [],
+            "dns": [],
+            "dns_search": [],
+            "dns_opt": [],
+            "extra_hosts": [],
+            "pid": "",
+            "ipc": "",
+            "uts": "",
+            "network_mode": "",
+            "userns_mode": "",
+            "ulimits": {},
+        },
+    }
+    runtime_model = {
+        "services": {"audit-anchor": service_model},
+        "networks": {
+            "default": {
+                "name": "",
+                "external": False,
+                "driver": "",
+                "driver_opts": {},
+            }
+        },
+        "volumes": {
+            "data": {
+                "name": "",
+                "external": False,
+                "driver": "",
+                "driver_opts": {},
+            }
+        },
+    }
+    image_config = {
+        "User": "nonroot:nonroot",
+        "Entrypoint": ["/entry"],
+        "Cmd": ["image-default"],
+        "WorkingDir": "/app",
+        "Env": ["PATH=/bin", "MODE=image"],
+        "ExposedPorts": {},
+        "Volumes": {},
+    }
+    container = {
+        "Config": {
+            "User": "nonroot:nonroot",
+            "Entrypoint": ["/entry"],
+            "Cmd": ["serve"],
+            "WorkingDir": "/app",
+            "Env": ["PATH=/bin", "MODE=approved"],
+            "ExposedPorts": {"3000/tcp": {}},
+        },
+        "HostConfig": {
+            "Devices": [
+                {
+                    "PathOnHost": "/dev/nsm",
+                    "PathInContainer": "/dev/nsm",
+                    "CgroupPermissions": "rwm",
+                }
+            ],
+            "ReadonlyRootfs": True,
+            "Privileged": False,
+            "PublishAllPorts": False,
+            "CapAdd": [],
+            "CapDrop": ["ALL"],
+            "SecurityOpt": ["no-new-privileges:true"],
+            "PidsLimit": 128,
+            "Memory": 268435456,
+            "Init": True,
+            "GroupAdd": [],
+            "VolumesFrom": [],
+            "Dns": [],
+            "DnsSearch": [],
+            "DnsOptions": [],
+            "ExtraHosts": [],
+            "PidMode": "",
+            "IpcMode": "",
+            "UTSMode": "",
+            "NetworkMode": "serverware-production_default",
+            "UsernsMode": "",
+            "Ulimits": [],
+            "Tmpfs": {},
+            "PortBindings": {
+                "3000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "3000"}]
+            },
+            "Links": [],
+        },
+        "NetworkSettings": {
+            "Networks": {"serverware-production_default": {"IPAddress": "10.0.0.2"}}
+        },
+        "Mounts": [
+            {
+                "Type": "volume",
+                "Name": "serverware-production_data",
+                "Destination": "/data",
+                "RW": True,
+                "Propagation": "",
+            },
+            {
+                "Type": "bind",
+                "Source": "/approved/release.json",
+                "Destination": "/run/release.json",
+                "RW": False,
+                "Propagation": "rprivate",
+            },
+        ],
+    }
+    expected = verify_release_completion.expected_runtime_projection(
+        "audit-anchor",
+        service_model,
+        runtime_model,
+        image_config,
+        project_name=project_name,
+        project_directory=project_directory,
+    )
+    observed = verify_release_completion.observed_runtime_projection(
+        "audit-anchor", container, project_directory=project_directory
+    )
+    verify_release_completion.verify_runtime_projection(
+        "audit-anchor", expected, observed
+    )
+
+    mutations = {
+        "root user": ("Config", "User", "0:0"),
+        "arbitrary command": ("Config", "Cmd", ["/bin/sh"]),
+        "extra environment": (
+            "Config",
+            "Env",
+            ["PATH=/bin", "MODE=approved", "INJECTED=1"],
+        ),
+        "device substitution": ("HostConfig", "Devices", []),
+        "network substitution": (
+            "NetworkSettings",
+            "Networks",
+            {"attacker_default": {}},
+        ),
+        "mount substitution": (
+            "Mounts",
+            None,
+            [
+                {
+                    "Type": "bind",
+                    "Source": "/attacker/release.json",
+                    "Destination": "/run/release.json",
+                    "RW": False,
+                    "Propagation": "rprivate",
+                }
+            ],
+        ),
+        "privileged container": ("HostConfig", "Privileged", True),
+    }
+    for label, (section, key, replacement) in mutations.items():
+        mutated = json.loads(canonical_json(container))
+        if key is None:
+            mutated[section] = replacement
+        else:
+            mutated[section][key] = replacement
+        try:
+            candidate = verify_release_completion.observed_runtime_projection(
+                "audit-anchor", mutated, project_directory=project_directory
+            )
+            verify_release_completion.verify_runtime_projection(
+                "audit-anchor", expected, candidate
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"runtime projection accepted {label}")
+
+    generation = {
+        "audit-anchor": {
+            "container_id": "a" * 64,
+            "started_at": "2026-01-01T00:00:00Z",
+            "image_id": digest("6"),
+            "runtime_projection": observed,
+        }
+    }
+    verify_release_completion.require_stable_container_generation(
+        generation, json.loads(canonical_json(generation))
+    )
+    for field, replacement in (
+        ("container_id", "b" * 64),
+        ("started_at", "2026-01-01T00:00:01Z"),
+    ):
+        changed = json.loads(canonical_json(generation))
+        changed["audit-anchor"][field] = replacement
+        try:
+            verify_release_completion.require_stable_container_generation(
+                generation, changed
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"container generation accepted changed {field}")
+
+    artifact = b'{"approved":true}\n'
+    archive_buffer = io.BytesIO()
+    with tarfile.open(fileobj=archive_buffer, mode="w") as archive:
+        member = tarfile.TarInfo("release.json")
+        member.size = len(artifact)
+        archive.addfile(member, io.BytesIO(artifact))
+    verified = verify_release_completion.parse_container_copy_archive(
+        archive_buffer.getvalue(),
+        expected_sha256=sha256_prefixed_bytes(artifact),
+        expected_bytes=len(artifact),
+        label="container-visible artifact",
+    )
+    if verified.get("container_namespace_verified") is not True:
+        raise AssertionError("container artifact was not marked namespace-verified")
+    for label, expected_digest, expected_length in (
+        ("digest tampering", digest("0"), len(artifact)),
+        ("length tampering", sha256_prefixed_bytes(artifact), len(artifact) + 1),
+    ):
+        try:
+            verify_release_completion.parse_container_copy_archive(
+                archive_buffer.getvalue(),
+                expected_sha256=expected_digest,
+                expected_bytes=expected_length,
+                label=label,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"container artifact accepted {label}")
+    linked_buffer = io.BytesIO()
+    with tarfile.open(fileobj=linked_buffer, mode="w") as archive:
+        member = tarfile.TarInfo("release.json")
+        member.type = tarfile.SYMTYPE
+        member.linkname = "/attacker/release.json"
+        archive.addfile(member)
+    try:
+        verify_release_completion.parse_container_copy_archive(
+            linked_buffer.getvalue(),
+            expected_sha256=sha256_prefixed_bytes(artifact),
+            expected_bytes=len(artifact),
+            label="symlink archive",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("container artifact accepted a symlink tar member")
+    multiple_buffer = io.BytesIO()
+    with tarfile.open(fileobj=multiple_buffer, mode="w") as archive:
+        for name in ("release.json", "extra.json"):
+            member = tarfile.TarInfo(name)
+            member.size = len(artifact)
+            archive.addfile(member, io.BytesIO(artifact))
+    try:
+        verify_release_completion.parse_container_copy_archive(
+            multiple_buffer.getvalue(),
+            expected_sha256=sha256_prefixed_bytes(artifact),
+            expected_bytes=len(artifact),
+            label="multiple-member archive",
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("container artifact accepted multiple tar members")
+
+
 def main() -> None:
     verify_cosign_ecdsa_signature_compatibility()
     verify_ed25519_signature_canonicalization()
     test_final_file_snapshots()
+    test_measured_preflight_module_replacement_race()
     test_final_production_env_binding()
+    test_preflight_authenticity_and_freshness()
+    test_live_runtime_projection_and_container_artifact_binding()
     global IMAGE_SIGNATURES_DIGEST, POLICY_DIGEST
     with tempfile.TemporaryDirectory() as tmp_raw:
-        tmp = Path(tmp_raw)
+        tmp = Path(tmp_raw).resolve()
         production_build = production_images_build()
         reproduced_images = []
         for image in production_build["images"]:
@@ -3654,8 +4694,274 @@ def main() -> None:
         if result.returncode != 0:
             raise AssertionError(f"completion verifier failed: {detail(result)}")
         proof = json.loads(result.stdout.decode("utf-8"))
-        if proof.get("ok") is not True or not out_path.exists() or not proof.get("proof_sha256", "").startswith("sha256:"):
+        persisted_proof = json.loads(out_path.read_text(encoding="utf-8"))
+        generation = (persisted_proof.get("integrity_metadata") or {}).get("generation")
+        detached_digest_path = run_production_readiness.completion_proof_digest_path(
+            out_path,
+            generation,
+        )
+        runner_expected = SimpleNamespace(
+            verification_mode="readiness",
+            runner_started_at_unix=persisted_proof["generated_at_unix"],
+            pre_run_completion_proof_state={"exists": False},
+            proxy_client_request_digest=PROXY_CLIENT_REQUEST_DIGEST,
+            proxy_request_digest=PROXY_REQUEST_DIGEST,
+            proxy_operation_digest=PROXY_OPERATION_DIGEST,
+            proxy_server_instance_id=PROXY_SERVER_INSTANCE_ID,
+            proxy_principal_id=PROXY_PRINCIPAL_ID,
+            proxy_client_nonce=PROXY_CLIENT_NONCE,
+            proxy_tls_channel_binding=PROXY_TLS_CHANNEL_BINDING,
+            proxy_proof_max_age_seconds=300,
+            p99_limit_ms=20.0,
+            docker_executable=str(tmp / "production-docker"),
+            collected_proxy_proof_sha256=sha256_file(tmp / "proxy-response-proof.json"),
+            launcher_env_binding=None,
+            production_readiness_env_sha256=sha256_file(tmp / "production.env"),
+            readiness_out=str(tmp / "production-readiness.json"),
+            config_out=str(tmp / "production-readiness-config.json"),
+            env_file=str(tmp / "production.env"),
+            production_host_preflight=str(tmp / "production-host-preflight.json"),
+            nitro_evidence_out=str(tmp / "nitro-kms-evidence.json"),
+            production_images_build=str(tmp / "production-images-build.json"),
+            production_images_env=str(tmp / "production-images.env"),
+            production_images_published=str(tmp / "production-images-published.json"),
+            release_provenance_summary=str(tmp / "release-provenance-summary.json"),
+            release_provenance=str(tmp / "release-provenance.json"),
+            release_provenance_trusted_public_key=str(tmp / "release-signing.pub.pem"),
+            image_signatures_summary=str(tmp / "image-signatures-summary.json"),
+            image_signatures=str(tmp / "image-signatures.json"),
+            sigstore_trusted_public_key=str(tmp / "sigstore-signing.pub.pem"),
+            rekor_trusted_public_key=str(tmp / "rekor.pub.pem"),
+            external_checkpoint_trusted_public_key=str(tmp / "external-checkpoint.pub.pem"),
+            bench=str(tmp / "decision-gate-rs-bench.json"),
+            policy_bundle=str(tmp / "policy-bundle.json"),
+            policy_trusted_public_key=str(tmp / "policy-signing.pub.pem"),
+            policy_identity_verification=str(tmp / "production-policy-identity-verification.json"),
+            policy_activation_verification=str(tmp / "policy-activation-verification.json"),
+            policy_activation_signature=str(tmp / "policy-activation-verification.signature.json"),
+            policy_activation_trusted_public_key=str(tmp / "policy-activation-verification.pub.pem"),
+            reproducible_build_verification=str(tmp / "reproducible-build-verification.json"),
+            reproducible_build_signature=str(tmp / "reproducible-build-verification.signature.json"),
+            reproducible_build_trusted_public_key=str(tmp / "reproducible-build-verification.pub.pem"),
+            kms_materials=str(tmp / "kms-materials.json"),
+            control_plane_response_signing_public_key=str(tmp / "control-plane-response-signing.pub.pem"),
+            proxy_response_proof=str(tmp / "proxy-response-proof.json"),
+            proxy_proof_verifier_public_key=str(tmp / "proxy-vendor-verifier-public-key.pem"),
+            proxy_collector_public_key=str(tmp / "proxy-collector-public-key.pem"),
+            compose_file="docker-compose.production.yml",
+            hardware_assurance=None,
+            hardware_assurance_trusted_public_key=None,
+            final_challenge_receipt=None,
+            final_challenge_authority_public_key=None,
+        )
+        verified_output_digest = run_production_readiness.verify_completion_output(
+            out_path,
+            runner_expected,
+        )
+        runner_expected.pre_run_completion_proof_state = {
+            "exists": True,
+            "sha256": verified_output_digest,
+            "device": out_path.stat().st_dev,
+            "inode": out_path.stat().st_ino,
+            "generation": generation,
+        }
+        try:
+            run_production_readiness.verify_completion_output(out_path, runner_expected)
+        except ValueError as exc:
+            if "not changed" not in str(exc) and "generation was reused" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a zero-return substitute that left the old proof in place")
+        runner_expected.pre_run_completion_proof_state = {"exists": False}
+        if (
+            proof.get("ok") is not True
+            or not out_path.exists()
+            or not detached_digest_path.exists()
+            or proof.get("proof_sha256") != verified_output_digest
+            or proof.get("proof_sha256_path") != str(detached_digest_path)
+            or detached_digest_path.read_text(encoding="ascii") != f"{verified_output_digest}\n"
+            or (persisted_proof.get("integrity_metadata") or {}).get("scope") != "checksum-only"
+            or (persisted_proof.get("integrity_metadata") or {}).get("independently_authenticated") is not False
+            or (persisted_proof.get("integrity_metadata") or {}).get(
+                "authenticity_requires_external_signature_or_checkpoint"
+            )
+            is not True
+            or (out_path.stat().st_mode & 0o777) != 0o600
+            or (detached_digest_path.stat().st_mode & 0o777) != 0o600
+        ):
             raise AssertionError(f"completion verifier did not write a valid proof: {proof}")
+        original_detached_digest = detached_digest_path.read_bytes()
+        detached_digest_path.write_text(f"{digest('f')}\n", encoding="ascii")
+        detached_digest_path.chmod(0o600)
+        try:
+            run_production_readiness.verify_completion_output(out_path)
+        except ValueError as exc:
+            if "does not match the completion proof bytes" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a tampered detached completion proof digest")
+        detached_digest_path.write_bytes(original_detached_digest)
+        detached_digest_path.chmod(0o600)
+        if run_production_readiness.verify_completion_output(out_path) != verified_output_digest:
+            raise AssertionError("runner did not accept the restored detached completion proof digest")
+        mutated_contract_path = tmp / "mutated-completion-proof.json"
+        mutated_contract = clone_document(persisted_proof)
+        mutated_contract["proof_path"] = str(mutated_contract_path)
+        mutated_contract["production_proxy_response_proof"]["principal_id"] = "agent:mutated"
+        mutated_generation = "c" * 32
+        mutated_contract_digest_path = run_production_readiness.completion_proof_digest_path(
+            mutated_contract_path,
+            mutated_generation,
+        )
+        mutated_contract["integrity_metadata"] = {
+            **mutated_contract["integrity_metadata"],
+            "generation": mutated_generation,
+            "detached_sha256_path": str(mutated_contract_digest_path),
+        }
+        verify_release_completion.write_output(mutated_contract_path, mutated_contract)
+        try:
+            run_production_readiness.verify_completion_output(
+                mutated_contract_path,
+                runner_expected,
+            )
+        except ValueError as exc:
+            if "proxy principal mismatch" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a checksum-valid mutated persisted proof contract")
+        stale_contract_path = tmp / "stale-completion-proof.json"
+        stale_contract = clone_document(persisted_proof)
+        stale_contract["proof_path"] = str(stale_contract_path)
+        stale_contract["generated_at_unix"] = runner_expected.runner_started_at_unix - 1
+        stale_generation = "b" * 32
+        stale_digest_path = run_production_readiness.completion_proof_digest_path(
+            stale_contract_path,
+            stale_generation,
+        )
+        stale_contract["integrity_metadata"] = {
+            **stale_contract["integrity_metadata"],
+            "generation": stale_generation,
+            "detached_sha256_path": str(stale_digest_path),
+        }
+        verify_release_completion.write_output(stale_contract_path, stale_contract)
+        try:
+            run_production_readiness.verify_completion_output(
+                stale_contract_path,
+                runner_expected,
+            )
+        except ValueError as exc:
+            if "predates the current readiness runner invocation" not in str(exc):
+                raise
+        else:
+            raise AssertionError("runner accepted a fresh-checksum proof forged with a stale timestamp")
+        committed_proof_bytes = out_path.read_bytes()
+        interrupted_proof = clone_document(persisted_proof)
+        interrupted_generation = "e" * 32
+        interrupted_digest_path = run_production_readiness.completion_proof_digest_path(
+            out_path,
+            interrupted_generation,
+        )
+        interrupted_proof["integrity_metadata"] = {
+            **interrupted_proof["integrity_metadata"],
+            "generation": interrupted_generation,
+            "detached_sha256_path": str(interrupted_digest_path),
+        }
+        try:
+            verify_release_completion.write_output(
+                out_path,
+                interrupted_proof,
+                fail_after_checksum_publish=True,
+            )
+        except RuntimeError as exc:
+            if "injected failure" not in str(exc):
+                raise
+        else:
+            raise AssertionError("completion output crash injection did not interrupt publication")
+        if (
+            out_path.read_bytes() != committed_proof_bytes
+            or not detached_digest_path.is_file()
+            or not interrupted_digest_path.is_file()
+            or run_production_readiness.verify_completion_output(out_path) != verified_output_digest
+        ):
+            raise AssertionError("interrupted checksum publication invalidated the prior committed proof")
+
+        for index in range(5):
+            stale_path = run_production_readiness.completion_proof_digest_path(
+                out_path,
+                f"{index:032x}",
+            )
+            stale_path.write_text(f"{digest('0')}\n", encoding="ascii")
+            stale_path.chmod(0o600)
+        replacement_proof = clone_document(persisted_proof)
+        replacement_generation = "d" * 32
+        replacement_digest_path = run_production_readiness.completion_proof_digest_path(
+            out_path,
+            replacement_generation,
+        )
+        replacement_proof["integrity_metadata"] = {
+            **replacement_proof["integrity_metadata"],
+            "generation": replacement_generation,
+            "detached_sha256_path": str(replacement_digest_path),
+        }
+        replacement_digest = verify_release_completion.write_output(
+            out_path,
+            replacement_proof,
+        )
+        retained_checksums = list(out_path.parent.glob(f"{out_path.name}.sha256.*"))
+        if (
+            len(retained_checksums) > 3
+            or replacement_digest_path not in retained_checksums
+            or run_production_readiness.verify_completion_output(out_path) != replacement_digest
+        ):
+            raise AssertionError("completion checksum generation cleanup violated the committed proof contract")
+
+        concurrent_template_path = tmp / "concurrent-proof-template.json"
+        concurrent_template_path.write_text(
+            json.dumps(persisted_proof, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        writer_code = (
+            "import json,sys; from pathlib import Path; "
+            "sys.path.insert(0, 'scripts'); import verify_release_completion as v; "
+            "template=Path(sys.argv[1]); out=Path(sys.argv[2]); generation=sys.argv[3]; "
+            "proof=json.loads(template.read_text(encoding='utf-8')); "
+            "proof['proof_path']=str(out); "
+            "sidecar=v.completion_proof_digest_path(out,generation); "
+            "proof['integrity_metadata']={**proof['integrity_metadata'],'generation':generation,"
+            "'detached_sha256_path':str(sidecar)}; v.write_output(out,proof)"
+        )
+        writers = [
+            subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    writer_code,
+                    str(concurrent_template_path),
+                    str(out_path),
+                    f"{index + 16:032x}",
+                ],
+                cwd=ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            for index in range(4)
+        ]
+        writer_failures = []
+        for writer in writers:
+            stdout, stderr = writer.communicate(timeout=30)
+            if writer.returncode != 0:
+                writer_failures.append((writer.returncode, stdout, stderr))
+        if writer_failures:
+            raise AssertionError(f"concurrent completion writers failed: {writer_failures}")
+        concurrent_proof = json.loads(out_path.read_text(encoding="utf-8"))
+        concurrent_generation = concurrent_proof["integrity_metadata"]["generation"]
+        concurrent_sidecar = run_production_readiness.completion_proof_digest_path(
+            out_path,
+            concurrent_generation,
+        )
+        if not concurrent_sidecar.is_file():
+            raise AssertionError("a concurrently committed completion proof lost its checksum generation")
+        run_production_readiness.verify_completion_output(out_path)
         if (
             proof.get("apiVersion") != "serverware.completionProof/v3"
             or proof.get("kind") != "ServerwarePreEnclaveReadiness"

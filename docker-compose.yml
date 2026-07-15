@@ -97,9 +97,9 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:d889b5588af206788f0b64f1396e15ea893a747253973c85466807d9d5326e82
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:5c771536b969beb557bf620c4936770206ef7ad896c4f5e466e8397cfc4c7e56
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - serverware-data:/data
       - ${SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/serverware-google-oauth-client-secret:ro
@@ -146,7 +146,7 @@ services:
       SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED: "1"
       SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH: /anchors/managed-transparency-log.jsonl
     ports:
-      - "9100:9100"
+      - "127.0.0.1:9100:9100"
     volumes:
       - serverware-audit-anchors:/anchors
     tmpfs:
@@ -262,8 +262,8 @@ services:
       SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND: /usr/local/bin/serverware-response-proof-fixture
       SERVERWARE_DATA_PLANE_INSTANCE_ID: spiffe://development.serverware/decision-gate/local
     ports:
-      - "8080:9090"
-      - "9090:9090"
+      - "127.0.0.1:8080:9090"
+      - "127.0.0.1:9090:9090"
       - "127.0.0.1:9091:9091"
     volumes:
       - serverware-data:/data:ro

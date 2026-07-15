@@ -5,9 +5,18 @@ TMP_DIR="${TMP_DIR:-.tmp}"
 mkdir -p "$TMP_DIR"
 collector_key="$TMP_DIR/dev-proof-collector-key.pem"
 collector_public_der="$TMP_DIR/dev-proof-collector-public.der"
+stream_dir="$TMP_DIR/stream-proof"
+stream_proof="$stream_dir/dev-streaming-proxy-response-proof.json"
+stream_body="$stream_dir/dev-streaming-body.bin"
+stream_summary="$TMP_DIR/dev-streaming-proof-summary.json"
+mkdir -p "$stream_dir"
+chmod 0700 "$stream_dir"
 rm -f \
   "$TMP_DIR/dev-proxy-response-proof.json" \
   "$TMP_DIR/dev-proxy-response-proof-summary.json" \
+  "$stream_proof" \
+  "$stream_body" \
+  "$stream_summary" \
   "$collector_key" \
   "$collector_public_der"
 openssl genpkey -algorithm ED25519 -out "$collector_key" >/dev/null 2>&1
@@ -224,10 +233,22 @@ canonical_upstream = {
 assert upstream_response["canonical_digest"] == "sha256:" + hashlib.sha256(
     json.dumps(canonical_upstream, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode()
 ).hexdigest(), upstream_response
+assert "client_request" not in capture, capture
 canonical_client_request = json.dumps(
-    capture["client_request"], sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    {
+        "apiVersion": "serverware.clientProofRequest/v1",
+        "method": "GET",
+        "scheme": "https",
+        "authority": "demo-upstream:8443",
+        "path": "/echo",
+        "query": [],
+        "headers": {},
+        "body_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
+    },
+    sort_keys=True,
+    separators=(",", ":"),
+    ensure_ascii=True,
 ).encode()
-assert capture["client_request"]["apiVersion"] == "serverware.clientProofRequest/v1", capture
 assert capture["client_request_digest"] == "sha256:" + hashlib.sha256(canonical_client_request).hexdigest(), capture
 assert summary["client_request_digest"] == capture["client_request_digest"], summary
 assert "server_statement_sha256" not in proof, proof
@@ -318,6 +339,134 @@ expected_claims = {
 assert claims == expected_claims, (claims, expected_claims)
 PY
 
+docker compose run --rm --no-deps \
+  --user "$(id -u):$(id -g)" \
+  -v "$PWD/$TMP_DIR:/proof" \
+  --entrypoint /usr/local/bin/serverware-proof-client \
+  decision-gate-rs \
+  --stream \
+  --proxy decision-gate-rs:9090 \
+  --url 'https://demo-upstream:8443/stream-bytes?chunks=2&chunkSize=16' \
+  --ca /data/decision-gate-ca-cert.pem \
+  --out /proof/stream-proof/dev-streaming-proxy-response-proof.json \
+  --body-out /proof/stream-proof/dev-streaming-body.bin \
+  --collector-key /proof/dev-proof-collector-key.pem \
+  --expected-principal-id agent:demo \
+  --proxy-header "X-Serverware-Agent: demo-agent" \
+  --header "X-Serverware-Agent: demo-agent" \
+  --max-stream-bytes 1048576 \
+  > "$stream_summary"
+
+docker compose run --rm --no-deps -T \
+  -v "$PWD/$TMP_DIR:/proof:ro" \
+  -v "$PWD/schemas:/proof-schemas:ro" \
+  --entrypoint python \
+  serverware - \
+  /proof/stream-proof/dev-streaming-proxy-response-proof.json \
+  /proof-schemas/streaming-response-proof.v1.schema.json <<'PY'
+import json
+import sys
+
+import jsonschema
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    proof = json.load(handle)
+with open(sys.argv[2], "r", encoding="utf-8") as handle:
+    schema = json.load(handle)
+jsonschema.Draft202012Validator.check_schema(schema)
+jsonschema.validate(proof, schema)
+PY
+
+python3 - "$stream_proof" "$stream_body" "$stream_summary" <<'PY'
+import hashlib
+import json
+import sys
+
+proof_path, body_path, summary_path = sys.argv[1:]
+with open(proof_path, "rb") as handle:
+    proof_bytes = handle.read()
+proof = json.loads(proof_bytes)
+with open(body_path, "rb") as handle:
+    body = handle.read()
+with open(summary_path, "r", encoding="utf-8") as handle:
+    summary = json.load(handle)
+
+assert summary["ok"] is True and summary["stream_verified"] is True, summary
+assert summary["proof_sha256"] == "sha256:" + hashlib.sha256(proof_bytes).hexdigest(), summary
+assert summary["body_bytes"] == len(body) == 32, summary
+assert summary["body_sha256"] == "sha256:" + hashlib.sha256(body).hexdigest(), summary
+assert proof["apiVersion"] == "serverware.streamingProxyResponseProof/v1", proof
+assert proof["kind"] == "ServerwareStreamingProxyResponseProof", proof
+capture = proof["external_capture"]
+statement = proof["streaming_response_statement"]
+assert capture["apiVersion"] == "serverware.streamingProxyResponseCapture/v1", capture
+assert statement["apiVersion"] == "serverware.streamingResponseStatement/v1", statement
+assert "client_request" not in capture, capture
+assert "authorization_binding" not in capture, capture
+binding_commitment = capture["authorization_binding_commitment"]
+assert binding_commitment == statement["authorization_binding_validation"]["binding_commitment"], binding_commitment
+assert "operation_context" not in binding_commitment, binding_commitment
+assert binding_commitment["operation_context_digest"].startswith("sha256:"), binding_commitment
+canonical_client_request = json.dumps(
+    {
+        "apiVersion": "serverware.streamingClientProofRequest/v1",
+        "method": "GET",
+        "scheme": "https",
+        "authority": "demo-upstream:8443",
+        "path": "/stream-bytes",
+        "query": [["chunkSize", "16"], ["chunks", "2"]],
+        "headers": {},
+        "body_sha256": "sha256:" + hashlib.sha256(b"").hexdigest(),
+    },
+    sort_keys=True,
+    separators=(",", ":"),
+    ensure_ascii=True,
+).encode()
+assert capture["client_request_digest"] == "sha256:" + hashlib.sha256(canonical_client_request).hexdigest(), capture
+for field in (
+    "client_nonce",
+    "client_request_digest",
+    "principal_id",
+    "route_id",
+    "request_digest",
+    "operation_digest",
+    "release_authority",
+    "control_plane_authorization_receipt",
+    "control_plane_authorization_receipt_sha256",
+    "upstream_response",
+    "released_response",
+    "tls_channel_binding",
+):
+    assert capture[field] == statement[field], (field, capture[field], statement[field])
+authority = capture["release_authority"]
+assert authority["authority_mode"] == "atomic", authority
+assert authority["authorization_state_at_upstream_dispatch"] == "dispatching", authority
+assert authority["credential_ref"] is None and authority["credential_version"] == 0, authority
+assert authority["grant_id"] is None and authority["approval_id"] is None, authority
+released = capture["released_response"]
+assert released["completion"] == "normal-eof", released
+assert released["framing"] == "http1.1-chunked-trailers", released
+assert released["body_bytes"] == len(body), released
+assert released["body_digest"] == summary["body_sha256"], released
+assert released["trailer_names"] == [
+    "X-Serverware-Stream-Proof-B64",
+    "X-Serverware-Stream-Proof-SHA256",
+], released
+assert released["selected_wire_headers"] == {
+    "connection": "close",
+    "content-type": "application/octet-stream",
+    "trailer": "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256",
+    "transfer-encoding": "chunked",
+}, released
+upstream = capture["upstream_response"]
+assert upstream["body_bytes"] == len(body), upstream
+assert upstream["body_digest"] == summary["body_sha256"], upstream
+assert capture["tls_channel_binding"]["exporter_label"] == "EXPORTER-Serverware-Proxy-Stream-v1", capture
+assert statement["server_instance"]["id"] == summary["server_instance_id"], statement
+assert proof["vendor_tee"]["platform"] == "none-dev", proof
+assert proof["vendor_tee"]["provider"] == "development-fixture", proof
+PY
+
 nonce="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 status="$(curl -sS -o "$TMP_DIR/response-proof-unsafe.json" -w '%{http_code}' \
   --max-time 10 \
@@ -339,4 +488,4 @@ assert status == 400, (status, payload)
 assert payload == {"error": "response_proof_requires_safe_method"}, payload
 PY
 
-printf '%s\n' '{"ok":true,"response_proof_capture":"pass"}'
+printf '%s\n' '{"buffered_response_proof_capture":"pass","ok":true,"streaming_response_proof_capture":"pass"}'

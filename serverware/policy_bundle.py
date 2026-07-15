@@ -1806,6 +1806,7 @@ def _validate_optional_response_release_contract(
 
 def _validate_signed_npm_publish_response_contract(
     route_id: str,
+    host: str,
     response: dict[str, Any],
     constraints: tuple[dict[str, Any], ...],
 ) -> None:
@@ -1821,12 +1822,31 @@ def _validate_signed_npm_publish_response_contract(
             "capped at 65536 bytes"
         )
 
+    publish_response_constraints = [
+        constraint
+        for constraint in constraints
+        if constraint.get("type") in {"responseBinding", "responseJson"}
+        and "npm.publish" in (constraint.get("operations") or [])
+    ]
     response_bindings = [
         constraint
         for constraint in constraints
         if constraint.get("type") == "responseBinding"
         and constraint.get("operations") == ["npm.publish"]
     ]
+    response_json_constraints = [
+        constraint
+        for constraint in constraints
+        if constraint.get("type") == "responseJson"
+        and constraint.get("operations") == ["npm.publish"]
+    ]
+    if (
+        host == "registry.npmjs.org"
+        and not publish_response_constraints
+        and not response_bindings
+        and not response_json_constraints
+    ):
+        return
     if not response_bindings:
         raise PolicyBundleError(
             f"route {route_id} signed npm.publish requires a responseBinding scoped only to npm.publish"
@@ -1845,12 +1865,6 @@ def _validate_signed_npm_publish_response_contract(
                 "contentTypes must be exactly application/json"
             )
 
-    response_json_constraints = [
-        constraint
-        for constraint in constraints
-        if constraint.get("type") == "responseJson"
-        and constraint.get("operations") == ["npm.publish"]
-    ]
     if not response_json_constraints:
         raise PolicyBundleError(
             f"route {route_id} signed npm.publish requires a responseJson success constraint "
@@ -1872,6 +1886,7 @@ def _validate_signed_npm_publish_response_contract(
 
 def _validate_adapter_security_invariants(
     route_id: str,
+    host: str,
     adapter_type: str,
     adapter_config: dict[str, Any],
     credential_ref: str | None,
@@ -1988,7 +2003,7 @@ def _validate_adapter_security_invariants(
         if response.get("mode") != "json":
             raise PolicyBundleError(f"route {route_id} npm writes require a bounded json success response")
         if signed_policy and "publish" in operations:
-            _validate_signed_npm_publish_response_contract(route_id, response, constraints)
+            _validate_signed_npm_publish_response_contract(route_id, host, response, constraints)
         authn = ((jit.get("approvers") or {}).get("authn") or {}) if isinstance(jit, dict) else {}
         authenticator_classes = set(authn.get("allowedAuthenticatorClasses") or [])
         if (
@@ -2327,6 +2342,7 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
         )
         _validate_adapter_security_invariants(
             route_id,
+            str(match.get("host") or ""),
             adapter_type,
             adapter_config,
             credential_ref,

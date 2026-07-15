@@ -15,6 +15,7 @@ import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import quote
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -357,9 +358,12 @@ def _assert_public_credential(
     walk(credential)
 
 
-def _wait_for_portal(page: Any, public_url: str) -> None:
+def _wait_for_portal(
+    page: Any, public_url: str, *, expected_url: str | None = None
+) -> None:
+    expected = expected_url or (public_url + "/")
     page.wait_for_url(
-        re.compile(rf"^{re.escape(public_url)}/(?:\?.*)?$"), timeout=DEFAULT_TIMEOUT_MS
+        re.compile(rf"^{re.escape(expected)}(?:\?.*)?$"), timeout=DEFAULT_TIMEOUT_MS
     )
     page.locator("#oauth-form").wait_for(state="visible", timeout=DEFAULT_TIMEOUT_MS)
     page.wait_for_function(
@@ -812,6 +816,47 @@ def _capture_mobile_screenshot(page: Any, selector: str, destination: Path) -> N
     )
 
 
+def _create_browser_jit_approval() -> dict[str, Any]:
+    from serverware import db
+    from serverware.policy_bundle import get_policy_snapshot
+
+    snapshot = get_policy_snapshot()
+    _require(snapshot is not None, "demo policy is unavailable for approval review")
+    credential = db.get_credential("cred-demo-bearer")
+    _require(credential is not None, "demo credential is unavailable for approval review")
+    return db.ensure_jit_approval_request(
+        route_id="demo.npm.publish.jit",
+        method="PUT",
+        url="https://demo-upstream:8443/npm/@scope%2Fbrowser-package",
+        principal_id="agent:demo",
+        credential_id=credential["id"],
+        credential_version=int(credential["credential_version"]),
+        policy_hash=snapshot.hash,
+        request_digest="sha256:" + "a" * 64,
+        operation_digest="sha256:" + "b" * 64,
+        canonical_request={
+            "principal": "agent:demo",
+            "request": {
+                "method": "PUT",
+                "body_sha256": "sha256:" + "c" * 64,
+            },
+            "operation": {
+                "type": "npm.publish",
+                "packageName": "@scope/browser-package",
+                "packageVersion": "1.2.3",
+                "tarballIntegrity": "sha512-browser-fixture",
+            },
+        },
+        redacted_display={
+            "package": "@scope/browser-package",
+            "version": "1.2.3",
+        },
+        pending_ttl_seconds=300,
+        grant_ttl_seconds=30,
+        grant_max_uses=1,
+    )
+
+
 def _assert_storage_and_disk_do_not_leak_tokens(
     page: Any,
     context: Any,
@@ -1046,6 +1091,67 @@ def _run_browser_journey(
                 )
                 page.set_viewport_size({"width": 1440, "height": 1100})
 
+            approval = _create_browser_jit_approval()
+            approval_url = f"{public_url}/approvals/{quote(approval['id'], safe='')}"
+            approval_response = page.goto(approval_url, wait_until="domcontentloaded")
+            _require(
+                approval_response is not None and approval_response.status == 200,
+                "approval deep link did not return the operator portal",
+            )
+            page.locator("#admin-token").fill(ADMIN_TOKEN)
+            page.locator("#admin-token").dispatch_event("change")
+            _wait_for_portal(page, public_url, expected_url=approval_url)
+            page.wait_for_function(
+                "(id) => state.approvalReview?.id === id",
+                arg=approval["id"],
+                timeout=DEFAULT_TIMEOUT_MS,
+            )
+            page.wait_for_function(
+                """
+                (id) => {
+                  const text = document.querySelector('#approval-review')?.textContent || '';
+                  return text.includes(id) && text.includes('Request digest');
+                }
+                """,
+                arg=approval["id"],
+                timeout=DEFAULT_TIMEOUT_MS,
+            )
+            review_panel = page.locator("#approval-review")
+            _require(review_panel.is_visible(), "approval review panel is not visible")
+            review_text = review_panel.text_content() or ""
+            for marker in (
+                approval["id"],
+                "demo.npm.publish.jit",
+                "Request digest",
+                "Operation digest",
+                "@scope/browser-package",
+            ):
+                _require(marker in review_text, f"approval review omitted {marker!r}")
+            _require(
+                page.evaluate("document.activeElement?.id") == "approval-review",
+                "approval deep link did not focus the canonical review document",
+            )
+            _assert_no_horizontal_overflow(page, label="desktop approval review")
+            if screenshots_dir is not None:
+                _capture_screenshot(
+                    page,
+                    "#approval-review",
+                    screenshots_dir / "operator-portal-approval.png",
+                )
+                page.set_viewport_size({"width": 390, "height": 844})
+                review_panel.scroll_into_view_if_needed()
+                page.wait_for_timeout(150)
+                page.locator("#approval-review").screenshot(
+                    path=str(screenshots_dir / "operator-portal-approval-mobile.png"),
+                    type="png",
+                )
+                page.set_viewport_size({"width": 1440, "height": 1100})
+
+            page.goto(public_url + "/", wait_until="domcontentloaded")
+            page.locator("#admin-token").fill(ADMIN_TOKEN)
+            page.locator("#admin-token").dispatch_event("change")
+            _wait_for_portal(page, public_url)
+
             google_credential = _connect_oauth(
                 page,
                 context,
@@ -1189,7 +1295,7 @@ def main() -> None:
     parser.add_argument(
         "--screenshots-dir",
         type=Path,
-        help="refresh the canonical desktop, mobile, OAuth, and policy screenshots",
+        help="refresh the canonical portal, approval, OAuth, and policy screenshots",
     )
     args = parser.parse_args()
     screenshots_dir = args.screenshots_dir.resolve() if args.screenshots_dir else None

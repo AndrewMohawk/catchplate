@@ -3,18 +3,25 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import fcntl
 import hashlib
 import hmac
+import importlib
+import io
 import json
+import math
 import os
 import platform
 import re
+import secrets
 import stat
 import subprocess
 import sys
 import tempfile
+import tarfile
 import time
+import types
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +38,59 @@ import production_release_input_preflight
 import run_production_readiness
 import verify_production_policy_identity
 from serverware.policy_bundle import PolicySnapshot, compile_policy_bundle
+
+
+_MEASURED_PREFLIGHT_MODULE: types.ModuleType | None = None
+_MEASURED_PREFLIGHT_MODULE_SHA256: str | None = None
+
+
+def load_production_host_preflight_module(
+    production_env: dict[str, str],
+    *,
+    final: bool,
+    after_open: Any | None = None,
+) -> types.ModuleType:
+    global _MEASURED_PREFLIGHT_MODULE, _MEASURED_PREFLIGHT_MODULE_SHA256
+    if not final:
+        return importlib.import_module("production_host_preflight")
+    setting = run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV
+    expected_digest = production_env.get(setting)
+    if not isinstance(expected_digest, str) or run_production_readiness.SHA256_RE.fullmatch(
+        expected_digest
+    ) is None:
+        raise ValueError(f"{setting} must be sha256:<64 lowercase hex>")
+    if (
+        _MEASURED_PREFLIGHT_MODULE is not None
+        and _MEASURED_PREFLIGHT_MODULE_SHA256 == expected_digest
+    ):
+        return _MEASURED_PREFLIGHT_MODULE
+    path = (Path(__file__).resolve().parent / "production_host_preflight.py").resolve()
+    measured = run_production_readiness.open_measured_script(path, expected_digest, setting)
+    try:
+        if after_open is not None:
+            after_open(measured)
+        os.lseek(measured.fd, 0, os.SEEK_SET)
+        data = run_production_readiness.read_fd_bytes(
+            measured.fd,
+            measured.metadata,
+            "measured production host preflight module",
+            max_bytes=run_production_readiness.MAX_EXECUTABLE_BYTES,
+        )
+        module_name = "_serverware_measured_production_host_preflight"
+        module = types.ModuleType(module_name)
+        module.__file__ = str(path)
+        module.__package__ = None
+        sys.modules[module_name] = module
+        try:
+            exec(compile(data, str(path), "exec"), module.__dict__, module.__dict__)
+        except Exception:
+            sys.modules.pop(module_name, None)
+            raise
+    finally:
+        measured.close()
+    _MEASURED_PREFLIGHT_MODULE = module
+    _MEASURED_PREFLIGHT_MODULE_SHA256 = expected_digest
+    return module
 
 
 REQUIRED_READINESS_CHECKS = {
@@ -130,6 +190,30 @@ SECRET_FIELD_NAMES = {
 FINAL_EVIDENCE_MAX_BYTES = 4 * 1024 * 1024
 FINAL_TRUST_ROOT_MAX_BYTES = 64 * 1024
 POLICY_BUNDLE_MAX_BYTES = 8 * 1024 * 1024
+COMPLETION_INPUT_MAX_BYTES = 64 * 1024 * 1024
+ENV_INPUT_MAX_BYTES = 8 * 1024 * 1024
+COMPOSE_INPUT_MAX_BYTES = 16 * 1024 * 1024
+PROXY_EXPECTED_DIGEST_ENV_KEYS = {
+    "proxy_client_request_digest": "SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST",
+    "proxy_request_digest": "SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST",
+    "proxy_operation_digest": "SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST",
+}
+PROXY_PROOF_MAX_AGE_ENV_KEY = "SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS"
+COMPLETION_P99_LIMIT_ENV_KEY = "SERVERWARE_COMPLETION_P99_LIMIT_MS"
+DOCKER_EXECUTABLE_ENV_KEY = run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV
+DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY = (
+    run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV
+)
+DOCKER_COMPOSE_PLUGIN_SHA256_ENV_KEY = run_production_readiness.DOCKER_COMPOSE_PLUGIN_SHA256_ENV
+DOCKER_UNIX_SOCKET_ENV_KEY = run_production_readiness.DOCKER_UNIX_SOCKET_ENV
+DOCKER_DAEMON_ID_ENV_KEY = run_production_readiness.DOCKER_DAEMON_ID_ENV
+PREFLIGHT_MAX_AGE_ENV_KEY = run_production_readiness.PRODUCTION_HOST_PREFLIGHT_MAX_AGE_ENV
+PREFLIGHT_SIGNING_PUBLIC_KEY_ENV_KEY = (
+    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_PUBLIC_KEY_ENV
+)
+PREFLIGHT_SIGNING_KEY_ID_ENV_KEY = (
+    run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SIGNING_KEY_ID_ENV
+)
 
 
 @dataclass(frozen=True)
@@ -137,6 +221,43 @@ class FileSnapshot:
     path: Path
     data: bytes
     sha256: str
+    metadata: os.stat_result
+
+
+class InputSnapshots:
+    def __init__(self) -> None:
+        self.by_key: dict[str, FileSnapshot] = {}
+        self._by_path: dict[str, FileSnapshot] = {}
+
+    def capture(self, key: str, path: Path, label: str, *, max_bytes: int) -> FileSnapshot:
+        absolute = os.path.abspath(os.fspath(path))
+        snapshot = self._by_path.get(absolute)
+        if snapshot is None:
+            snapshot = snapshot_regular_file(path, label, max_bytes=max_bytes)
+            self._by_path[absolute] = snapshot
+        else:
+            require(len(snapshot.data) <= max_bytes, f"{label} exceeds the {max_bytes}-byte size limit")
+        self.by_key[key] = snapshot
+        return snapshot
+
+    def capture_many(
+        self,
+        paths: dict[str, Path],
+        limits: dict[str, tuple[str, int]],
+    ) -> dict[str, FileSnapshot]:
+        grouped: dict[str, list[tuple[str, Path, str, int]]] = {}
+        for key, path in paths.items():
+            label, max_bytes = limits[key]
+            grouped.setdefault(os.path.abspath(os.fspath(path)), []).append(
+                (key, path, label, max_bytes)
+            )
+        for entries in grouped.values():
+            strictest = min(entry[3] for entry in entries)
+            snapshot = self.capture(entries[0][0], entries[0][1], entries[0][2], max_bytes=strictest)
+            for key, _path, label, max_bytes in entries:
+                require(len(snapshot.data) <= max_bytes, f"{label} exceeds the {max_bytes}-byte size limit")
+                self.by_key[key] = snapshot
+        return self.by_key
 
 
 def canonical_json(value: Any) -> str:
@@ -388,15 +509,12 @@ def reject_duplicate_json_object_keys(pairs: list[tuple[str, Any]]) -> dict[str,
 def snapshot_regular_file(path: Path, label: str, *, max_bytes: int) -> FileSnapshot:
     require(max_bytes > 0, f"{label} snapshot size limit is invalid")
     require(hasattr(os, "O_NOFOLLOW"), f"{label} cannot be opened safely on this platform")
-    try:
-        metadata = path.lstat()
-    except OSError as exc:
-        raise ValueError(f"{label} artifact does not exist or cannot be inspected: {path}") from exc
-    require(not stat.S_ISLNK(metadata.st_mode), f"{label} must not be a symlink: {path}")
     flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise ValueError(f"{label} must not be a symlink: {path}") from exc
         raise ValueError(f"{label} could not be opened without following symlinks: {path}") from exc
     try:
         opened_metadata = os.fstat(descriptor)
@@ -434,7 +552,12 @@ def snapshot_regular_file(path: Path, label: str, *, max_bytes: int) -> FileSnap
         )
     finally:
         os.close(descriptor)
-    return FileSnapshot(path=path, data=data, sha256=sha256_prefixed_bytes(data))
+    return FileSnapshot(
+        path=path,
+        data=data,
+        sha256=sha256_prefixed_bytes(data),
+        metadata=opened_metadata,
+    )
 
 
 def snapshot_text(snapshot: FileSnapshot, label: str, *, encoding: str) -> str:
@@ -545,14 +668,66 @@ def load_json_snapshot(snapshot: FileSnapshot, label: str) -> dict[str, Any]:
     return load_json_bytes(snapshot.data, snapshot.path, label)
 
 
-def load_json(path: Path, label: str) -> dict[str, Any]:
-    if not path.exists():
-        raise ValueError(f"{label} artifact does not exist: {path}")
-    return load_json_bytes(path.read_bytes(), path, label)
+def load_production_env_snapshot(snapshot: FileSnapshot) -> dict[str, str]:
+    text = snapshot_text(snapshot, "production readiness env", encoding="utf-8")
+    loaded: dict[str, str] = {}
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        parsed = run_production_readiness.parse_env_assignment(raw, lineno)
+        if parsed is None:
+            continue
+        key, value = parsed
+        require(key not in loaded, f"production readiness env line {lineno} duplicates {key}")
+        require(
+            run_production_readiness.PLACEHOLDER_RE.search(value) is None,
+            f"production readiness env line {lineno} contains a placeholder value",
+        )
+        require(
+            run_production_readiness.EXAMPLE_DOMAIN_RE.search(value) is None,
+            f"production readiness env line {lineno} contains an example placeholder domain",
+        )
+        loaded[key] = value
+    require(bool(loaded), "production readiness env is empty")
+    return loaded
 
 
-def file_digest(path: Path) -> str:
-    return sha256_prefixed_bytes(path.read_bytes())
+def load_images_env_snapshot(snapshot: FileSnapshot) -> tuple[str, list[dict[str, str]]]:
+    text = snapshot_text(snapshot, "production images env", encoding="utf-8")
+    loaded: dict[str, str] = {}
+    for lineno, raw in enumerate(text.splitlines(), start=1):
+        parsed = run_production_readiness.parse_env_assignment(raw, lineno)
+        if parsed is None:
+            continue
+        key, value = parsed
+        require(key not in loaded, f"production images env line {lineno} duplicates {key}")
+        loaded[key] = value
+    require(
+        sorted(loaded) == [merge_production_images_env.KEY],
+        f"production images env must contain only {merge_production_images_env.KEY}",
+    )
+    value = loaded[merge_production_images_env.KEY]
+    return value, merge_production_images_env.validate_production_images(value)
+
+
+def materialize_snapshots(
+    snapshots: dict[str, FileSnapshot],
+    keys: tuple[str, ...],
+) -> tuple[tempfile.TemporaryDirectory[str], dict[str, Path]]:
+    temporary = tempfile.TemporaryDirectory(prefix="serverware-completion-inputs-")
+    directory = Path(temporary.name)
+    os.chmod(directory, 0o700)
+    paths: dict[str, Path] = {}
+    for index, key in enumerate(keys):
+        destination = directory / f"{index:02d}-{key}"
+        descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(descriptor, "wb", closefd=False) as handle:
+                handle.write(snapshots[key].data)
+                handle.flush()
+                os.fsync(handle.fileno())
+        finally:
+            os.close(descriptor)
+        paths[key] = destination
+    return temporary, paths
 
 
 def semantic_result_digest(document: dict[str, Any]) -> str:
@@ -562,12 +737,20 @@ def semantic_result_digest(document: dict[str, Any]) -> str:
     return sha256_prefixed_json(payload)
 
 
-def kms_ciphertext_blob(config: dict[str, Any], material: str) -> bytes:
+def kms_ciphertext_blob(
+    config: dict[str, Any],
+    material: str,
+    snapshots: InputSnapshots,
+) -> bytes:
     path = config.get("ciphertext_blob_path") or config.get("ciphertextBlobPath")
     if isinstance(path, str) and path:
-        blob_path = Path(path)
-        require(blob_path.is_file(), f"current KMS material {material} ciphertext blob path is not a file")
-        return blob_path.read_bytes()
+        snapshot = snapshots.capture(
+            f"kms_ciphertext_{material}",
+            Path(path),
+            f"current KMS material {material} ciphertext blob",
+            max_bytes=COMPLETION_INPUT_MAX_BYTES,
+        )
+        return snapshot.data
     raw = config.get("ciphertext_blob_b64") or config.get("ciphertextBlobB64")
     require(isinstance(raw, str) and raw, f"current KMS material {material} is missing ciphertext blob")
     try:
@@ -576,8 +759,11 @@ def kms_ciphertext_blob(config: dict[str, Any], material: str) -> bytes:
         raise ValueError(f"current KMS material {material} ciphertext blob is invalid base64") from exc
 
 
-def current_kms_material_bindings(path: Path) -> dict[str, dict[str, str]]:
-    parsed = load_json(path, "current KMS materials")
+def current_kms_material_bindings(
+    snapshot: FileSnapshot,
+    snapshots: InputSnapshots,
+) -> dict[str, dict[str, str]]:
+    parsed = load_json_snapshot(snapshot, "current KMS materials")
     assert_no_secret_fields(parsed)
     require(isinstance(parsed, dict), "current KMS materials file must be a JSON object")
     material_names = set(parsed)
@@ -595,7 +781,9 @@ def current_kms_material_bindings(path: Path) -> dict[str, dict[str, str]]:
         require(isinstance(context, dict), f"current KMS material {material} encryption context must be an object")
         bindings[material] = {
             "key_id_sha256": sha256_prefixed_bytes(key_id.encode("utf-8")),
-            "ciphertext_blob_sha256": sha256_prefixed_bytes(kms_ciphertext_blob(config, material)),
+            "ciphertext_blob_sha256": sha256_prefixed_bytes(
+                kms_ciphertext_blob(config, material, snapshots)
+            ),
             "encryption_context_sha256": sha256_prefixed_json(context),
         }
     return bindings
@@ -2419,23 +2607,121 @@ def nested(value: dict[str, Any], *keys: str) -> Any:
     return current
 
 
-def require_preflight_file_digest(preflight: dict[str, Any], paths: dict[str, Path], artifact: str, *keys: str) -> None:
+def require_preflight_file_digest(
+    preflight: dict[str, Any],
+    snapshots: dict[str, FileSnapshot],
+    artifact: str,
+    *keys: str,
+) -> None:
     expected = nested(preflight, "checks", "release_artifacts", *keys)
     require(
-        expected == file_digest(paths[artifact]),
+        expected == snapshots[artifact].sha256,
         f"production host preflight {artifact} digest does not match current artifact",
     )
+
+
+def verify_preflight_authenticity(
+    preflight: dict[str, Any],
+    *,
+    trusted_public_key: FileSnapshot,
+    expected_key_id: str,
+    max_age_seconds: int,
+) -> dict[str, Any]:
+    require(1 <= max_age_seconds <= 900, "production host preflight max age is invalid")
+    authenticity = preflight.get("authenticity")
+    require(isinstance(authenticity, dict), "final production host preflight is unsigned")
+    require_exact_keys(
+        authenticity,
+        {"apiVersion", "algorithm", "key_id", "payload_sha256", "signed_at_unix", "signature"},
+        "production host preflight authenticity",
+    )
+    require(
+        authenticity.get("apiVersion") == "serverware.productionHostPreflightSignature/v1"
+        and authenticity.get("algorithm") == "ed25519",
+        "production host preflight authenticity scheme is invalid",
+    )
+    key_id = require_sha256(authenticity.get("key_id"), "production host preflight signing key ID")
+    require(
+        hmac.compare_digest(key_id, require_sha256(expected_key_id, "expected preflight signing key ID")),
+        "production host preflight signing key ID does not match the selected trust root",
+    )
+    public_key_pem = snapshot_text(
+        trusted_public_key,
+        "production host preflight signing public key",
+        encoding="ascii",
+    )
+    require(
+        hmac.compare_digest(release_public_key_id(public_key_pem), key_id),
+        "production host preflight signing public key bytes do not match the expected key ID",
+    )
+    payload_document = dict(preflight)
+    payload_document.pop("authenticity", None)
+    payload = canonical_json(payload_document).encode("utf-8")
+    require(
+        hmac.compare_digest(
+            require_sha256(authenticity.get("payload_sha256"), "production host preflight payload digest"),
+            sha256_prefixed_bytes(payload),
+        ),
+        "production host preflight signed payload digest mismatch",
+    )
+    verify_ed25519(
+        public_key_pem,
+        str(authenticity.get("signature")),
+        payload,
+        "production host preflight",
+    )
+    now = int(time.time())
+    generated_at = preflight.get("generated_at_unix")
+    signed_at = authenticity.get("signed_at_unix")
+    require(isinstance(generated_at, int) and generated_at > 0, "production host preflight generated_at_unix is invalid")
+    require(isinstance(signed_at, int) and signed_at > 0, "production host preflight signed_at_unix is invalid")
+    for timestamp, label in ((generated_at, "generated"), (signed_at, "signed")):
+        require(timestamp <= now + PROXY_PROOF_FUTURE_SKEW_SECONDS, f"production host preflight was {label} in the future")
+        require(now - timestamp <= max_age_seconds, f"production host preflight {label} timestamp is stale")
+    require(abs(signed_at - generated_at) <= 5, "production host preflight signing time is not bound to generation")
+    return {
+        "verified": True,
+        "key_id": key_id,
+        "payload_sha256": authenticity["payload_sha256"],
+        "generated_at_unix": generated_at,
+        "signed_at_unix": signed_at,
+        "max_age_seconds": max_age_seconds,
+    }
 
 
 def verify_production_host_preflight(
     preflight: dict[str, Any],
     paths: dict[str, Path],
+    snapshots: InputSnapshots,
     readiness_summary: dict[str, Any],
+    *,
+    verification_mode: str = "readiness",
+    preflight_signing_public_key: FileSnapshot | None = None,
+    preflight_signing_key_id: str | None = None,
+    preflight_max_age_seconds: int | None = None,
 ) -> dict[str, Any]:
+    production_env_snapshot = load_production_env_snapshot(
+        snapshots.by_key["production_readiness_env"]
+    )
+    preflight_module = load_production_host_preflight_module(
+        production_env_snapshot,
+        final=verification_mode == "final",
+    )
     assert_no_secret_fields(preflight)
     require(preflight.get("apiVersion") == "serverware.productionHostPreflight/v1", "production host preflight has wrong apiVersion")
     require(preflight.get("ok") is True, "production host preflight is not ok")
     require(not preflight.get("failures"), "production host preflight includes failures")
+    preflight_authenticity: dict[str, Any] | None = None
+    if verification_mode == "final":
+        require(preflight_signing_public_key is not None, "final completion is missing the preflight signing trust root snapshot")
+        require(isinstance(preflight_signing_key_id, str), "final completion is missing the preflight signing key ID")
+        require(isinstance(preflight_max_age_seconds, int), "final completion is missing the preflight freshness policy")
+        preflight_authenticity = verify_preflight_authenticity(
+            preflight,
+            trusted_public_key=preflight_signing_public_key,
+            expected_key_id=preflight_signing_key_id,
+            max_age_seconds=preflight_max_age_seconds,
+        )
     checks = preflight.get("checks") if isinstance(preflight.get("checks"), dict) else {}
     host = checks.get("host") if isinstance(checks.get("host"), dict) else {}
     require(host.get("ok") is True, "production host preflight host check did not pass")
@@ -2481,12 +2767,147 @@ def verify_production_host_preflight(
     )
     require_sha256(runtime_trust.get("proof_collector_key_id"), "production host preflight collector key id")
     require_sha256(runtime_trust.get("proof_verifier_key_id"), "production host preflight verifier key id")
+    executable_digest_entries = runtime_trust.get("executable_digests")
+    require(
+        isinstance(executable_digest_entries, list),
+        "production host preflight did not report pinned executable digests",
+    )
+    executable_digests: dict[str, str] = {}
+    for item in executable_digest_entries:
+        require(
+            isinstance(item, dict)
+            and set(item) == {"setting", "executable", "host_path", "sha256", "verified"},
+            "production host preflight executable digest entry is invalid",
+        )
+        setting = item.get("setting")
+        require(
+            isinstance(setting, str)
+            and setting in preflight_module.PINNED_EXECUTABLE_COMMAND_SETTINGS,
+            "production host preflight executable digest setting is invalid",
+        )
+        require(
+            setting not in executable_digests,
+            f"production host preflight has duplicate executable digest setting: {setting}",
+        )
+        require(
+            isinstance(item.get("executable"), str)
+            and Path(str(item["executable"])).is_absolute()
+            and (
+                setting
+                in {
+                    preflight_module.PRODUCTION_PYTHON_EXECUTABLE_SETTING,
+                    preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING,
+                }
+                or Path(str(item["executable"])).parent == Path("/opt/serverware/bin")
+            ),
+            f"production host preflight executable path is invalid for {setting}",
+        )
+        require(
+            isinstance(item.get("host_path"), str) and bool(item["host_path"]),
+            f"production host preflight host executable path is invalid for {setting}",
+        )
+        require(
+            item.get("verified") is True,
+            f"production host preflight did not verify the executable digest for {setting}",
+        )
+        executable_digests[setting] = require_sha256(
+            item.get("sha256"),
+            f"production host preflight executable digest for {setting}",
+        )
+    require(
+        set(executable_digests)
+        == preflight_module.PINNED_EXECUTABLE_COMMAND_SETTINGS,
+        "production host preflight did not validate every pinned helper and collector executable",
+    )
+    script_digests: dict[str, str] = {}
+    docker_toolchain = runtime_trust.get("docker_toolchain")
+    material_digests = runtime_trust.get("material_digests")
+    if verification_mode == "final":
+        script_entries = runtime_trust.get("python_script_digests")
+        require(isinstance(script_entries, list), "production host preflight did not report pinned Python scripts")
+        for item in script_entries:
+            require(
+                isinstance(item, dict)
+                and set(item) == {"setting", "path", "sha256", "verified"}
+                and item.get("verified") is True,
+                "production host preflight Python script digest entry is invalid",
+            )
+            setting = str(item["setting"])
+            require(
+                setting in set(run_production_readiness.PINNED_PYTHON_SCRIPTS.values())
+                and setting not in script_digests,
+                "production host preflight Python script digest setting is invalid or duplicated",
+            )
+            script_digests[setting] = require_sha256(
+                item.get("sha256"),
+                f"production host preflight Python script digest for {setting}",
+            )
+        require(
+            set(script_digests) == set(run_production_readiness.PINNED_PYTHON_SCRIPTS.values()),
+            "production host preflight did not validate every pinned Python script",
+        )
+        require(
+            isinstance(docker_toolchain, dict)
+            and docker_toolchain.get("ok") is True
+            and nested(docker_toolchain, "compose_plugin", "verified") is True
+            and nested(docker_toolchain, "daemon", "daemon_id_verified") is True,
+            "production host preflight did not authenticate the Docker toolchain and daemon",
+        )
+        required_runtime_materials = {
+            "control_plane_certificate",
+            "control_plane_private_key",
+            "control_plane_ca_bundle",
+            "anchor_certificate",
+            "anchor_private_key",
+            "proof_ca_bundle",
+            "proof_collector_private_key",
+            "proof_collector_public_key",
+            "proof_verifier_public_key",
+            "preflight_signing_public_key",
+        }
+        require(
+            isinstance(material_digests, dict)
+            and set(material_digests) == required_runtime_materials,
+            "production host preflight runtime trust digest set is incomplete",
+        )
+        for label, report in material_digests.items():
+            require(
+                isinstance(report, dict)
+                and set(report)
+                == {"path", "sha256", "bytes", "mode", "owner_uid", "nofollow", "secure_ancestors"}
+                and report.get("nofollow") is True
+                and report.get("secure_ancestors") is True,
+                f"production host preflight runtime trust digest report is invalid: {label}",
+            )
+            require_sha256(report.get("sha256"), f"production host preflight runtime trust digest {label}")
 
     production_env = checks.get("production_env") if isinstance(checks.get("production_env"), dict) else {}
     require(production_env.get("ok") is True, "production host preflight production env check did not pass")
+    preflight_executing_script: dict[str, Any] | None = None
+    if verification_mode == "final":
+        candidate = production_env.get("executing_script")
+        require(
+            isinstance(candidate, dict)
+            and set(candidate)
+            == {
+                "path",
+                "sha256",
+                "device",
+                "inode",
+                "measured_from",
+                "matches_pinned_path_inode",
+            }
+            and candidate.get("matches_pinned_path_inode") is True
+            and candidate.get("sha256")
+            == script_digests[
+                run_production_readiness.PRODUCTION_HOST_PREFLIGHT_SCRIPT_SHA256_ENV
+            ],
+            "production host preflight did not bind its descriptor-executed script identity",
+        )
+        preflight_executing_script = candidate
     production_env_file = production_env.get("file") if isinstance(production_env.get("file"), dict) else {}
     require(
-        production_env_file.get("sha256") == file_digest(paths["production_readiness_env"]),
+        production_env_file.get("sha256") == snapshots.by_key["production_readiness_env"].sha256,
         "production host preflight production env digest does not match current production readiness env",
     )
     config_gate = production_env.get("config_gate") if isinstance(production_env.get("config_gate"), dict) else {}
@@ -2494,16 +2915,24 @@ def verify_production_host_preflight(
     require(config_gate.get("ok") is True, "production host preflight config gate did not pass")
     preflight_config_file = config_gate.get("file") if isinstance(config_gate.get("file"), dict) else {}
     preflight_config_path = Path(str(config_gate.get("out") or preflight_config_file.get("path") or ""))
-    require(preflight_config_path.is_file(), "production host preflight config gate artifact is missing")
+    preflight_config_snapshot = snapshots.capture(
+        "production_host_preflight_config",
+        preflight_config_path,
+        "production host preflight config gate",
+        max_bytes=COMPLETION_INPUT_MAX_BYTES,
+    )
     require(
-        preflight_config_file.get("sha256") == file_digest(preflight_config_path),
+        preflight_config_file.get("sha256") == preflight_config_snapshot.sha256,
         "production host preflight config gate digest does not match current preflight config artifact",
     )
     require(
         config_gate.get("result_sha256") == preflight_config_file.get("sha256"),
         "production host preflight config gate result digest mismatch",
     )
-    preflight_config = load_json(preflight_config_path, "production host preflight config gate")
+    preflight_config = load_json_snapshot(
+        preflight_config_snapshot,
+        "production host preflight config gate",
+    )
     preflight_config_semantic_sha256 = semantic_result_digest(preflight_config)
     require(
         config_gate.get("semantic_sha256") == preflight_config_semantic_sha256,
@@ -2514,7 +2943,7 @@ def verify_production_host_preflight(
     require(images_env.get("ok") is True and images_env.get("status") == "valid", "production host preflight image env check did not pass")
     images_env_file = images_env.get("file") if isinstance(images_env.get("file"), dict) else {}
     require(
-        images_env_file.get("sha256") == file_digest(paths["production_images_env"]),
+        images_env_file.get("sha256") == snapshots.by_key["production_images_env"].sha256,
         "production host preflight production images env digest does not match current production images env",
     )
     require(
@@ -2533,48 +2962,180 @@ def verify_production_host_preflight(
         production_compose.get("sha256"),
         "production host preflight Compose digest",
     )
+    compose_renderer: dict[str, Any] | None = None
+    production_runtime_model: dict[str, Any] | None = None
+    if verification_mode == "final":
+        compose_renderer = {
+            "path": production_compose.get("compose_plugin_executable"),
+            "sha256": require_sha256(
+                production_compose.get("compose_plugin_sha256"),
+                "production host preflight Compose renderer digest",
+            ),
+        }
+        require(
+            compose_renderer["path"] == nested(docker_toolchain, "compose_plugin", "path")
+            and compose_renderer["sha256"]
+            == nested(docker_toolchain, "compose_plugin", "sha256"),
+            "production host preflight Compose renderer differs from the measured Docker toolchain",
+        )
+        require(
+            production_compose.get("docker_unix_socket")
+            == nested(docker_toolchain, "daemon", "socket", "path")
+            and production_compose.get("docker_daemon_id")
+            == nested(docker_toolchain, "daemon", "daemon_id"),
+            "production host preflight Compose renderer used a different Docker endpoint",
+        )
+        require(
+            production_compose.get("docker_daemon_before")
+            == production_compose.get("docker_daemon_after")
+            == docker_toolchain.get("daemon"),
+            "production host preflight Docker endpoint changed during Compose rendering",
+        )
+        require(
+            production_compose.get("compose_project_name")
+            == production_env_snapshot.get(
+                run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV
+            )
+            == docker_toolchain.get("compose_project_name"),
+            "production host preflight Compose project name differs from the hashed production env",
+        )
+        candidate_runtime_model = production_compose.get("runtime_model")
+        require(
+            isinstance(candidate_runtime_model, dict)
+            and set(candidate_runtime_model)
+            == {"services", "networks", "volumes", "sha256"}
+            and isinstance(candidate_runtime_model.get("services"), dict)
+            and isinstance(candidate_runtime_model.get("networks"), dict)
+            and isinstance(candidate_runtime_model.get("volumes"), dict)
+            and set(candidate_runtime_model["services"])
+            == set(run_production_readiness.FINAL_SERVICE_USERS),
+            "production host preflight normalized runtime model is incomplete",
+        )
+        runtime_model_digest = sha256_prefixed_bytes(
+            canonical_json(
+                {
+                    key: candidate_runtime_model[key]
+                    for key in ("services", "networks", "volumes")
+                }
+            ).encode("utf-8")
+        )
+        require(
+            candidate_runtime_model.get("sha256")
+            == production_compose.get("runtime_model_sha256")
+            == runtime_model_digest,
+            "production host preflight normalized runtime model digest is invalid",
+        )
+        production_runtime_model = candidate_runtime_model
 
     artifacts = checks.get("release_artifacts") if isinstance(checks.get("release_artifacts"), dict) else {}
     require(artifacts.get("ok") is True, "production host preflight release artifact check did not pass")
-    require_preflight_file_digest(preflight, paths, "production_images_build", "production_images", "file", "sha256")
-    require_preflight_file_digest(preflight, paths, "production_images_published", "production_images_published", "file", "sha256")
-    require_preflight_file_digest(preflight, paths, "release_provenance_summary", "release_provenance", "file", "sha256")
-    require_preflight_file_digest(preflight, paths, "release_provenance", "release_provenance_document", "sha256")
-    require_preflight_file_digest(preflight, paths, "image_signatures_summary", "image_signatures_summary", "file", "sha256")
-    require_preflight_file_digest(preflight, paths, "image_signatures", "image_signatures", "file", "sha256")
-    require_preflight_file_digest(preflight, paths, "bench", "bench", "file", "sha256")
+    require_preflight_file_digest(preflight, snapshots.by_key, "production_images_build", "production_images", "file", "sha256")
+    require_preflight_file_digest(preflight, snapshots.by_key, "production_images_published", "production_images_published", "file", "sha256")
+    require_preflight_file_digest(preflight, snapshots.by_key, "release_provenance_summary", "release_provenance", "file", "sha256")
+    require_preflight_file_digest(preflight, snapshots.by_key, "release_provenance", "release_provenance_document", "sha256")
+    require_preflight_file_digest(preflight, snapshots.by_key, "image_signatures_summary", "image_signatures_summary", "file", "sha256")
+    require_preflight_file_digest(preflight, snapshots.by_key, "image_signatures", "image_signatures", "file", "sha256")
+    require_preflight_file_digest(preflight, snapshots.by_key, "bench", "bench", "file", "sha256")
     release_security = checks.get("release_security_evidence") if isinstance(checks.get("release_security_evidence"), dict) else {}
     require(release_security.get("ok") is True, "production host preflight release security evidence did not pass")
+    policy_trust_roots: dict[str, Any] = {}
+    if verification_mode == "final":
+        candidate_trust_roots = release_security.get("trust_roots")
+        require(
+            isinstance(candidate_trust_roots, dict)
+            and set(candidate_trust_roots)
+            == {"policy_identity", "policy_activation", "reproducible_build"},
+            "production host preflight policy trust-root binding set is incomplete",
+        )
+        role_bindings = {
+            "policy_identity": (
+                "policy_trusted_public_key",
+                run_production_readiness.POLICY_TRUST_ROOT_ENV,
+                run_production_readiness.POLICY_TRUST_ROOT_ID_ENV,
+            ),
+            "policy_activation": (
+                "policy_activation_trusted_public_key",
+                run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV,
+                run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV,
+            ),
+            "reproducible_build": (
+                "reproducible_build_trusted_public_key",
+                run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV,
+                run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV,
+            ),
+        }
+        for role, (snapshot_key, path_setting, id_setting) in role_bindings.items():
+            report = candidate_trust_roots.get(role)
+            require(
+                isinstance(report, dict)
+                and report.get("verified") is True
+                and report.get("path") == production_env_snapshot.get(path_setting)
+                and report.get("sha256") == snapshots.by_key[snapshot_key].sha256,
+                f"production host preflight {role} trust-root snapshot binding is invalid",
+            )
+            current_id = release_public_key_id(
+                snapshot_text(snapshots.by_key[snapshot_key], f"{role} trust root", encoding="ascii")
+            )
+            require(
+                hmac.compare_digest(
+                    current_id,
+                    require_sha256(
+                        production_env_snapshot.get(id_setting),
+                        f"production env {role} SPKI pin",
+                    ),
+                )
+                and report.get("spki_sha256") == current_id,
+                f"production host preflight {role} SPKI binding mismatch",
+            )
+            policy_trust_roots[role] = {
+                "path": report["path"],
+                "sha256": report["sha256"],
+                "spki_sha256": current_id,
+            }
+        require(
+            len({item["spki_sha256"] for item in policy_trust_roots.values()}) == 3,
+            "policy identity, activation, and reproducible-build trust roots are not distinct",
+        )
     policy_identity = release_security.get("policy_identity") if isinstance(release_security.get("policy_identity"), dict) else {}
     require(
-        policy_identity.get("reportSha256") == file_digest(paths["policy_identity_verification"]),
+        policy_identity.get("reportSha256") == snapshots.by_key["policy_identity_verification"].sha256,
         "production host preflight policy identity report digest does not match current artifact",
     )
     require(
-        policy_identity.get("policyBundleSha256") == file_digest(paths["policy_bundle"]),
+        policy_identity.get("policyBundleSha256") == snapshots.by_key["policy_bundle"].sha256,
         "production host preflight policy bundle digest does not match current artifact",
     )
     require(
-        policy_identity.get("trustedPublicKeySha256") == file_digest(paths["policy_trusted_public_key"]),
+        policy_identity.get("trustedPublicKeySha256") == snapshots.by_key["policy_trusted_public_key"].sha256,
         "production host preflight policy trust root digest does not match current artifact",
     )
     activation_evidence = release_security.get("policy_activation") if isinstance(release_security.get("policy_activation"), dict) else {}
     require(
-        activation_evidence.get("reportSha256") == file_digest(paths["policy_activation_verification"]),
+        activation_evidence.get("reportSha256") == snapshots.by_key["policy_activation_verification"].sha256,
         "production host preflight activation report digest does not match current artifact",
     )
     require(
-        activation_evidence.get("signatureSha256") == file_digest(paths["policy_activation_signature"]),
+        activation_evidence.get("signatureSha256") == snapshots.by_key["policy_activation_signature"].sha256,
         "production host preflight activation signature digest does not match current artifact",
+    )
+    require(
+        activation_evidence.get("trustedPublicKeySha256")
+        == snapshots.by_key["policy_activation_trusted_public_key"].sha256,
+        "production host preflight activation trust-root digest does not match current artifact",
     )
     reproducibility_evidence = release_security.get("reproducible_builds") if isinstance(release_security.get("reproducible_builds"), dict) else {}
     require(
-        reproducibility_evidence.get("reportSha256") == file_digest(paths["reproducible_build_verification"]),
+        reproducibility_evidence.get("reportSha256") == snapshots.by_key["reproducible_build_verification"].sha256,
         "production host preflight reproducibility report digest does not match current artifact",
     )
     require(
-        reproducibility_evidence.get("signatureSha256") == file_digest(paths["reproducible_build_signature"]),
+        reproducibility_evidence.get("signatureSha256") == snapshots.by_key["reproducible_build_signature"].sha256,
         "production host preflight reproducibility signature digest does not match current artifact",
+    )
+    require(
+        reproducibility_evidence.get("trustedPublicKeySha256")
+        == snapshots.by_key["reproducible_build_trusted_public_key"].sha256,
+        "production host preflight reproducibility trust-root digest does not match current artifact",
     )
     artifact_mounts = checks.get("release_artifact_mounts") if isinstance(checks.get("release_artifact_mounts"), dict) else {}
     require(artifact_mounts.get("ok") is True, "production host preflight release artifact mount check did not pass")
@@ -2597,7 +3158,7 @@ def verify_production_host_preflight(
     require(kms.get("secret_values_redacted") is True, "production host preflight KMS materials did not redact secret values")
     kms_file = kms.get("file") if isinstance(kms.get("file"), dict) else {}
     require(
-        kms_file.get("sha256") == file_digest(paths["kms_materials"]),
+        kms_file.get("sha256") == snapshots.by_key["kms_materials"].sha256,
         "production host preflight KMS materials digest does not match current KMS materials file",
     )
     kms_material_key_ids: dict[str, str] = {}
@@ -2624,7 +3185,10 @@ def verify_production_host_preflight(
         }
     materials = sorted(kms_material_key_ids)
     require(sorted(REQUIRED_MATERIALS) == materials, "production host preflight did not validate all required KMS materials")
-    current_bindings = current_kms_material_bindings(paths["kms_materials"])
+    current_bindings = current_kms_material_bindings(
+        snapshots.by_key["kms_materials"],
+        snapshots,
+    )
     require(
         kms_material_bindings == current_bindings,
         "production host preflight KMS material bindings do not match current KMS materials file",
@@ -2646,19 +3210,31 @@ def verify_production_host_preflight(
             "proof_collector_private_key_mode": runtime_trust.get("proof_collector_private_key_mode"),
             "proof_collector_key_id": runtime_trust.get("proof_collector_key_id"),
             "proof_verifier_key_id": runtime_trust.get("proof_verifier_key_id"),
+            "executable_digests": executable_digests,
+            "python_script_digests": script_digests,
+            "docker_toolchain": docker_toolchain,
+            "material_digests": material_digests,
             "private_key_mode": runtime_trust.get("private_key_mode"),
             "certificate_not_after": runtime_trust.get("certificate_not_after"),
         },
+        "authenticity": preflight_authenticity,
+        "executing_script": preflight_executing_script,
         "production_env_keys": production_env.get("env_keys") or [],
         "production_readiness_env_sha256": production_env_file.get("sha256"),
         "production_images_env_sha256": images_env_file.get("sha256"),
         "production_config_sha256": preflight_config_file.get("sha256"),
         "production_config_semantic_sha256": preflight_config_semantic_sha256,
         "production_compose_sha256": production_compose_sha256,
+        "production_compose_renderer": compose_renderer,
+        "production_compose_project_name": production_compose.get(
+            "compose_project_name"
+        ),
+        "production_runtime_model": production_runtime_model,
         "release_artifact_mounts": mounted_artifacts,
         "production_image_refs": sorted(readiness_summary["production_images"]),
         "benchmark_binary_digest": benchmark_binary_digest,
         "release_security_evidence": {
+            "trust_roots": policy_trust_roots,
             "policy_identity": policy_identity,
             "policy_activation": activation_evidence,
             "reproducible_builds": reproducibility_evidence,
@@ -2710,6 +3286,7 @@ def verify_current_completion_host(preflight_summary: dict[str, Any], *, skip_cu
 
 def verify_current_production_env_binding(
     paths: dict[str, Path],
+    snapshots: InputSnapshots,
     readiness_summary: dict[str, Any],
     preflight_summary: dict[str, Any],
     config_summary: dict[str, Any],
@@ -2718,14 +3295,157 @@ def verify_current_production_env_binding(
     release_trust_inputs: dict[str, str | None] | None = None,
     final_inputs: dict[str, str | None] | None = None,
     final_file_snapshots: dict[str, FileSnapshot] | None = None,
+    proxy_digest_inputs: dict[str, str | None] | None = None,
+    launcher_trust_inputs: dict[str, str | None] | None = None,
+    proxy_proof_max_age_seconds: int | None = None,
+    p99_limit_ms: float | None = None,
+    docker_executable: str | None = None,
+    docker_compose_plugin_executable: str | None = None,
+    docker_unix_socket: str | None = None,
+    docker_daemon_id: str | None = None,
+    preflight_signing_public_key: str | None = None,
+    preflight_signing_key_id: str | None = None,
+    preflight_max_age_seconds: int | None = None,
+    remeasure_runtime_trust: bool = True,
 ) -> dict[str, Any]:
+    env_snapshot = snapshots.by_key["production_readiness_env"]
+    launcher_trust: dict[str, Any] | None = None
+    if verification_mode == "final":
+        require(launcher_trust_inputs is not None, "final verification is missing launcher trust inputs")
+        launcher_trust = run_production_readiness.validate_launcher_trusted_env(
+            env_snapshot.path,
+            env_snapshot.data,
+            env_snapshot.metadata,
+            expected_path=launcher_trust_inputs.get(
+                run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT
+            ),
+            expected_sha256=launcher_trust_inputs.get(
+                run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT
+            ),
+        )
     try:
-        production_env = run_production_readiness.load_env_file(paths["production_readiness_env"])
+        production_env = load_production_env_snapshot(env_snapshot)
     except Exception as exc:
         raise ValueError(f"current production readiness env is invalid: {exc}") from exc
+    require(
+        not run_production_readiness.LAUNCHER_TRUST_INPUT_NAMES & set(production_env),
+        "out-of-band launcher trust inputs must not be defined inside the production readiness env",
+    )
+    if verification_mode == "final":
+        launcher_trust["startup_environment_contract"] = (
+            run_production_readiness.validate_final_launcher_contract(production_env)
+        )
+    preflight_module = load_production_host_preflight_module(
+        production_env,
+        final=verification_mode == "final",
+    )
+    raw_max_age = production_env.get(PROXY_PROOF_MAX_AGE_ENV_KEY)
+    require(isinstance(raw_max_age, str), f"production readiness env must pin {PROXY_PROOF_MAX_AGE_ENV_KEY}")
     try:
-        images_value = merge_production_images_env.load_images_fragment(paths["production_images_env"])
-        images = merge_production_images_env.validate_production_images(images_value)
+        expected_proxy_proof_max_age_seconds = int(raw_max_age)
+    except ValueError as exc:
+        raise ValueError(f"{PROXY_PROOF_MAX_AGE_ENV_KEY} must be an integer") from exc
+    require(
+        1 <= expected_proxy_proof_max_age_seconds <= PROXY_PROOF_MAX_AGE_LIMIT_SECONDS,
+        f"{PROXY_PROOF_MAX_AGE_ENV_KEY} must be between 1 and {PROXY_PROOF_MAX_AGE_LIMIT_SECONDS}",
+    )
+    raw_p99_limit = production_env.get(COMPLETION_P99_LIMIT_ENV_KEY)
+    require(isinstance(raw_p99_limit, str), f"production readiness env must pin {COMPLETION_P99_LIMIT_ENV_KEY}")
+    try:
+        expected_p99_limit_ms = float(raw_p99_limit)
+    except ValueError as exc:
+        raise ValueError(f"{COMPLETION_P99_LIMIT_ENV_KEY} must be numeric") from exc
+    require(
+        math.isfinite(expected_p99_limit_ms) and expected_p99_limit_ms > 0,
+        f"{COMPLETION_P99_LIMIT_ENV_KEY} must be finite and positive",
+    )
+    expected_docker_executable = production_env.get(DOCKER_EXECUTABLE_ENV_KEY)
+    require(
+        isinstance(expected_docker_executable, str)
+        and Path(expected_docker_executable).is_absolute(),
+        f"production readiness env must pin absolute {DOCKER_EXECUTABLE_ENV_KEY}",
+    )
+    docker_toolchain_settings = (
+        run_production_readiness.validate_docker_toolchain_settings(production_env)
+        if verification_mode == "final"
+        else {
+            DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY: production_env.get(
+                DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY, "readiness-unbound"
+            ),
+            DOCKER_COMPOSE_PLUGIN_SHA256_ENV_KEY: production_env.get(
+                DOCKER_COMPOSE_PLUGIN_SHA256_ENV_KEY, "sha256:" + "0" * 64
+            ),
+            DOCKER_UNIX_SOCKET_ENV_KEY: production_env.get(
+                DOCKER_UNIX_SOCKET_ENV_KEY, "/var/run/docker.sock"
+            ),
+            DOCKER_DAEMON_ID_ENV_KEY: production_env.get(
+                DOCKER_DAEMON_ID_ENV_KEY, "readiness-unbound"
+            ),
+            run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV: production_env.get(
+                run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV,
+                "serverware-production",
+            ),
+        }
+    )
+    raw_preflight_max_age = production_env.get(PREFLIGHT_MAX_AGE_ENV_KEY)
+    try:
+        expected_preflight_max_age = int(raw_preflight_max_age or "300")
+    except ValueError as exc:
+        raise ValueError(f"{PREFLIGHT_MAX_AGE_ENV_KEY} must be an integer") from exc
+    require(1 <= expected_preflight_max_age <= 900, f"{PREFLIGHT_MAX_AGE_ENV_KEY} must be between 1 and 900")
+    expected_preflight_public_key = production_env.get(PREFLIGHT_SIGNING_PUBLIC_KEY_ENV_KEY)
+    expected_preflight_key_id = (
+        require_sha256(
+            production_env.get(PREFLIGHT_SIGNING_KEY_ID_ENV_KEY),
+            "production host preflight signing key ID",
+        )
+        if verification_mode == "final"
+        else production_env.get(PREFLIGHT_SIGNING_KEY_ID_ENV_KEY, "sha256:" + "0" * 64)
+    )
+    if verification_mode == "final":
+        require(
+            proxy_proof_max_age_seconds == expected_proxy_proof_max_age_seconds,
+            f"selected proxy proof max age does not exactly match {PROXY_PROOF_MAX_AGE_ENV_KEY}",
+        )
+        require(
+            p99_limit_ms == expected_p99_limit_ms,
+            f"selected p99 limit does not exactly match {COMPLETION_P99_LIMIT_ENV_KEY}",
+        )
+        require(
+            docker_executable == expected_docker_executable,
+            f"selected Docker executable does not exactly match {DOCKER_EXECUTABLE_ENV_KEY}",
+        )
+        for selected, setting in (
+            (docker_compose_plugin_executable, DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY),
+            (docker_unix_socket, DOCKER_UNIX_SOCKET_ENV_KEY),
+            (docker_daemon_id, DOCKER_DAEMON_ID_ENV_KEY),
+        ):
+            require(
+                selected == docker_toolchain_settings[setting],
+                f"selected Docker setting does not exactly match {setting}",
+            )
+        require(
+            preflight_signing_public_key == expected_preflight_public_key,
+            f"selected preflight signing public key does not exactly match {PREFLIGHT_SIGNING_PUBLIC_KEY_ENV_KEY}",
+        )
+        require(
+            preflight_signing_key_id == expected_preflight_key_id,
+            f"selected preflight signing key ID does not exactly match {PREFLIGHT_SIGNING_KEY_ID_ENV_KEY}",
+        )
+        require(
+            preflight_max_age_seconds == expected_preflight_max_age,
+            f"selected preflight max age does not exactly match {PREFLIGHT_MAX_AGE_ENV_KEY}",
+        )
+        measured_compose_plugin = run_production_readiness.open_measured_executable(
+            Path(docker_toolchain_settings[DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY]),
+            docker_toolchain_settings[DOCKER_COMPOSE_PLUGIN_SHA256_ENV_KEY],
+            DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY,
+        )
+        measured_compose_plugin.close()
+    try:
+        images_value, images = load_images_env_snapshot(
+            snapshots.by_key["production_images_env"]
+        )
     except Exception as exc:
         raise ValueError(f"current production images env is invalid: {exc}") from exc
 
@@ -2782,6 +3502,20 @@ def verify_current_production_env_binding(
         and all(character.isprintable() for character in expected_proxy_principal_id),
         "production readiness expected proxy principal ID is invalid",
     )
+    expected_proxy_digests = {
+        env_name: require_sha256(
+            production_env.get(env_name),
+            f"production readiness expected proxy digest {env_name}",
+        )
+        for env_name in PROXY_EXPECTED_DIGEST_ENV_KEYS.values()
+    }
+    if verification_mode == "final":
+        require(proxy_digest_inputs is not None, "final verification is missing expected proxy digest inputs")
+        for attribute, env_name in PROXY_EXPECTED_DIGEST_ENV_KEYS.items():
+            require(
+                proxy_digest_inputs.get(attribute) == expected_proxy_digests[env_name],
+                f"selected {attribute.replace('_', ' ')} does not exactly match the hashed production readiness env",
+            )
     runtime_trust = preflight_summary["runtime_trust_materials"]
     require(
         runtime_trust.get("proof_collector_key_id") == expected_collector_key_id,
@@ -2791,8 +3525,122 @@ def verify_current_production_env_binding(
         runtime_trust.get("proof_verifier_key_id") == expected_verifier_key_id,
         "production readiness response-proof verifier key id does not match production host preflight",
     )
-    production_readiness_env_sha256 = file_digest(paths["production_readiness_env"])
-    production_images_env_sha256 = file_digest(paths["production_images_env"])
+    raw_executable_digest_manifest = production_env.get(
+        preflight_module.ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV
+    )
+    try:
+        executable_digest_manifest = json.loads(str(raw_executable_digest_manifest))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            "production readiness attestation executable digest manifest is invalid JSON"
+        ) from exc
+    require(
+        isinstance(executable_digest_manifest, dict)
+        and set(executable_digest_manifest)
+        == preflight_module.PINNED_EXECUTABLE_COMMAND_SETTINGS,
+        "production readiness attestation executable digest manifest is not closed and complete",
+    )
+    expected_executable_digests = {
+        setting: require_sha256(
+            executable_digest_manifest.get(setting),
+            f"production readiness executable digest pin for {setting}",
+        )
+        for setting in sorted(preflight_module.PINNED_EXECUTABLE_COMMAND_SETTINGS)
+    }
+    require(
+        runtime_trust.get("executable_digests") == expected_executable_digests,
+        "production host preflight executable digests do not match the hashed production readiness env pins",
+    )
+    current_executable_reports, current_executable_failures = (
+        preflight_module.snapshot_pinned_executables(production_env)
+    )
+    require(
+        not current_executable_failures,
+        "current pinned executable remeasurement failed: " + "; ".join(current_executable_failures),
+    )
+    current_executable_digests = {
+        item["setting"]: item["sha256"] for item in current_executable_reports
+    }
+    require(
+        current_executable_digests == expected_executable_digests,
+        "current executable bytes do not match the hashed production readiness env pins",
+    )
+    current_script_digests: dict[str, str] = {}
+    if verification_mode == "final":
+        expected_script_pins = {
+            setting: production_env.get(setting)
+            for setting in run_production_readiness.PINNED_PYTHON_SCRIPTS.values()
+        }
+        expected_script_digests = {
+            setting: require_sha256(value, f"production readiness Python script digest pin {setting}")
+            for setting, value in expected_script_pins.items()
+        }
+        require(
+            runtime_trust.get("python_script_digests") == expected_script_digests,
+            "production host preflight Python script digests do not match the hashed production readiness env pins",
+        )
+        current_script_reports, current_script_failures = preflight_module.snapshot_pinned_python_scripts(
+            production_env
+        )
+        require(
+            not current_script_failures,
+            "current pinned Python script remeasurement failed: " + "; ".join(current_script_failures),
+        )
+        current_script_digests = {item["setting"]: item["sha256"] for item in current_script_reports}
+        require(
+            current_script_digests == expected_script_digests,
+            "current Python script bytes do not match the hashed production readiness env pins",
+        )
+        if remeasure_runtime_trust:
+            current_runtime_trust, current_runtime_failures = (
+                preflight_module.runtime_trust_materials_check(
+                    production_env,
+                    skip_host_check=False,
+                )
+            )
+            require(
+                not current_runtime_failures and current_runtime_trust.get("ok") is True,
+                "current runtime trust material revalidation failed: "
+                + "; ".join(current_runtime_failures),
+            )
+            require(
+                current_runtime_trust.get("material_digests")
+                == runtime_trust.get("material_digests"),
+                "current TLS/audit/proof material bytes differ from the authenticated production host preflight",
+            )
+            require(
+                current_runtime_trust.get("proof_collector_key_id")
+                == runtime_trust.get("proof_collector_key_id")
+                and current_runtime_trust.get("proof_verifier_key_id")
+                == runtime_trust.get("proof_verifier_key_id"),
+                "current proof signing identities differ from the authenticated production host preflight",
+            )
+            require(
+                current_runtime_trust.get("docker_toolchain")
+                == runtime_trust.get("docker_toolchain"),
+                "current Docker toolchain/daemon binding differs from the authenticated production host preflight",
+            )
+        require(
+            preflight_summary.get("production_compose_renderer")
+            == {
+                "path": docker_toolchain_settings[
+                    DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY
+                ],
+                "sha256": docker_toolchain_settings[
+                    DOCKER_COMPOSE_PLUGIN_SHA256_ENV_KEY
+                ],
+            },
+            "authenticated preflight Compose renderer does not match the hashed production env pin",
+        )
+        require(
+            preflight_summary.get("production_compose_project_name")
+            == docker_toolchain_settings[
+                run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV
+            ],
+            "authenticated preflight Compose project name does not match the hashed production env pin",
+        )
+    production_readiness_env_sha256 = snapshots.by_key["production_readiness_env"].sha256
+    production_images_env_sha256 = snapshots.by_key["production_images_env"].sha256
     require(
         production_readiness_env_sha256 == preflight_summary["production_readiness_env_sha256"],
         "current production readiness env digest does not match production host preflight",
@@ -2830,7 +3678,44 @@ def verify_current_production_env_binding(
             CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY,
             "control-plane response signing expected SPKI identity",
         ),
+        (
+            run_production_readiness.POLICY_TRUST_ROOT_ENV,
+            "policy identity trust root",
+        ),
+        (
+            run_production_readiness.POLICY_TRUST_ROOT_ID_ENV,
+            "policy identity expected SPKI identity",
+        ),
+        (
+            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV,
+            "policy activation trust root",
+        ),
+        (
+            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV,
+            "policy activation expected SPKI identity",
+        ),
+        (
+            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV,
+            "reproducible-build trust root",
+        ),
+        (
+            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV,
+            "reproducible-build expected SPKI identity",
+        ),
     ):
+        if (
+            verification_mode != "final"
+            and env_name
+            in {
+                run_production_readiness.POLICY_TRUST_ROOT_ENV,
+                run_production_readiness.POLICY_TRUST_ROOT_ID_ENV,
+                run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV,
+                run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV,
+                run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV,
+                run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV,
+            }
+        ):
+            continue
         selected = release_trust_inputs.get(env_name)
         require(isinstance(selected, str) and bool(selected), f"release completion is missing the selected {label}")
         require(
@@ -2839,16 +3724,37 @@ def verify_current_production_env_binding(
         )
     try:
         release_provenance_trust_root_id = release_public_key_id(
-            Path(production_env[RELEASE_PROVENANCE_TRUST_ROOT_ENV_KEY]).read_text(encoding="ascii")
+            snapshot_text(snapshots.by_key["release_provenance_trusted_public_key"], "release provenance trust root", encoding="ascii")
         )
         sigstore_trust_root_id = release_public_key_id(
-            Path(production_env[SIGSTORE_TRUST_ROOT_ENV_KEY]).read_text(encoding="ascii")
+            snapshot_text(snapshots.by_key["sigstore_trusted_public_key"], "Sigstore trust root", encoding="ascii")
         )
         rekor_trust_root_id = release_public_key_id(
-            Path(production_env[REKOR_TRUST_ROOT_ENV_KEY]).read_text(encoding="ascii")
+            snapshot_text(snapshots.by_key["rekor_trusted_public_key"], "Rekor trust root", encoding="ascii")
         )
         external_checkpoint_trust_root_id = release_public_key_id(
-            Path(production_env[EXTERNAL_CHECKPOINT_TRUST_ROOT_ENV_KEY]).read_text(encoding="ascii")
+            snapshot_text(snapshots.by_key["external_checkpoint_trusted_public_key"], "external checkpoint trust root", encoding="ascii")
+        )
+        policy_trust_root_id = release_public_key_id(
+            snapshot_text(
+                snapshots.by_key["policy_trusted_public_key"],
+                "policy identity trust root",
+                encoding="ascii",
+            )
+        )
+        policy_activation_trust_root_id = release_public_key_id(
+            snapshot_text(
+                snapshots.by_key["policy_activation_trusted_public_key"],
+                "policy activation trust root",
+                encoding="ascii",
+            )
+        )
+        reproducible_build_trust_root_id = release_public_key_id(
+            snapshot_text(
+                snapshots.by_key["reproducible_build_trusted_public_key"],
+                "reproducible-build trust root",
+                encoding="ascii",
+            )
         )
     except Exception as exc:
         raise ValueError(f"production readiness env release trust root is unreadable or invalid: {exc}") from exc
@@ -2883,6 +3789,47 @@ def verify_current_production_env_binding(
         ),
         "control-plane response signing trust root does not match the independently configured SPKI identity",
     )
+    policy_role_ids = {
+        "policy_identity": policy_trust_root_id,
+        "policy_activation": policy_activation_trust_root_id,
+        "reproducible_build": reproducible_build_trust_root_id,
+    }
+    policy_role_settings = {
+        "policy_identity": run_production_readiness.POLICY_TRUST_ROOT_ID_ENV,
+        "policy_activation": run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV,
+        "reproducible_build": run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV,
+    }
+    for role, key_id in policy_role_ids.items():
+        if verification_mode == "final":
+            require(
+                hmac.compare_digest(
+                    key_id,
+                    require_sha256(
+                        production_env.get(policy_role_settings[role]),
+                        f"production readiness {role} expected SPKI identity",
+                    ),
+                ),
+                f"{role} trust-root bytes do not match the hashed production env SPKI pin",
+            )
+            preflight_role = nested(
+                preflight_summary,
+                "release_security_evidence",
+                "trust_roots",
+                role,
+            )
+            require(
+                isinstance(preflight_role, dict)
+                and preflight_role.get("spki_sha256") == key_id
+                and preflight_role.get("sha256")
+                == snapshots.by_key[
+                    {
+                        "policy_identity": "policy_trusted_public_key",
+                        "policy_activation": "policy_activation_trusted_public_key",
+                        "reproducible_build": "reproducible_build_trusted_public_key",
+                    }[role]
+                ].sha256,
+                f"current {role} trust root differs from the authenticated preflight",
+            )
     existing_release_trust_root_ids = {
         release_provenance_trust_root_id,
         sigstore_trust_root_id,
@@ -2894,6 +3841,11 @@ def verify_current_production_env_binding(
         not in existing_release_trust_root_ids,
         "control-plane responses must use an independent signing public key",
     )
+    if verification_mode == "final":
+        require(
+            len(set(policy_role_ids.values())) == len(policy_role_ids),
+            "policy identity, activation, and reproducible-build roles must use distinct public keys",
+        )
     release_trust_binding = {
         "release_trust_roots_env_bound": True,
         "release_provenance_trusted_public_key_id": release_provenance_trust_root_id,
@@ -2903,6 +3855,11 @@ def verify_current_production_env_binding(
         "external_checkpoint_provider": production_env[EXTERNAL_CHECKPOINT_PROVIDER_ENV_KEY],
         "control_plane_response_signing_public_key_id": (
             control_plane_response_signing_key_id
+        ),
+        "policy_trusted_public_key_id": policy_trust_root_id,
+        "policy_activation_trusted_public_key_id": policy_activation_trust_root_id,
+        "reproducible_build_trusted_public_key_id": (
+            reproducible_build_trust_root_id
         ),
     }
 
@@ -2998,6 +3955,9 @@ def verify_current_production_env_binding(
             release_trust_binding[
                 "control_plane_response_signing_public_key_id"
             ],
+            release_trust_binding["policy_trusted_public_key_id"],
+            release_trust_binding["policy_activation_trusted_public_key_id"],
+            release_trust_binding["reproducible_build_trusted_public_key_id"],
         }
         require(
             hardware_trust_root_id not in release_role_ids,
@@ -3033,34 +3993,796 @@ def verify_current_production_env_binding(
         "expected_proxy_principal_id": expected_proxy_principal_id,
         "expected_proxy_collector_key_id": expected_collector_key_id,
         "expected_proxy_verifier_key_id": expected_verifier_key_id,
+        "current_executable_digests": current_executable_digests,
+        "current_python_script_digests": current_script_digests,
+        "launcher_trust": launcher_trust,
+        "proxy_proof_max_age_seconds": expected_proxy_proof_max_age_seconds,
+        "p99_limit_ms": expected_p99_limit_ms,
+        "docker_executable": expected_docker_executable,
+        "docker_compose_plugin_executable": docker_toolchain_settings[
+            DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV_KEY
+        ],
+        "docker_compose_plugin_sha256": docker_toolchain_settings[
+            DOCKER_COMPOSE_PLUGIN_SHA256_ENV_KEY
+        ],
+        "docker_unix_socket": docker_toolchain_settings[DOCKER_UNIX_SOCKET_ENV_KEY],
+        "docker_daemon_id": docker_toolchain_settings[DOCKER_DAEMON_ID_ENV_KEY],
+        "docker_compose_project_name": docker_toolchain_settings[
+            run_production_readiness.DOCKER_COMPOSE_PROJECT_NAME_ENV
+        ],
+        "production_host_preflight_signing_public_key": expected_preflight_public_key,
+        "production_host_preflight_signing_key_id": expected_preflight_key_id,
+        "production_host_preflight_max_age_seconds": expected_preflight_max_age,
+        **expected_proxy_digests,
     }
+
+
+def verify_current_interpreter_binding(
+    production_env: dict[str, str],
+    executable_digests: dict[str, str],
+) -> dict[str, Any]:
+    setting = run_production_readiness.PRODUCTION_PYTHON_EXECUTABLE_ENV
+    configured_path = production_env.get(setting)
+    require(
+        isinstance(configured_path, str) and Path(configured_path).is_absolute(),
+        f"production readiness env must pin absolute {setting}",
+    )
+    expected_digest = executable_digests.get(setting)
+    require(isinstance(expected_digest, str), "production Python digest pin is missing")
+    measured = run_production_readiness.open_measured_executable(
+        Path(configured_path),
+        expected_digest,
+        setting,
+    )
+    try:
+        if sys.platform.startswith("linux"):
+            descriptor = os.open("/proc/self/exe", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+            source = "/proc/self/exe"
+            try:
+                current_metadata = os.fstat(descriptor)
+                current_bytes = run_production_readiness.read_fd_bytes(
+                    descriptor,
+                    current_metadata,
+                    "currently executing Python interpreter",
+                    max_bytes=run_production_readiness.MAX_EXECUTABLE_BYTES,
+                )
+            finally:
+                os.close(descriptor)
+        else:
+            current_path = Path(sys.executable).resolve()
+            current_bytes, current_metadata = run_production_readiness.read_regular_file_once(
+                current_path,
+                "currently executing Python interpreter",
+                max_bytes=run_production_readiness.MAX_EXECUTABLE_BYTES,
+                executable=True,
+            )
+            source = str(current_path)
+        current_digest = sha256_prefixed_bytes(current_bytes)
+        require(
+            hmac.compare_digest(current_digest, measured.sha256),
+            "currently executing interpreter bytes do not match the production Python pin",
+        )
+        require(
+            (current_metadata.st_dev, current_metadata.st_ino)
+            == (measured.metadata.st_dev, measured.metadata.st_ino),
+            "currently executing interpreter inode does not match the production Python pin",
+        )
+        return {
+            "path": configured_path,
+            "sha256": current_digest,
+            "device": current_metadata.st_dev,
+            "inode": current_metadata.st_ino,
+            "measured_from": source,
+            "matches_pinned_path_inode": True,
+        }
+    finally:
+        measured.close()
+
+
+def verify_current_script_binding(production_env: dict[str, str]) -> dict[str, Any]:
+    setting = run_production_readiness.VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV
+    expected_digest = require_sha256(
+        production_env.get(setting),
+        "release completion verifier script digest pin",
+    )
+    raw_descriptor = os.environ.get("SERVERWARE_EXECUTING_SCRIPT_FD")
+    require(
+        isinstance(raw_descriptor, str) and raw_descriptor.isdigit(),
+        "final verifier was not launched from a retained measured script descriptor",
+    )
+    descriptor = int(raw_descriptor)
+    metadata = os.fstat(descriptor)
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    data = run_production_readiness.read_fd_bytes(
+        descriptor,
+        metadata,
+        "currently executing release completion verifier script",
+        max_bytes=run_production_readiness.MAX_EXECUTABLE_BYTES,
+    )
+    digest = sha256_prefixed_bytes(data)
+    require(
+        hmac.compare_digest(digest, expected_digest),
+        "currently executing release completion verifier script does not match the hashed env pin",
+    )
+    configured = run_production_readiness.open_measured_script(
+        (Path(__file__).resolve().parent / "verify_release_completion.py"),
+        expected_digest,
+        setting,
+    )
+    try:
+        require(
+            (metadata.st_dev, metadata.st_ino)
+            == (configured.metadata.st_dev, configured.metadata.st_ino),
+            "currently executing release completion verifier script inode differs from the pinned path",
+        )
+    finally:
+        configured.close()
+    return {
+        "path": str((Path(__file__).resolve().parent / "verify_release_completion.py")),
+        "sha256": digest,
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "measured_from": f"/proc/self/fd/{descriptor}",
+        "matches_pinned_path_inode": True,
+    }
+
+
+def hashed_environment_from_docker(
+    value: Any,
+    label: str,
+) -> list[dict[str, str]]:
+    require(isinstance(value, list), f"{label} environment must be a list")
+    variables: dict[str, str] = {}
+    for item in value:
+        require(
+            isinstance(item, str) and "=" in item,
+            f"{label} environment entry is invalid",
+        )
+        name, rendered = item.split("=", 1)
+        require(
+            bool(name) and "=" not in name and name not in variables,
+            f"{label} environment has an invalid or duplicate name",
+        )
+        variables[name] = sha256_prefixed_bytes(rendered.encode("utf-8"))
+    return [
+        {"name": name, "value_sha256": variables[name]}
+        for name in sorted(variables)
+    ]
+
+
+def merged_expected_environment(
+    image_environment: Any,
+    compose_environment: Any,
+    label: str,
+) -> list[dict[str, str]]:
+    merged = {
+        item["name"]: item["value_sha256"]
+        for item in hashed_environment_from_docker(
+            image_environment or [], f"{label} image"
+        )
+    }
+    require(
+        isinstance(compose_environment, list),
+        f"{label} signed Compose environment must be a list",
+    )
+    for item in compose_environment:
+        require(
+            isinstance(item, dict)
+            and set(item) == {"name", "value_sha256"},
+            f"{label} signed Compose environment entry is invalid",
+        )
+        merged[str(item["name"])] = require_sha256(
+            item.get("value_sha256"),
+            f"{label} signed Compose environment value",
+        )
+    return [
+        {"name": name, "value_sha256": merged[name]} for name in sorted(merged)
+    ]
+
+
+def compose_resource_runtime_name(
+    logical_name: str,
+    resources: dict[str, Any],
+    project_name: str,
+) -> str:
+    resource = resources.get(logical_name)
+    require(isinstance(resource, dict), f"signed Compose resource is missing: {logical_name}")
+    explicit_name = resource.get("name")
+    if isinstance(explicit_name, str) and explicit_name:
+        return explicit_name
+    if resource.get("external") is True:
+        return logical_name
+    return f"{project_name}_{logical_name}"
+
+
+def normalized_security_options(
+    values: Any,
+    *,
+    project_directory: Path,
+) -> list[str]:
+    require(
+        values is None
+        or (isinstance(values, list) and all(isinstance(item, str) for item in values)),
+        "container security options must be a string list",
+    )
+    normalized: list[str] = []
+    for item in values or []:
+        if item.startswith("seccomp="):
+            prefix, raw_path = item.split("=", 1)
+            path = Path(raw_path)
+            if not path.is_absolute() and raw_path not in {"unconfined", "default"}:
+                path = (project_directory / path).resolve()
+                item = f"{prefix}={path}"
+        normalized.append(item)
+    return sorted(normalized)
+
+
+def normalize_expected_ports(value: Any, label: str) -> list[dict[str, str]]:
+    require(isinstance(value, list), f"{label} ports must be a list")
+    normalized: list[dict[str, str]] = []
+    for item in value:
+        require(isinstance(item, dict), f"{label} port entry must be an object")
+        target = item.get("target")
+        published = item.get("published")
+        require(
+            isinstance(target, int) and 1 <= target <= 65535,
+            f"{label} target port is invalid",
+        )
+        require(published is not None, f"{label} published port is required")
+        normalized.append(
+            {
+                "target": str(target),
+                "published": str(published),
+                "host_ip": str(item.get("host_ip") or ""),
+                "protocol": str(item.get("protocol") or "tcp"),
+            }
+        )
+    return sorted(
+        normalized,
+        key=lambda item: (
+            item["target"],
+            item["protocol"],
+            item["host_ip"],
+            item["published"],
+        ),
+    )
+
+
+def normalize_observed_ports(value: Any, label: str) -> list[dict[str, str]]:
+    require(isinstance(value, dict), f"{label} port bindings must be an object")
+    normalized: list[dict[str, str]] = []
+    for container_port, bindings in value.items():
+        require(
+            isinstance(container_port, str) and "/" in container_port,
+            f"{label} container port is invalid",
+        )
+        target, protocol = container_port.rsplit("/", 1)
+        require(isinstance(bindings, list), f"{label} port bindings are invalid")
+        for binding in bindings:
+            require(isinstance(binding, dict), f"{label} port binding is invalid")
+            normalized.append(
+                {
+                    "target": target,
+                    "published": str(binding.get("HostPort") or ""),
+                    "host_ip": str(binding.get("HostIp") or ""),
+                    "protocol": protocol,
+                }
+            )
+    return sorted(
+        normalized,
+        key=lambda item: (
+            item["target"],
+            item["protocol"],
+            item["host_ip"],
+            item["published"],
+        ),
+    )
+
+
+def normalize_expected_ulimits(value: Any, label: str) -> list[dict[str, int | str]]:
+    require(isinstance(value, dict), f"{label} ulimits must be an object")
+    normalized: list[dict[str, int | str]] = []
+    for name, limits in sorted(value.items()):
+        require(isinstance(limits, dict), f"{label} ulimit {name} is invalid")
+        normalized.append(
+            {
+                "name": name,
+                "soft": int(limits.get("soft", 0)),
+                "hard": int(limits.get("hard", 0)),
+            }
+        )
+    return normalized
+
+
+def normalize_observed_ulimits(value: Any, label: str) -> list[dict[str, int | str]]:
+    require(isinstance(value, list), f"{label} ulimits must be a list")
+    normalized = []
+    for item in value:
+        require(isinstance(item, dict), f"{label} ulimit entry is invalid")
+        normalized.append(
+            {
+                "name": str(item.get("Name") or ""),
+                "soft": int(item.get("Soft")),
+                "hard": int(item.get("Hard")),
+            }
+        )
+    return sorted(normalized, key=lambda item: str(item["name"]))
+
+
+def normalize_expected_mounts(
+    service_model: dict[str, Any],
+    runtime_model: dict[str, Any],
+    image_config: dict[str, Any],
+    project_name: str,
+) -> list[dict[str, Any]]:
+    expected: list[dict[str, Any]] = []
+    destinations: set[str] = set()
+    for item in service_model.get("mounts") or []:
+        require(isinstance(item, dict), "signed Compose mount entry is invalid")
+        mount_type = item.get("type")
+        target = item.get("target")
+        require(
+            mount_type in {"bind", "volume", "tmpfs"}
+            and isinstance(target, str)
+            and target.startswith("/")
+            and target not in destinations,
+            "signed Compose mount destination is invalid or duplicated",
+        )
+        destinations.add(target)
+        source = str(item.get("source") or "")
+        if mount_type == "volume":
+            source = compose_resource_runtime_name(
+                source,
+                runtime_model.get("volumes") or {},
+                project_name,
+            )
+        bind = item.get("bind") if isinstance(item.get("bind"), dict) else {}
+        expected.append(
+            {
+                "type": mount_type,
+                "source": source,
+                "target": target,
+                "read_only": bool(item.get("read_only", False)),
+                "propagation": str(bind.get("propagation") or ("rprivate" if mount_type == "bind" else "")),
+            }
+        )
+    image_volumes = image_config.get("Volumes") or {}
+    require(isinstance(image_volumes, dict), "image volume defaults must be an object")
+    for target in image_volumes:
+        require(isinstance(target, str) and target.startswith("/"), "image volume destination is invalid")
+        if target not in destinations:
+            expected.append(
+                {
+                    "type": "volume",
+                    "source": "<anonymous>",
+                    "target": target,
+                    "read_only": False,
+                    "propagation": "",
+                }
+            )
+    for item in service_model.get("tmpfs") or []:
+        require(isinstance(item, dict), "signed Compose tmpfs entry is invalid")
+        target = item.get("target")
+        require(
+            isinstance(target, str) and target.startswith("/") and target not in destinations,
+            "signed Compose tmpfs destination is invalid or duplicated",
+        )
+        options = item.get("options") or []
+        destinations.add(target)
+        expected.append(
+            {
+                "type": "tmpfs",
+                "source": "",
+                "target": target,
+                "read_only": "ro" in options and "rw" not in options,
+                "propagation": "",
+            }
+        )
+    return sorted(expected, key=lambda item: item["target"])
+
+
+def normalize_observed_mounts(value: Any, label: str) -> list[dict[str, Any]]:
+    require(isinstance(value, list), f"{label} mounts must be a list")
+    normalized: list[dict[str, Any]] = []
+    destinations: set[str] = set()
+    for item in value:
+        require(isinstance(item, dict), f"{label} mount entry is invalid")
+        mount_type = item.get("Type")
+        target = item.get("Destination")
+        require(
+            mount_type in {"bind", "volume", "tmpfs"}
+            and isinstance(target, str)
+            and target not in destinations,
+            f"{label} mount type or destination is invalid",
+        )
+        destinations.add(target)
+        source = item.get("Name") if mount_type == "volume" else item.get("Source")
+        normalized.append(
+            {
+                "type": mount_type,
+                "source": str(source or ""),
+                "target": target,
+                "read_only": item.get("RW") is not True,
+                "propagation": str(item.get("Propagation") or ""),
+            }
+        )
+    return sorted(normalized, key=lambda item: item["target"])
+
+
+def mount_projections_match(
+    expected: list[dict[str, Any]],
+    observed: list[dict[str, Any]],
+) -> bool:
+    if len(expected) != len(observed):
+        return False
+    for expected_item, observed_item in zip(expected, observed):
+        if expected_item["source"] == "<anonymous>":
+            if not observed_item["source"]:
+                return False
+            expected_item = {**expected_item, "source": observed_item["source"]}
+        if expected_item != observed_item:
+            return False
+    return True
+
+
+def normalized_tmpfs_mapping(value: Any, label: str) -> list[dict[str, Any]]:
+    require(isinstance(value, dict), f"{label} tmpfs must be an object")
+    return sorted(
+        (
+            {
+                "target": str(target),
+                "options": run_production_readiness.normalize_tmpfs_options(
+                    str(options).split(",")
+                ),
+            }
+            for target, options in value.items()
+        ),
+        key=lambda item: item["target"],
+    )
+
+
+def expected_runtime_projection(
+    service: str,
+    service_model: dict[str, Any],
+    runtime_model: dict[str, Any],
+    image_config: dict[str, Any],
+    *,
+    project_name: str,
+    project_directory: Path,
+) -> dict[str, Any]:
+    image_user = str(image_config.get("User") or "")
+    compose_user = str(service_model.get("compose_user") or "")
+    effective_user = compose_user or image_user
+    require(
+        effective_user == service_model.get("required_runtime_user"),
+        f"production service {service} effective image/Compose user is not the fixed final user",
+    )
+    image_entrypoint = run_production_readiness.normalize_command_value(
+        image_config.get("Entrypoint"), f"{service} image entrypoint"
+    )
+    image_command = run_production_readiness.normalize_command_value(
+        image_config.get("Cmd"), f"{service} image command"
+    )
+    entrypoint = service_model.get("entrypoint")
+    command = service_model.get("command")
+    networks = [
+        compose_resource_runtime_name(
+            name,
+            runtime_model.get("networks") or {},
+            project_name,
+        )
+        for name in service_model.get("networks") or []
+    ]
+    host = service_model.get("host_config")
+    require(isinstance(host, dict), f"production service {service} host config is invalid")
+    expected_network_mode = str(host.get("network_mode") or "")
+    if not expected_network_mode and networks:
+        logical_networks = service_model.get("networks") or []
+        primary = "default" if "default" in logical_networks else logical_networks[0]
+        expected_network_mode = compose_resource_runtime_name(
+            primary,
+            runtime_model.get("networks") or {},
+            project_name,
+        )
+    expected_ports = normalize_expected_ports(service_model.get("ports") or [], service)
+    exposed_ports = set(str(item) for item in (image_config.get("ExposedPorts") or {}))
+    exposed_ports.update(
+        f"{item['target']}/{item['protocol']}" for item in expected_ports
+    )
+    return {
+        "user": effective_user,
+        "entrypoint": image_entrypoint if entrypoint is None else entrypoint,
+        "command": image_command if command is None else command,
+        "working_dir": str(service_model.get("working_dir") or image_config.get("WorkingDir") or ""),
+        "environment": merged_expected_environment(
+            image_config.get("Env") or [],
+            service_model.get("environment") or [],
+            service,
+        ),
+        "devices": service_model.get("devices") or [],
+        "networks": sorted(networks),
+        "mounts": normalize_expected_mounts(
+            service_model, runtime_model, image_config, project_name
+        ),
+        "tmpfs": service_model.get("tmpfs") or [],
+        "ports": expected_ports,
+        "exposed_ports": sorted(exposed_ports),
+        "links": service_model.get("links") or [],
+        "host_config": {
+            "read_only": bool(host.get("read_only")),
+            "privileged": bool(host.get("privileged")),
+            "publish_all_ports": False,
+            "cap_add": sorted(host.get("cap_add") or []),
+            "cap_drop": sorted(host.get("cap_drop") or []),
+            "security_opt": normalized_security_options(
+                host.get("security_opt"), project_directory=project_directory
+            ),
+            "pids_limit": int(host.get("pids_limit") or 0),
+            "memory": int(host.get("memory") or 0),
+            "init": bool(host.get("init")),
+            "group_add": sorted(host.get("group_add") or []),
+            "volumes_from": sorted(host.get("volumes_from") or []),
+            "dns": sorted(host.get("dns") or []),
+            "dns_search": sorted(host.get("dns_search") or []),
+            "dns_opt": sorted(host.get("dns_opt") or []),
+            "extra_hosts": sorted(host.get("extra_hosts") or []),
+            "pid": str(host.get("pid") or ""),
+            "ipc": str(host.get("ipc") or ""),
+            "uts": str(host.get("uts") or ""),
+            "network_mode": expected_network_mode,
+            "userns_mode": str(host.get("userns_mode") or ""),
+            "ulimits": normalize_expected_ulimits(host.get("ulimits") or {}, service),
+        },
+    }
+
+
+def observed_runtime_projection(
+    service: str,
+    container: dict[str, Any],
+    *,
+    project_directory: Path,
+) -> dict[str, Any]:
+    config = container.get("Config")
+    host = container.get("HostConfig")
+    network_settings = container.get("NetworkSettings")
+    require(isinstance(config, dict), f"production service {service} Config is invalid")
+    require(isinstance(host, dict), f"production service {service} HostConfig is invalid")
+    require(
+        isinstance(network_settings, dict)
+        and isinstance(network_settings.get("Networks"), dict),
+        f"production service {service} NetworkSettings is invalid",
+    )
+    devices = []
+    for item in host.get("Devices") or []:
+        require(isinstance(item, dict), f"production service {service} device is invalid")
+        devices.append(
+            {
+                "source": str(item.get("PathOnHost") or ""),
+                "target": str(item.get("PathInContainer") or ""),
+                "permissions": str(item.get("CgroupPermissions") or ""),
+            }
+        )
+    projection = {
+        "user": str(config.get("User") or ""),
+        "entrypoint": run_production_readiness.normalize_command_value(
+            config.get("Entrypoint"), f"{service} runtime entrypoint"
+        ),
+        "command": run_production_readiness.normalize_command_value(
+            config.get("Cmd"), f"{service} runtime command"
+        ),
+        "working_dir": str(config.get("WorkingDir") or ""),
+        "environment": hashed_environment_from_docker(
+            config.get("Env") or [], f"{service} runtime"
+        ),
+        "devices": sorted(
+            devices,
+            key=lambda item: (item["target"], item["source"], item["permissions"]),
+        ),
+        "networks": sorted(network_settings["Networks"]),
+        "mounts": normalize_observed_mounts(container.get("Mounts") or [], service),
+        "tmpfs": normalized_tmpfs_mapping(host.get("Tmpfs") or {}, service),
+        "ports": normalize_observed_ports(host.get("PortBindings") or {}, service),
+        "exposed_ports": sorted((config.get("ExposedPorts") or {}).keys()),
+        "links": sorted(host.get("Links") or []),
+        "host_config": {
+            "read_only": host.get("ReadonlyRootfs") is True,
+            "privileged": host.get("Privileged") is True,
+            "publish_all_ports": host.get("PublishAllPorts") is True,
+            "cap_add": sorted(host.get("CapAdd") or []),
+            "cap_drop": sorted(host.get("CapDrop") or []),
+            "security_opt": normalized_security_options(
+                host.get("SecurityOpt"), project_directory=project_directory
+            ),
+            "pids_limit": int(host.get("PidsLimit") or 0),
+            "memory": int(host.get("Memory") or 0),
+            "init": host.get("Init") is True,
+            "group_add": sorted(str(item) for item in (host.get("GroupAdd") or [])),
+            "volumes_from": sorted(host.get("VolumesFrom") or []),
+            "dns": sorted(host.get("Dns") or []),
+            "dns_search": sorted(host.get("DnsSearch") or []),
+            "dns_opt": sorted(host.get("DnsOptions") or []),
+            "extra_hosts": sorted(host.get("ExtraHosts") or []),
+            "pid": str(host.get("PidMode") or ""),
+            "ipc": str(host.get("IpcMode") or ""),
+            "uts": str(host.get("UTSMode") or ""),
+            "network_mode": str(host.get("NetworkMode") or ""),
+            "userns_mode": str(host.get("UsernsMode") or ""),
+            "ulimits": normalize_observed_ulimits(host.get("Ulimits") or [], service),
+        },
+    }
+    return projection
+
+
+def verify_runtime_projection(
+    service: str,
+    expected: dict[str, Any],
+    observed: dict[str, Any],
+) -> None:
+    expected_without_mounts = {key: value for key, value in expected.items() if key != "mounts"}
+    observed_without_mounts = {key: value for key, value in observed.items() if key != "mounts"}
+    require(
+        observed_without_mounts == expected_without_mounts,
+        f"production service {service} runtime projection differs from signed Compose and pinned image defaults",
+    )
+    require(
+        mount_projections_match(expected["mounts"], observed["mounts"]),
+        f"production service {service} complete mount projection differs from signed Compose and pinned image defaults",
+    )
+
+
+def parse_container_copy_archive(
+    archive: bytes,
+    *,
+    expected_sha256: str,
+    expected_bytes: int,
+    label: str,
+) -> dict[str, Any]:
+    require(
+        0 < expected_bytes <= COMPLETION_INPUT_MAX_BYTES,
+        f"{label} approved artifact length is invalid",
+    )
+    require(
+        0 < len(archive) <= expected_bytes + 1024 * 1024,
+        f"{label} Docker copy archive is empty or too large",
+    )
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as bundle:
+            members = bundle.getmembers()
+            require(
+                len(members) == 1 and members[0].isreg(),
+                f"{label} Docker copy archive must contain exactly one regular file",
+            )
+            member = members[0]
+            require(
+                member.size == expected_bytes,
+                f"{label} container artifact length differs from the approved snapshot",
+            )
+            extracted = bundle.extractfile(member)
+            require(extracted is not None, f"{label} Docker copy archive member is unreadable")
+            data = extracted.read(expected_bytes + 1)
+    except (tarfile.TarError, OSError) as exc:
+        raise ValueError(f"{label} Docker copy archive is invalid: {exc}") from exc
+    require(
+        len(data) == expected_bytes,
+        f"{label} Docker copy archive member length is invalid",
+    )
+    digest = sha256_prefixed_bytes(data)
+    require(
+        hmac.compare_digest(digest, require_sha256(expected_sha256, label)),
+        f"{label} container-visible bytes differ from the approved snapshot",
+    )
+    return {
+        "sha256": digest,
+        "bytes": len(data),
+        "tar_members": 1,
+        "regular_file": True,
+        "container_namespace_verified": True,
+    }
+
+
+def require_stable_container_generation(
+    before: dict[str, Any],
+    after: dict[str, Any],
+) -> None:
+    require(
+        before == after,
+        "production Compose service IDs, running StartedAt values, or runtime projections changed during inspection",
+    )
 
 
 def verify_running_production_containers(
     *,
     env_file: Path,
     compose_file: Path,
+    production_env: dict[str, str],
+    project_directory: Path,
     production_image_refs: list[str],
     source_tree_digest: str,
+    runtime_model: dict[str, Any],
+    artifact_expectations: dict[str, dict[str, Any]],
+    compose_project_name: str,
     skip_current_host_check: bool,
+    docker_executable: str,
+    docker_sha256: str,
+    compose_plugin_executable: str,
+    compose_plugin_sha256: str,
+    docker_unix_socket: str,
+    docker_daemon_id: str,
+    final_mode: bool,
 ) -> dict[str, Any]:
     if skip_current_host_check:
         return {"ok": True, "skipped": True, "containers": []}
-    production_env = run_production_readiness.load_env_file(env_file)
+    require(final_mode, "live production container verification requires final mode")
+    require(
+        runtime_model.get("sha256")
+        == sha256_prefixed_bytes(
+            canonical_json(
+                {
+                    key: runtime_model[key]
+                    for key in ("services", "networks", "volumes")
+                }
+            ).encode("utf-8")
+        ),
+        "signed normalized runtime model digest is invalid",
+    )
+    services_model = runtime_model.get("services")
+    require(
+        isinstance(services_model, dict)
+        and set(services_model) == set(run_production_readiness.FINAL_SERVICE_USERS),
+        "signed normalized runtime model service set is incomplete",
+    )
     by_name = {
         ref.split("@", 1)[0].rsplit("/", 1)[-1]: ref
         for ref in production_image_refs
     }
-    expected = {
+    expected_refs = {
         "serverware": by_name["control"],
         "audit-anchor": by_name["control"],
         "decision-gate-rs": by_name["decision-gate"],
     }
 
-    def docker(command: list[str]) -> str:
-        result = subprocess.run(
+    child_env = run_production_readiness.build_final_child_environment(production_env)
+    socket_path = Path(docker_unix_socket)
+    docker_env = run_production_readiness.docker_subprocess_environment(
+        child_env,
+        socket_path,
+    )
+    docker_endpoint = f"unix://{socket_path}"
+    daemon_before = run_production_readiness.verify_docker_daemon_identity(
+        docker_executable=Path(docker_executable),
+        docker_sha256=docker_sha256,
+        socket_path=socket_path,
+        expected_daemon_id=docker_daemon_id,
+        base_env=child_env,
+    )
+
+    def measured_text(command: list[str], *, compose: bool = False) -> str:
+        expected_executable = compose_plugin_executable if compose else docker_executable
+        require(
+            command[0] == expected_executable,
+            "Docker command did not use its pinned absolute executable",
+        )
+        if compose:
+            require(
+                command[1:5]
+                == ["--host", docker_endpoint, "--project-name", compose_project_name],
+                "Compose command did not pin the Docker endpoint and project name",
+            )
+        else:
+            require(
+                command[1:3] == ["--host", docker_endpoint],
+                "Docker command did not pin the Docker endpoint",
+            )
+        result = run_production_readiness.run_measured_command(
             command,
+            setting=(
+                run_production_readiness.DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV
+                if compose
+                else run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV
+            ),
+            expected_digest=compose_plugin_sha256 if compose else docker_sha256,
             cwd=Path(__file__).resolve().parent.parent,
+            env=docker_env,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
@@ -3068,62 +4790,264 @@ def verify_running_production_containers(
         )
         if result.returncode != 0:
             detail = result.stderr.strip() or result.stdout.strip()
-            raise ValueError(f"{' '.join(command)} failed with exit {result.returncode}: {detail}")
+            raise ValueError(
+                f"{' '.join(command)} failed with exit {result.returncode}: {detail}"
+            )
         return result.stdout.strip()
 
-    base = ["docker", "compose", "--env-file", str(env_file), "-f", str(compose_file)]
-    containers: list[dict[str, Any]] = []
-    artifact_sources = {
-        "/run/serverware/release/release-provenance.json": production_env["SERVERWARE_RELEASE_PROVENANCE_FILE"],
-        "/run/serverware/release/image-signatures.json": production_env["SERVERWARE_IMAGE_SIGNATURES_FILE"],
-    }
-    for service, expected_ref in expected.items():
-        container_id = docker([*base, "ps", "-q", service])
-        require(bool(container_id) and "\n" not in container_id, f"production Compose service {service} is not uniquely running")
-        container = json.loads(docker(["docker", "inspect", container_id]))[0]
-        require((container.get("State") or {}).get("Status") == "running", f"production service {service} is not running")
-        require((container.get("Config") or {}).get("Image") == expected_ref, f"production service {service} was not created from its digest-pinned image ref")
-        host_config = container.get("HostConfig") if isinstance(container.get("HostConfig"), dict) else {}
-        require(host_config.get("ReadonlyRootfs") is True, f"production service {service} does not have a read-only root filesystem")
-        require("ALL" in (host_config.get("CapDrop") or []), f"production service {service} does not drop all capabilities")
-        require(
-            any(str(item).startswith("no-new-privileges") for item in host_config.get("SecurityOpt") or []),
-            f"production service {service} does not enforce no-new-privileges",
+    def measured_container_copy(
+        container_id: str,
+        destination: str,
+        expected: dict[str, Any],
+    ) -> dict[str, Any]:
+        command = [
+            docker_executable,
+            "--host",
+            docker_endpoint,
+            "container",
+            "cp",
+            f"{container_id}:{destination}",
+            "-",
+        ]
+        max_archive = int(expected["bytes"]) + 1024 * 1024
+        result = run_production_readiness.run_measured_binary_command_bounded(
+            command,
+            setting=run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV,
+            expected_digest=docker_sha256,
+            max_stdout_bytes=max_archive,
+            cwd=Path(__file__).resolve().parent.parent,
+            env=docker_env,
         )
-        image_id = require_sha256(container.get("Image"), f"production service {service} image id")
-        image = json.loads(docker(["docker", "image", "inspect", image_id]))[0]
-        require(expected_ref in (image.get("RepoDigests") or []), f"production service {service} local image does not retain the approved registry digest")
+        if result.returncode != 0:
+            detail = result.stderr.decode("utf-8", errors="replace").strip()
+            raise ValueError(
+                f"pinned docker container cp failed with exit {result.returncode}: {detail}"
+            )
+        return parse_container_copy_archive(
+            result.stdout,
+            expected_sha256=str(expected["sha256"]),
+            expected_bytes=int(expected["bytes"]),
+            label=f"{container_id}:{destination}",
+        )
+
+    compose_base = [
+        compose_plugin_executable,
+        "--host",
+        docker_endpoint,
+        "--project-name",
+        compose_project_name,
+        "--project-directory",
+        str(project_directory),
+        "--env-file",
+        str(env_file),
+        "-f",
+        str(compose_file),
+    ]
+
+    def snapshot_ids() -> dict[str, str]:
+        identifiers: dict[str, str] = {}
+        for service in sorted(expected_refs):
+            identifier = measured_text(
+                [*compose_base, "ps", "-q", service], compose=True
+            )
+            require(
+                re.fullmatch(r"[0-9a-f]{64}", identifier) is not None,
+                f"production Compose service {service} did not resolve to one full container ID",
+            )
+            identifiers[service] = identifier
+        require(
+            len(set(identifiers.values())) == len(identifiers),
+            "production Compose services resolved to duplicate container IDs",
+        )
+        return identifiers
+
+    def inspect_containers(identifiers: dict[str, str]) -> dict[str, dict[str, Any]]:
+        raw = json.loads(
+            measured_text(
+                [
+                    docker_executable,
+                    "--host",
+                    docker_endpoint,
+                    "container",
+                    "inspect",
+                    *[identifiers[service] for service in sorted(identifiers)],
+                ]
+            )
+        )
+        require(
+            isinstance(raw, list) and len(raw) == len(identifiers),
+            "Docker container inspection did not return the complete service set",
+        )
+        by_id = {
+            str(item.get("Id")): item for item in raw if isinstance(item, dict)
+        }
+        require(
+            set(by_id) == set(identifiers.values()),
+            "Docker container inspection IDs differ from the Compose snapshot",
+        )
+        return {service: by_id[identifier] for service, identifier in identifiers.items()}
+
+    ids_before = snapshot_ids()
+    containers_before = inspect_containers(ids_before)
+    image_ids: dict[str, str] = {}
+    for service, container in containers_before.items():
+        require(
+            (container.get("State") or {}).get("Status") == "running",
+            f"production service {service} is not running",
+        )
+        require(
+            (container.get("Config") or {}).get("Image") == expected_refs[service]
+            == services_model[service].get("image"),
+            f"production service {service} was not created from the signed digest-pinned image ref",
+        )
+        image_ids[service] = require_sha256(
+            container.get("Image"), f"production service {service} image id"
+        )
+    raw_images = json.loads(
+        measured_text(
+            [
+                docker_executable,
+                "--host",
+                docker_endpoint,
+                "image",
+                "inspect",
+                *sorted(set(image_ids.values())),
+            ]
+        )
+    )
+    require(isinstance(raw_images, list), "Docker image inspection is invalid")
+    images = {
+        str(item.get("Id")): item for item in raw_images if isinstance(item, dict)
+    }
+    require(
+        set(images) == set(image_ids.values()),
+        "Docker image inspection did not return every running image",
+    )
+
+    generation_before: dict[str, Any] = {}
+    container_summaries: list[dict[str, Any]] = []
+    for service in sorted(expected_refs):
+        container = containers_before[service]
+        image_id = image_ids[service]
+        image = images[image_id]
+        require(
+            expected_refs[service] in (image.get("RepoDigests") or []),
+            f"production service {service} local image does not retain the approved registry digest",
+        )
         labels = ((image.get("Config") or {}).get("Labels")) or {}
         require(
             labels.get("dev.serverware.source_tree_digest") == source_tree_digest,
             f"production service {service} image source-tree label does not match release provenance",
         )
+        expected_projection = expected_runtime_projection(
+            service,
+            services_model[service],
+            runtime_model,
+            image.get("Config") or {},
+            project_name=compose_project_name,
+            project_directory=project_directory,
+        )
+        observed_projection = observed_runtime_projection(
+            service, container, project_directory=project_directory
+        )
+        verify_runtime_projection(service, expected_projection, observed_projection)
+        started_at = (container.get("State") or {}).get("StartedAt")
+        require(
+            isinstance(started_at, str) and bool(started_at),
+            f"production service {service} running StartedAt is missing",
+        )
+        generation_before[service] = {
+            "container_id": ids_before[service],
+            "started_at": started_at,
+            "image_id": image_id,
+            "runtime_projection": observed_projection,
+        }
+        namespace_artifacts: dict[str, Any] = {}
         if service in {"serverware", "decision-gate-rs"}:
-            mounts = container.get("Mounts") or []
-            for destination, source in artifact_sources.items():
-                require(
-                    any(
-                        isinstance(item, dict)
-                        and item.get("Destination") == destination
-                        and item.get("Source") == source
-                        and item.get("RW") is False
-                        for item in mounts
-                    ),
-                    f"production service {service} does not use the approved read-only {destination} mount",
+            for destination, expectation in sorted(artifact_expectations.items()):
+                namespace_artifacts[destination] = measured_container_copy(
+                    ids_before[service], destination, expectation
                 )
-        containers.append(
+        container_summaries.append(
             {
                 "service": service,
-                "container_id": container_id,
-                "image_id": image_id,
-                "image_ref": expected_ref,
+                **generation_before[service],
+                "image_ref": expected_refs[service],
                 "source_tree_digest": source_tree_digest,
-                "read_only_rootfs": True,
-                "capabilities_dropped": "ALL",
-                "release_artifacts_read_only": service in {"serverware", "decision-gate-rs"},
+                "container_namespace_artifacts": namespace_artifacts,
             }
         )
-    return {"ok": True, "skipped": False, "compose_file": str(compose_file), "containers": containers}
+
+    ids_after = snapshot_ids()
+    require(
+        ids_after == ids_before,
+        "production Compose service ID mapping changed during runtime inspection",
+    )
+    containers_after = inspect_containers(ids_after)
+    generation_after: dict[str, Any] = {}
+    for service in sorted(expected_refs):
+        container = containers_after[service]
+        require(
+            (container.get("State") or {}).get("Status") == "running",
+            f"production service {service} stopped during runtime inspection",
+        )
+        require(
+            require_sha256(
+                container.get("Image"), f"production service {service} final image id"
+            )
+            == image_ids[service],
+            f"production service {service} image changed during runtime inspection",
+        )
+        final_projection = observed_runtime_projection(
+            service, container, project_directory=project_directory
+        )
+        verify_runtime_projection(
+            service,
+            expected_runtime_projection(
+                service,
+                services_model[service],
+                runtime_model,
+                images[image_ids[service]].get("Config") or {},
+                project_name=compose_project_name,
+                project_directory=project_directory,
+            ),
+            final_projection,
+        )
+        generation_after[service] = {
+            "container_id": ids_after[service],
+            "started_at": (container.get("State") or {}).get("StartedAt"),
+            "image_id": image_ids[service],
+            "runtime_projection": final_projection,
+        }
+    require_stable_container_generation(generation_before, generation_after)
+
+    daemon_after = run_production_readiness.verify_docker_daemon_identity(
+        docker_executable=Path(docker_executable),
+        docker_sha256=docker_sha256,
+        socket_path=socket_path,
+        expected_daemon_id=docker_daemon_id,
+        base_env=child_env,
+    )
+    run_production_readiness.require_stable_docker_daemon_binding(
+        daemon_before,
+        daemon_after,
+    )
+    return {
+        "ok": True,
+        "skipped": False,
+        "compose_file": str(compose_file),
+        "compose_project_name": compose_project_name,
+        "runtime_model_sha256": runtime_model["sha256"],
+        "docker_executable": docker_executable,
+        "docker_sha256": docker_sha256,
+        "compose_plugin_executable": compose_plugin_executable,
+        "compose_plugin_sha256": compose_plugin_sha256,
+        "docker_daemon_before": daemon_before,
+        "docker_daemon_after": daemon_after,
+        "service_generation_before": generation_before,
+        "service_generation_after": generation_after,
+        "containers": container_summaries,
+    }
 
 
 def ed25519_public_key_der(public_key_pem: str, label: str) -> bytes:
@@ -3767,9 +5691,9 @@ def match_proxy_policy_route(
     policy: PolicySnapshot,
     *,
     principal_id: str,
-    client_request: dict[str, Any],
+    route_id: str,
 ) -> tuple[str, set[str]]:
-    label = "proxy response independently matched policy route"
+    label = "proxy response independently matched policy route identity"
     require(
         isinstance(principal_id, str)
         and principal_id == principal_id.strip()
@@ -3778,39 +5702,20 @@ def match_proxy_policy_route(
         f"{label} principal ID is invalid",
     )
     require(principal_id in policy.principals, f"{label} principal is absent from the signed policy")
-    scheme = client_request.get("scheme")
-    authority = client_request.get("authority")
-    method = client_request.get("method")
-    path = client_request.get("path")
-    try:
-        parsed = urlsplit(f"{scheme}://{authority}{path}")
-        hostname = parsed.hostname
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError(f"{label} authority is invalid") from exc
     require(
-        parsed.scheme == scheme
-        and isinstance(hostname, str)
-        and bool(hostname)
-        and parsed.username is None
-        and parsed.password is None
-        and parsed.path == path
-        and not parsed.query
-        and not parsed.fragment,
-        f"{label} request target is invalid",
+        isinstance(route_id, str)
+        and route_id == route_id.strip()
+        and 1 <= len(route_id) <= 256,
+        f"{label} route ID is invalid",
     )
-    if port is None:
-        port = 443 if scheme == "https" else 80
-    matched = policy.match_route(
-        str(scheme),
-        hostname,
-        port,
-        str(method),
-        str(path),
-        principal_id,
+    routes = [route for route in policy.routes if route.id == route_id]
+    require(len(routes) == 1, f"{label} is absent or ambiguous in the signed policy")
+    route = routes[0]
+    require(
+        principal_id in route.principals or "*" in route.principals,
+        f"{label} does not authorize the independently pinned principal",
     )
-    require(matched is not None, f"{label} did not match exactly one signed route")
-    response_profile = matched.route.adapter_config.get("response")
+    response_profile = route.adapter_config.get("response")
     require(isinstance(response_profile, dict), f"{label} success response profile is missing")
     raw_allowed_headers = response_profile.get("allowedHeaders", [])
     require(
@@ -3824,7 +5729,7 @@ def match_proxy_policy_route(
         and len(raw_allowed_headers) == len(set(raw_allowed_headers)),
         f"{label} success allowedHeaders are invalid",
     )
-    return matched.route.id, {
+    return route.id, {
         "content-encoding",
         "content-length",
         "content-type",
@@ -3912,6 +5817,7 @@ def verify_production_proxy_response_proof(
     expected_principal_id: str,
     expected_server_instance_id: str,
     expected_client_nonce: str,
+    expected_client_request_digest: str,
     expected_request_digest: str,
     expected_operation_digest: str,
     expected_tls_channel_binding: str,
@@ -3975,6 +5881,10 @@ def verify_production_proxy_response_proof(
         "expected proxy TLS channel binding",
         minimum_bytes=32,
     )
+    expected_client_request_digest = require_sha256(
+        expected_client_request_digest,
+        "expected proxy client request digest",
+    )
 
     external_capture = document.get("external_capture") if isinstance(document.get("external_capture"), dict) else {}
     require(
@@ -3989,7 +5899,6 @@ def verify_production_proxy_response_proof(
             "collection_mode",
             "captured_at_unix",
             "client_nonce",
-            "client_request",
             "client_request_digest",
             "principal_id",
             "route_id",
@@ -4027,81 +5936,6 @@ def verify_production_proxy_response_proof(
         nonce == expected_client_nonce and nonce_bytes == expected_nonce_bytes,
         "proxy response external capture client nonce mismatch",
     )
-    client_request = (
-        external_capture.get("client_request")
-        if isinstance(external_capture.get("client_request"), dict)
-        else {}
-    )
-    require_exact_object_fields(
-        client_request,
-        {"apiVersion", "method", "scheme", "authority", "path", "query", "headers", "body_sha256"},
-        "proxy response external client request",
-    )
-    require(
-        client_request.get("apiVersion") == "serverware.clientProofRequest/v1",
-        "proxy response external client request has wrong apiVersion",
-    )
-    require(client_request.get("method") == "GET", "proxy response proof request method is not GET")
-    require(client_request.get("scheme") == "https", "proxy response proof request scheme is not HTTPS")
-    require(
-        isinstance(client_request.get("authority"), str)
-        and bool(client_request["authority"])
-        and client_request["authority"] == client_request["authority"].lower()
-        and not client_request["authority"].endswith("."),
-        "proxy response proof request authority is not canonical",
-    )
-    require(
-        isinstance(client_request.get("path"), str) and client_request["path"].startswith("/"),
-        "proxy response proof request path is not canonical",
-    )
-    client_query = client_request.get("query")
-    require(
-        isinstance(client_query, list)
-        and all(
-            isinstance(pair, list)
-            and len(pair) == 2
-            and all(isinstance(value, str) for value in pair)
-            for pair in client_query
-        )
-        and client_query == sorted(client_query),
-        "proxy response proof request query is not a sorted string-pair list",
-    )
-    client_headers = client_request.get("headers")
-    reserved_client_headers = {
-        "authorization",
-        "connection",
-        "content-length",
-        "host",
-        "keep-alive",
-        "proxy-authenticate",
-        "proxy-authorization",
-        "proxy-connection",
-        "te",
-        "trailer",
-        "transfer-encoding",
-        "upgrade",
-        "x-serverware-agent",
-        "x-serverware-data-plane-token",
-        "x-serverware-proof-nonce",
-    }
-    require(
-        isinstance(client_headers, dict)
-        and all(
-            isinstance(name, str)
-            and re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) is not None
-            and name not in reserved_client_headers
-            and isinstance(value, str)
-            and value == value.strip()
-            and "\r" not in value
-            and "\n" not in value
-            for name, value in client_headers.items()
-        ),
-        "proxy response proof request headers are not canonical and sanitized",
-    )
-    require(
-        client_request.get("body_sha256") == sha256_prefixed_bytes(b""),
-        "proxy response proof request did not bind an empty body",
-    )
     require(
         external_capture.get("principal_id") == expected_principal_id,
         "proxy response external capture principal ID does not match the independently configured expected proxy principal",
@@ -4109,7 +5943,7 @@ def verify_production_proxy_response_proof(
     matched_route_id, expected_raw_policy_header_names = match_proxy_policy_route(
         policy_snapshot,
         principal_id=expected_principal_id,
-        client_request=client_request,
+        route_id=external_capture.get("route_id"),
     )
     require(
         external_capture.get("route_id") == matched_route_id,
@@ -4120,8 +5954,8 @@ def verify_production_proxy_response_proof(
         "proxy response external client request digest",
     )
     require(
-        client_request_digest == sha256_prefixed_json(client_request),
-        "proxy response external client request digest mismatch",
+        client_request_digest == expected_client_request_digest,
+        "proxy response external client request digest does not match the independently supplied client commitment",
     )
     request_digest = require_sha256(
         external_capture.get("request_digest"),
@@ -4701,6 +6535,7 @@ def verify_production_proxy_response_proof(
         "server_statement_sha256": server_statement_digest,
         "captured_at_unix": captured_at,
         "issued_at_unix": issued_at,
+        "client_nonce_sha256": sha256_prefixed_bytes(nonce_bytes),
         "client_request_digest": client_request_digest,
         "request_digest": request_digest,
         "operation_digest": operation_digest,
@@ -4739,34 +6574,134 @@ def verify_production_proxy_response_proof(
     }
 
 
-def write_output(path: Path, proof: dict[str, Any]) -> str:
-    payload = (json.dumps(proof, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode("utf-8")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    require(not path.is_symlink(), "completion proof output must not be a symlink")
-    temporary_path: Path | None = None
+def completion_proof_digest_path(path: Path, generation: str) -> Path:
+    require(
+        re.fullmatch(r"[0-9a-f]{32}", generation) is not None,
+        "completion proof checksum generation is invalid",
+    )
+    return path.with_name(f"{path.name}.sha256.{generation}")
+
+
+def fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
     try:
-        with tempfile.NamedTemporaryFile(
-            mode="wb",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            delete=False,
-        ) as temporary:
-            temporary_path = Path(temporary.name)
-            os.fchmod(temporary.fileno(), 0o600)
-            temporary.write(payload)
-            temporary.flush()
-            os.fsync(temporary.fileno())
-        os.replace(temporary_path, path)
-        temporary_path = None
-        directory_fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
+        os.fsync(descriptor)
     finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
-    return sha256_prefixed_bytes(payload)
+        os.close(descriptor)
+
+
+def verify_private_output_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    metadata = path.lstat()
+    require(stat.S_ISDIR(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode), "completion proof output directory must be a non-symlink directory")
+    require(metadata.st_uid == os.geteuid(), "completion proof output directory must be owned by the verifier user")
+    require(not stat.S_IMODE(metadata.st_mode) & 0o022, "completion proof output directory must not be writable by group/other")
+
+
+def validate_existing_private_output(path: Path, label: str) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    require(stat.S_ISREG(metadata.st_mode) and not stat.S_ISLNK(metadata.st_mode), f"{label} must be a regular non-symlink file")
+    require(metadata.st_uid == os.geteuid(), f"{label} must be owned by the verifier user")
+    require(stat.S_IMODE(metadata.st_mode) == 0o600, f"{label} must use mode 0600")
+
+
+def cleanup_stale_completion_checksums(path: Path, current_generation: str, *, retain: int = 3) -> None:
+    candidates: list[tuple[int, Path]] = []
+    pattern = re.compile(rf"^{re.escape(path.name)}\.sha256\.([0-9a-f]{{32}})$")
+    for candidate in path.parent.iterdir():
+        match = pattern.fullmatch(candidate.name)
+        if match is None or match.group(1) == current_generation:
+            continue
+        try:
+            metadata = candidate.lstat()
+        except FileNotFoundError:
+            continue
+        if (
+            stat.S_ISREG(metadata.st_mode)
+            and not stat.S_ISLNK(metadata.st_mode)
+            and metadata.st_uid == os.geteuid()
+            and stat.S_IMODE(metadata.st_mode) == 0o600
+        ):
+            candidates.append((metadata.st_mtime_ns, candidate))
+    candidates.sort(reverse=True)
+    for _mtime, candidate in candidates[max(retain - 1, 0) :]:
+        candidate.unlink(missing_ok=True)
+    fsync_directory(path.parent)
+
+
+def write_output(
+    path: Path,
+    proof: dict[str, Any],
+    *,
+    fail_after_checksum_publish: bool = False,
+) -> str:
+    payload = (json.dumps(proof, indent=2, sort_keys=True, ensure_ascii=True) + "\n").encode("utf-8")
+    proof_digest = sha256_prefixed_bytes(payload)
+    integrity = proof.get("integrity_metadata")
+    require(isinstance(integrity, dict), "completion proof is missing integrity metadata")
+    generation = integrity.get("generation")
+    require(isinstance(generation, str), "completion proof checksum generation is invalid")
+    digest_path = completion_proof_digest_path(path, generation)
+    require(
+        integrity.get("detached_sha256_path") == str(digest_path),
+        "completion proof checksum path does not match its generation",
+    )
+    digest_payload = f"{proof_digest}\n".encode("ascii")
+    verify_private_output_directory(path.parent)
+    lock_path = path.with_name(f".{path.name}.writer.lock")
+    lock_flags = os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    try:
+        lock_descriptor = os.open(lock_path, lock_flags, 0o600)
+    except OSError as exc:
+        raise ValueError("completion proof writer lock could not be opened without following symlinks") from exc
+    try:
+        lock_metadata = os.fstat(lock_descriptor)
+        require(stat.S_ISREG(lock_metadata.st_mode), "completion proof writer lock must be a regular file")
+        require(lock_metadata.st_uid == os.geteuid(), "completion proof writer lock must be owned by the verifier user")
+        require(stat.S_IMODE(lock_metadata.st_mode) == 0o600, "completion proof writer lock must use mode 0600")
+        fcntl.flock(lock_descriptor, fcntl.LOCK_EX)
+        validate_existing_private_output(path, "completion proof output")
+        try:
+            digest_path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            raise ValueError("completion proof checksum generation already exists")
+        temporary_paths: list[Path] = []
+        try:
+            staged: dict[Path, Path] = {}
+            for destination, content in ((digest_path, digest_payload), (path, payload)):
+                with tempfile.NamedTemporaryFile(
+                    mode="wb",
+                    dir=path.parent,
+                    prefix=f".{destination.name}.",
+                    delete=False,
+                ) as temporary:
+                    temporary_path = Path(temporary.name)
+                    temporary_paths.append(temporary_path)
+                    os.fchmod(temporary.fileno(), 0o600)
+                    temporary.write(content)
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                    staged[destination] = temporary_path
+            os.replace(staged[digest_path], digest_path)
+            temporary_paths.remove(staged[digest_path])
+            fsync_directory(path.parent)
+            if fail_after_checksum_publish:
+                raise RuntimeError("injected failure after checksum publication")
+            os.replace(staged[path], path)
+            temporary_paths.remove(staged[path])
+            fsync_directory(path.parent)
+            cleanup_stale_completion_checksums(path, generation)
+        finally:
+            for temporary_path in temporary_paths:
+                temporary_path.unlink(missing_ok=True)
+    finally:
+        os.close(lock_descriptor)
+    return proof_digest
 
 
 def consume_final_challenge_once(
@@ -5174,6 +7109,7 @@ def verify_release_security_evidence(
         "completion reproducibility evidence differs from host preflight",
     )
     return {
+        "trust_roots": preflight_security.get("trust_roots") or {},
         "policy_identity": identity,
         "policy_activation": {key: value for key, value in activation.items() if key != "report"},
         "reproducible_builds": {
@@ -5202,6 +7138,21 @@ def main() -> None:
     parser.add_argument("--production-readiness", default=".tmp/production-readiness.json")
     parser.add_argument("--production-readiness-config", default=".tmp/production-readiness-config.json")
     parser.add_argument("--production-readiness-env", default="ops/production-readiness.env")
+    parser.add_argument(
+        "--launcher-trusted-production-env-path",
+        default=os.getenv(run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT),
+    )
+    parser.add_argument(
+        "--launcher-trusted-production-env-sha256",
+        default=os.getenv(run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT),
+    )
+    parser.add_argument("--docker-executable", default=None)
+    parser.add_argument("--docker-compose-plugin-executable", default=None)
+    parser.add_argument("--docker-unix-socket", default=None)
+    parser.add_argument("--docker-daemon-id", default=None)
+    parser.add_argument("--production-host-preflight-signing-public-key", default=None)
+    parser.add_argument("--production-host-preflight-signing-key-id", default=None)
+    parser.add_argument("--production-host-preflight-max-age-seconds", type=int, default=None)
     parser.add_argument("--compose-file", default="docker-compose.production.yml")
     parser.add_argument("--production-host-preflight", default=".tmp/production-host-preflight.json")
     parser.add_argument("--nitro-evidence", default=".tmp/nitro-kms-evidence.json")
@@ -5233,13 +7184,16 @@ def main() -> None:
     parser.add_argument("--bench", default=".tmp/decision-gate-rs-bench.json")
     parser.add_argument("--policy-bundle", required=True)
     parser.add_argument("--policy-trusted-public-key", required=True)
+    parser.add_argument("--policy-trusted-public-key-id", default=None)
     parser.add_argument("--policy-identity-verification", required=True)
     parser.add_argument("--policy-activation-verification", required=True)
     parser.add_argument("--policy-activation-signature", required=True)
     parser.add_argument("--policy-activation-trusted-public-key", required=True)
+    parser.add_argument("--policy-activation-trusted-public-key-id", default=None)
     parser.add_argument("--reproducible-build-verification", required=True)
     parser.add_argument("--reproducible-build-signature", required=True)
     parser.add_argument("--reproducible-build-trusted-public-key", required=True)
+    parser.add_argument("--reproducible-build-trusted-public-key-id", default=None)
     parser.add_argument("--kms-materials", default="/etc/serverware/kms-materials.json")
     parser.add_argument(
         "--control-plane-response-signing-public-key",
@@ -5254,11 +7208,12 @@ def main() -> None:
     parser.add_argument("--proxy-collector-public-key", default=None)
     parser.add_argument("--proxy-server-instance-id", default=None)
     parser.add_argument("--proxy-client-nonce", default=None)
+    parser.add_argument("--proxy-client-request-digest", default=None)
     parser.add_argument("--proxy-request-digest", default=None)
     parser.add_argument("--proxy-operation-digest", default=None)
     parser.add_argument("--proxy-tls-channel-binding", default=None)
-    parser.add_argument("--proxy-proof-max-age-seconds", type=int, default=300)
-    parser.add_argument("--p99-limit-ms", type=float, default=20.0)
+    parser.add_argument("--proxy-proof-max-age-seconds", type=int, default=None)
+    parser.add_argument("--p99-limit-ms", type=float, default=None)
     parser.add_argument("--out", default=None)
     parser.add_argument("--skip-current-host-check", action="store_true", help="Test-only bypass for synthetic fixture completion tests.")
     args = parser.parse_args()
@@ -5286,6 +7241,34 @@ def main() -> None:
             "hardware assurance expected challenge options require --hardware-assurance",
         )
     if args.verification_mode == "final":
+        forbidden_environment = run_production_readiness.forbidden_process_environment_names(
+            dict(os.environ)
+        )
+        require(
+            not forbidden_environment,
+            "final verifier environment contains forbidden runtime/loader injection settings: "
+            + ", ".join(forbidden_environment),
+        )
+        require(sys.flags.isolated == 1, "final verifier Python interpreter must run in isolated mode")
+        require(bool(args.docker_executable), "final verification mode requires --docker-executable")
+        require(
+            bool(args.docker_compose_plugin_executable),
+            "final verification mode requires --docker-compose-plugin-executable",
+        )
+        require(bool(args.docker_unix_socket), "final verification mode requires --docker-unix-socket")
+        require(bool(args.docker_daemon_id), "final verification mode requires --docker-daemon-id")
+        require(
+            bool(args.production_host_preflight_signing_public_key),
+            "final verification mode requires --production-host-preflight-signing-public-key",
+        )
+        require(
+            bool(args.production_host_preflight_signing_key_id),
+            "final verification mode requires --production-host-preflight-signing-key-id",
+        )
+        require(
+            isinstance(args.production_host_preflight_max_age_seconds, int),
+            "final verification mode requires --production-host-preflight-max-age-seconds",
+        )
         require(bool(args.hardware_assurance), "final verification mode requires hardware assurance evidence")
         require(bool(args.final_challenge_receipt), "final verification mode requires --final-challenge-receipt")
         require(
@@ -5337,6 +7320,10 @@ def main() -> None:
     )
     require(bool(args.proxy_server_instance_id), "production completion requires --proxy-server-instance-id")
     require(bool(args.proxy_client_nonce), "production completion requires --proxy-client-nonce")
+    require(
+        bool(args.proxy_client_request_digest),
+        "production completion requires --proxy-client-request-digest",
+    )
     require(bool(args.proxy_request_digest), "production completion requires --proxy-request-digest")
     require(bool(args.proxy_operation_digest), "production completion requires --proxy-operation-digest")
     require(bool(args.proxy_tls_channel_binding), "production completion requires --proxy-tls-channel-binding")
@@ -5346,6 +7333,15 @@ def main() -> None:
         "production_readiness_config": Path(args.production_readiness_config),
         "production_readiness_env": Path(args.production_readiness_env),
         "production_host_preflight": Path(args.production_host_preflight),
+        **(
+            {
+                "production_host_preflight_signing_public_key": Path(
+                    args.production_host_preflight_signing_public_key
+                )
+            }
+            if args.production_host_preflight_signing_public_key
+            else {}
+        ),
         "nitro_evidence": Path(args.nitro_evidence),
         "production_images_build": Path(args.production_images_build),
         "production_images_env": Path(args.production_images_env),
@@ -5375,6 +7371,7 @@ def main() -> None:
         "proxy_response_proof": Path(args.proxy_response_proof),
         "proxy_proof_verifier_public_key": Path(args.proxy_proof_verifier_public_key),
         "proxy_collector_public_key": Path(args.proxy_collector_public_key),
+        "compose_file": Path(args.compose_file),
     }
     if args.hardware_assurance:
         paths["hardware_assurance"] = Path(args.hardware_assurance)
@@ -5383,25 +7380,52 @@ def main() -> None:
         paths["final_challenge_receipt"] = Path(args.final_challenge_receipt)
         paths["final_challenge_authority_public_key"] = Path(args.final_challenge_authority_public_key)
 
-    final_file_snapshots = snapshot_final_verification_files(
-        paths,
-        include_hardware_assurance=bool(args.hardware_assurance),
-        include_final_receipt=args.verification_mode == "final",
-        include_proxy_security=True,
-        include_policy=True,
+    trust_root_keys = {
+        "release_provenance_trusted_public_key",
+        "sigstore_trusted_public_key",
+        "rekor_trusted_public_key",
+        "external_checkpoint_trusted_public_key",
+        "policy_trusted_public_key",
+        "policy_activation_trusted_public_key",
+        "reproducible_build_trusted_public_key",
+        "control_plane_response_signing_public_key",
+        "proxy_proof_verifier_public_key",
+        "proxy_collector_public_key",
+        "hardware_assurance_trusted_public_key",
+        "final_challenge_authority_public_key",
+        "production_host_preflight_signing_public_key",
+    }
+    input_limits: dict[str, tuple[str, int]] = {}
+    for key in paths:
+        if key in trust_root_keys:
+            max_bytes = FINAL_TRUST_ROOT_MAX_BYTES
+        elif key == "production_readiness_env" or key == "production_images_env":
+            max_bytes = ENV_INPUT_MAX_BYTES
+        elif key == "compose_file":
+            max_bytes = COMPOSE_INPUT_MAX_BYTES
+        elif key == "policy_bundle":
+            max_bytes = POLICY_BUNDLE_MAX_BYTES
+        else:
+            max_bytes = COMPLETION_INPUT_MAX_BYTES
+        input_limits[key] = (key.replace("_", " "), max_bytes)
+    input_snapshots = InputSnapshots()
+    final_file_snapshots = input_snapshots.capture_many(paths, input_limits)
+    stable_input_directory, stable_paths = materialize_snapshots(
+        final_file_snapshots,
+        tuple(paths),
     )
 
-    readiness = load_json(paths["production_readiness"], "production readiness")
-    production_readiness_config = load_json(paths["production_readiness_config"], "production readiness config")
-    production_host_preflight = load_json(paths["production_host_preflight"], "production host preflight")
-    nitro_evidence = load_json(paths["nitro_evidence"], "Nitro/KMS evidence")
-    production_images_build = load_json(paths["production_images_build"], "production images build")
-    production_images_published = load_json(paths["production_images_published"], "production images published")
-    provenance_summary = load_json(paths["release_provenance_summary"], "release provenance summary")
-    provenance_document = load_json(paths["release_provenance"], "release provenance")
-    image_summary = load_json(paths["image_signatures_summary"], "image signatures summary")
-    image_document = load_json(paths["image_signatures"], "image signatures")
-    bench = load_json(paths["bench"], "decision-gate benchmark")
+    readiness = load_json_snapshot(final_file_snapshots["production_readiness"], "production readiness")
+    production_readiness_config = load_json_snapshot(final_file_snapshots["production_readiness_config"], "production readiness config")
+    production_host_preflight = load_json_snapshot(final_file_snapshots["production_host_preflight"], "production host preflight")
+    nitro_evidence = load_json_snapshot(final_file_snapshots["nitro_evidence"], "Nitro/KMS evidence")
+    production_images_build = load_json_snapshot(final_file_snapshots["production_images_build"], "production images build")
+    production_images_published = load_json_snapshot(final_file_snapshots["production_images_published"], "production images published")
+    provenance_summary = load_json_snapshot(final_file_snapshots["release_provenance_summary"], "release provenance summary")
+    provenance_document = load_json_snapshot(final_file_snapshots["release_provenance"], "release provenance")
+    image_summary = load_json_snapshot(final_file_snapshots["image_signatures_summary"], "image signatures summary")
+    image_document = load_json_snapshot(final_file_snapshots["image_signatures"], "image signatures")
+    bench = load_json_snapshot(final_file_snapshots["bench"], "decision-gate benchmark")
     proxy_response_proof = load_json_snapshot(
         final_file_snapshots["proxy_response_proof"],
         "production proxy response proof",
@@ -5425,7 +7449,18 @@ def main() -> None:
     )
 
     readiness_summary = verify_readiness(readiness)
-    preflight_summary = verify_production_host_preflight(production_host_preflight, paths, readiness_summary)
+    preflight_summary = verify_production_host_preflight(
+        production_host_preflight,
+        paths,
+        input_snapshots,
+        readiness_summary,
+        verification_mode=args.verification_mode,
+        preflight_signing_public_key=final_file_snapshots.get(
+            "production_host_preflight_signing_public_key"
+        ),
+        preflight_signing_key_id=args.production_host_preflight_signing_key_id,
+        preflight_max_age_seconds=args.production_host_preflight_max_age_seconds,
+    )
     current_host_summary = verify_current_completion_host(
         preflight_summary,
         skip_current_host_check=args.skip_current_host_check,
@@ -5433,6 +7468,7 @@ def main() -> None:
     production_config_summary = verify_production_config_result(production_readiness_config, preflight_summary)
     production_env_binding = verify_current_production_env_binding(
         paths,
+        input_snapshots,
         readiness_summary,
         preflight_summary,
         production_config_summary,
@@ -5449,6 +7485,24 @@ def main() -> None:
             CONTROL_PLANE_RESPONSE_SIGNING_KEY_ID_ENV_KEY: (
                 args.control_plane_response_signing_public_key_id
             ),
+            run_production_readiness.POLICY_TRUST_ROOT_ENV: (
+                args.policy_trusted_public_key
+            ),
+            run_production_readiness.POLICY_TRUST_ROOT_ID_ENV: (
+                args.policy_trusted_public_key_id
+            ),
+            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ENV: (
+                args.policy_activation_trusted_public_key
+            ),
+            run_production_readiness.POLICY_ACTIVATION_TRUST_ROOT_ID_ENV: (
+                args.policy_activation_trusted_public_key_id
+            ),
+            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ENV: (
+                args.reproducible_build_trusted_public_key
+            ),
+            run_production_readiness.REPRODUCIBLE_BUILD_TRUST_ROOT_ID_ENV: (
+                args.reproducible_build_trusted_public_key_id
+            ),
         },
         final_inputs={
             FINAL_HARDWARE_ASSURANCE_ENV_KEY: args.hardware_assurance,
@@ -5462,11 +7516,69 @@ def main() -> None:
             FINAL_CHALLENGE_AUTHORITY_PROVIDER_ENV_KEY: args.final_challenge_authority_provider,
         },
         final_file_snapshots=final_file_snapshots,
+        proxy_digest_inputs={
+            attribute: getattr(args, attribute)
+            for attribute in PROXY_EXPECTED_DIGEST_ENV_KEYS
+        },
+        launcher_trust_inputs={
+            run_production_readiness.LAUNCHER_TRUSTED_ENV_PATH_INPUT: (
+                args.launcher_trusted_production_env_path
+            ),
+            run_production_readiness.LAUNCHER_TRUSTED_ENV_SHA256_INPUT: (
+                args.launcher_trusted_production_env_sha256
+            ),
+        },
+        proxy_proof_max_age_seconds=args.proxy_proof_max_age_seconds,
+        p99_limit_ms=args.p99_limit_ms,
+        docker_executable=args.docker_executable,
+        docker_compose_plugin_executable=args.docker_compose_plugin_executable,
+        docker_unix_socket=args.docker_unix_socket,
+        docker_daemon_id=args.docker_daemon_id,
+        preflight_signing_public_key=args.production_host_preflight_signing_public_key,
+        preflight_signing_key_id=args.production_host_preflight_signing_key_id,
+        preflight_max_age_seconds=args.production_host_preflight_max_age_seconds,
     )
-    trusted_release_public_key_pem = paths["release_provenance_trusted_public_key"].read_text(encoding="ascii")
-    trusted_sigstore_public_key_pem = paths["sigstore_trusted_public_key"].read_text(encoding="ascii")
-    trusted_rekor_public_key_pem = paths["rekor_trusted_public_key"].read_text(encoding="ascii")
-    trusted_external_public_key_pem = paths["external_checkpoint_trusted_public_key"].read_text(encoding="ascii")
+    production_env = load_production_env_snapshot(
+        final_file_snapshots["production_readiness_env"]
+    )
+    args.proxy_proof_max_age_seconds = production_env_binding[
+        "proxy_proof_max_age_seconds"
+    ]
+    args.p99_limit_ms = production_env_binding["p99_limit_ms"]
+    args.docker_executable = production_env_binding["docker_executable"]
+    args.docker_compose_plugin_executable = production_env_binding[
+        "docker_compose_plugin_executable"
+    ]
+    args.docker_unix_socket = production_env_binding["docker_unix_socket"]
+    args.docker_daemon_id = production_env_binding["docker_daemon_id"]
+    if args.verification_mode == "final":
+        production_env_binding["executing_interpreter"] = verify_current_interpreter_binding(
+            production_env,
+            production_env_binding["current_executable_digests"],
+        )
+        production_env_binding["executing_script"] = verify_current_script_binding(
+            production_env
+        )
+    trusted_release_public_key_pem = snapshot_text(
+        final_file_snapshots["release_provenance_trusted_public_key"],
+        "release provenance trust root",
+        encoding="ascii",
+    )
+    trusted_sigstore_public_key_pem = snapshot_text(
+        final_file_snapshots["sigstore_trusted_public_key"],
+        "Sigstore trust root",
+        encoding="ascii",
+    )
+    trusted_rekor_public_key_pem = snapshot_text(
+        final_file_snapshots["rekor_trusted_public_key"],
+        "Rekor trust root",
+        encoding="ascii",
+    )
+    trusted_external_public_key_pem = snapshot_text(
+        final_file_snapshots["external_checkpoint_trusted_public_key"],
+        "external checkpoint trust root",
+        encoding="ascii",
+    )
     trusted_external_log_id = release_public_key_id(trusted_external_public_key_pem)
     require(
         readiness_summary["external_transparency_provider"] == args.external_checkpoint_provider,
@@ -5564,11 +7676,36 @@ def main() -> None:
     provenance_summary_out["current_source_tree_digest"] = current_source_tree_digest
     provenance_summary_out["current_source_tree_bound"] = True
     running_containers = verify_running_production_containers(
-        env_file=paths["production_readiness_env"],
-        compose_file=Path(args.compose_file),
+        env_file=stable_paths["production_readiness_env"],
+        compose_file=stable_paths["compose_file"],
+        production_env=production_env,
+        project_directory=paths["compose_file"].parent.resolve(),
         production_image_refs=list(readiness_summary["production_images"]),
         source_tree_digest=current_source_tree_digest,
+        runtime_model=preflight_summary["production_runtime_model"],
+        artifact_expectations={
+            "/run/serverware/release/release-provenance.json": {
+                "sha256": final_file_snapshots["release_provenance"].sha256,
+                "bytes": len(final_file_snapshots["release_provenance"].data),
+            },
+            "/run/serverware/release/image-signatures.json": {
+                "sha256": final_file_snapshots["image_signatures"].sha256,
+                "bytes": len(final_file_snapshots["image_signatures"].data),
+            },
+        },
+        compose_project_name=production_env_binding[
+            "docker_compose_project_name"
+        ],
         skip_current_host_check=args.skip_current_host_check,
+        docker_executable=args.docker_executable,
+        docker_sha256=production_env_binding["current_executable_digests"][
+            run_production_readiness.PRODUCTION_DOCKER_EXECUTABLE_ENV
+        ],
+        compose_plugin_executable=args.docker_compose_plugin_executable,
+        compose_plugin_sha256=production_env_binding["docker_compose_plugin_sha256"],
+        docker_unix_socket=args.docker_unix_socket,
+        docker_daemon_id=args.docker_daemon_id,
+        final_mode=args.verification_mode == "final",
     )
     production_images_build_summary = verify_production_image_build(
         production_images_build,
@@ -5636,8 +7773,8 @@ def main() -> None:
             "data_plane_binary_digest": attested_runtime["data_plane_binary_digest"],
             "production_image_digests": readiness_summary["production_image_digests"],
             "production_image_refs": readiness_summary["production_images"],
-            "production_images_build_sha256": file_digest(paths["production_images_build"]),
-            "production_images_published_sha256": file_digest(paths["production_images_published"]),
+            "production_images_build_sha256": final_file_snapshots["production_images_build"].sha256,
+            "production_images_published_sha256": final_file_snapshots["production_images_published"].sha256,
             "image_signature_bundle_digest": image_summary_out["image_signature_bundle_digest"],
         },
         "independently verified release identity",
@@ -5659,15 +7796,15 @@ def main() -> None:
                 "hardware_assurance"
             ].sha256,
             nitro_summary=nitro_summary,
-            nitro_evidence_sha256=file_digest(paths["nitro_evidence"]),
-            production_host_preflight_sha256=file_digest(paths["production_host_preflight"]),
+            nitro_evidence_sha256=final_file_snapshots["nitro_evidence"].sha256,
+            production_host_preflight_sha256=final_file_snapshots["production_host_preflight"].sha256,
             current_host=current_host_summary,
             expected_release_identity=verified_release_identity,
             expected_challenge_nonce=args.hardware_assurance_expected_challenge_nonce,
             expected_challenge_nonce_sha256=args.hardware_assurance_expected_challenge_nonce_sha256,
         )
     release_security_summary = verify_release_security_evidence(
-        paths=paths,
+        paths=stable_paths,
         production_build=production_images_build_summary,
         benchmark=benchmark_summary,
         attested_runtime=attested_runtime,
@@ -5694,6 +7831,7 @@ def main() -> None:
         ],
         expected_server_instance_id=str(args.proxy_server_instance_id),
         expected_client_nonce=str(args.proxy_client_nonce),
+        expected_client_request_digest=str(args.proxy_client_request_digest),
         expected_request_digest=str(args.proxy_request_digest),
         expected_operation_digest=str(args.proxy_operation_digest),
         expected_tls_channel_binding=str(args.proxy_tls_channel_binding),
@@ -5788,14 +7926,10 @@ def main() -> None:
         "generated_at_unix": int(time.time()),
         "artifacts": {
             label: {
-                "path": str(path),
-                "sha256": (
-                    final_file_snapshots[label].sha256
-                    if label in final_file_snapshots
-                    else file_digest(path)
-                ),
+                "path": str(snapshot.path),
+                "sha256": snapshot.sha256,
             }
-            for label, path in paths.items()
+            for label, snapshot in sorted(final_file_snapshots.items())
         },
         "production_readiness": readiness_summary,
         "production_readiness_config": production_config_summary,
@@ -5821,8 +7955,19 @@ def main() -> None:
     }
     if args.out:
         proof["proof_path"] = args.out
+        generation = secrets.token_hex(16)
+        proof_digest_path = completion_proof_digest_path(Path(args.out), generation)
+        proof["integrity_metadata"] = {
+            "generation": generation,
+            "detached_sha256_path": str(proof_digest_path),
+            "scope": "checksum-only",
+            "independently_authenticated": False,
+            "authenticity_requires_external_signature_or_checkpoint": True,
+        }
         proof["proof_sha256"] = write_output(Path(args.out), proof)
+        proof["proof_sha256_path"] = str(proof_digest_path)
     print(canonical_json(proof))
+    stable_input_directory.cleanup()
 
 
 if __name__ == "__main__":

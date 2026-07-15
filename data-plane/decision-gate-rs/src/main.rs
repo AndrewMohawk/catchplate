@@ -81,8 +81,15 @@ const DEFAULT_REQUEST_BODY_DEADLINE_MS: u64 = 120_000;
 const DEFAULT_RESPONSE_WRITE_DEADLINE_MS: u64 = 120_000;
 const SOCKET_IO_SLICE: Duration = Duration::from_secs(1);
 const RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
+const STREAM_RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Stream-v1";
 const SERVERWARE_INTERNAL_HEADER_PREFIX: &str = "x-serverware-";
 const RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-proof-nonce";
+const STREAM_RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-stream-proof-nonce";
+const STREAM_RESPONSE_PROOF_B64_TRAILER: &str = "X-Serverware-Stream-Proof-B64";
+const STREAM_RESPONSE_PROOF_SHA256_TRAILER: &str = "X-Serverware-Stream-Proof-SHA256";
+const STREAM_RESPONSE_PROOF_TRAILER_DECLARATION: &str =
+    "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256";
+const MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES: usize = 96 * 1024;
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
 const SUPPORTED_ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
 
@@ -425,6 +432,54 @@ struct StreamingResponsePolicy {
     allowed_fields: Vec<Vec<String>>,
 }
 
+#[derive(Clone)]
+struct StreamingResponseProofContext {
+    client_nonce: String,
+    client_nonce_bytes: Vec<u8>,
+    tls_exporter: String,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResponseProofKind {
+    Buffered,
+    Streaming,
+}
+
+enum ResponseProofRequestContext<'a> {
+    Buffered(&'a ResponseProofContext),
+    Streaming(&'a StreamingResponseProofContext),
+}
+
+struct StreamingResponseProofRequest<'a> {
+    context: &'a StreamingResponseProofContext,
+    expected_client_request_digest: &'a str,
+    writer: &'a mut dyn TerminalDeadlineWrite,
+}
+
+struct StreamingResponseProofExecution<'a> {
+    context: &'a StreamingResponseProofContext,
+    authorization_context: &'a ResponseProofAuthorizationContext,
+    expected_client_request_digest: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StreamingResponseStats {
+    raw_body_digest: String,
+    raw_body_bytes: u64,
+    body_digest: String,
+    body_bytes: u64,
+    validation: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+struct StreamingResponseProofUpstreamResponse {
+    status: u16,
+    selected_raw_policy_headers_b64: BTreeMap<String, Vec<String>>,
+    body_digest: String,
+    body_bytes: u64,
+    canonical_digest: String,
+}
+
 enum ForwardResult {
     Buffered(Vec<u8>),
     Streamed,
@@ -467,6 +522,7 @@ struct GateState {
     credential_lease_renewal_queue_full: AtomicU64,
     credential_lease_cache_max: usize,
     upstream_client: Client,
+    one_shot_upstream_client: Client,
     audit_client: Client,
     credential_lease_client: Client,
     audit_url: Option<String>,
@@ -727,6 +783,11 @@ struct DeadlineIo<T> {
     read_started: Option<Instant>,
     write_budget: Duration,
     write_started: Option<Instant>,
+    terminal_write_deadline: Option<Instant>,
+}
+
+trait TerminalDeadlineWrite: Write {
+    fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>);
 }
 
 trait ConfigureIoTimeout {
@@ -762,6 +823,7 @@ impl<T> DeadlineIo<T> {
             read_started: None,
             write_budget,
             write_started: None,
+            terminal_write_deadline: None,
         }
     }
 
@@ -779,6 +841,33 @@ impl<T> DeadlineIo<T> {
         let started = started.get_or_insert_with(Instant::now);
         budget.checked_sub(started.elapsed())
     }
+
+    fn write_remaining(&mut self) -> Option<Duration> {
+        let phase_remaining = Self::phase_remaining(&mut self.write_started, self.write_budget)?;
+        match self.terminal_write_deadline {
+            Some(deadline) => {
+                Some(phase_remaining.min(deadline.checked_duration_since(Instant::now())?))
+            }
+            None => Some(phase_remaining),
+        }
+    }
+}
+
+impl<T: ConfigureIoTimeout + Write> TerminalDeadlineWrite for DeadlineIo<T> {
+    fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
+        self.terminal_write_deadline = deadline;
+    }
+}
+
+impl TerminalDeadlineWrite for StreamOwned<ServerConnection, DeadlineIo<TcpStream>> {
+    fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
+        self.sock.set_terminal_write_deadline(deadline);
+    }
+}
+
+#[cfg(test)]
+impl TerminalDeadlineWrite for Vec<u8> {
+    fn set_terminal_write_deadline(&mut self, _deadline: Option<Instant>) {}
 }
 
 impl<T: ConfigureIoTimeout + Read> Read for DeadlineIo<T> {
@@ -819,70 +908,82 @@ impl<T: ConfigureIoTimeout + Read> Read for DeadlineIo<T> {
 
 impl<T: ConfigureIoTimeout + Write> Write for DeadlineIo<T> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        loop {
-            let Some(remaining) = Self::phase_remaining(&mut self.write_started, self.write_budget)
-            else {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "absolute response write deadline exceeded",
-                ));
-            };
-            self.inner
-                .configure_write_timeout(remaining.min(SOCKET_IO_SLICE))?;
-            match self.inner.write(buffer) {
-                Err(err)
-                    if matches!(
-                        err.kind(),
-                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    continue;
+        let Some(remaining) = self.write_remaining() else {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "absolute response write deadline exceeded",
+            ));
+        };
+        self.inner
+            .configure_write_timeout(remaining.min(SOCKET_IO_SLICE))?;
+        match self.inner.write(buffer) {
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                if self.write_remaining().is_none() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "absolute response write deadline exceeded",
+                    ));
                 }
-                Ok(written) => {
-                    if Self::phase_remaining(&mut self.write_started, self.write_budget).is_none() {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "absolute response write deadline exceeded",
-                        ));
-                    }
-                    return Ok(written);
-                }
-                Err(err) => return Err(err),
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "response write slice elapsed",
+                ))
             }
+            Ok(written) => {
+                if self.write_remaining().is_none() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "absolute response write deadline exceeded",
+                    ));
+                }
+                Ok(written)
+            }
+            Err(err) => Err(err),
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        loop {
-            let Some(remaining) = Self::phase_remaining(&mut self.write_started, self.write_budget)
-            else {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "absolute response write deadline exceeded",
-                ));
-            };
-            self.inner
-                .configure_write_timeout(remaining.min(SOCKET_IO_SLICE))?;
-            match self.inner.flush() {
-                Err(err)
-                    if matches!(
-                        err.kind(),
-                        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-                    ) =>
-                {
-                    continue;
+        let Some(remaining) = self.write_remaining() else {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "absolute response write deadline exceeded",
+            ));
+        };
+        self.inner
+            .configure_write_timeout(remaining.min(SOCKET_IO_SLICE))?;
+        match self.inner.flush() {
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+                ) =>
+            {
+                if self.write_remaining().is_none() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "absolute response write deadline exceeded",
+                    ));
                 }
-                Ok(()) => {
-                    if Self::phase_remaining(&mut self.write_started, self.write_budget).is_none() {
-                        return Err(io::Error::new(
-                            io::ErrorKind::TimedOut,
-                            "absolute response write deadline exceeded",
-                        ));
-                    }
-                    return Ok(());
-                }
-                Err(err) => return Err(err),
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "response flush slice elapsed",
+                ))
             }
+            Ok(()) => {
+                if self.write_remaining().is_none() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "absolute response write deadline exceeded",
+                    ));
+                }
+                Ok(())
+            }
+            Err(err) => Err(err),
         }
     }
 }
@@ -3095,6 +3196,7 @@ fn validate_generic_required_header_policy(
 
 fn validate_signed_npm_publish_response_contract(
     route_id: &str,
+    host: &str,
     adapter_config: &serde_json::Map<String, Value>,
     constraints: &[Value],
 ) -> Result<(), String> {
@@ -3117,6 +3219,22 @@ fn validate_signed_npm_publish_response_contract(
         ));
     }
 
+    let publish_response_constraints = constraints
+        .iter()
+        .filter(|constraint| {
+            matches!(
+                constraint.get("type").and_then(Value::as_str),
+                Some("responseBinding" | "responseJson")
+            ) && constraint
+                .get("operations")
+                .and_then(Value::as_array)
+                .is_some_and(|operations| {
+                    operations
+                        .iter()
+                        .any(|operation| operation.as_str() == Some("npm.publish"))
+                })
+        })
+        .collect::<Vec<_>>();
     let response_bindings = constraints
         .iter()
         .filter(|constraint| {
@@ -3129,6 +3247,25 @@ fn validate_signed_npm_publish_response_contract(
                     })
         })
         .collect::<Vec<_>>();
+    let response_json_constraints = constraints
+        .iter()
+        .filter(|constraint| {
+            constraint.get("type").and_then(Value::as_str) == Some("responseJson")
+                && constraint
+                    .get("operations")
+                    .and_then(Value::as_array)
+                    .is_some_and(|operations| {
+                        operations.len() == 1 && operations[0].as_str() == Some("npm.publish")
+                    })
+        })
+        .collect::<Vec<_>>();
+    if host == "registry.npmjs.org"
+        && publish_response_constraints.is_empty()
+        && response_bindings.is_empty()
+        && response_json_constraints.is_empty()
+    {
+        return Ok(());
+    }
     if response_bindings.is_empty() {
         return Err(format!(
             "route {route_id} signed npm.publish requires a responseBinding scoped only to npm.publish"
@@ -3164,19 +3301,6 @@ fn validate_signed_npm_publish_response_contract(
             ));
         }
     }
-
-    let response_json_constraints = constraints
-        .iter()
-        .filter(|constraint| {
-            constraint.get("type").and_then(Value::as_str) == Some("responseJson")
-                && constraint
-                    .get("operations")
-                    .and_then(Value::as_array)
-                    .is_some_and(|operations| {
-                        operations.len() == 1 && operations[0].as_str() == Some("npm.publish")
-                    })
-        })
-        .collect::<Vec<_>>();
     if response_json_constraints.is_empty() {
         return Err(format!(
             "route {route_id} signed npm.publish requires a responseJson success constraint scoped only to npm.publish"
@@ -4949,7 +5073,18 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                         .any(|operation| operation.as_str() == Some("publish"))
                 })
         {
-            validate_signed_npm_publish_response_contract(route_id, adapter_config, constraints)?;
+            let host = route
+                .get("match")
+                .and_then(Value::as_object)
+                .and_then(|route_match| route_match.get("host"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            validate_signed_npm_publish_response_contract(
+                route_id,
+                host,
+                adapter_config,
+                constraints,
+            )?;
         }
 
         let Some(jit_value) = route.get("jit") else {
@@ -6087,8 +6222,9 @@ fn canonical_client_proof_headers(
     Ok(lowered)
 }
 
-fn canonical_client_proof_request(
+fn canonical_client_proof_request_for_version(
     request: &IncomingRequest,
+    api_version: &'static str,
 ) -> Result<CanonicalSafeProofRequest, String> {
     let method = request.method.to_ascii_uppercase();
     if method != "GET" {
@@ -6110,7 +6246,7 @@ fn canonical_client_proof_request(
         return Err("response proof request URL is not a canonical HTTP authority".to_string());
     }
     Ok(CanonicalSafeProofRequest {
-        api_version: "serverware.clientProofRequest/v1",
+        api_version,
         method,
         scheme: url.scheme().to_ascii_lowercase(),
         authority: canonical_authority(&url),
@@ -6119,6 +6255,18 @@ fn canonical_client_proof_request(
         headers: canonical_client_proof_headers(&request.headers)?,
         body_sha256: sha256_prefixed(b""),
     })
+}
+
+fn canonical_client_proof_request(
+    request: &IncomingRequest,
+) -> Result<CanonicalSafeProofRequest, String> {
+    canonical_client_proof_request_for_version(request, "serverware.clientProofRequest/v1")
+}
+
+fn canonical_streaming_client_proof_request(
+    request: &IncomingRequest,
+) -> Result<CanonicalSafeProofRequest, String> {
+    canonical_client_proof_request_for_version(request, "serverware.streamingClientProofRequest/v1")
 }
 
 fn client_proof_request_digest(
@@ -6134,6 +6282,26 @@ fn client_proof_request_digest(
     let canonical = canonical_client_proof_request(request)?;
     let value = serde_json::to_value(canonical)
         .map_err(|err| format!("serialize canonical response proof request: {err}"))?;
+    Ok(digest_json(&value))
+}
+
+fn streaming_client_proof_request_digest(
+    request: &IncomingRequest,
+    context: &StreamingResponseProofContext,
+) -> Result<String, String> {
+    let headers = lower_headers(&request.headers);
+    if headers
+        .get(STREAM_RESPONSE_PROOF_NONCE_HEADER)
+        .map(String::as_str)
+        != Some(context.client_nonce.as_str())
+    {
+        return Err(
+            "streaming response proof context does not match the request nonce".to_string(),
+        );
+    }
+    let canonical = canonical_streaming_client_proof_request(request)?;
+    let value = serde_json::to_value(canonical)
+        .map_err(|err| format!("serialize canonical streaming response proof request: {err}"))?;
     Ok(digest_json(&value))
 }
 
@@ -6174,6 +6342,10 @@ fn digest_json(value: &Value) -> String {
 
 fn digest_json_ensure_ascii(value: &Value) -> String {
     sha256_prefixed(canonical_json_ensure_ascii(value).as_bytes())
+}
+
+fn approval_url(approval_id: &str) -> String {
+    format!("/approvals/{approval_id}")
 }
 
 fn random_request_attempt_id() -> Result<String, String> {
@@ -6239,6 +6411,63 @@ fn response_proof_context(
         )
         .map_err(|err| format!("derive response proof TLS exporter: {err}"))?;
     Ok(Some(ResponseProofContext {
+        client_nonce: client_nonce.to_string(),
+        client_nonce_bytes,
+        tls_exporter: general_purpose::URL_SAFE_NO_PAD.encode(exporter),
+    }))
+}
+
+fn requested_response_proof_kind(
+    headers: &BTreeMap<String, String>,
+) -> Result<Option<ResponseProofKind>, String> {
+    let lowered = lower_headers(headers);
+    let buffered = lowered.contains_key(RESPONSE_PROOF_NONCE_HEADER);
+    let streaming = lowered.contains_key(STREAM_RESPONSE_PROOF_NONCE_HEADER);
+    match (buffered, streaming) {
+        (true, true) => Err(
+            "buffered and streaming response proof nonce headers are mutually exclusive"
+                .to_string(),
+        ),
+        (true, false) => Ok(Some(ResponseProofKind::Buffered)),
+        (false, true) => Ok(Some(ResponseProofKind::Streaming)),
+        (false, false) => Ok(None),
+    }
+}
+
+fn decode_streaming_response_proof_nonce(client_nonce: &str) -> Result<Vec<u8>, String> {
+    if client_nonce.contains('=') {
+        return Err("streaming response proof nonce must use unpadded base64url".to_string());
+    }
+    let client_nonce_bytes = general_purpose::URL_SAFE_NO_PAD
+        .decode(client_nonce.as_bytes())
+        .map_err(|_| "streaming response proof nonce is not valid base64url".to_string())?;
+    if client_nonce_bytes.len() != 32 {
+        return Err("streaming response proof nonce must contain exactly 32 bytes".to_string());
+    }
+    Ok(client_nonce_bytes)
+}
+
+fn streaming_response_proof_context(
+    state: &GateState,
+    headers: &BTreeMap<String, String>,
+    tls: &ServerConnection,
+) -> Result<Option<StreamingResponseProofContext>, String> {
+    let lowered = lower_headers(headers);
+    let Some(client_nonce) = lowered.get(STREAM_RESPONSE_PROOF_NONCE_HEADER) else {
+        return Ok(None);
+    };
+    if state.response_proof_attestation_command.is_none() || state.server_instance_id.is_none() {
+        return Err("streaming response proof service is not configured".to_string());
+    }
+    let client_nonce_bytes = decode_streaming_response_proof_nonce(client_nonce)?;
+    let exporter = tls
+        .export_keying_material(
+            [0u8; 32],
+            STREAM_RESPONSE_PROOF_EXPORTER_LABEL,
+            Some(client_nonce_bytes.as_slice()),
+        )
+        .map_err(|err| format!("derive streaming response proof TLS exporter: {err}"))?;
+    Ok(Some(StreamingResponseProofContext {
         client_nonce: client_nonce.to_string(),
         client_nonce_bytes,
         tls_exporter: general_purpose::URL_SAFE_NO_PAD.encode(exporter),
@@ -6565,18 +6794,17 @@ fn validate_response_proof_authorization_binding(
     Ok(())
 }
 
-fn validate_response_proof_upstream_binding(
-    upstream_response: &ResponseProofUpstreamResponse,
+fn validate_response_proof_upstream_headers(
+    selected_raw_policy_headers_b64: &BTreeMap<String, Vec<String>>,
 ) -> Result<(), String> {
     const REQUIRED_HEADERS: [&str; 3] = ["content-encoding", "content-length", "content-type"];
-    if REQUIRED_HEADERS.iter().any(|name| {
-        !upstream_response
-            .selected_raw_policy_headers_b64
-            .contains_key(*name)
-    }) {
+    if REQUIRED_HEADERS
+        .iter()
+        .any(|name| !selected_raw_policy_headers_b64.contains_key(*name))
+    {
         return Err("response proof upstream raw header binding is incomplete".to_string());
     }
-    for (name, values) in &upstream_response.selected_raw_policy_headers_b64 {
+    for (name, values) in selected_raw_policy_headers_b64 {
         if !REQUIRED_HEADERS.contains(&name.as_str())
             && !SAFE_RESPONSE_HEADERS.contains(&name.as_str())
         {
@@ -6609,6 +6837,13 @@ fn validate_response_proof_upstream_binding(
             }
         }
     }
+    Ok(())
+}
+
+fn validate_response_proof_upstream_binding(
+    upstream_response: &ResponseProofUpstreamResponse,
+) -> Result<(), String> {
+    validate_response_proof_upstream_headers(&upstream_response.selected_raw_policy_headers_b64)?;
     let canonical_digest = response_proof_upstream_canonical_digest(
         upstream_response.status,
         &upstream_response.selected_raw_policy_headers_b64,
@@ -6860,6 +7095,296 @@ fn attach_response_proof(
         runtime_proof_sha256: runtime_proof_digest,
         client_request_digest,
     })
+}
+
+fn encode_streaming_response_runtime_proof(
+    runtime_proof: &Value,
+) -> Result<(String, String), String> {
+    let runtime_proof_bytes = canonical_json(runtime_proof).into_bytes();
+    if runtime_proof_bytes.len() > MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES {
+        return Err(format!(
+            "streaming response runtime proof exceeds {MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES} bytes"
+        ));
+    }
+    let runtime_proof_digest = sha256_prefixed(&runtime_proof_bytes);
+    let runtime_proof_b64 = general_purpose::URL_SAFE_NO_PAD.encode(runtime_proof_bytes);
+    Ok((runtime_proof_b64, runtime_proof_digest))
+}
+
+fn validate_streaming_response_proof_snapshot(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+) -> Result<(), String> {
+    if snapshot_is_active(state, snapshot) {
+        Ok(())
+    } else {
+        Err("policy snapshot revoked before streaming response proof completion".to_string())
+    }
+}
+
+fn validate_streaming_response_proof_authority(
+    route: &Route,
+    authority: &ResponseProofReleaseAuthority,
+) -> Result<(), String> {
+    if authority.authority_mode != "atomic"
+        || authority.request_digest.is_empty()
+        || authority.operation_digest.is_empty()
+    {
+        return Err("streaming response proof requires atomic release authority".to_string());
+    }
+    match route.credential_ref.as_deref() {
+        None if authority.credential_ref.is_none() && authority.credential_version == 0 => Ok(()),
+        Some(expected)
+            if authority.credential_ref.as_deref() == Some(expected)
+                && authority.credential_version > 0 =>
+        {
+            Ok(())
+        }
+        _ => Err("streaming response proof credential authority mismatch".to_string()),
+    }
+}
+
+fn release_authorization_binding_commitment(binding: &ReleaseAuthorizationBinding) -> Value {
+    json!({
+        "attempt_id":binding.attempt_id,
+        "flow_id":binding.flow_id,
+        "principal_id":binding.principal_id,
+        "route_id":binding.route_id,
+        "credential_id":binding.credential_id,
+        "credential_version":binding.credential_version,
+        "policy_hash":binding.policy_hash,
+        "request_digest":binding.request_digest,
+        "operation_digest":binding.operation_digest,
+        "operation_context_digest":digest_json_ensure_ascii(&binding.operation_context),
+        "require_jit_grant":binding.require_jit_grant,
+        "shared_quotas":binding.shared_quotas,
+    })
+}
+
+fn build_streaming_response_runtime_proof(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+    context: &StreamingResponseProofContext,
+    authorization_context: &ResponseProofAuthorizationContext,
+    expected_client_request_digest: &str,
+    upstream_response: &StreamingResponseProofUpstreamResponse,
+    status: StatusCode,
+    content_type: &str,
+    selected_wire_headers: &BTreeMap<String, String>,
+    stats: &StreamingResponseStats,
+) -> Result<(String, String), String> {
+    if !status.is_success() {
+        return Err(
+            "streaming response proof is unavailable for non-success responses".to_string(),
+        );
+    }
+    let route_match = validate_response_release_context(state, snapshot, decision, method, url)
+        .map_err(|payload| {
+            format!("streaming response proof release context invalid: {payload}")
+        })?;
+    validate_streaming_response_proof_snapshot(state, snapshot)?;
+    let release_authority = &authorization_context.release_authority;
+    validate_streaming_response_proof_authority(route_match.route, release_authority)?;
+    validate_control_plane_authorization_receipt(
+        snapshot,
+        &authorization_context.control_plane_authorization_receipt,
+        &authorization_context.principal_id,
+        &authorization_context.route_id,
+        release_authority,
+        &authorization_context.authorization_binding,
+    )?;
+    if !is_sha256_digest(expected_client_request_digest)
+        || !is_sha256_digest(&stats.body_digest)
+        || !is_sha256_digest(&stats.raw_body_digest)
+        || upstream_response.status != status.as_u16()
+        || upstream_response.body_digest != stats.raw_body_digest
+        || upstream_response.body_bytes != stats.raw_body_bytes
+    {
+        return Err("streaming response proof response binding is invalid".to_string());
+    }
+    validate_response_proof_upstream_headers(&upstream_response.selected_raw_policy_headers_b64)?;
+    let expected_upstream_digest = streaming_response_proof_upstream_canonical_digest(
+        upstream_response.status,
+        &upstream_response.selected_raw_policy_headers_b64,
+        &upstream_response.body_digest,
+        upstream_response.body_bytes,
+    );
+    if upstream_response.canonical_digest != expected_upstream_digest {
+        return Err("streaming response proof upstream canonical digest mismatch".to_string());
+    }
+    let authorization_binding_value =
+        serde_json::to_value(&authorization_context.authorization_binding)
+            .map_err(|err| format!("serialize streaming authorization binding: {err}"))?;
+    let authorization_binding_digest = digest_json_ensure_ascii(&authorization_binding_value);
+    if authorization_binding_digest != release_authority.consumption_identity_digest {
+        return Err("streaming response proof authorization binding digest mismatch".to_string());
+    }
+    let authorization_binding_commitment =
+        release_authorization_binding_commitment(&authorization_context.authorization_binding);
+    let receipt_value =
+        serde_json::to_value(&authorization_context.control_plane_authorization_receipt)
+            .map_err(|err| format!("serialize streaming authorization receipt: {err}"))?;
+    let receipt_digest = digest_json(&receipt_value);
+    let selected_wire_headers_digest = digest_json(
+        &serde_json::to_value(selected_wire_headers)
+            .map_err(|err| format!("serialize streaming response wire headers: {err}"))?,
+    );
+    let provenance_digest = release_provenance_digest(&state.release_provenance_path);
+    let release_digest = provenance_digest
+        .as_str()
+        .filter(|value| is_sha256_digest(value))
+        .ok_or("streaming response proof requires release provenance")?
+        .to_string();
+    let image_signature_digest = image_signatures_digest(&state.image_signatures_path);
+    let source_digest = source_tree_digest(&state.release_provenance_path);
+    let runtime_manifest = build_runtime_manifest(
+        state,
+        snapshot,
+        &provenance_digest,
+        &image_signature_digest,
+        &source_digest,
+    );
+    let runtime_manifest_digest = sha256_prefixed(canonical_json(&runtime_manifest).as_bytes());
+    let server_instance_id = state
+        .server_instance_id
+        .as_deref()
+        .ok_or("streaming response proof server instance is not configured")?;
+    let server_instance_identity_digest = sha256_prefixed(server_instance_id.as_bytes());
+    let tls_channel_binding = json!({
+        "type":"tls-exporter",
+        "exporter_label":String::from_utf8_lossy(STREAM_RESPONSE_PROOF_EXPORTER_LABEL),
+        "value":context.tls_exporter,
+    });
+    let trailer_names = json!([
+        STREAM_RESPONSE_PROOF_B64_TRAILER,
+        STREAM_RESPONSE_PROOF_SHA256_TRAILER
+    ]);
+    let issued_at_unix = now_epoch_ms() / 1000;
+    let statement = json!({
+        "apiVersion":"serverware.streamingResponseStatement/v1",
+        "issued_at_unix":issued_at_unix,
+        "client_nonce":context.client_nonce,
+        "client_request_digest":expected_client_request_digest,
+        "principal_id":authorization_context.principal_id,
+        "route_id":authorization_context.route_id,
+        "request_digest":release_authority.request_digest,
+        "operation_digest":release_authority.operation_digest,
+        "release_authority":release_authority,
+        "authorization_binding_validation":{
+            "status":"validated",
+            "binding_commitment":authorization_binding_commitment,
+            "binding_digest":authorization_binding_digest,
+        },
+        "control_plane_authorization_receipt":authorization_context.control_plane_authorization_receipt,
+        "control_plane_authorization_receipt_sha256":receipt_digest,
+        "upstream_response":upstream_response,
+        "released_response":{
+            "status":status.as_u16(),
+            "content_type":content_type,
+            "selected_wire_headers":selected_wire_headers,
+            "selected_wire_headers_digest":selected_wire_headers_digest,
+            "body_digest":stats.body_digest,
+            "body_bytes":stats.body_bytes,
+            "framing":"http1.1-chunked-trailers",
+            "completion":"normal-eof",
+            "trailer_names":trailer_names,
+        },
+        "policy_digest":snapshot.hash,
+        "runtime_manifest_digest":runtime_manifest_digest,
+        "data_plane_binary_digest":state.binary_digest,
+        "release_digest":release_digest,
+        "server_instance":{
+            "id":server_instance_id,
+            "identity_digest":server_instance_identity_digest,
+        },
+        "tls_channel_binding":tls_channel_binding,
+    });
+    let canonical_statement = canonical_json(&statement);
+    let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
+    let signature = state
+        .response_proof_signing_key
+        .sign(canonical_statement.as_bytes());
+    let raw_headers_digest = digest_json(
+        &serde_json::to_value(&upstream_response.selected_raw_policy_headers_b64)
+            .map_err(|err| format!("serialize streaming raw response headers: {err}"))?,
+    );
+    let attested_claims = json!({
+        "streaming_response_statement_api_version":"serverware.streamingResponseStatement/v1",
+        "streaming_response_statement_sha256":statement_digest,
+        "issued_at_unix":issued_at_unix,
+        "client_nonce_sha256":sha256_prefixed(&context.client_nonce_bytes),
+        "client_request_digest":expected_client_request_digest,
+        "principal_id":authorization_context.principal_id,
+        "route_id":authorization_context.route_id,
+        "request_digest":release_authority.request_digest,
+        "operation_digest":release_authority.operation_digest,
+        "release_authority":release_authority,
+        "authorization_binding_digest":authorization_binding_digest,
+        "control_plane_authorization_receipt_sha256":receipt_digest,
+        "upstream_status":upstream_response.status,
+        "upstream_selected_raw_policy_headers_digest":raw_headers_digest,
+        "upstream_body_digest":upstream_response.body_digest,
+        "upstream_body_bytes":upstream_response.body_bytes,
+        "upstream_canonical_digest":upstream_response.canonical_digest,
+        "released_response_status":status.as_u16(),
+        "released_response_content_type":content_type,
+        "selected_response_wire_headers_digest":selected_wire_headers_digest,
+        "released_response_body_digest":stats.body_digest,
+        "released_response_body_bytes":stats.body_bytes,
+        "response_framing":"http1.1-chunked-trailers",
+        "response_completion":"normal-eof",
+        "response_trailer_names":trailer_names,
+        "policy_digest":snapshot.hash,
+        "runtime_manifest_digest":runtime_manifest_digest,
+        "data_plane_binary_digest":state.binary_digest,
+        "release_digest":release_digest,
+        "server_instance_id":server_instance_id,
+        "server_instance_identity_digest":server_instance_identity_digest,
+        "tls_channel_binding_type":"tls-exporter",
+        "tls_exporter_label":String::from_utf8_lossy(STREAM_RESPONSE_PROOF_EXPORTER_LABEL),
+        "tls_channel_binding_sha256":digest_json(&tls_channel_binding),
+        "response_signing_key_id":state.response_proof_signing_key_id,
+    });
+    let attestation_request = json!({
+        "apiVersion":"serverware.streamingResponseProofAttestationRequest/v1",
+        "kind":"ServerwareStreamingResponseProofAttestationRequest",
+        "streaming_response_statement_api_version":"serverware.streamingResponseStatement/v1",
+        "streaming_response_statement_sha256":statement_digest,
+        "response_signing_key_id":state.response_proof_signing_key_id,
+        "response_signing_public_key_pem":state.response_proof_public_key_pem,
+        "attested_claims":attested_claims,
+    });
+    let attestation_command = state
+        .response_proof_attestation_command
+        .as_deref()
+        .ok_or("streaming response proof attestation command is not configured")?;
+    let attestation = run_bounded_json_command(
+        attestation_command,
+        &attestation_request,
+        "streaming response proof attestation",
+    )?;
+    let vendor_tee = attestation
+        .get("vendor_tee")
+        .filter(|value| value.is_object())
+        .cloned()
+        .ok_or("streaming response proof attestation output is missing vendor_tee")?;
+    let runtime_proof = json!({
+        "apiVersion":"serverware.streamingResponseRuntimeProof/v1",
+        "kind":"ServerwareStreamingResponseRuntimeProof",
+        "streaming_response_statement":statement,
+        "streaming_response_statement_sha256":statement_digest,
+        "server_signature":{
+            "algorithm":"Ed25519",
+            "key_id":state.response_proof_signing_key_id,
+            "public_key_pem":state.response_proof_public_key_pem,
+            "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())),
+        },
+        "vendor_tee":vendor_tee,
+    });
+    encode_streaming_response_runtime_proof(&runtime_proof)
 }
 
 fn required_signed_response_header(
@@ -8089,10 +8614,13 @@ fn pem_certificates(bundle: &str) -> Vec<Vec<u8>> {
     certs
 }
 
-fn build_upstream_client() -> Result<Client, String> {
+fn build_upstream_client(reuse_idle_connections: bool) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none());
+    if !reuse_idle_connections {
+        builder = builder.pool_max_idle_per_host(0);
+    }
     if let Ok(path) = env::var("SERVERWARE_UPSTREAM_CA_BUNDLE") {
         if !path.trim().is_empty() {
             let text = fs::read_to_string(&path)
@@ -8111,6 +8639,14 @@ fn build_upstream_client() -> Result<Client, String> {
     builder
         .build()
         .map_err(|err| format!("build upstream HTTP client: {err}"))
+}
+
+fn upstream_client_for_method<'a>(state: &'a GateState, method: &Method) -> &'a Client {
+    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
+        &state.upstream_client
+    } else {
+        &state.one_shot_upstream_client
+    }
 }
 
 fn build_audit_client() -> Result<Client, String> {
@@ -11181,7 +11717,8 @@ fn prepare_request_operation_context(
                 })
             },
         )?;
-    let proof_requested = normalized_headers.contains_key(RESPONSE_PROOF_NONCE_HEADER);
+    let proof_requested = normalized_headers.contains_key(RESPONSE_PROOF_NONCE_HEADER)
+        || normalized_headers.contains_key(STREAM_RESPONSE_PROOF_NONCE_HEADER);
     if proof_requested != req.client_request_digest.is_some() {
         return Err(json!({
             "error":"invalid_response_proof_request_binding",
@@ -14277,6 +14814,7 @@ fn decide_internal_with_mode(
                     "error":"jit_grant_unavailable",
                     "release_reason":release.reason,
                     "approval_id":release.approval_request_id,
+                    "approval_url":release.approval_request_id.as_deref().map(approval_url),
                     "approval_status":release.approval_status,
                     "expires_at":release.approval_expires_at,
                     "approval_created":release.approval_created,
@@ -14335,6 +14873,12 @@ fn decide_internal_with_mode(
                             .map(Value::String)
                             .unwrap_or(Value::Null),
                     );
+                    if let Some(approval_id) = release.approval_request_id.as_deref() {
+                        object.insert(
+                            "approval_url".to_string(),
+                            Value::String(approval_url(approval_id)),
+                        );
+                    }
                     object.insert(
                         "approval_status".to_string(),
                         release
@@ -14745,62 +15289,70 @@ fn decide_internal_with_mode(
         true
     };
     let action = if allowed { "allow" } else { "jit_required" };
-    with_enrollment_session_id(
-        json!({
-            "action": action,
-            "allowed": allowed,
-            "status_code": if allowed {200} else {428},
-            "principal_id": principal.id,
-            "route_id": route.id,
-            "adapter": route.adapter_type,
-            "policy_hash": snapshot.hash,
-            "snapshot_epoch": snapshot.epoch,
-            "credential_ref": credential_ref,
-            "credential_version": credential_version,
-            "client_request_digest": client_request_digest,
-            "request_digest": request_digest,
-            "operation_digest": operation_digest,
-            "attempt_id": grant_attempt_id,
-            "flow_id": flow_id.clone(),
-            "grant_id": consumed_grant.as_ref().map(|grant| grant.id.clone()),
-            "operation": operation,
-            "rewrite": rewrite,
-            "jit": if jit_required {
-                match consumed_grant {
-                    Some(ref grant) => json!({"required":true,"grant_consumed":true,"grant_id":grant.id,"approval_id":grant.approval_id,"grant_store":grant_store,"secondary_audit_enqueued":grant_audit_enqueued}),
-                    None => json!({
-                        "required":true,
-                        "grant_consumed":false,
-                        "grant_store":grant_store,
-                        "approval_id":pending_approval.as_ref().map(|approval| approval.id.clone()),
-                        "expires_at":pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
-                        "retry_after_seconds":3
-                    }),
-                }
-            } else {
-                json!({"required":false})
-            },
-            "approval_id": consumed_grant
+    let pending_approval_url = (!allowed)
+        .then(|| {
+            pending_approval
                 .as_ref()
-                .and_then(|grant| grant.approval_id.clone())
-                .or_else(|| pending_approval.as_ref().map(|approval| approval.id.clone())),
-            "expires_at": pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
-            "injection": if allowed {
-                json!({
-                    "credential_ref":route.credential_ref,
-                    "credential_version":credential_version,
-                    "secret_available":secret_available,
-                    "plan":injection,
-                })
-            } else {
-                json!(null)
-            },
-            "canonical_request": canonical,
-            "decision_us": started.elapsed().as_micros() as u64,
-            "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
-        }),
-        enrollment_session_id.as_deref(),
-    )
+                .map(|approval| approval_url(&approval.id))
+        })
+        .flatten();
+    let mut decision = json!({
+        "action": action,
+        "allowed": allowed,
+        "status_code": if allowed {200} else {428},
+        "principal_id": principal.id,
+        "route_id": route.id,
+        "adapter": route.adapter_type,
+        "policy_hash": snapshot.hash,
+        "snapshot_epoch": snapshot.epoch,
+        "credential_ref": credential_ref,
+        "credential_version": credential_version,
+        "client_request_digest": client_request_digest,
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+        "attempt_id": grant_attempt_id,
+        "flow_id": flow_id.clone(),
+        "grant_id": consumed_grant.as_ref().map(|grant| grant.id.clone()),
+        "operation": operation,
+        "rewrite": rewrite,
+        "jit": if jit_required {
+            match consumed_grant {
+                Some(ref grant) => json!({"required":true,"grant_consumed":true,"grant_id":grant.id,"approval_id":grant.approval_id,"grant_store":grant_store,"secondary_audit_enqueued":grant_audit_enqueued}),
+                None => json!({
+                    "required":true,
+                    "grant_consumed":false,
+                    "grant_store":grant_store,
+                    "approval_id":pending_approval.as_ref().map(|approval| approval.id.clone()),
+                    "expires_at":pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
+                    "retry_after_seconds":3
+                }),
+            }
+        } else {
+            json!({"required":false})
+        },
+        "approval_id": consumed_grant
+            .as_ref()
+            .and_then(|grant| grant.approval_id.clone())
+            .or_else(|| pending_approval.as_ref().map(|approval| approval.id.clone())),
+        "expires_at": pending_approval.as_ref().and_then(|approval| approval.expires_at.clone()),
+        "injection": if allowed {
+            json!({
+                "credential_ref":route.credential_ref,
+                "credential_version":credential_version,
+                "secret_available":secret_available,
+                "plan":injection,
+            })
+        } else {
+            json!(null)
+        },
+        "canonical_request": canonical,
+        "decision_us": started.elapsed().as_micros() as u64,
+        "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
+    });
+    if let (Some(object), Some(approval_url)) = (decision.as_object_mut(), pending_approval_url) {
+        object.insert("approval_url".to_string(), Value::String(approval_url));
+    }
+    with_enrollment_session_id(decision, enrollment_session_id.as_deref())
 }
 
 fn http_response(status: &str, body: Value) -> Vec<u8> {
@@ -14875,6 +15427,130 @@ fn write_stream_response_headers(
         .write_all(headers.as_bytes())
         .map_err(|err| format!("write response headers: {err}"))?;
     Ok(chunked)
+}
+
+fn streaming_response_proof_wire_headers(content_type: &str) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("connection".to_string(), "close".to_string()),
+        ("content-type".to_string(), content_type.to_string()),
+        (
+            "trailer".to_string(),
+            STREAM_RESPONSE_PROOF_TRAILER_DECLARATION.to_string(),
+        ),
+        ("transfer-encoding".to_string(), "chunked".to_string()),
+    ])
+}
+
+fn write_streaming_response_proof_headers(
+    writer: &mut dyn Write,
+    status: StatusCode,
+    content_type: &str,
+) -> Result<BTreeMap<String, String>, String> {
+    let reason = status.canonical_reason().unwrap_or("Status");
+    let headers = streaming_response_proof_wire_headers(content_type);
+    let response = format!(
+        "HTTP/1.1 {} {}\r\nConnection: close\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nTrailer: {}\r\n\r\n",
+        status.as_u16(),
+        reason,
+        content_type,
+        STREAM_RESPONSE_PROOF_TRAILER_DECLARATION,
+    );
+    writer
+        .write_all(response.as_bytes())
+        .map_err(|err| format!("write streaming response proof headers: {err}"))?;
+    Ok(headers)
+}
+
+fn streaming_response_proof_terminal(
+    runtime_proof_b64: &str,
+    runtime_proof_digest: &str,
+) -> Result<Vec<u8>, String> {
+    if runtime_proof_b64.contains('=')
+        || general_purpose::URL_SAFE_NO_PAD
+            .decode(runtime_proof_b64.as_bytes())
+            .is_err()
+        || !is_sha256_digest(runtime_proof_digest)
+    {
+        return Err("streaming response proof terminal values are invalid".to_string());
+    }
+    Ok(format!(
+        "0\r\n{STREAM_RESPONSE_PROOF_B64_TRAILER}: {runtime_proof_b64}\r\n{STREAM_RESPONSE_PROOF_SHA256_TRAILER}: {runtime_proof_digest}\r\n\r\n"
+    )
+    .into_bytes())
+}
+
+#[cfg(test)]
+fn write_streaming_response_proof_terminal(
+    writer: &mut dyn Write,
+    runtime_proof_b64: &str,
+    runtime_proof_digest: &str,
+) -> Result<(), String> {
+    let terminal = streaming_response_proof_terminal(runtime_proof_b64, runtime_proof_digest)?;
+    writer
+        .write_all(&terminal)
+        .map_err(|err| format!("write streaming response proof terminal: {err}"))
+}
+
+fn write_streaming_response_proof_terminal_for_active_snapshot<
+    W: TerminalDeadlineWrite + ?Sized,
+>(
+    writer: &mut ActiveSnapshotWriter<'_, W>,
+    runtime_proof_b64: &str,
+    runtime_proof_digest: &str,
+) -> Result<(), String> {
+    if !policy_trust_is_fresh(writer.state) {
+        return Err("policy snapshot revoked before terminal proof publication".to_string());
+    }
+    let terminal = streaming_response_proof_terminal(runtime_proof_b64, runtime_proof_digest)?;
+    let active = writer
+        .state
+        .snapshot
+        .read()
+        .expect("policy snapshot lock poisoned");
+    if active.epoch != writer.snapshot.epoch || !Arc::ptr_eq(&active, writer.snapshot) {
+        return Err("policy snapshot revoked before terminal proof publication".to_string());
+    }
+    let deadline = Instant::now()
+        .checked_add(SOCKET_IO_SLICE)
+        .ok_or("terminal proof publication deadline overflow")?;
+    writer.inner.set_terminal_write_deadline(Some(deadline));
+    let result = (|| {
+        let mut remaining = terminal.as_slice();
+        while !remaining.is_empty() {
+            if Instant::now() >= deadline {
+                return Err("terminal proof publication exceeded its bounded I/O slice".to_string());
+            }
+            match writer.inner.write(remaining) {
+                Ok(0) => {
+                    return Err("terminal proof publication made no write progress".to_string())
+                }
+                Ok(written) => remaining = &remaining[written..],
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                    return Err("terminal proof publication write slice elapsed".to_string())
+                }
+                Err(err) => return Err(format!("write streaming response proof terminal: {err}")),
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err("terminal proof publication exceeded its bounded I/O slice".to_string());
+        }
+        match writer.inner.flush() {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {
+                return Err("terminal proof publication flush slice elapsed".to_string())
+            }
+            Err(err) => return Err(format!("flush streaming response proof terminal: {err}")),
+        }
+        if Instant::now() >= deadline {
+            return Err("terminal proof publication exceeded its bounded I/O slice".to_string());
+        }
+        if !policy_trust_is_fresh(writer.state) {
+            return Err("policy trust expired during terminal proof publication".to_string());
+        }
+        Ok(())
+    })();
+    writer.inner.set_terminal_write_deadline(None);
+    result
 }
 
 fn headers_want_close(headers: &BTreeMap<String, String>) -> bool {
@@ -17280,7 +17956,7 @@ fn release_forward_response(
                 "upstream_status":status.as_u16(),
                 "response_body_sha256":sha256_prefixed(&body),
                 "response_body_bytes":body.len(),
-                "response_validation":validation,
+                "response_validation":validation.clone(),
             }),
         ),
     );
@@ -17383,28 +18059,29 @@ fn response_policy_for_decision(
     url: &Url,
 ) -> Option<ResponsePolicy> {
     let route_match = decision_route_context(snapshot, decision, method, url).ok()?;
-    Some(ResponsePolicy {
-        adapter_type: route_match.route.adapter_type.clone(),
-        response_config: route_match
-            .route
+    Some(response_policy_for_route(route_match.route))
+}
+
+fn response_policy_for_route(route: &Route) -> ResponsePolicy {
+    ResponsePolicy {
+        adapter_type: route.adapter_type.clone(),
+        response_config: route
             .adapter_config
             .get("response")
             .cloned()
             .unwrap_or(Value::Null),
-        has_response_constraints: route_match
-            .route
+        has_response_constraints: route
             .constraints
             .iter()
             .any(|constraint| constraint_phase_includes(constraint, "response")),
-        has_response_binding: route_match.route.constraints.iter().any(|constraint| {
+        has_response_binding: route.constraints.iter().any(|constraint| {
             constraint.get("type").and_then(Value::as_str) == Some("responseBinding")
         }),
-        credential_bearing: route_match
-            .route
+        credential_bearing: route
             .credential_ref
             .as_deref()
             .is_some_and(|credential_ref| !credential_ref.is_empty()),
-    })
+    }
 }
 
 fn credential_response_projection_error(
@@ -17589,6 +18266,42 @@ fn streaming_response_policy(policy: &ResponsePolicy) -> Option<StreamingRespons
     })
 }
 
+fn validate_response_proof_route_preflight(
+    route: &Route,
+    proof_kind: ResponseProofKind,
+) -> Result<(), &'static str> {
+    let streaming = streaming_response_policy(&response_policy_for_route(route)).is_some();
+    match (proof_kind, streaming) {
+        (ResponseProofKind::Buffered, true) => {
+            Err("response_proof_requires_buffered_response_route")
+        }
+        (ResponseProofKind::Streaming, false) => {
+            Err("stream_response_proof_requires_streaming_response_route")
+        }
+        _ => Ok(()),
+    }
+}
+
+fn matched_response_proof_route<'a>(
+    snapshot: &'a Snapshot,
+    request: &IncomingRequest,
+    authenticated_principal_id: Option<&str>,
+) -> Option<&'a Route> {
+    let url = Url::parse(&request.target).ok()?;
+    let headers = lower_headers(&request.headers);
+    let principal = if let Some(principal_id) = authenticated_principal_id {
+        snapshot
+            .principals
+            .iter()
+            .find(|item| item.id == principal_id)
+    } else {
+        snapshot.identify_principal(request.client_ip.as_deref(), &headers)
+    }?;
+    snapshot
+        .match_route(&principal.id, &request.method, &url)
+        .map(|route_match| route_match.route)
+}
+
 fn response_content_length(headers: &HeaderMap) -> Option<u64> {
     headers
         .get(CONTENT_LENGTH)
@@ -17605,7 +18318,16 @@ fn release_streamed_forward_response(
     body_sha256: String,
     body_bytes: u64,
     validation: Value,
-) {
+) -> StreamingResponseStats {
+    let raw_body_digest = validation
+        .get("raw_response_body_sha256")
+        .and_then(Value::as_str)
+        .unwrap_or(&body_sha256)
+        .to_string();
+    let raw_body_bytes = validation
+        .get("raw_response_body_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(body_bytes);
     enqueue_audit(
         state,
         "data_plane.response.released",
@@ -17618,37 +18340,89 @@ fn release_streamed_forward_response(
                 "upstream_status":status.as_u16(),
                 "response_body_sha256":body_sha256,
                 "response_body_bytes":body_bytes,
-                "response_validation":validation,
+                "response_validation":validation.clone(),
             }),
         ),
     );
+    StreamingResponseStats {
+        raw_body_digest,
+        raw_body_bytes,
+        body_digest: body_sha256,
+        body_bytes,
+        validation,
+    }
 }
 
-struct ActiveSnapshotWriter<'a> {
+struct ActiveSnapshotWriter<'a, W: Write + ?Sized = dyn Write> {
     state: &'a GateState,
     snapshot: &'a Arc<Snapshot>,
-    inner: &'a mut dyn Write,
+    inner: &'a mut W,
 }
 
-impl Write for ActiveSnapshotWriter<'_> {
+impl<W: Write + ?Sized> Write for ActiveSnapshotWriter<'_, W> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if !snapshot_is_active(self.state, self.snapshot) {
+        if !policy_trust_is_fresh(self.state) {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "policy snapshot revoked before response release",
             ));
         }
-        self.inner.write(buffer)
+        let active = self
+            .state
+            .snapshot
+            .read()
+            .expect("policy snapshot lock poisoned");
+        if active.epoch != self.snapshot.epoch || !Arc::ptr_eq(&active, self.snapshot) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "policy snapshot revoked before response release",
+            ));
+        }
+        drop(active);
+        let written = self.inner.write(buffer)?;
+        if !policy_trust_is_fresh(self.state) || !snapshot_is_active(self.state, self.snapshot) {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "policy snapshot revoked during response release",
+            ));
+        }
+        Ok(written)
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if !snapshot_is_active(self.state, self.snapshot) {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "policy snapshot revoked before response flush",
-            ));
+        loop {
+            if !policy_trust_is_fresh(self.state) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "policy snapshot revoked before response flush",
+                ));
+            }
+            let active = self
+                .state
+                .snapshot
+                .read()
+                .expect("policy snapshot lock poisoned");
+            if active.epoch != self.snapshot.epoch || !Arc::ptr_eq(&active, self.snapshot) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "policy snapshot revoked before response flush",
+                ));
+            }
+            drop(active);
+            match self.inner.flush() {
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
+                Err(err) => return Err(err),
+                Ok(()) => {}
+            }
+            if !policy_trust_is_fresh(self.state) || !snapshot_is_active(self.state, self.snapshot)
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "policy snapshot revoked during response flush",
+                ));
+            }
+            return Ok(());
         }
-        self.inner.flush()
     }
 }
 
@@ -17713,6 +18487,7 @@ struct ChunkedHashWriter<'a> {
     hasher: Sha256,
     body_bytes: u64,
     pending: Vec<u8>,
+    defer_terminal: bool,
 }
 
 impl<'a> ChunkedHashWriter<'a> {
@@ -17722,6 +18497,17 @@ impl<'a> ChunkedHashWriter<'a> {
             hasher: Sha256::new(),
             body_bytes: 0,
             pending: Vec::with_capacity(16 * 1024),
+            defer_terminal: false,
+        }
+    }
+
+    fn new_with_deferred_terminal(writer: &'a mut dyn Write) -> Self {
+        Self {
+            writer,
+            hasher: Sha256::new(),
+            body_bytes: 0,
+            pending: Vec::with_capacity(16 * 1024),
+            defer_terminal: true,
         }
     }
 
@@ -17742,9 +18528,11 @@ impl<'a> ChunkedHashWriter<'a> {
     fn finish(mut self) -> Result<(String, u64), String> {
         self.flush_pending()
             .map_err(|err| format!("write json nested chunk: {err}"))?;
-        self.writer
-            .write_all(b"0\r\n\r\n")
-            .map_err(|err| format!("write final chunk: {err}"))?;
+        if !self.defer_terminal {
+            self.writer
+                .write_all(b"0\r\n\r\n")
+                .map_err(|err| format!("write final chunk: {err}"))?;
+        }
         self.writer
             .flush()
             .map_err(|err| format!("flush json nested stream: {err}"))?;
@@ -17766,6 +18554,14 @@ impl Write for ChunkedHashWriter<'_> {
 
     fn flush(&mut self) -> io::Result<()> {
         self.flush_pending()
+    }
+}
+
+fn streaming_chunk_writer(writer: &mut dyn Write, defer_terminal: bool) -> ChunkedHashWriter<'_> {
+    if defer_terminal {
+        ChunkedHashWriter::new_with_deferred_terminal(writer)
+    } else {
+        ChunkedHashWriter::new(writer)
     }
 }
 
@@ -17852,10 +18648,15 @@ fn stream_json_nested_forward_response(
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
     response_secret_guard: &ResponseSecretGuard,
-) -> Result<(), String> {
-    write_stream_response_headers(writer, status, Some("application/json"), None, keep_alive)?;
+    defer_terminal: bool,
+) -> Result<StreamingResponseStats, String> {
+    if defer_terminal {
+        write_streaming_response_proof_headers(writer, status, "application/json")?;
+    } else {
+        write_stream_response_headers(writer, status, Some("application/json"), None, keep_alive)?;
+    }
     let mut raw_reader = HashingLimitResponseReader::new(response, policy.max_body_bytes);
-    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut chunk_writer = streaming_chunk_writer(writer, defer_terminal);
     {
         let mut guarded_writer =
             ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
@@ -17873,7 +18674,7 @@ fn stream_json_nested_forward_response(
     let raw_body_sha256 = raw_reader.sha256();
     let raw_body_bytes = raw_reader.body_bytes;
     let (body_sha256, body_bytes) = chunk_writer.finish()?;
-    release_streamed_forward_response(
+    Ok(release_streamed_forward_response(
         state,
         decision,
         method,
@@ -17890,8 +18691,7 @@ fn stream_json_nested_forward_response(
             "raw_response_body_sha256":raw_body_sha256,
             "raw_response_body_bytes":raw_body_bytes,
         }),
-    );
-    Ok(())
+    ))
 }
 
 fn stream_json_lines_forward_response(
@@ -17905,17 +18705,22 @@ fn stream_json_lines_forward_response(
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
     response_secret_guard: &ResponseSecretGuard,
-) -> Result<(), String> {
-    write_stream_response_headers(
-        writer,
-        status,
-        Some("application/x-ndjson"),
-        None,
-        keep_alive,
-    )?;
+    defer_terminal: bool,
+) -> Result<StreamingResponseStats, String> {
+    if defer_terminal {
+        write_streaming_response_proof_headers(writer, status, "application/x-ndjson")?;
+    } else {
+        write_stream_response_headers(
+            writer,
+            status,
+            Some("application/x-ndjson"),
+            None,
+            keep_alive,
+        )?;
+    }
     let mut raw_hasher = Sha256::new();
     let mut raw_body_bytes = 0u64;
-    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut chunk_writer = streaming_chunk_writer(writer, defer_terminal);
     let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut pending = Vec::<u8>::new();
     let mut buffer = [0u8; 16 * 1024];
@@ -17966,7 +18771,7 @@ fn stream_json_lines_forward_response(
         .finish()
         .map_err(|err| format!("json_lines_response_guard_failed: {err}"))?;
     let (body_sha256, body_bytes) = chunk_writer.finish()?;
-    release_streamed_forward_response(
+    Ok(release_streamed_forward_response(
         state,
         decision,
         method,
@@ -17983,8 +18788,7 @@ fn stream_json_lines_forward_response(
             "raw_response_body_sha256":format!("sha256:{}", hex::encode(raw_hasher.finalize())),
             "raw_response_body_bytes":raw_body_bytes,
         }),
-    );
-    Ok(())
+    ))
 }
 
 fn stream_json_array_forward_response(
@@ -17998,11 +18802,16 @@ fn stream_json_array_forward_response(
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
     response_secret_guard: &ResponseSecretGuard,
-) -> Result<(), String> {
-    write_stream_response_headers(writer, status, Some("application/json"), None, keep_alive)?;
+    defer_terminal: bool,
+) -> Result<StreamingResponseStats, String> {
+    if defer_terminal {
+        write_streaming_response_proof_headers(writer, status, "application/json")?;
+    } else {
+        write_stream_response_headers(writer, status, Some("application/json"), None, keep_alive)?;
+    }
     let mut raw_hasher = Sha256::new();
     let mut raw_body_bytes = 0u64;
-    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut chunk_writer = streaming_chunk_writer(writer, defer_terminal);
     let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut core = JsonArrayRedactorCore::new(policy.max_item_bytes, policy.allowed_fields.clone());
     let mut buffer = [0u8; 16 * 1024];
@@ -18043,7 +18852,7 @@ fn stream_json_array_forward_response(
         .finish()
         .map_err(|err| format!("json_array_response_guard_failed: {err}"))?;
     let (body_sha256, body_bytes) = chunk_writer.finish()?;
-    release_streamed_forward_response(
+    Ok(release_streamed_forward_response(
         state,
         decision,
         method,
@@ -18060,8 +18869,7 @@ fn stream_json_array_forward_response(
             "raw_response_body_sha256":format!("sha256:{}", hex::encode(raw_hasher.finalize())),
             "raw_response_body_bytes":raw_body_bytes,
         }),
-    );
-    Ok(())
+    ))
 }
 
 fn stream_json_sse_forward_response(
@@ -18075,11 +18883,16 @@ fn stream_json_sse_forward_response(
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
     response_secret_guard: &ResponseSecretGuard,
-) -> Result<(), String> {
-    write_stream_response_headers(writer, status, Some("text/event-stream"), None, keep_alive)?;
+    defer_terminal: bool,
+) -> Result<StreamingResponseStats, String> {
+    if defer_terminal {
+        write_streaming_response_proof_headers(writer, status, "text/event-stream")?;
+    } else {
+        write_stream_response_headers(writer, status, Some("text/event-stream"), None, keep_alive)?;
+    }
     let mut raw_hasher = Sha256::new();
     let mut raw_body_bytes = 0u64;
-    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut chunk_writer = streaming_chunk_writer(writer, defer_terminal);
     let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut core = JsonSseRedactorCore::new(
         policy.max_line_bytes,
@@ -18124,7 +18937,7 @@ fn stream_json_sse_forward_response(
         .finish()
         .map_err(|err| format!("json_sse_response_guard_failed: {err}"))?;
     let (body_sha256, body_bytes) = chunk_writer.finish()?;
-    release_streamed_forward_response(
+    Ok(release_streamed_forward_response(
         state,
         decision,
         method,
@@ -18142,8 +18955,7 @@ fn stream_json_sse_forward_response(
             "raw_response_body_sha256":format!("sha256:{}", hex::encode(raw_hasher.finalize())),
             "raw_response_body_bytes":raw_body_bytes,
         }),
-    );
-    Ok(())
+    ))
 }
 
 fn stream_form_urlencoded_forward_response(
@@ -18157,17 +18969,26 @@ fn stream_form_urlencoded_forward_response(
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
     response_secret_guard: &ResponseSecretGuard,
-) -> Result<(), String> {
-    write_stream_response_headers(
-        writer,
-        status,
-        Some("application/x-www-form-urlencoded"),
-        None,
-        keep_alive,
-    )?;
+    defer_terminal: bool,
+) -> Result<StreamingResponseStats, String> {
+    if defer_terminal {
+        write_streaming_response_proof_headers(
+            writer,
+            status,
+            "application/x-www-form-urlencoded",
+        )?;
+    } else {
+        write_stream_response_headers(
+            writer,
+            status,
+            Some("application/x-www-form-urlencoded"),
+            None,
+            keep_alive,
+        )?;
+    }
     let mut raw_hasher = Sha256::new();
     let mut raw_body_bytes = 0u64;
-    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut chunk_writer = streaming_chunk_writer(writer, defer_terminal);
     let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut core =
         FormUrlencodedRedactorCore::new(policy.max_pair_bytes, policy.allowed_fields.clone());
@@ -18209,7 +19030,7 @@ fn stream_form_urlencoded_forward_response(
         .finish()
         .map_err(|err| format!("form_urlencoded_response_guard_failed: {err}"))?;
     let (body_sha256, body_bytes) = chunk_writer.finish()?;
-    release_streamed_forward_response(
+    Ok(release_streamed_forward_response(
         state,
         decision,
         method,
@@ -18226,8 +19047,7 @@ fn stream_form_urlencoded_forward_response(
             "raw_response_body_sha256":format!("sha256:{}", hex::encode(raw_hasher.finalize())),
             "raw_response_body_bytes":raw_body_bytes,
         }),
-    );
-    Ok(())
+    ))
 }
 
 fn stream_csv_forward_response(
@@ -18241,8 +19061,13 @@ fn stream_csv_forward_response(
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
     response_secret_guard: &ResponseSecretGuard,
-) -> Result<(), String> {
-    write_stream_response_headers(writer, status, Some("text/csv"), None, keep_alive)?;
+    defer_terminal: bool,
+) -> Result<StreamingResponseStats, String> {
+    if defer_terminal {
+        write_streaming_response_proof_headers(writer, status, "text/csv")?;
+    } else {
+        write_stream_response_headers(writer, status, Some("text/csv"), None, keep_alive)?;
+    }
     let raw_stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
     let output_stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
     let raw_reader = StatsLimitReader::new(
@@ -18257,7 +19082,7 @@ fn stream_csv_forward_response(
         policy.allowed_fields.clone(),
         output_stats.clone(),
     );
-    let mut chunk_writer = ChunkedHashWriter::new(writer);
+    let mut chunk_writer = streaming_chunk_writer(writer, defer_terminal);
     let mut guarded_writer = ResponseSecretWriter::new(&mut chunk_writer, response_secret_guard);
     let mut buffer = [0u8; 16 * 1024];
     loop {
@@ -18276,7 +19101,7 @@ fn stream_csv_forward_response(
         .map_err(|err| format!("csv_response_guard_failed: {err}"))?;
     let (body_sha256, body_bytes) = chunk_writer.finish()?;
     let (raw_body_sha256, raw_body_bytes) = request_stream_stats_snapshot(&raw_stats);
-    release_streamed_forward_response(
+    Ok(release_streamed_forward_response(
         state,
         decision,
         method,
@@ -18293,8 +19118,7 @@ fn stream_csv_forward_response(
             "raw_response_body_sha256":raw_body_sha256,
             "raw_response_body_bytes":raw_body_bytes,
         }),
-    );
-    Ok(())
+    ))
 }
 
 fn stream_forward_response(
@@ -18307,11 +19131,13 @@ fn stream_forward_response(
     content_type: Option<&str>,
     content_length: Option<u64>,
     mut response: reqwest::blocking::Response,
-    writer: &mut dyn Write,
+    writer: &mut dyn TerminalDeadlineWrite,
     keep_alive: bool,
     policy: &StreamingResponsePolicy,
     response_secret_guard: &ResponseSecretGuard,
-) -> Result<(), String> {
+    selected_raw_policy_headers_b64: Option<BTreeMap<String, Vec<String>>>,
+    proof: Option<StreamingResponseProofExecution<'_>>,
+) -> Result<StreamingResponseStats, String> {
     validate_response_release_context(state, snapshot, decision, method, url)
         .map_err(|payload| payload.to_string())?;
     let mut guarded_writer = ActiveSnapshotWriter {
@@ -18323,122 +19149,215 @@ fn stream_forward_response(
     if content_type.is_some_and(|value| response_secret_guard.detects(value.as_bytes())) {
         return Err("response_credential_reflection".to_string());
     }
-    if policy.mode == "jsonlStream" {
-        return stream_json_lines_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            response,
-            writer,
-            keep_alive,
-            policy,
-            response_secret_guard,
-        );
-    }
-    if policy.mode == "jsonArrayStream" {
-        return stream_json_array_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            response,
-            writer,
-            keep_alive,
-            policy,
-            response_secret_guard,
-        );
-    }
-    if policy.mode == "jsonSseStream" {
-        return stream_json_sse_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            response,
-            writer,
-            keep_alive,
-            policy,
-            response_secret_guard,
-        );
-    }
-    if policy.mode == "jsonNestedStream" {
-        return stream_json_nested_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            response,
-            writer,
-            keep_alive,
-            policy,
-            response_secret_guard,
-        );
-    }
-    if policy.mode == "formUrlencodedStream" {
-        return stream_form_urlencoded_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            response,
-            writer,
-            keep_alive,
-            policy,
-            response_secret_guard,
-        );
-    }
-    if policy.mode == "csvStream" {
-        return stream_csv_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            response,
-            writer,
-            keep_alive,
-            policy,
-            response_secret_guard,
-        );
-    }
-    let chunked =
-        write_stream_response_headers(writer, status, content_type, content_length, keep_alive)?;
-    let (body_sha256, released_body_bytes) = if chunked {
-        let mut body_writer = ChunkedHashWriter::new(writer);
-        copy_guarded_stream_body(
-            &mut response,
-            &mut body_writer,
-            response_secret_guard,
-            policy.max_body_bytes,
-        )?;
-        body_writer.finish()?
-    } else {
-        let mut body_writer = DirectHashWriter::new(writer);
-        copy_guarded_stream_body(
-            &mut response,
-            &mut body_writer,
-            response_secret_guard,
-            policy.max_body_bytes,
-        )?;
-        body_writer.finish()?
+    let defer_terminal = proof.is_some();
+    let released_content_type = match policy.mode.as_str() {
+        "jsonlStream" => "application/x-ndjson",
+        "jsonArrayStream" | "jsonNestedStream" => "application/json",
+        "jsonSseStream" => "text/event-stream",
+        "formUrlencodedStream" => "application/x-www-form-urlencoded",
+        "csvStream" => "text/csv",
+        _ => content_type.unwrap_or("application/octet-stream"),
     };
-    release_streamed_forward_response(
-        state,
-        decision,
-        method,
-        url,
-        status,
-        body_sha256,
-        released_body_bytes,
-        json!({"ok":true,"mode":"stream","adapter":policy.adapter_type.clone(),"streamed":true}),
-    );
-    Ok(())
+    let stats = if policy.mode == "jsonlStream" {
+        stream_json_lines_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
+            defer_terminal,
+        )?
+    } else if policy.mode == "jsonArrayStream" {
+        stream_json_array_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
+            defer_terminal,
+        )?
+    } else if policy.mode == "jsonSseStream" {
+        stream_json_sse_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
+            defer_terminal,
+        )?
+    } else if policy.mode == "jsonNestedStream" {
+        stream_json_nested_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
+            defer_terminal,
+        )?
+    } else if policy.mode == "formUrlencodedStream" {
+        stream_form_urlencoded_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
+            defer_terminal,
+        )?
+    } else if policy.mode == "csvStream" {
+        stream_csv_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            response,
+            writer,
+            keep_alive,
+            policy,
+            response_secret_guard,
+            defer_terminal,
+        )?
+    } else {
+        let (body_sha256, released_body_bytes) = if defer_terminal {
+            write_streaming_response_proof_headers(writer, status, released_content_type)?;
+            let mut body_writer = ChunkedHashWriter::new_with_deferred_terminal(writer);
+            copy_guarded_stream_body(
+                &mut response,
+                &mut body_writer,
+                response_secret_guard,
+                policy.max_body_bytes,
+            )?;
+            body_writer.finish()?
+        } else {
+            let chunked = write_stream_response_headers(
+                writer,
+                status,
+                content_type,
+                content_length,
+                keep_alive,
+            )?;
+            if chunked {
+                let mut body_writer = ChunkedHashWriter::new(writer);
+                copy_guarded_stream_body(
+                    &mut response,
+                    &mut body_writer,
+                    response_secret_guard,
+                    policy.max_body_bytes,
+                )?;
+                body_writer.finish()?
+            } else {
+                let mut body_writer = DirectHashWriter::new(writer);
+                copy_guarded_stream_body(
+                    &mut response,
+                    &mut body_writer,
+                    response_secret_guard,
+                    policy.max_body_bytes,
+                )?;
+                body_writer.finish()?
+            }
+        };
+        release_streamed_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            body_sha256,
+            released_body_bytes,
+            json!({"ok":true,"mode":"stream","adapter":policy.adapter_type.clone(),"streamed":true}),
+        )
+    };
+    if let Some(proof) = proof {
+        if content_length.is_some_and(|expected| expected != stats.raw_body_bytes) {
+            return Err("streaming response body was truncated before normal EOF".to_string());
+        }
+        let selected_raw_policy_headers_b64 = selected_raw_policy_headers_b64
+            .ok_or("streaming response proof raw upstream headers are unavailable")?;
+        let upstream_response = StreamingResponseProofUpstreamResponse {
+            status: status.as_u16(),
+            selected_raw_policy_headers_b64,
+            body_digest: stats.raw_body_digest.clone(),
+            body_bytes: stats.raw_body_bytes,
+            canonical_digest: String::new(),
+        };
+        let upstream_response = StreamingResponseProofUpstreamResponse {
+            canonical_digest: streaming_response_proof_upstream_canonical_digest(
+                upstream_response.status,
+                &upstream_response.selected_raw_policy_headers_b64,
+                &upstream_response.body_digest,
+                upstream_response.body_bytes,
+            ),
+            ..upstream_response
+        };
+        let selected_wire_headers = streaming_response_proof_wire_headers(released_content_type);
+        let (runtime_proof_b64, runtime_proof_digest) = build_streaming_response_runtime_proof(
+            state,
+            snapshot,
+            decision,
+            method,
+            url,
+            proof.context,
+            proof.authorization_context,
+            proof.expected_client_request_digest,
+            &upstream_response,
+            status,
+            released_content_type,
+            &selected_wire_headers,
+            &stats,
+        )?;
+        validate_response_release_context(state, snapshot, decision, method, url).map_err(
+            |payload| format!("streaming response proof final release context invalid: {payload}"),
+        )?;
+        validate_streaming_response_proof_snapshot(state, snapshot)?;
+        write_streaming_response_proof_terminal_for_active_snapshot(
+            &mut guarded_writer,
+            &runtime_proof_b64,
+            &runtime_proof_digest,
+        )?;
+        enqueue_audit(
+            state,
+            "data_plane.streaming_response_proof.emitted",
+            decision_audit_event(
+                decision,
+                method,
+                url,
+                "emitted",
+                json!({
+                    "client_nonce_sha256":sha256_prefixed(&proof.context.client_nonce_bytes),
+                    "client_request_digest":proof.expected_client_request_digest,
+                    "policy_hash":snapshot.hash,
+                    "runtime_proof_sha256":runtime_proof_digest,
+                    "response_signing_key_id":state.response_proof_signing_key_id,
+                }),
+            ),
+        );
+    }
+    Ok(stats)
 }
 
 fn validate_policy_json_response(
@@ -18911,10 +19830,7 @@ fn response_content_encoding_is_identity_or_absent(headers: &HeaderMap) -> bool 
         .is_ok_and(|value| value.trim().eq_ignore_ascii_case("identity"))
 }
 
-fn selected_raw_policy_headers_b64(
-    response_config: &Value,
-    upstream_headers: &HeaderMap,
-) -> BTreeMap<String, Vec<String>> {
+fn selected_raw_policy_header_names(response_config: &Value) -> Vec<&'static str> {
     let configured = response_config
         .get("allowedHeaders")
         .and_then(Value::as_array)
@@ -18931,6 +19847,24 @@ fn selected_raw_policy_headers_b64(
             .filter(|name| configured.contains(*name)),
     );
     names
+}
+
+fn selected_raw_policy_headers_detect_secret(
+    response_config: &Value,
+    upstream_headers: &HeaderMap,
+    response_secret_guard: &ResponseSecretGuard,
+) -> bool {
+    selected_raw_policy_header_names(response_config)
+        .into_iter()
+        .flat_map(|name| upstream_headers.get_all(name).iter())
+        .any(|value| response_secret_guard.detects(value.as_bytes()))
+}
+
+fn selected_raw_policy_headers_b64(
+    response_config: &Value,
+    upstream_headers: &HeaderMap,
+) -> BTreeMap<String, Vec<String>> {
+    selected_raw_policy_header_names(response_config)
         .into_iter()
         .map(|name| {
             let values = upstream_headers
@@ -18955,6 +19889,20 @@ fn response_proof_upstream_canonical_digest(
     }))
 }
 
+fn streaming_response_proof_upstream_canonical_digest(
+    status: u16,
+    selected_raw_policy_headers_b64: &BTreeMap<String, Vec<String>>,
+    body_digest: &str,
+    body_bytes: u64,
+) -> String {
+    digest_json(&json!({
+        "status":status,
+        "selected_raw_policy_headers_b64":selected_raw_policy_headers_b64,
+        "body_digest":body_digest,
+        "body_bytes":body_bytes,
+    }))
+}
+
 fn finalize_upstream_response(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -18963,8 +19911,9 @@ fn finalize_upstream_response(
     upstream_url: &Url,
     response: reqwest::blocking::Response,
     response_secret_guard: &ResponseSecretGuard,
-    stream_writer: Option<&mut dyn Write>,
+    stream_writer: Option<&mut dyn TerminalDeadlineWrite>,
     response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
+    streaming_response_proof: Option<StreamingResponseProofExecution<'_>>,
     _keep_alive: bool,
 ) -> ForwardResult {
     let status = response.status();
@@ -19064,6 +20013,20 @@ fn finalize_upstream_response(
             ))
         }
     };
+    if selected_raw_policy_headers_detect_secret(
+        &response_config,
+        &upstream_headers,
+        response_secret_guard,
+    ) {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            json!({"error":"response_credential_reflection"}),
+        ));
+    }
     let response_policy = ResponsePolicy {
         adapter_type: base_response_policy.adapter_type,
         response_config,
@@ -19071,9 +20034,9 @@ fn finalize_upstream_response(
         has_response_binding: base_response_policy.has_response_binding,
         credential_bearing: base_response_policy.credential_bearing,
     };
-    let response_proof_raw_headers = response_proof_upstream_output.as_ref().map(|_| {
-        selected_raw_policy_headers_b64(&response_policy.response_config, &upstream_headers)
-    });
+    let response_proof_raw_headers = (response_proof_upstream_output.is_some()
+        || streaming_response_proof.is_some())
+    .then(|| selected_raw_policy_headers_b64(&response_policy.response_config, &upstream_headers));
     let Some(response_body_limit) = response_policy
         .response_config
         .get("maxBodyBytes")
@@ -19130,6 +20093,8 @@ fn finalize_upstream_response(
             }
         }
         if let Some(writer) = stream_writer {
+            let streaming_proof_requested = streaming_response_proof.is_some();
+            let streaming_response_proof = streaming_response_proof.filter(|_| status.is_success());
             match stream_forward_response(
                 state,
                 snapshot,
@@ -19144,9 +20109,28 @@ fn finalize_upstream_response(
                 false,
                 &policy,
                 response_secret_guard,
+                response_proof_raw_headers.clone(),
+                streaming_response_proof,
             ) {
-                Ok(()) => return ForwardResult::Streamed,
+                Ok(_) => return ForwardResult::Streamed,
                 Err(err) => {
+                    if streaming_proof_requested {
+                        enqueue_audit(
+                            state,
+                            "data_plane.streaming_response_proof.failed",
+                            decision_audit_event(
+                                decision,
+                                request_method,
+                                upstream_url,
+                                "denied",
+                                json!({
+                                    "stage":"stream_response",
+                                    "error":"streaming_response_proof_unavailable",
+                                    "detail":err.clone(),
+                                }),
+                            ),
+                        );
+                    }
                     enqueue_audit(
                         state,
                         "data_plane.response.blocked",
@@ -19227,7 +20211,7 @@ fn finalize_upstream_response(
     }
 }
 
-fn forward_absolute_request_inner(
+fn forward_absolute_request_inner<'a>(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     request: IncomingRequest,
@@ -19235,7 +20219,8 @@ fn forward_absolute_request_inner(
     client_request_digest: Option<&str>,
     response_proof_authorization_output: Option<&mut Option<ResponseProofAuthorizationContext>>,
     response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
-    stream_writer: Option<&mut dyn Write>,
+    stream_writer: Option<&'a mut dyn TerminalDeadlineWrite>,
+    streaming_response_proof_request: Option<StreamingResponseProofRequest<'a>>,
     keep_alive: bool,
 ) -> ForwardResult {
     macro_rules! buffered {
@@ -19318,19 +20303,39 @@ fn forward_absolute_request_inner(
             json!({"error":"response_proof_request_binding_mismatch"}),
         ));
     }
-    let response_proof_requested = response_proof_authorization_output.is_some();
+    let response_proof_kind = if streaming_response_proof_request.is_some() {
+        Some(ResponseProofKind::Streaming)
+    } else if response_proof_authorization_output.is_some() {
+        Some(ResponseProofKind::Buffered)
+    } else {
+        None
+    };
+    let response_proof_requested = response_proof_kind.is_some();
     let mut upstream_url = target_url;
     apply_rewrite(
         &mut upstream_url,
         decision.get("rewrite").unwrap_or(&Value::Null),
     );
-    if client_request_digest.is_some()
-        && response_policy_for_decision(snapshot, &decision, &request.method, &upstream_url)
-            .is_some_and(|policy| streaming_response_policy(&policy).is_some())
-    {
+    let route_streaming =
+        response_policy_for_decision(snapshot, &decision, &request.method, &upstream_url)
+            .is_some_and(|policy| streaming_response_policy(&policy).is_some());
+    let proof_route_error = match (response_proof_kind, route_streaming) {
+        (Some(ResponseProofKind::Buffered), true) => {
+            Some("response_proof_requires_buffered_response_route")
+        }
+        (Some(ResponseProofKind::Streaming), false) => {
+            Some("stream_response_proof_requires_streaming_response_route")
+        }
+        _ => None,
+    };
+    if let Some(error) = proof_route_error {
         enqueue_audit(
             state,
-            "data_plane.response_proof.denied",
+            if response_proof_kind == Some(ResponseProofKind::Streaming) {
+                "data_plane.streaming_response_proof.denied"
+            } else {
+                "data_plane.response_proof.denied"
+            },
             decision_audit_event(
                 &decision,
                 &request.method,
@@ -19338,13 +20343,13 @@ fn forward_absolute_request_inner(
                 "denied",
                 json!({
                     "stage":"pre_upstream",
-                    "error":"response_proof_requires_buffered_response_route",
+                    "error":error,
                 }),
             ),
         );
         buffered!(json_status_response(
             StatusCode::UNPROCESSABLE_ENTITY,
-            json!({"error":"response_proof_requires_buffered_response_route"}),
+            json!({"error":error}),
         ));
     }
     if response_proof_requested && release_authorization.is_none() {
@@ -19444,8 +20449,7 @@ fn forward_absolute_request_inner(
         }
     };
     let request_method = request.method.clone();
-    let mut builder = state
-        .upstream_client
+    let mut builder = upstream_client_for_method(state, &method)
         .request(method, upstream_url.as_str())
         .headers(headers);
     if !request.body.is_empty() {
@@ -19497,6 +20501,7 @@ fn forward_absolute_request_inner(
             }
         }
     }
+    let mut completed_response_proof_authorization = None;
     if response_proof_requested {
         let Some(release) = release_authorization.as_ref() else {
             buffered!(json_status_response(
@@ -19524,8 +20529,9 @@ fn forward_absolute_request_inner(
             )),
         };
         if let Some(output) = response_proof_authorization_output {
-            *output = Some(authorization_context);
+            *output = Some(authorization_context.clone());
         }
+        completed_response_proof_authorization = Some(authorization_context);
     }
     let response = match builder.send() {
         Ok(response) => response,
@@ -19556,6 +20562,26 @@ fn forward_absolute_request_inner(
             ));
         }
     }
+    let (stream_writer, streaming_response_proof) = if let Some(request) =
+        streaming_response_proof_request
+    {
+        let Some(authorization_context) = completed_response_proof_authorization.as_ref() else {
+            buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"streaming_response_proof_authorization_context_unavailable"}),
+            ));
+        };
+        (
+            Some(request.writer),
+            Some(StreamingResponseProofExecution {
+                context: request.context,
+                authorization_context,
+                expected_client_request_digest: request.expected_client_request_digest,
+            }),
+        )
+    } else {
+        (stream_writer, None)
+    };
     finalize_upstream_response(
         state,
         snapshot,
@@ -19566,6 +20592,7 @@ fn forward_absolute_request_inner(
         &response_secret_guard,
         stream_writer,
         response_proof_upstream_output,
+        streaming_response_proof,
         keep_alive,
     )
 }
@@ -19579,7 +20606,7 @@ fn forward_absolute_streaming_request_to(
     request_policy: StreamingRequestPolicy,
     authenticated_principal_id: Option<&str>,
     keep_alive: bool,
-    writer: &mut dyn Write,
+    writer: &mut dyn TerminalDeadlineWrite,
 ) -> bool {
     macro_rules! write_buffered {
         ($response:expr) => {{
@@ -19794,8 +20821,7 @@ fn forward_absolute_streaming_request_to(
         )),
         _ => Body::sized(body_stream, content_length),
     };
-    let builder = state
-        .upstream_client
+    let builder = upstream_client_for_method(state, &method)
         .request(method, upstream_url.as_str())
         .headers(headers)
         .body(upstream_body);
@@ -19955,6 +20981,7 @@ fn forward_absolute_streaming_request_to(
         &response_secret_guard,
         Some(writer),
         None,
+        None,
         keep_alive,
     ) {
         ForwardResult::Buffered(response) => {
@@ -19965,7 +20992,7 @@ fn forward_absolute_streaming_request_to(
     }
 }
 
-fn forward_intercepted_streaming_request_to<R: Read + Write>(
+fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWrite>(
     state: &Arc<GateState>,
     snapshot: &Arc<Snapshot>,
     mut request: RequestHead,
@@ -20217,8 +21244,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
         )),
         _ => Body::sized(body_reader, content_length),
     };
-    let builder = state
-        .upstream_client
+    let builder = upstream_client_for_method(state, &method)
         .request(method, upstream_url.as_str())
         .headers(headers)
         .body(body);
@@ -20429,6 +21455,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
         &response_secret_guard,
         Some(tls),
         None,
+        None,
         keep_alive,
     ) {
         ForwardResult::Buffered(response) => {
@@ -20439,33 +21466,83 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
     }
 }
 
-fn forward_absolute_request_to(
+fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     request: IncomingRequest,
     authenticated_principal_id: Option<&str>,
     keep_alive: bool,
-    writer: &mut dyn Write,
-    response_proof: Option<&ResponseProofContext>,
+    writer: &mut W,
+    response_proof: Option<ResponseProofRequestContext<'_>>,
 ) -> bool {
-    let client_request_digest = if let Some(context) = response_proof {
-        match client_proof_request_digest(&request, context) {
+    let proof_kind = response_proof.as_ref().map(|proof| match proof {
+        ResponseProofRequestContext::Buffered(_) => ResponseProofKind::Buffered,
+        ResponseProofRequestContext::Streaming(_) => ResponseProofKind::Streaming,
+    });
+    if let Some(proof_kind) = proof_kind {
+        if let Some(route) =
+            matched_response_proof_route(snapshot, &request, authenticated_principal_id)
+        {
+            if let Err(error) = validate_response_proof_route_preflight(route, proof_kind) {
+                enqueue_audit(
+                    state,
+                    if proof_kind == ResponseProofKind::Streaming {
+                        "data_plane.streaming_response_proof.denied"
+                    } else {
+                        "data_plane.response_proof.denied"
+                    },
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "outcome":"denied",
+                        "stage":"pre_upstream",
+                        "error":error,
+                        "policy_hash":snapshot.hash,
+                    }),
+                );
+                let response =
+                    json_status_response(StatusCode::UNPROCESSABLE_ENTITY, json!({"error":error}));
+                return write_snapshot_guarded_response(state, snapshot, writer, &response);
+            }
+        }
+    }
+    let client_request_digest = if let Some(proof) = response_proof.as_ref() {
+        let digest = match proof {
+            ResponseProofRequestContext::Buffered(context) => {
+                client_proof_request_digest(&request, context)
+            }
+            ResponseProofRequestContext::Streaming(context) => {
+                streaming_client_proof_request_digest(&request, context)
+            }
+        };
+        match digest {
             Ok(digest) => Some(digest),
             Err(err) => {
                 enqueue_audit(
                     state,
-                    "data_plane.response_proof.denied",
+                    if proof_kind == Some(ResponseProofKind::Streaming) {
+                        "data_plane.streaming_response_proof.denied"
+                    } else {
+                        "data_plane.response_proof.denied"
+                    },
                     json!({
                         "component":"serverware-decision-gate-rs",
                         "outcome":"denied",
-                        "error":"response_proof_request_binding_invalid",
+                        "error":if proof_kind == Some(ResponseProofKind::Streaming) {
+                            "streaming_response_proof_request_binding_invalid"
+                        } else {
+                            "response_proof_request_binding_invalid"
+                        },
                         "detail":err,
                         "policy_hash":snapshot.hash,
                     }),
                 );
                 let response = json_status_response(
                     StatusCode::BAD_REQUEST,
-                    json!({"error":"response_proof_request_binding_invalid"}),
+                    json!({"error":if proof_kind == Some(ResponseProofKind::Streaming) {
+                        "streaming_response_proof_request_binding_invalid"
+                    } else {
+                        "response_proof_request_binding_invalid"
+                    }}),
                 );
                 let _ = write_snapshot_guarded_response(state, snapshot, writer, &response);
                 return false;
@@ -20476,8 +21553,8 @@ fn forward_absolute_request_to(
     };
     let mut response_proof_authorization = None;
     let mut response_proof_upstream = None;
-    let result = if response_proof.is_some() {
-        forward_absolute_request_inner(
+    let result = match response_proof.as_ref() {
+        Some(ResponseProofRequestContext::Buffered(_)) => forward_absolute_request_inner(
             state,
             snapshot,
             request,
@@ -20486,10 +21563,31 @@ fn forward_absolute_request_to(
             Some(&mut response_proof_authorization),
             Some(&mut response_proof_upstream),
             None,
+            None,
             keep_alive,
-        )
-    } else {
-        forward_absolute_request_inner(
+        ),
+        Some(ResponseProofRequestContext::Streaming(context)) => {
+            let Some(expected_client_request_digest) = client_request_digest.as_deref() else {
+                return false;
+            };
+            forward_absolute_request_inner(
+                state,
+                snapshot,
+                request,
+                authenticated_principal_id,
+                Some(expected_client_request_digest),
+                None,
+                None,
+                None,
+                Some(StreamingResponseProofRequest {
+                    context,
+                    expected_client_request_digest,
+                    writer,
+                }),
+                keep_alive,
+            )
+        }
+        None => forward_absolute_request_inner(
             state,
             snapshot,
             request,
@@ -20498,13 +21596,14 @@ fn forward_absolute_request_to(
             None,
             None,
             Some(writer),
+            None,
             keep_alive,
-        )
+        ),
     };
     match result {
         ForwardResult::Buffered(mut response) => {
             let mut attached_proof = None;
-            if let Some(context) = response_proof {
+            if let Some(ResponseProofRequestContext::Buffered(context)) = response_proof.as_ref() {
                 let Some(expected_client_request_digest) = client_request_digest.as_deref() else {
                     return false;
                 };
@@ -20553,8 +21652,10 @@ fn forward_absolute_request_to(
             let response = override_response_connection(response, keep_alive);
             let written = write_snapshot_guarded_response(state, snapshot, writer, &response);
             if written {
-                if let (Some(context), Some((runtime_proof_sha256, client_request_digest))) =
-                    (response_proof, attached_proof)
+                if let (
+                    Some(ResponseProofRequestContext::Buffered(context)),
+                    Some((runtime_proof_sha256, client_request_digest)),
+                ) = (response_proof.as_ref(), attached_proof)
                 {
                     enqueue_audit(
                         state,
@@ -21329,52 +22430,73 @@ fn handle_connect_request(
             let _ = tls.flush();
             break;
         }
-        let response_proof =
-            if lower_headers(&head.headers).contains_key(RESPONSE_PROOF_NONCE_HEADER) {
-                if head.method != "GET" {
-                    let response = json_status_response(
-                        StatusCode::BAD_REQUEST,
-                        json!({"error":"response_proof_requires_safe_method"}),
-                    );
-                    let _ = tls.write_all(&response);
-                    let _ = tls.flush();
-                    break;
-                }
-                if head.content_length != 0 {
-                    let response = json_status_response(
-                        StatusCode::BAD_REQUEST,
-                        json!({"error":"response_proof_requires_empty_body"}),
-                    );
-                    let _ = tls.write_all(&response);
-                    let _ = tls.flush();
-                    break;
-                }
-                match response_proof_context(&state, &head.headers, &tls.conn) {
-                    Ok(context) => context,
-                    Err(err) => {
-                        enqueue_audit(
-                            &state,
-                            "data_plane.response_proof.denied",
-                            json!({
-                                "component":"serverware-decision-gate-rs",
-                                "outcome":"denied",
-                                "error":"response_proof_request_invalid",
-                                "detail":err,
-                                "client_ip":client_ip,
-                            }),
-                        );
-                        let response = json_status_response(
-                            StatusCode::BAD_REQUEST,
-                            json!({"error":"response_proof_request_invalid"}),
-                        );
-                        let _ = tls.write_all(&response);
-                        let _ = tls.flush();
-                        break;
-                    }
-                }
-            } else {
-                None
-            };
+        let proof_kind = match requested_response_proof_kind(&head.headers) {
+            Ok(kind) => kind,
+            Err(err) => {
+                let response = json_status_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({"error":"response_proof_nonce_headers_conflict","detail":err}),
+                );
+                let _ = tls.write_all(&response);
+                let _ = tls.flush();
+                break;
+            }
+        };
+        if proof_kind.is_some() && head.method != "GET" {
+            let response = json_status_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error":"response_proof_requires_safe_method"}),
+            );
+            let _ = tls.write_all(&response);
+            let _ = tls.flush();
+            break;
+        }
+        if proof_kind.is_some() && head.content_length != 0 {
+            let response = json_status_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error":"response_proof_requires_empty_body"}),
+            );
+            let _ = tls.write_all(&response);
+            let _ = tls.flush();
+            break;
+        }
+        let mut buffered_response_proof = None;
+        let mut streaming_response_proof = None;
+        let proof_context_result = match proof_kind {
+            Some(ResponseProofKind::Buffered) => {
+                response_proof_context(&state, &head.headers, &tls.conn)
+                    .map(|context| buffered_response_proof = context)
+            }
+            Some(ResponseProofKind::Streaming) => {
+                streaming_response_proof_context(&state, &head.headers, &tls.conn)
+                    .map(|context| streaming_response_proof = context)
+            }
+            None => Ok(()),
+        };
+        if let Err(err) = proof_context_result {
+            enqueue_audit(
+                &state,
+                if proof_kind == Some(ResponseProofKind::Streaming) {
+                    "data_plane.streaming_response_proof.denied"
+                } else {
+                    "data_plane.response_proof.denied"
+                },
+                json!({
+                    "component":"serverware-decision-gate-rs",
+                    "outcome":"denied",
+                    "error":"response_proof_request_invalid",
+                    "detail":err,
+                    "client_ip":client_ip,
+                }),
+            );
+            let response = json_status_response(
+                StatusCode::BAD_REQUEST,
+                json!({"error":"response_proof_request_invalid"}),
+            );
+            let _ = tls.write_all(&response);
+            let _ = tls.flush();
+            break;
+        }
         tls.sock.reset_read_deadline(state.request_body_deadline);
         let forwarded = match connect_inner_absolute_target(&authority, &head.target, &host, port) {
             Ok(target) => {
@@ -21386,7 +22508,7 @@ fn handle_connect_request(
                     authenticated_principal_id.as_deref(),
                 ) {
                     RequestStreamingPreflight::Stream(policy) => {
-                        if response_proof.is_some() {
+                        if proof_kind.is_some() {
                             let response = json_status_response(
                                 StatusCode::BAD_REQUEST,
                                 json!({"error":"response_proof_requires_buffered_request_route"}),
@@ -21432,6 +22554,14 @@ fn handle_connect_request(
                                 break;
                             }
                         };
+                        let response_proof = buffered_response_proof
+                            .as_ref()
+                            .map(ResponseProofRequestContext::Buffered)
+                            .or_else(|| {
+                                streaming_response_proof
+                                    .as_ref()
+                                    .map(ResponseProofRequestContext::Streaming)
+                            });
                         forward_absolute_request_to(
                             &state,
                             &request_snapshot,
@@ -21439,7 +22569,7 @@ fn handle_connect_request(
                             authenticated_principal_id.as_deref(),
                             !close_after,
                             &mut tls,
-                            response_proof.as_ref(),
+                            response_proof,
                         )
                     }
                 }
@@ -21464,6 +22594,8 @@ fn handle_connect_request(
             break;
         }
     }
+    tls.conn.send_close_notify();
+    let _ = tls.flush();
     if handled_requests > 1 {
         enqueue_audit(
             &state,
@@ -21555,7 +22687,19 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
         return;
     }
     if absolute_form_target(&head.target) {
-        if lower_headers(&head.headers).contains_key(RESPONSE_PROOF_NONCE_HEADER) {
+        let proof_kind = match requested_response_proof_kind(&head.headers) {
+            Ok(kind) => kind,
+            Err(err) => {
+                let response = json_status_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({"error":"response_proof_nonce_headers_conflict","detail":err}),
+                );
+                let _ = stream.write_all(&response);
+                let _ = stream.flush();
+                return;
+            }
+        };
+        if proof_kind.is_some() {
             let response = json_status_response(
                 StatusCode::BAD_REQUEST,
                 json!({"error":"response_proof_requires_connect_tls"}),
@@ -22337,7 +23481,8 @@ fn main() -> Result<(), String> {
     let snapshot = Arc::new(initial_snapshot);
     let (response_proof_signing_key, response_proof_public_key_pem, response_proof_signing_key_id) =
         response_proof_signing_material()?;
-    let upstream_client = build_upstream_client()?;
+    let upstream_client = build_upstream_client(true)?;
+    let one_shot_upstream_client = build_upstream_client(false)?;
     let audit_client = build_audit_client()?;
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
@@ -22374,6 +23519,7 @@ fn main() -> Result<(), String> {
         credential_lease_renewal_queue_full: AtomicU64::new(0),
         credential_lease_cache_max,
         upstream_client,
+        one_shot_upstream_client,
         audit_client,
         credential_lease_client,
         audit_url,
@@ -22619,6 +23765,7 @@ mod tests {
             credential_lease_renewal_queue_full: AtomicU64::new(0),
             credential_lease_cache_max: 10_000,
             upstream_client: client.clone(),
+            one_shot_upstream_client: client.clone(),
             audit_client: client.clone(),
             credential_lease_client: client,
             audit_url: None,
@@ -22903,11 +24050,16 @@ mod tests {
         assert_eq!(decision["action"], "jit_required");
         assert_eq!(decision["allowed"], false);
         assert_eq!(decision["approval_id"], "approval:test");
+        assert_eq!(decision["approval_url"], "/approvals/approval:test");
         assert_eq!(decision["approval_status"], "pending");
         assert_eq!(decision["expires_at"], approval_expires_at);
         assert_eq!(decision["approval_created"], true);
         assert_eq!(decision["retry_after_seconds"], 3);
         assert_eq!(decision["payload"]["approval_id"], "approval:test");
+        assert_eq!(
+            decision["payload"]["approval_url"],
+            "/approvals/approval:test"
+        );
         assert_eq!(decision["payload"]["approval_status"], "pending");
         assert_eq!(decision["payload"]["expires_at"], approval_expires_at);
         assert_eq!(decision["payload"]["approval_created"], true);
@@ -22931,6 +24083,57 @@ mod tests {
             json!({"host":"example.test"})
         );
         assert!(payload.get("redactedDisplay").is_none());
+    }
+
+    #[test]
+    fn shared_jit_428_includes_approval_url_without_changing_approval_id() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("shared grant listener");
+        let address = listener.local_addr().expect("shared grant address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("shared grant request");
+            let mut request = [0u8; 16 * 1024];
+            let _ = stream
+                .read(&mut request)
+                .expect("read shared grant request");
+            let body = serde_json::to_vec(&json!({
+                "ok":true,
+                "available":false,
+                "consumed":false,
+                "approval_id":"approval:shared",
+                "expires_at":"2030-01-01T00:00:00Z"
+            }))
+            .expect("shared grant response body");
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                    .as_bytes(),
+                )
+                .expect("shared grant response head");
+            stream.write_all(&body).expect("shared grant response body");
+        });
+
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.routes[0].jit = json!({"required":true});
+        let snapshot = Arc::new(snapshot_value);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("audit-token".to_string());
+        state.grant_consume_url = Some(format!("http://{address}/consume"));
+        state.grant_consume_token = Some("grant-token".to_string());
+        let decision = decide_internal(
+            &state,
+            &snapshot,
+            correlated_test_decision_request("A_-0123456789abcdefghijk"),
+            Some("agent:test"),
+        );
+        server.join().expect("shared grant server");
+
+        assert_eq!(decision["status_code"], 428);
+        assert_eq!(decision["approval_id"], "approval:shared");
+        assert_eq!(decision["approval_url"], "/approvals/approval:shared");
     }
 
     fn test_release_authorization_response(
@@ -23931,6 +25134,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let response = match result {
@@ -24621,6 +25825,21 @@ mod tests {
     }
 
     #[test]
+    fn mutating_upstream_requests_use_a_non_pooled_client() {
+        let state = test_gate_state(test_snapshot(1));
+        assert!(std::ptr::eq(
+            upstream_client_for_method(&state, &Method::GET),
+            &state.upstream_client
+        ));
+        for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
+            assert!(std::ptr::eq(
+                upstream_client_for_method(&state, &method),
+                &state.one_shot_upstream_client
+            ));
+        }
+    }
+
+    #[test]
     fn path_templates_reject_non_terminal_globs() {
         assert!(compile_template("/prefix/**/suffix").is_err());
         assert!(compile_template("/prefix/**").is_ok());
@@ -24885,6 +26104,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let response = match result {
@@ -25008,6 +26228,7 @@ mod tests {
             None,
             None,
             None,
+            None,
             false,
         );
         let response = match result {
@@ -25116,6 +26337,7 @@ mod tests {
                 client_ip: Some("127.0.0.1".to_string()),
             },
             Some("agent:test"),
+            None,
             None,
             None,
             None,
@@ -26080,6 +27302,31 @@ mod tests {
     }
 
     #[test]
+    fn policy_selected_response_headers_are_credential_reflection_scanned() {
+        let mut guard = ResponseSecretGuard::default();
+        guard.add_text_encodings("credential-from-vault");
+        let config = json!({"allowedHeaders":["etag"]});
+        let mut headers = HeaderMap::new();
+        headers.append(
+            "etag",
+            HeaderValue::from_static("\"credential-from-vault\""),
+        );
+        headers.append(
+            "x-unconsulted",
+            HeaderValue::from_static("credential-from-vault"),
+        );
+        assert!(selected_raw_policy_headers_detect_secret(
+            &config, &headers, &guard
+        ));
+
+        headers.remove("etag");
+        headers.append("etag", HeaderValue::from_static("\"safe-etag\""));
+        assert!(!selected_raw_policy_headers_detect_secret(
+            &config, &headers, &guard
+        ));
+    }
+
+    #[test]
     fn gmail_date_window_never_exempts_unproven_items() {
         let mut route = test_snapshot(1).routes[0].clone();
         route.constraints = vec![json!({
@@ -27017,6 +28264,862 @@ mod tests {
     }
 
     #[test]
+    fn streaming_proof_rejects_both_nonce_headers() {
+        let headers = BTreeMap::from([
+            (
+                RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                "buffered-nonce".to_string(),
+            ),
+            (
+                STREAM_RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                "streaming-nonce".to_string(),
+            ),
+        ]);
+        let error = requested_response_proof_kind(&headers)
+            .expect_err("proof nonce domains must be mutually exclusive");
+        assert!(error.contains("mutually exclusive"));
+    }
+
+    #[test]
+    fn streaming_proof_nonce_is_exactly_32_bytes() {
+        let valid = general_purpose::URL_SAFE_NO_PAD.encode([7u8; 32]);
+        assert_eq!(
+            decode_streaming_response_proof_nonce(&valid).unwrap(),
+            [7u8; 32]
+        );
+        for invalid in [
+            general_purpose::URL_SAFE_NO_PAD.encode([7u8; 31]),
+            general_purpose::URL_SAFE_NO_PAD.encode([7u8; 33]),
+            format!("{valid}="),
+        ] {
+            assert!(
+                decode_streaming_response_proof_nonce(&invalid).is_err(),
+                "{invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_client_proof_request_is_canonically_domain_separated() {
+        let buffered_nonce = "buffered-nonce";
+        let streaming_nonce = "streaming-nonce";
+        let request_for = |header: &str, nonce: &str| IncomingRequest {
+            method: "GET".to_string(),
+            target: "https://example.test/resource?a=1".to_string(),
+            headers: BTreeMap::from([
+                (header.to_string(), nonce.to_string()),
+                ("X-Visible".to_string(), "visible".to_string()),
+            ]),
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        let buffered_request = request_for(RESPONSE_PROOF_NONCE_HEADER, buffered_nonce);
+        let streaming_request = request_for(STREAM_RESPONSE_PROOF_NONCE_HEADER, streaming_nonce);
+        let buffered = serde_json::to_value(
+            canonical_client_proof_request(&buffered_request).expect("buffered canonical request"),
+        )
+        .expect("serialize buffered request");
+        let streaming = serde_json::to_value(
+            canonical_streaming_client_proof_request(&streaming_request)
+                .expect("streaming canonical request"),
+        )
+        .expect("serialize streaming request");
+        assert_eq!(buffered["apiVersion"], "serverware.clientProofRequest/v1");
+        assert_eq!(
+            streaming["apiVersion"],
+            "serverware.streamingClientProofRequest/v1"
+        );
+        assert_eq!(buffered["headers"], json!({"x-visible":"visible"}));
+        assert_eq!(streaming["headers"], buffered["headers"]);
+        assert_ne!(digest_json(&buffered), digest_json(&streaming));
+    }
+
+    #[test]
+    fn response_proof_preflight_requires_the_matching_release_mode() {
+        let buffered = test_snapshot(1).routes[0].clone();
+        assert!(
+            validate_response_proof_route_preflight(&buffered, ResponseProofKind::Buffered).is_ok()
+        );
+        assert_eq!(
+            validate_response_proof_route_preflight(&buffered, ResponseProofKind::Streaming),
+            Err("stream_response_proof_requires_streaming_response_route")
+        );
+
+        let mut streaming = buffered;
+        streaming.adapter_config["response"] =
+            json!({"mode":"jsonArrayStream","maxBodyBytes":1024,"allowedFields":["safe"]});
+        assert!(
+            validate_response_proof_route_preflight(&streaming, ResponseProofKind::Streaming)
+                .is_ok()
+        );
+        assert_eq!(
+            validate_response_proof_route_preflight(&streaming, ResponseProofKind::Buffered),
+            Err("response_proof_requires_buffered_response_route")
+        );
+    }
+
+    #[test]
+    fn streaming_proof_authority_distinguishes_credentialless_and_credentialed_routes() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        let mut authority = ResponseProofReleaseAuthority {
+            authority_mode: "atomic",
+            grant_id: None,
+            approval_id: None,
+            credential_ref: None,
+            credential_version: 0,
+            request_digest: sha256_prefixed(b"request"),
+            operation_digest: sha256_prefixed(b"operation"),
+            attempt_id: sha256_prefixed(b"attempt"),
+            consumption_identity_digest: sha256_prefixed(b"binding"),
+            authorization_state_at_upstream_dispatch: "dispatching",
+            authorization_state_observed_at_epoch_ms: 1,
+            reservation_expires_at_epoch_ms: Some(3),
+            dispatch_expires_at_epoch_ms: 2,
+        };
+        validate_streaming_response_proof_authority(&route, &authority)
+            .expect("credentialless atomic authority");
+
+        authority.credential_ref = Some("credential:test".to_string());
+        authority.credential_version = 7;
+        assert!(
+            validate_streaming_response_proof_authority(&route, &authority)
+                .expect_err("credential authority on credentialless route")
+                .contains("credential authority mismatch")
+        );
+
+        route.credential_ref = Some("credential:test".to_string());
+        validate_streaming_response_proof_authority(&route, &authority)
+            .expect("exact credential authority");
+        authority.credential_version = 0;
+        assert!(
+            validate_streaming_response_proof_authority(&route, &authority)
+                .expect_err("credential authority requires a positive version")
+                .contains("credential authority mismatch")
+        );
+        authority.credential_version = 7;
+        authority.credential_ref = Some("credential:other".to_string());
+        assert!(
+            validate_streaming_response_proof_authority(&route, &authority)
+                .expect_err("credential authority must match the admitted route")
+                .contains("credential authority mismatch")
+        );
+    }
+
+    #[test]
+    fn credentialless_atomic_jsonl_stream_emits_end_to_end_runtime_proof() {
+        let mut admitted_route = generic_policy_route("none", json!(1024));
+        admitted_route["match"]["methods"] = json!(["GET"]);
+        admitted_route["adapter"]["config"]["response"] = json!({
+            "mode":"jsonlStream",
+            "maxBodyBytes":1024,
+            "maxLineBytes":1024,
+            "allowedFields":["safe"]
+        });
+        validate_policy_capabilities(&policy_with_route(admitted_route))
+            .expect("credentialless GET structured response stream is policy-admitted");
+
+        let upstream_listener = TcpListener::bind("127.0.0.1:0").expect("upstream listener");
+        let upstream_address = upstream_listener
+            .local_addr()
+            .expect("upstream listener address");
+        let raw_body = b"{\"safe\":\"released\",\"secret\":\"withheld\"}\n".to_vec();
+        let upstream_body = raw_body.clone();
+        let upstream_server = thread::spawn(move || {
+            let (mut stream, _) = upstream_listener.accept().expect("upstream request");
+            let request = read_request_head_from(&mut stream, None).expect("upstream request head");
+            assert_eq!(request.method, "GET");
+            assert_eq!(request.target, "/resource");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                upstream_body.len()
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("upstream response head");
+            stream
+                .write_all(&upstream_body)
+                .expect("upstream response body");
+        });
+
+        let response_signing_key = SigningKey::from_bytes(&[93u8; 32]);
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.hash = sha256_prefixed(b"streaming-proof-test-policy");
+        snapshot_value.routes[0].scheme = "http".to_string();
+        snapshot_value.routes[0].host = "127.0.0.1".to_string();
+        snapshot_value.routes[0].port = upstream_address.port();
+        snapshot_value.routes[0].methods = HashSet::from(["GET".to_string()]);
+        snapshot_value.routes[0].credential_ref = None;
+        snapshot_value.routes[0].adapter_config["response"] = json!({
+            "mode":"jsonlStream",
+            "maxBodyBytes":1024,
+            "maxLineBytes":1024,
+            "allowedFields":["safe"]
+        });
+        snapshot_value.response_signing_key_id = Some(sha256_prefixed(
+            response_signing_key.verifying_key().as_bytes(),
+        ));
+        snapshot_value.response_verifying_key = Some(response_signing_key.verifying_key());
+        snapshot_value.attested_response_context = Some(AttestedResponseContext {
+            runtime_manifest_digest: sha256_prefixed(b"test-runtime-manifest"),
+            policy_bundle_digest: snapshot_value.hash.clone(),
+            provenance_digest: None,
+            image_signatures_digest: None,
+            source_tree_digest: None,
+        });
+        let snapshot = Arc::new(snapshot_value);
+
+        let release_listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
+        let release_address = release_listener
+            .local_addr()
+            .expect("release listener address");
+        let release_snapshot = Arc::clone(&snapshot);
+        let release_server = thread::spawn(move || {
+            let (mut reserve_stream, reserve) = read_release_test_request(&release_listener);
+            assert_eq!(
+                reserve["apiVersion"],
+                "serverware.releaseAuthorizationReserve/v1"
+            );
+            assert!(reserve["credentialRef"].is_null());
+            assert_eq!(reserve["credentialVersion"], 0);
+            let attempt_id = reserve["attemptId"]
+                .as_str()
+                .expect("reserve attempt ID")
+                .to_string();
+            let binding_digest = digest_json_ensure_ascii(&json!({
+                "attempt_id":attempt_id,
+                "flow_id":attempt_id,
+                "principal_id":reserve["principalId"],
+                "route_id":reserve["routeId"],
+                "credential_id":"",
+                "credential_version":0,
+                "policy_hash":reserve["policyHash"],
+                "request_digest":reserve["requestDigest"],
+                "operation_digest":reserve["operationDigest"],
+                "operation_context":reserve["operationContext"],
+                "require_jit_grant":false,
+                "shared_quotas":[],
+            }));
+            let reservation_expires_at =
+                u64::try_from(now_epoch_ms()).expect("current epoch") + 60_000;
+            reserve_stream
+                .write_all(&http_response(
+                    "200 OK",
+                    json!({
+                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "ok":true,
+                        "authorized":true,
+                        "state":"reserved",
+                        "reason":"reserved",
+                        "attemptId":attempt_id,
+                        "bindingDigest":binding_digest,
+                        "idempotentReplay":false,
+                        "grantId":null,
+                        "approvalRequestId":null,
+                        "reservationExpiresAtEpochMs":reservation_expires_at,
+                        "dispatchStartedAtEpochMs":null,
+                        "dispatchExpiresAtEpochMs":null,
+                        "completionOutcome":null,
+                        "retryAfterSeconds":0,
+                        "quotas":[],
+                        "store":{"backend":"sqlite","ha":false},
+                    }),
+                ))
+                .expect("reserve response");
+
+            let (mut dispatch_stream, _) = release_listener.accept().expect("dispatch request");
+            dispatch_stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("dispatch read timeout");
+            let dispatch_head =
+                read_request_head_from(&mut dispatch_stream, None).expect("dispatch request head");
+            let dispatch_request = read_request_body_from_head(
+                &mut dispatch_stream,
+                dispatch_head,
+                MAX_MANAGEMENT_REQUEST_BODY_BYTES,
+            )
+            .expect("dispatch request body");
+            let dispatch = strict_json_value_from_slice(&dispatch_request.body)
+                .expect("dispatch request JSON");
+            assert_eq!(
+                dispatch["apiVersion"],
+                "serverware.releaseAuthorizationDispatch/v1"
+            );
+            assert_eq!(dispatch["attemptId"], attempt_id);
+            assert_eq!(dispatch["bindingDigest"], binding_digest);
+            let dispatch_started_at = u64::try_from(now_epoch_ms()).expect("current epoch");
+            let dispatch_expires_at = dispatch_started_at + 30_000;
+            let dispatch_body = json!({
+                "apiVersion":"serverware.releaseAuthorization/v1",
+                "ok":true,
+                "authorized":true,
+                "state":"dispatching",
+                "reason":"dispatching",
+                "attemptId":attempt_id,
+                "bindingDigest":binding_digest,
+                "idempotentReplay":false,
+                "grantId":null,
+                "approvalRequestId":null,
+                "reservationExpiresAtEpochMs":reservation_expires_at,
+                "dispatchStartedAtEpochMs":dispatch_started_at,
+                "dispatchExpiresAtEpochMs":dispatch_expires_at,
+                "completionOutcome":null,
+                "retryAfterSeconds":0,
+                "quotas":[],
+                "store":{"backend":"sqlite","ha":false},
+            });
+            let response_nonce = dispatch_request
+                .headers
+                .get("x-serverware-response-nonce")
+                .expect("dispatch response nonce");
+            dispatch_stream
+                .write_all(&signed_control_plane_test_response(
+                    &response_signing_key,
+                    &release_snapshot,
+                    &dispatch_request,
+                    response_nonce,
+                    dispatch_started_at,
+                    dispatch_body,
+                ))
+                .expect("dispatch response");
+
+            let (mut complete_stream, complete) = read_release_test_request(&release_listener);
+            assert_eq!(
+                complete["apiVersion"],
+                "serverware.releaseAuthorizationComplete/v1"
+            );
+            assert_eq!(complete["attemptId"], attempt_id);
+            assert_eq!(complete["bindingDigest"], binding_digest);
+            assert_eq!(complete["outcome"], "forwarded");
+            complete_stream
+                .write_all(&http_response(
+                    "200 OK",
+                    json!({
+                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "ok":true,
+                        "authorized":true,
+                        "state":"committed",
+                        "reason":"committed",
+                        "attemptId":attempt_id,
+                        "bindingDigest":binding_digest,
+                        "idempotentReplay":false,
+                        "grantId":null,
+                        "approvalRequestId":null,
+                        "reservationExpiresAtEpochMs":reservation_expires_at,
+                        "dispatchStartedAtEpochMs":dispatch_started_at,
+                        "dispatchExpiresAtEpochMs":dispatch_expires_at,
+                        "completionOutcome":"forwarded",
+                        "retryAfterSeconds":0,
+                        "quotas":[],
+                        "store":{"backend":"sqlite","ha":false},
+                    }),
+                ))
+                .expect("complete response");
+        });
+
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.atomic_release_authorization_enabled = true;
+        state.release_authorization_base_url = Some(format!(
+            "http://{release_address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        state.response_proof_attestation_command =
+            Some("/bin/echo '{\"vendor_tee\":{\"provider\":\"unit-test\"}}'".to_string());
+        state.server_instance_id = Some("server:test".to_string());
+        state.release_provenance_path = Some(format!("{}/Cargo.toml", env!("CARGO_MANIFEST_DIR")));
+        let client_nonce_bytes = vec![7u8; 32];
+        let client_nonce = general_purpose::URL_SAFE_NO_PAD.encode(&client_nonce_bytes);
+        let context = StreamingResponseProofContext {
+            client_nonce: client_nonce.clone(),
+            client_nonce_bytes,
+            tls_exporter: general_purpose::URL_SAFE_NO_PAD.encode([8u8; 32]),
+        };
+        let request = IncomingRequest {
+            method: "GET".to_string(),
+            target: format!("http://{upstream_address}/resource"),
+            headers: BTreeMap::from([(
+                STREAM_RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                client_nonce,
+            )]),
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        let mut wire = Vec::new();
+        let kept_alive = forward_absolute_request_to(
+            &state,
+            &snapshot,
+            request,
+            Some("agent:test"),
+            false,
+            &mut wire,
+            Some(ResponseProofRequestContext::Streaming(&context)),
+        );
+        assert!(
+            !kept_alive,
+            "unexpected buffered response: {}",
+            String::from_utf8_lossy(&wire)
+        );
+        upstream_server.join().expect("upstream server");
+        release_server.join().expect("release server");
+
+        let wire = String::from_utf8(wire).expect("streaming proof response");
+        assert!(wire.starts_with("HTTP/1.1 200"));
+        assert!(wire.contains("Transfer-Encoding: chunked\r\n"));
+        assert!(wire.contains(&format!(
+            "Trailer: {STREAM_RESPONSE_PROOF_TRAILER_DECLARATION}\r\n"
+        )));
+        let proof_b64 = wire
+            .split("\r\n")
+            .find_map(|line| line.strip_prefix(&format!("{STREAM_RESPONSE_PROOF_B64_TRAILER}: ")))
+            .expect("runtime proof trailer");
+        let proof_digest = wire
+            .split("\r\n")
+            .find_map(|line| {
+                line.strip_prefix(&format!("{STREAM_RESPONSE_PROOF_SHA256_TRAILER}: "))
+            })
+            .expect("runtime proof digest trailer");
+        let proof_bytes = general_purpose::URL_SAFE_NO_PAD
+            .decode(proof_b64)
+            .expect("runtime proof base64url");
+        assert_eq!(sha256_prefixed(&proof_bytes), proof_digest);
+        let proof = strict_json_value_from_slice(&proof_bytes).expect("runtime proof JSON");
+        assert_eq!(
+            proof["apiVersion"],
+            "serverware.streamingResponseRuntimeProof/v1"
+        );
+        assert_eq!(proof["kind"], "ServerwareStreamingResponseRuntimeProof");
+        let statement = &proof["streaming_response_statement"];
+        assert!(statement["release_authority"]["credential_ref"].is_null());
+        assert_eq!(statement["release_authority"]["credential_version"], 0);
+        let projected_body = b"{\"safe\":\"released\"}\n";
+        assert_eq!(
+            statement["released_response"]["body_digest"],
+            sha256_prefixed(projected_body)
+        );
+        assert_eq!(
+            statement["released_response"]["body_bytes"],
+            projected_body.len()
+        );
+        assert_eq!(
+            statement["upstream_response"]["body_digest"],
+            sha256_prefixed(&raw_body)
+        );
+        assert_eq!(statement["upstream_response"]["body_bytes"], raw_body.len());
+    }
+
+    #[test]
+    fn streaming_proof_terminal_declares_and_writes_exactly_two_trailers() {
+        let mut wire = Vec::new();
+        let headers =
+            write_streaming_response_proof_headers(&mut wire, StatusCode::OK, "application/json")
+                .expect("streaming proof headers");
+        let proof = general_purpose::URL_SAFE_NO_PAD.encode(b"{}");
+        let digest = sha256_prefixed(b"{}");
+        write_streaming_response_proof_terminal(&mut wire, &proof, &digest)
+            .expect("streaming proof terminal");
+        let wire = String::from_utf8(wire).expect("ASCII proof framing");
+        assert_eq!(
+            headers.get("trailer").map(String::as_str),
+            Some(STREAM_RESPONSE_PROOF_TRAILER_DECLARATION)
+        );
+        assert!(wire.contains(&format!(
+            "Trailer: {STREAM_RESPONSE_PROOF_TRAILER_DECLARATION}\r\n"
+        )));
+        assert!(wire.ends_with(&format!(
+            "0\r\n{STREAM_RESPONSE_PROOF_B64_TRAILER}: {proof}\r\n{STREAM_RESPONSE_PROOF_SHA256_TRAILER}: {digest}\r\n\r\n"
+        )));
+        assert_eq!(wire.matches("\r\n0\r\n").count(), 1);
+    }
+
+    #[test]
+    fn streaming_proof_projected_digest_counts_only_released_entity_bytes() {
+        let projected = br#"[{"safe":true}]"#;
+        let mut wire = Vec::new();
+        let (digest, bytes) = {
+            let mut writer = ChunkedHashWriter::new_with_deferred_terminal(&mut wire);
+            writer
+                .write_all(projected)
+                .expect("projected response chunk");
+            writer.finish().expect("deferred projected response")
+        };
+        assert_eq!(digest, sha256_prefixed(projected));
+        assert_eq!(bytes, projected.len() as u64);
+        assert_ne!(digest, sha256_prefixed(&wire));
+        assert!(!wire.windows(5).any(|window| window == b"0\r\n\r\n"));
+    }
+
+    #[test]
+    fn streaming_proof_keeps_raw_and_projected_body_bindings_distinct() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(snapshot);
+        let projected = br#"[{"safe":true}]"#;
+        let raw = br#"[{"safe":true,"secret":"redacted"}]"#;
+        let stats = release_streamed_forward_response(
+            &state,
+            &json!({}),
+            "GET",
+            &Url::parse("https://example.test/resource").expect("URL"),
+            StatusCode::OK,
+            sha256_prefixed(projected),
+            projected.len() as u64,
+            json!({
+                "ok":true,
+                "raw_response_body_sha256":sha256_prefixed(raw),
+                "raw_response_body_bytes":raw.len(),
+            }),
+        );
+        assert_eq!(stats.body_digest, sha256_prefixed(projected));
+        assert_eq!(stats.body_bytes, projected.len() as u64);
+        assert_eq!(stats.raw_body_digest, sha256_prefixed(raw));
+        assert_eq!(stats.raw_body_bytes, raw.len() as u64);
+        assert_ne!(stats.body_digest, stats.raw_body_digest);
+    }
+
+    #[test]
+    fn streaming_proof_final_snapshot_check_rejects_revocation() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        validate_streaming_response_proof_snapshot(&state, &snapshot).expect("active snapshot");
+        *state.snapshot.write().expect("snapshot lock") = test_snapshot(2);
+        assert!(
+            validate_streaming_response_proof_snapshot(&state, &snapshot)
+                .expect_err("revoked snapshot must fail final proof completion")
+                .contains("revoked")
+        );
+    }
+
+    #[test]
+    fn snapshot_revocation_does_not_wait_for_a_stalled_response_write() {
+        struct BlockingWriter {
+            entered: SyncSender<()>,
+            release: Receiver<()>,
+        }
+
+        impl Write for BlockingWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.entered.send(()).expect("announce response write");
+                self.release.recv().expect("release response write");
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let snapshot = test_snapshot(1);
+        let state = Arc::new(test_gate_state(Arc::clone(&snapshot)));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let (write_done_tx, write_done_rx) = mpsc::sync_channel(0);
+        let write_state = Arc::clone(&state);
+        let write_snapshot = Arc::clone(&snapshot);
+        let writer = thread::spawn(move || {
+            let mut inner = BlockingWriter {
+                entered: entered_tx,
+                release: release_rx,
+            };
+            let result = ActiveSnapshotWriter {
+                state: &write_state,
+                snapshot: &write_snapshot,
+                inner: &mut inner,
+            }
+            .write_all(b"terminal-proof");
+            write_done_tx.send(result).expect("report response write");
+        });
+        entered_rx.recv().expect("response write entered");
+
+        let (revoked_tx, revoked_rx) = mpsc::sync_channel(0);
+        let revoke_state = Arc::clone(&state);
+        let revoker = thread::spawn(move || {
+            *revoke_state.snapshot.write().expect("snapshot lock") = test_snapshot(2);
+            revoked_tx.send(()).expect("report snapshot revocation");
+        });
+        revoked_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("snapshot revocation must not wait for downstream I/O");
+        release_tx.send(()).expect("release response write");
+        let error = write_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("response write completed")
+            .expect_err("a response crossing snapshot revocation must fail closed");
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        writer.join().expect("response writer");
+        revoker.join().expect("snapshot revoker");
+    }
+
+    #[test]
+    fn terminal_proof_publication_linearizes_before_snapshot_revocation() {
+        struct BlockingWriter {
+            entered: SyncSender<()>,
+            release: Receiver<()>,
+        }
+
+        impl Write for BlockingWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.entered.send(()).expect("announce terminal write");
+                self.release.recv().expect("release terminal write");
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl TerminalDeadlineWrite for BlockingWriter {
+            fn set_terminal_write_deadline(&mut self, _deadline: Option<Instant>) {}
+        }
+
+        let snapshot = test_snapshot(1);
+        let state = Arc::new(test_gate_state(Arc::clone(&snapshot)));
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let (write_done_tx, write_done_rx) = mpsc::sync_channel(0);
+        let write_state = Arc::clone(&state);
+        let write_snapshot = Arc::clone(&snapshot);
+        let writer = thread::spawn(move || {
+            let mut inner = BlockingWriter {
+                entered: entered_tx,
+                release: release_rx,
+            };
+            let result = write_streaming_response_proof_terminal_for_active_snapshot(
+                &mut ActiveSnapshotWriter {
+                    state: &write_state,
+                    snapshot: &write_snapshot,
+                    inner: &mut inner,
+                },
+                "e30",
+                &format!("sha256:{}", "0".repeat(64)),
+            );
+            write_done_tx.send(result).expect("report terminal write");
+        });
+        entered_rx.recv().expect("terminal write entered");
+
+        let (revoking_tx, revoking_rx) = mpsc::sync_channel(0);
+        let (revoked_tx, revoked_rx) = mpsc::sync_channel(0);
+        let revoke_state = Arc::clone(&state);
+        let revoker = thread::spawn(move || {
+            revoking_tx.send(()).expect("report revocation attempt");
+            *revoke_state.snapshot.write().expect("snapshot lock") = test_snapshot(2);
+            revoked_tx.send(()).expect("report snapshot revocation");
+        });
+        revoking_rx.recv().expect("snapshot revocation attempted");
+        assert!(
+            revoked_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "snapshot replacement must not split terminal proof publication"
+        );
+        release_tx.send(()).expect("release terminal write");
+        write_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("terminal write completed")
+            .expect("terminal proof must publish before queued revocation");
+        revoked_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("snapshot revocation completed after terminal proof");
+        writer.join().expect("terminal writer");
+        revoker.join().expect("snapshot revoker");
+    }
+
+    #[test]
+    fn terminal_proof_write_and_flush_share_one_absolute_deadline() {
+        #[derive(Default)]
+        struct DeadlineRecordingWriter {
+            active_deadline: Option<Instant>,
+            configured_deadlines: Vec<Option<Instant>>,
+            write_deadline: Option<Instant>,
+            flush_deadline: Option<Instant>,
+        }
+
+        impl Write for DeadlineRecordingWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                self.write_deadline = self.active_deadline;
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.flush_deadline = self.active_deadline;
+                Ok(())
+            }
+        }
+
+        impl TerminalDeadlineWrite for DeadlineRecordingWriter {
+            fn set_terminal_write_deadline(&mut self, deadline: Option<Instant>) {
+                self.active_deadline = deadline;
+                self.configured_deadlines.push(deadline);
+            }
+        }
+
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let mut inner = DeadlineRecordingWriter::default();
+        write_streaming_response_proof_terminal_for_active_snapshot(
+            &mut ActiveSnapshotWriter {
+                state: &state,
+                snapshot: &snapshot,
+                inner: &mut inner,
+            },
+            "e30",
+            &format!("sha256:{}", "0".repeat(64)),
+        )
+        .expect("terminal proof publication");
+
+        assert!(inner.write_deadline.is_some());
+        assert_eq!(inner.write_deadline, inner.flush_deadline);
+        assert_eq!(inner.configured_deadlines, vec![inner.write_deadline, None]);
+        assert!(inner.active_deadline.is_none());
+    }
+
+    #[test]
+    fn terminal_proof_publication_does_not_retry_an_elapsed_io_slice() {
+        struct SliceTimeoutWriter {
+            writes: usize,
+        }
+
+        impl Write for SliceTimeoutWriter {
+            fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+                self.writes += 1;
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "response write slice elapsed",
+                ))
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                panic!("flush must not run after an elapsed write slice")
+            }
+        }
+
+        impl TerminalDeadlineWrite for SliceTimeoutWriter {
+            fn set_terminal_write_deadline(&mut self, _deadline: Option<Instant>) {}
+        }
+
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let mut inner = SliceTimeoutWriter { writes: 0 };
+        let error = write_streaming_response_proof_terminal_for_active_snapshot(
+            &mut ActiveSnapshotWriter {
+                state: &state,
+                snapshot: &snapshot,
+                inner: &mut inner,
+            },
+            "e30",
+            &format!("sha256:{}", "0".repeat(64)),
+        )
+        .expect_err("elapsed terminal write slice must fail closed");
+        assert!(error.contains("write slice elapsed"));
+        assert_eq!(inner.writes, 1);
+        *state.snapshot.write().expect("snapshot lock released") = test_snapshot(2);
+    }
+
+    #[test]
+    fn terminal_proof_publication_does_not_retry_an_elapsed_flush_slice() {
+        struct FlushTimeoutWriter {
+            flushes: usize,
+        }
+
+        impl Write for FlushTimeoutWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                self.flushes += 1;
+                Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "response flush slice elapsed",
+                ))
+            }
+        }
+
+        impl TerminalDeadlineWrite for FlushTimeoutWriter {
+            fn set_terminal_write_deadline(&mut self, _deadline: Option<Instant>) {}
+        }
+
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let mut inner = FlushTimeoutWriter { flushes: 0 };
+        let error = write_streaming_response_proof_terminal_for_active_snapshot(
+            &mut ActiveSnapshotWriter {
+                state: &state,
+                snapshot: &snapshot,
+                inner: &mut inner,
+            },
+            "e30",
+            &format!("sha256:{}", "0".repeat(64)),
+        )
+        .expect_err("elapsed terminal flush slice must fail closed");
+        assert!(error.contains("flush slice elapsed"));
+        assert_eq!(inner.flushes, 1);
+        *state.snapshot.write().expect("snapshot lock released") = test_snapshot(2);
+    }
+
+    #[test]
+    fn streaming_runtime_proof_rejects_canonical_payload_over_96_kib() {
+        let oversized = json!({
+            "apiVersion":"serverware.streamingResponseRuntimeProof/v1",
+            "kind":"ServerwareStreamingResponseRuntimeProof",
+            "padding":"x".repeat(MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES),
+        });
+        assert!(encode_streaming_response_runtime_proof(&oversized)
+            .expect_err("oversized runtime proof must fail before base64")
+            .contains("exceeds"));
+    }
+
+    #[test]
+    fn streaming_proof_failure_writer_emits_no_zero_chunk_or_proof_trailers() {
+        #[derive(Default)]
+        struct FailTerminalWriter {
+            bytes: Vec<u8>,
+        }
+
+        impl Write for FailTerminalWriter {
+            fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+                if buffer.starts_with(b"0\r\n") {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "terminal write failed",
+                    ));
+                }
+                self.bytes.extend_from_slice(buffer);
+                Ok(buffer.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut writer = FailTerminalWriter::default();
+        write_streaming_response_proof_headers(&mut writer, StatusCode::OK, "application/json")
+            .expect("proof response head");
+        {
+            let mut chunks = ChunkedHashWriter::new_with_deferred_terminal(&mut writer);
+            chunks.write_all(b"released").expect("released body");
+            chunks.finish().expect("deferred terminal");
+        }
+        let proof = general_purpose::URL_SAFE_NO_PAD.encode(b"{}");
+        assert!(write_streaming_response_proof_terminal(
+            &mut writer,
+            &proof,
+            &sha256_prefixed(b"{}")
+        )
+        .is_err());
+        let body = writer
+            .bytes
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .map(|index| &writer.bytes[index + 4..])
+            .expect("response body");
+        assert!(!body.windows(3).any(|window| window == b"0\r\n"));
+        assert!(!body
+            .windows(STREAM_RESPONSE_PROOF_B64_TRAILER.len())
+            .any(|window| window == STREAM_RESPONSE_PROOF_B64_TRAILER.as_bytes()));
+        assert!(!body
+            .windows(STREAM_RESPONSE_PROOF_SHA256_TRAILER.len())
+            .any(|window| window == STREAM_RESPONSE_PROOF_SHA256_TRAILER.as_bytes()));
+    }
+
+    #[test]
     fn non_success_response_does_not_emit_response_proof_audit() {
         let snapshot = test_snapshot(1);
         let mut state = test_gate_state(Arc::clone(&snapshot));
@@ -27046,7 +29149,7 @@ mod tests {
             None,
             false,
             &mut wire,
-            Some(&context),
+            Some(ResponseProofRequestContext::Buffered(&context)),
         ));
         let response = String::from_utf8(wire).expect("HTTP response");
         assert!(response.starts_with("HTTP/1.1 403"));
@@ -27092,7 +29195,7 @@ mod tests {
             Some("agent:test"),
             false,
             &mut wire,
-            Some(&context),
+            Some(ResponseProofRequestContext::Buffered(&context)),
         ));
         let response = String::from_utf8(wire).expect("HTTP response");
         assert!(response.starts_with("HTTP/1.1 422"));
@@ -27100,6 +29203,51 @@ mod tests {
         let audit = state.audit_queue.lock().expect("audit queue");
         assert!(audit.iter().any(|event| {
             event.event_type == "data_plane.response_proof.denied"
+                && event.event.get("stage").and_then(Value::as_str) == Some("pre_upstream")
+        }));
+    }
+
+    #[test]
+    fn stream_response_proof_rejects_buffered_route_before_credential_acquisition() {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.routes[0].credential_ref = Some("credential:missing".to_string());
+        let snapshot = Arc::new(snapshot);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("test-token".to_string());
+        let request = IncomingRequest {
+            method: "GET".to_string(),
+            target: "https://example.test/resource".to_string(),
+            headers: BTreeMap::from([(
+                STREAM_RESPONSE_PROOF_NONCE_HEADER.to_string(),
+                "test-nonce".to_string(),
+            )]),
+            body: Vec::new(),
+            client_ip: Some("127.0.0.1".to_string()),
+        };
+        let context = StreamingResponseProofContext {
+            client_nonce: "test-nonce".to_string(),
+            client_nonce_bytes: vec![7; 32],
+            tls_exporter: "test-exporter".to_string(),
+        };
+
+        let mut wire = Vec::new();
+        assert!(forward_absolute_request_to(
+            &state,
+            &snapshot,
+            request,
+            Some("agent:test"),
+            false,
+            &mut wire,
+            Some(ResponseProofRequestContext::Streaming(&context)),
+        ));
+        let response = String::from_utf8(wire).expect("HTTP response");
+        assert!(response.starts_with("HTTP/1.1 422"));
+        assert!(response.contains("stream_response_proof_requires_streaming_response_route"));
+        assert!(!response.contains("credential_generation_missing"));
+        let audit = state.audit_queue.lock().expect("audit queue");
+        assert!(audit.iter().any(|event| {
+            event.event_type == "data_plane.streaming_response_proof.denied"
                 && event.event.get("stage").and_then(Value::as_str) == Some("pre_upstream")
         }));
     }
@@ -28172,6 +30320,100 @@ mod tests {
         assert!(validate_policy_capabilities(&policy_with_route(route))
             .expect_err("streaming responses must not claim header release support")
             .contains("cannot release upstream headers"));
+    }
+
+    #[test]
+    fn signed_npm_publish_public_registry_exception_is_exact_and_all_or_nothing() {
+        let publish_route = |host: &str, constraints: Value| {
+            json!({
+                "id":"npm:public-exception",
+                "principals":["agent:test"],
+                "match":{
+                    "scheme":"https","host":host,"port":443,
+                    "methods":["PUT"],"paths":["/{package}"]
+                },
+                "credentialRef":"credential:npm",
+                "adapter":{"type":"npm.registry","config":{
+                    "operations":["publish"],
+                    "response":{
+                        "mode":"json","maxBodyBytes":65536,
+                        "allowedFields":["package","version","published"],
+                        "allowedHeaders":[],
+                        "error":{
+                            "mode":"json","maxBodyBytes":65536,
+                            "allowedFields":["error","reason"],
+                            "allowedHeaders":["retry-after"],
+                            "onInvalid":"block"
+                        }
+                    }
+                }},
+                "constraints":constraints,
+                "jit":{
+                    "required":true,
+                    "mode":"perOperation",
+                    "ttlSeconds":30,
+                    "maxUses":1,
+                    "consumeOn":"forwardStart",
+                    "binding":{"type":"operationDigest","fields":[
+                        "principal","routeId","credentialRef","credentialVersion","policyHash",
+                        "method","authority","path","query","selectedHeaders","bodySha256",
+                        "packageName","packageVersion","tarballIntegrity"
+                    ]},
+                    "approvers":{"quorum":1,"users":["user:release"],"authn":{
+                        "webauthnRequired":true,
+                        "userVerification":"required",
+                        "allowedAuthenticatorClasses":["hardware"],
+                        "requireHardwareAttestation":true
+                    }}
+                }
+            })
+        };
+        let signed_policy = |route: Value| {
+            let mut policy = policy_with_route(route);
+            policy["metadata"]["signature"] = json!("ed25519:test-signature");
+            policy
+        };
+        let operation_constraint = json!({
+            "id":"npm-publish-only",
+            "type":"operationPolicy",
+            "allowedOperations":["npm.publish"]
+        });
+
+        validate_policy_capabilities(&signed_policy(publish_route(
+            "registry.npmjs.org",
+            json!([operation_constraint.clone()]),
+        )))
+        .expect("exact public npm host may omit both response assertions");
+
+        let non_public_error = validate_policy_capabilities(&signed_policy(publish_route(
+            "registry.example.test",
+            json!([operation_constraint.clone()]),
+        )))
+        .expect_err("compatible non-public registry must provide both response assertions");
+        assert_eq!(
+            non_public_error,
+            "route npm:public-exception signed npm.publish requires a responseBinding scoped only to npm.publish"
+        );
+
+        let partial_public_error = validate_policy_capabilities(&signed_policy(publish_route(
+            "registry.npmjs.org",
+            json!([
+                operation_constraint,
+                {
+                    "id":"npm-publish-success",
+                    "type":"responseJson",
+                    "phase":"response",
+                    "operations":["npm.publish"],
+                    "required":true,
+                    "fields":{"published":{"required":true,"type":"boolean","equals":true}}
+                }
+            ]),
+        )))
+        .expect_err("partial public npm response assertion must fail closed");
+        assert_eq!(
+            partial_public_error,
+            "route npm:public-exception signed npm.publish requires a responseBinding scoped only to npm.publish"
+        );
     }
 
     #[test]

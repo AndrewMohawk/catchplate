@@ -432,6 +432,20 @@ def build_agent_enrollment(
                 "provisionSeparately": bool(identity.get("proxyAuthorization")),
                 "tokenId": (identity.get("proxyAuthorization") or {}).get("tokenId"),
             },
+            "requestHandling": {
+                "approvalRequired": {
+                    "statusCode": 428,
+                    "approvalIdField": "approval_id",
+                    "operatorPathField": "approval_url",
+                    "operatorPathTemplate": "/approvals/{approval_id}",
+                    "retryAfterField": "retry_after_seconds",
+                    "retryRule": "retry-the-identical-request-only-after-human-approval",
+                },
+                "stopAndReportStatusCodes": [403],
+                "stopAndReportStatusClasses": [5],
+                "bypassForbidden": True,
+                "credentialHandling": "never-request-store-print-or-cache-provider-credentials",
+            },
             "allowedUrls": [url for route in routes for url in route["urls"]],
             "sequence": [
                 "Verify attestation and install the returned CA at destinationPath.",
@@ -439,6 +453,8 @@ def build_agent_enrollment(
                 "Provision proxy authorization separately when required; it is never embedded here.",
                 "Set requiredProxyHeaders on CONNECT, requiredProviderHeaders inside the tunnel, and the enrollment header on a direct plain-HTTP proxy request.",
                 "Run allow and deny canaries, then start the agent with normal provider URLs.",
+                "On HTTP 428, send approval_url to the operator, wait for approval, honor retry_after_seconds, and retry only the identical request.",
+                "On HTTP 403 or 5xx, stop and report the route and error; never bypass Serverware or request provider credentials.",
             ],
         },
         "egress": {

@@ -488,6 +488,17 @@ def main() -> None:
                 },
             },
         )
+        if app_module.approval_index(current["id"]) != app_module.UI_HTML:
+            raise AssertionError("approval deep link did not serve the operator portal")
+        try:
+            app_module.approval_index("invalid/approval")
+        except app_module.HTTPException as exc:
+            if exc.status_code != 404:
+                raise AssertionError(
+                    f"invalid approval deep link returned {exc.status_code}"
+                ) from exc
+        else:
+            raise AssertionError("approval deep link accepted an invalid path identifier")
         review = app_module.approval_review(
             current["id"],
             identity=AdminIdentity("user:demo", frozenset({"approver"}), "admin-token-header"),

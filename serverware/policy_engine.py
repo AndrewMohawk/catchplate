@@ -1302,6 +1302,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                         {
                             "error": "serverware_approval_required",
                             "approval_id": approval_id,
+                            "approval_url": f"/approvals/{approval_id}",
                             "approval_status": approval_status,
                             "approval_created": approval_created,
                             "request_digest": request_digest,
@@ -1477,6 +1478,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                     {
                         "error": "serverware_approval_required",
                         "approval_id": approval["id"],
+                        "approval_url": f"/approvals/{approval['id']}",
                         "request_digest": request_digest,
                         "operation_digest": operation_digest,
                         "route_id": route.id,

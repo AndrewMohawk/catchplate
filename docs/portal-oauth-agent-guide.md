@@ -6,7 +6,7 @@ This guide covers the operator path for connecting OAuth-backed services in the 
 
 [Private deployment screenshot omitted from public source.]
 
-The screenshots in this guide are rendered from the real portal UI by the deterministic HTTPS browser journey in `scripts/test_portal_browser_oauth.py`. The desktop view above shows the empty operator-passkey inventory, pending configuration/runtime/hardware statuses, handoff field, and assignment controls after the demo state is seeded. The OAuth and policy screenshots below exercise real portal redirects and callback handling against a bounded local provider simulator. They are not evidence of a live Google/X tenant, production WebAuthn enrollment, or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
+The screenshots in this guide are rendered from the real portal UI by the deterministic HTTPS browser journey in `scripts/test_portal_browser_oauth.py`. The desktop view above shows the empty operator-passkey inventory, pending configuration/runtime/hardware statuses, handoff field, and assignment controls after the demo state is seeded. The approval views below open a real pending request through its exact deep link. The OAuth and policy screenshots exercise real portal redirects and callback handling against a bounded local provider simulator. They are not evidence of a live Google/X tenant, production WebAuthn enrollment, or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
 
 ## Authenticate The Operator
 
@@ -144,12 +144,15 @@ jq '.routes[] | select(.id == "example.gmail.last_30_days")' \
   policies/credential-limits.examples.json
 ```
 
-The common templates are:
+The canonical example bundle currently contains 10 credential definitions and 14 routes. The portal selector exposes nine fixed templates plus **Custom typed route policy**. Routes absent from that selector, including X full read, GitHub, Basic, query-token, and cookie examples, must be extracted from the bundle and submitted through the complete candidate-bundle path. Gmail, X, and npm selector entries are maintained portal variants; Slack and the Stripe/object-store entries are synchronized with their canonical examples.
+
+The canonical routes are:
 
 | Template route | Enforced capability |
 | --- | --- |
 | `example.gmail.last_30_days` | Gmail list/get only, a forced 30-day query, page cap 10, prior-search proof for direct reads, response `internalDate` validation, projected fields, only `From`/`Subject`/`Date` message headers, and bounded projected provider errors. |
 | `example.x.search.seven_days` | Exact X recent-search read operation, app-ID binding, seven-day request and response windows, page cap 100, and bounded JSON projection. |
+| `example.x.full_bounded_read` | Every currently cataloged X read family under `GET /2/**`, with write blocking and a bounded projection. This deliberately includes sensitive reads such as DMs and bookmarks; prefer a narrower route when possible. |
 | `example.x.tweet.one_per_day` | Exact `POST /2/tweets`, app-ID and callback-verified provider-account binding, one shared use per provider account and operation every 86,400 seconds across principal or credential rotation, a 280-character body allowlist, and bounded JSON projection. |
 | `example.npm.publish.yubikey_jit` | Publish, unpublish, dist-tag, token, and metadata write families, each behind a one-use 30-second operation-bound grant and WebAuthn user verification with trusted YubiKey or hardware attestation. Narrow the operation list when an agent needs fewer write families. The public npmjs template intentionally omits response-body identity binding because the official client ignores ordinary publish bodies; a compatible registry can enable the stricter `200`/`201` JSON package/version plus `published: true` invariant. |
 | `example.slack.chat_post.hourly` | Exact `chat.postMessage`, a bounded channel/text request, five shared posts per principal/credential/route assignment per hour, and a success response whose channel must equal the requested channel. Message text is projected but not echoed as a security assertion because Slack may normalize it. |
@@ -158,6 +161,9 @@ The common templates are:
 | `example.stripe.customers.get` | Only `GET /v1/customers/{customer_id}`, with the returned customer ID bound exactly to the matched path parameter and an optional deleted marker. |
 | `example.stripe.payment_intent.tokenized_jit` | Only tokenized `pm_...` PaymentIntent creation, a required bounded `Idempotency-Key`, USD 50-50,000 minor-unit amount bounds, five shared attempts per principal/credential/route assignment per day, raw card/source fields denied, one-use hardware-backed JIT, an admitted PaymentIntent status, and response binding for `amount`, `currency`, and `payment_method`. Denied request bytes are handled transiently by the proxy; this is not card tokenization or PCI certification. |
 | `example.object_store.small_puts` | Exact bounded JSON PUT, ten shared writes per principal/credential/route assignment per hour, and response binding for the path artifact ID plus provider-echoed caller-declared digest metadata. It does not hash the uploaded content. |
+| `example.basic.structured_secret_read` | Read-only Basic authentication using a fixed username and a password selected from a structured secret field. |
+| `example.query.structured_secret_read` | Read-only query-token injection selected from a nested secret field; the caller can supply `city` but cannot override the injected `api_key`. |
+| `example.cookie.structured_secret_read` | Read-only cookie injection selected from a nested secret field; ambient caller cookies remain outside the admitted request contract. |
 
 Every template is an ordinary signed route: operators can narrow it further, but unknown fields, operations, hosts, paths, content types, policy extensions, and unsupported response modes fail admission or execution closed.
 
@@ -183,13 +189,17 @@ Each accepted activation persists a policy high-water record containing the poli
 
 ## Review JIT Approvals
 
-When an agent's first real proxied request hits a route that requires human approval, the release authority validates its full canonical request, leaves no quota or grant reservation behind, atomically creates or reuses the exact pending approval, and returns `428 serverware_approval_required`. The non-mutating `/v1/decide` preview never creates approvals. The agent does not receive a grant token or credential; it waits and retries the identical request after approval.
+When an agent's first real proxied request hits a route that requires human approval, the release authority validates its full canonical request, leaves no quota or grant reservation behind, atomically creates or reuses the exact pending approval, and returns `428 serverware_approval_required` with `approval_id`, `approval_url`, and retry timing. The non-mutating `/v1/decide` preview never creates approvals. The agent gives the operator the exact URL, waits, and retries only the identical request after approval. It never receives a grant token or credential.
+
+[Private deployment screenshot omitted from public source.]
+
+The approval URL is an application path such as `/approvals/apr_...`; deployments resolve it against the configured Serverware public origin before showing it to the operator. Opening that URL authenticates the operator, loads only the named review document, focuses the review panel, and preserves the exact route in browser history. The deterministic browser test verifies the approval ID, route, package, request digest, operation digest, focus, and absence of horizontal overflow before capturing this view.
 
 In the portal **Approvals** table, open **Review** before approving. The review panel is populated from `GET /api/approvals/{id}/review` and shows:
 
 - principal and source identity;
 - route, credential reference, credential version, and policy hash;
-- method, URL, normalized operation fields, and request body hash;
+- method, stored target-URL commitment, normalized operation fields, and request body hash; the raw URL is not recoverable from durable approval storage;
 - redacted payload summary and risk flags such as WebAuthn requirement, hardware attestation requirement, current policy hash, credential-version binding, and one-use grant;
 - previous similar approvals or denials;
 - exact retry semantics, including the request digest, operation digest, grant TTL, max uses, and the fact that the agent receives no secret or token.
@@ -197,6 +207,10 @@ In the portal **Approvals** table, open **Review** before approving. The review 
 Opening review now issues a short-lived, one-use server-side receipt bound to the approver and SHA-256 digest of that exact redacted review document. WebAuthn options include the receipt ID, review digest, and receipt expiry in the signed challenge. The approval transaction requires and atomically consumes the same live receipt while creating the grant, so a direct API caller cannot approve without first retrieving the matching review and cannot replay a reviewed document after approval. Opening review is itself audited.
 
 The portal keeps **Approve** disabled until the matching review has been opened. If the active policy changed after the approval request was created, the review shows `policy_hash_not_current`, the portal keeps approval disabled, and the approval API returns `409` so the agent must issue a new request under the current policy. Approval still runs through the configured WebAuthn/YubiKey policy and creates a server-side one-use grant. The identical retry atomically reserves that grant together with every shared quota, advances the exact attempt to `dispatching` immediately before upstream contact, and commits or refunds it according to the bounded completion state. Denial can include an operator reason through the API, and denial records are searchable in audit.
+
+[Private deployment screenshot omitted from public source.]
+
+The narrow-viewport capture exercises the same canonical review document and bindings. It is not evidence of a physical YubiKey ceremony or independent production approval authority.
 
 [Private deployment screenshot omitted from public source.]
 
@@ -256,7 +270,7 @@ python3 scripts/verify_attestation.py \
 install -D -m 0644 .tmp/serverware-ca.pem /etc/serverware/serverware-ca.pem
 ```
 
-The copied portal command performs these steps in this order with shell error handling and defaults to the downloaded packet under `$HOME/Downloads`. It never requests, embeds, or transmits the Serverware admin token or any receipt-signing private key. The signed packet carries a policy-hash-bound, principal-bound, short-lived, one-use verifier capability whose URLs are relative to the configured control-plane origin; it can read only the pinned policy and download the CA once. Set `SERVERWARE_ENROLLMENT_PACKET` first when the browser saves downloads elsewhere. The verifier writes `.tmp/serverware-ca.pem`. The enrollment packet's `agentHandoff.caInstall.command` installs that verified file at the packet's configured `ca.installPath`; run it in the agent image or VM before starting the agent. The packet enumerates every allowed route URL, not just the first path, and exposes the exact proxy environment and required CONNECT/provider headers. Proxy-authorization secret material is deliberately absent and must be provisioned separately when `agentHandoff.proxyAuthorization.required` is true.
+The copied portal command performs these steps in this order with shell error handling and defaults to the downloaded packet under `$HOME/Downloads`. It never requests, embeds, or transmits the Serverware admin token or any receipt-signing private key. The signed packet carries a policy-hash-bound, principal-bound, short-lived, one-use verifier capability whose URLs are relative to the configured control-plane origin; it can read only the pinned policy and download the CA once. Set `SERVERWARE_ENROLLMENT_PACKET` first when the browser saves downloads elsewhere. The verifier writes `.tmp/serverware-ca.pem`. The enrollment packet's `agentHandoff.caInstall.command` installs that verified file at the packet's configured `ca.installPath`; run it in the agent image or VM before starting the agent. The packet enumerates every allowed route URL, not just the first path, and exposes the exact proxy environment, required CONNECT/provider headers, and machine-readable `requestHandling` rules for approval and terminal errors. Proxy-authorization secret material is deliberately absent and must be provisioned separately when `agentHandoff.proxyAuthorization.required` is true.
 
 Setup enrollment-receipt signing is a separate trust-domain operation. Run `scripts/generate_agent_enrollment.py --sign-setup-receipt` only on the independently controlled verifier, after transferring the precommitted packet and live nonce-bound attestation evidence to that verifier. Its owner-only Ed25519 key must never be mounted in, copied to, or referenced by the agent image, VM, portal handoff command, or Serverware workload. Transfer only the signed receipt back to the operator for upload through the Setup workflow.
 
@@ -280,7 +294,7 @@ Use the normal provider SDKs and upstream URLs.
 Do not ask for, store, print, or cache provider credentials.
 All HTTP and HTTPS traffic must use the configured Serverware proxy.
 Apply the enrollment packet's proxy identity requirements to the proxy connection, including CONNECT.
-If Serverware returns 428, wait for human approval and retry the same request.
+If Serverware returns 428, give approval_url to the operator, honor retry_after_seconds, wait for human approval, and retry only the identical request.
 If Serverware returns 403 or 5xx, stop and report the route/error; do not bypass the proxy.
 ```
 
@@ -325,11 +339,11 @@ In development this verifier checks internal consistency among the signed quote,
 
 For a safe, buffered `GET`, `serverware-proof-client` can send a fresh proof nonce through the CONNECT TLS tunnel and write `serverware.proxyResponseProof/v3`; `HEAD` is rejected. The proof pairs a v2 external client capture with the Rust `serverware.proxyResponseStatement/v2`. Both bind the exact atomic authorization historically observed at upstream dispatch, including observation time and reservation expiry, grant/approval identity when present, credential version, request/operation/attempt/consumption identity, raw upstream status/body/policy-header digests, exact projected status/body/selected headers, policy, runtime manifest, measured binary, release, server instance, and TLS exporter. The gate sends a fresh nonce in the actual dispatch call and embeds its canonical request plus the signed control-plane response as `serverware.controlPlaneAuthorizationReceipt/v1`. Production verification independently pins that response-signing key and requires the embedded receipt to match the complete authority tuple and timing; no separately supplied receipt artifact is accepted. The inline statement makes no current-authorization or downstream-completion claim; the client demonstrates receipt by possessing the response and valid proof. This is a real end-to-end byte binding in the development stack, but its `vendor_tee` is explicitly `none-dev`/`development-fixture`.
 
-`make production-release-proof` binds the real Linux/Nitro/AppArmor/KMS/Sigstore/registry readiness artifacts, but that alone is not final hardware proof. `serverware.completionProof/v3` reports `ServerwarePreEnclaveReadiness`, `completion_status: pre-enclave-readiness`, `final_completion: false`, and `hardware_proof: false` unless the verifier also receives a separately trusted, fresh `serverware.hardwareAssurance/v1` statement and an unbypassed current-host binding. That independent statement must bind EIF/PCR measurements, enclave and parent CIDs, a verified vsock handshake, KMS Recipient enclave key custody, evidence that parent processes did not hold key material, the exact Nitro evidence, host preflight, and attested release. No such real hardware artifact exists for this checkout. The current proxy-proof path also requires a safe method and fully buffered request/response; streaming responses do not yet expose an equivalent final client-verifiable proof.
+`make production-release-proof` binds the real Linux/Nitro/AppArmor/KMS/Sigstore/registry readiness artifacts, but that alone is not final hardware proof. `serverware.completionProof/v3` reports `ServerwarePreEnclaveReadiness`, `completion_status: pre-enclave-readiness`, `final_completion: false`, and `hardware_proof: false` unless the verifier also receives a separately trusted, fresh `serverware.hardwareAssurance/v1` statement and an unbypassed current-host binding. That independent statement must bind EIF/PCR measurements, enclave and parent CIDs, a verified vsock handshake, KMS Recipient enclave key custody, evidence that parent processes did not hold key material, the exact Nitro evidence, host preflight, and attested release. No such real hardware artifact exists for this checkout. Streaming `GET` routes have a local domain-separated v1 end-of-stream proof; production completion still consumes buffered v3 until custody and release-verifier integration.
 
 ## Current Local Evidence
 
-The current local Docker measurement binds the Rust executable `sha256:d889b5588af206788f0b64f1396e15ea893a747253973c85466807d9d5326e82`. After 100 warmups and 1000 authenticated decisions over the Compose network, it measured p50 `0.405 ms`, p95 `0.499 ms`, p99 `0.548 ms`, mean `0.412 ms`, and max `0.622 ms`. The benchmark covers the authenticated, non-mutating `/v1/decide` management endpoint; it does not measure release-authority calls, CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
+The canonical current local measurement and measured executable digest are recorded in [README.md](../README.md#runtime-and-performance) and the regenerated `.tmp/decision-gate-rs-bench.json` artifact. The benchmark covers the authenticated, non-mutating `/v1/decide` management endpoint; it does not measure release-authority calls, CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency. Regenerate it from the exact release candidate instead of copying volatile timings into this guide.
 
 The local provenance and image-signature records are explicitly development fixtures, and no current hardware-bound production image/quote set exists for this checkout. They cannot be combined with this benchmark as production release evidence; rebuild every source-, image-, binary-, signature-, benchmark-, and quote-bound artifact from one exact checkout on the target host.
 

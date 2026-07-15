@@ -264,7 +264,7 @@ def verify_streaming_contract() -> None:
             db.WEBAUTHN_RECOVERY_WITNESS_PATH = Path(tmp) / "recovery-witness.sqlite3"
             db.ensure_data_dirs = lambda: None
             connection = sqlite3.connect(db.DB_PATH)
-            connection.execute(
+            connection.executescript(
                 """
                 CREATE TABLE audit_events (
                     id TEXT PRIMARY KEY,
@@ -317,46 +317,37 @@ def verify_streaming_contract() -> None:
             original_grant_store_init = db.grants.init_grant_store
             db.grants.init_grant_store = lambda: None
             try:
-                db.init_db()
+                try:
+                    db.init_db()
+                except db.AuditStoreError as exc:
+                    assert "event_size_exceeded" in str(exc), exc
+                else:
+                    raise AssertionError(
+                        "audit migration continued over an oversized invalid legacy chain"
+                    )
             finally:
                 db.grants.init_grant_store = original_grant_store_init
-            oversized_legacy_json = legacy_rows[1][4]
             with sqlite3.connect(db.DB_PATH) as connection:
-                assert connection.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 2
-                try:
-                    connection.execute(
-                        "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                stored_rows = connection.execute(
+                    "SELECT id, event_json, event_hash FROM audit_events ORDER BY rowid"
+                ).fetchall()
+                assert stored_rows == [
+                    (row[0], row[4], row[6]) for row in legacy_rows
+                ], stored_rows
+                migration_table = connection.execute(
+                    "SELECT 1 FROM sqlite_master "
+                    "WHERE type = 'table' AND name = 'serverware_store_migrations'"
+                ).fetchone()
+                if migration_table:
+                    completed = connection.execute(
+                        "SELECT COUNT(*) FROM serverware_store_migrations "
+                        "WHERE migration = ? AND version = ?",
                         (
-                            "oversized-new-insert",
-                            "test.audit.legacy",
-                            "test",
-                            None,
-                            oversized_legacy_json,
-                            None,
-                            "sha256:" + "1" * 64,
-                            "2026-01-01T00:00:02+00:00",
+                            db._AUDIT_STORAGE_REDACTION_MIGRATION,
+                            db._STORAGE_REDACTION_MIGRATION_VERSION,
                         ),
-                    )
-                except sqlite3.IntegrityError as exc:
-                    assert "stored size ceiling" in str(exc), exc
-                else:
-                    raise AssertionError("SQLite migration accepted a new oversized audit row")
-                try:
-                    connection.execute(
-                        "UPDATE audit_events SET event_json = ? WHERE id = ?",
-                        (oversized_legacy_json, "valid-prefix"),
-                    )
-                except sqlite3.IntegrityError as exc:
-                    assert "stored size ceiling" in str(exc), exc
-                else:
-                    raise AssertionError("SQLite migration accepted an oversized audit update")
-
-            limited_legacy = db.verify_audit_chain(limit=1)
-            assert limited_legacy["ok"] is True, limited_legacy
-            assert limited_legacy["count"] == 1 and limited_legacy["complete"] is False, limited_legacy
-            full_legacy = db.verify_audit_chain()
-            assert full_legacy["ok"] is False, full_legacy
-            assert full_legacy["error"] == "event_size_exceeded" and full_legacy["count"] == 0, full_legacy
+                    ).fetchone()[0]
+                    assert completed == 0, completed
 
             db.DB_PATH = Path(tmp) / "snapshot-audit.sqlite3"
             seed_event_json = '{"snapshot":1}'
@@ -372,7 +363,7 @@ def verify_streaming_contract() -> None:
             )
             connection = sqlite3.connect(db.DB_PATH)
             connection.execute("PRAGMA journal_mode=WAL")
-            connection.execute(
+            connection.executescript(
                 """
                 CREATE TABLE audit_events (
                     id TEXT PRIMARY KEY,
@@ -380,14 +371,24 @@ def verify_streaming_contract() -> None:
                     actor_type TEXT NOT NULL,
                     actor_id TEXT,
                     event_json TEXT NOT NULL,
+                    encrypted_canonical_event_json TEXT,
+                    storage_format_version INTEGER,
                     prev_event_hash TEXT,
                     event_hash TEXT NOT NULL,
                     created_at TEXT NOT NULL
-                )
+                );
+                CREATE TABLE serverware_store_migrations (
+                    migration TEXT PRIMARY KEY,
+                    version BIGINT NOT NULL,
+                    applied_at TEXT NOT NULL
+                );
                 """
             )
             connection.execute(
-                "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO audit_events "
+                "(id, event_type, actor_type, actor_id, event_json, "
+                "prev_event_hash, event_hash, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     "snapshot-seed",
                     "test.audit.snapshot",
@@ -425,7 +426,10 @@ def verify_streaming_contract() -> None:
                         )
                         writer = sqlite3.connect(db.DB_PATH)
                         writer.execute(
-                            "INSERT INTO audit_events VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                            "INSERT INTO audit_events "
+                            "(id, event_type, actor_type, actor_id, event_json, "
+                            "prev_event_hash, event_hash, created_at) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             (
                                 "snapshot-concurrent",
                                 "test.audit.snapshot",
@@ -481,9 +485,16 @@ def verify_streaming_contract() -> None:
                     actor_type TEXT NOT NULL,
                     actor_id TEXT,
                     event_json TEXT NOT NULL,
+                    encrypted_canonical_event_json TEXT,
+                    storage_format_version INTEGER,
                     prev_event_hash TEXT,
                     event_hash TEXT NOT NULL,
                     created_at TEXT NOT NULL
+                );
+                CREATE TABLE serverware_store_migrations (
+                    migration TEXT PRIMARY KEY,
+                    version BIGINT NOT NULL,
+                    applied_at TEXT NOT NULL
                 );
                 CREATE TRIGGER reject_second_audit_event
                 BEFORE INSERT ON audit_events
@@ -797,8 +808,21 @@ def migration_connect():
 
 db._audit_pg_connect = migration_connect
 try:
+    def rejected_migration(_index):
+        try:
+            db.init_audit_store()
+        except db.AuditStoreError as exc:
+            assert "event_size_exceeded" in str(exc), exc
+            return "rejected"
+        raise AssertionError(
+            "PostgreSQL audit migration continued over an oversized invalid legacy chain"
+        )
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        list(pool.map(lambda _index: db.init_audit_store(), range(2)))
+        assert list(pool.map(rejected_migration, range(2))) == [
+            "rejected",
+            "rejected",
+        ]
     with migration_connect() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
@@ -812,8 +836,23 @@ try:
             )
             constraint = cursor.fetchone()
             assert int(constraint["count"]) == 1 and constraint["all_unvalidated"] is True, constraint
-            cursor.execute("SELECT COUNT(*)::bigint AS count FROM serverware_audit_events")
-            assert int(cursor.fetchone()["count"]) == 1
+            cursor.execute(
+                "SELECT id, event_json FROM serverware_audit_events"
+            )
+            stored = cursor.fetchone()
+            assert stored == {
+                "id": "oversized-legacy-row",
+                "event_json": oversized_legacy_json,
+            }, stored
+            cursor.execute(
+                "SELECT COUNT(*)::bigint AS count FROM serverware_store_migrations "
+                "WHERE migration = %s AND version = %s",
+                (
+                    db._AUDIT_STORAGE_REDACTION_MIGRATION,
+                    db._STORAGE_REDACTION_MIGRATION_VERSION,
+                ),
+            )
+            assert int(cursor.fetchone()["count"]) == 0
     try:
         with migration_connect() as connection:
             with connection.cursor() as cursor:
@@ -851,7 +890,7 @@ print(
     {
         "ok": True,
         "postgres_repeatable_read_snapshot": "pass",
-        "postgres_concurrent_migration": "pass",
+        "postgres_concurrent_invalid_migration_rejected": "pass",
         "snapshot_total": snapshot["total"],
     }
 )

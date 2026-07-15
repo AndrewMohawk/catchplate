@@ -116,6 +116,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
                     "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
                     "image_id": digest("b"),
                     "binary_digest": digest("9"),
+                    "launcher_binary_digest": digest("e"),
                 },
             ],
             "no_shell": {"ok": True, "results": [{"ok": True}, {"ok": True}]},
@@ -130,6 +131,14 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             "sha256": digest("c"),
         },
         "sbom": {"cyclonedx": {"sha256": digest("d"), "components": 204}},
+        "images": {
+            "serverware-control": {"image_id": digest("a")},
+            "serverware-decision-gate": {
+                "image_id": digest("b"),
+                "binary_digest": digest("9"),
+                "launcher_binary_digest": digest("e"),
+            },
+        },
     }
     release_key = release_key_info()
     release_key_id = str(release_key["key_id"])
@@ -153,6 +162,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
         "provenance_digest": provenance_digest,
         "signature": provenance_signature,
         "release_signing_key_id": release_key_id,
+        "production_launcher_binary_digest": digest("e"),
     }
     write_json(
         provenance_summary,
@@ -163,6 +173,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
             "inclusion_verified": True,
             "provenance_digest": provenance_digest,
             "release_signing_key_id": release_key_id,
+            "production_launcher_binary_digest": digest("e"),
             "transparency_mode": "signed-merkle-transparency-log",
         },
     )
@@ -312,6 +323,7 @@ def write_fixture_artifacts(tmp: Path, *, p99_ms: float = 6.0) -> dict[str, Path
                     "repo_digest": gate_ref,
                     "remote_image_id": digest("d"),
                     "binary_digest": digest("9"),
+                    "launcher_binary_digest": digest("e"),
                 },
             ],
             "remote_no_shell": {"ok": True},
@@ -422,11 +434,14 @@ def main() -> None:
             "decision-gate-bench-evidence",
             "publish-production-images",
             "merge-production-images-env",
+            "build-production-launcher",
             "production-release-provenance",
             "sign-production-images",
             "prepare-aws-kms-materials",
-            "production-host-preflight",
-            "run-production-readiness",
+            "deploy-production",
+            "install-production-launcher",
+            "generate-production-launch-manifest",
+            "run-production-readiness-final",
         ]
         actual_order = [command[1] for command in commands if isinstance(command, list) and len(command) >= 2 and command[0] == "make"]
         positions = [actual_order.index(target) if target in actual_order else -1 for target in required_order]
@@ -439,11 +454,24 @@ def main() -> None:
             raise AssertionError(f"handoff image signing command did not preserve the production env path: {output}")
         if not any(command[:2] == ["make", "merge-production-images-env"] for command in commands):
             raise AssertionError(f"handoff did not include the checked production image env merge target: {output}")
-        if not any(command[:2] == ["make", "production-host-preflight"] for command in commands):
-            raise AssertionError(f"handoff did not include the production host preflight target: {output}")
-        final_runs = [command for command in commands if command[:2] == ["make", "run-production-readiness"]]
-        if not final_runs or not any(item.startswith("AWS_KMS_MATERIALS_OUT=") for item in final_runs[0]):
-            raise AssertionError(f"handoff final readiness command did not preserve KMS materials path: {output}")
+        manifest_runs = [
+            command
+            for command in commands
+            if command[:2] == ["make", "generate-production-launch-manifest"]
+        ]
+        if (
+            not manifest_runs
+            or not any(item.startswith("PRODUCTION_RELEASE_ROOT=/opt/serverware/releases/sha256-") for item in manifest_runs[0])
+            or not any(item.startswith("PRODUCTION_SOURCE_TREE_DIGEST=sha256:") for item in manifest_runs[0])
+        ):
+            raise AssertionError(f"handoff did not bind the installed release tree to the source digest: {output}")
+        final_runs = [
+            command
+            for command in commands
+            if command[:2] == ["make", "run-production-readiness-final"]
+        ]
+        if not final_runs:
+            raise AssertionError(f"handoff omitted the systemd final readiness command: {output}")
 
         placeholder = run_handoff(paths, "--registry-prefix", "registry.example/serverware")
         if placeholder.returncode == 0 or "placeholder .example registry" not in detail(placeholder):

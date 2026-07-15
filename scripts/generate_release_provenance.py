@@ -585,7 +585,18 @@ def production_image_inventory(
             published_binary = require_sha256(pushed.get("binary_digest"), "published decision-gate binary digest")
             if built_binary != published_binary:
                 raise ValueError("published decision-gate executable does not match the measured build executable")
+            built_launcher = require_sha256(
+                built.get("launcher_binary_digest"),
+                "built production launcher binary digest",
+            )
+            published_launcher = require_sha256(
+                pushed.get("launcher_binary_digest"),
+                "published production launcher binary digest",
+            )
+            if built_launcher != published_launcher:
+                raise ValueError("published production launcher does not match the measured build launcher")
             entry["binary_digest"] = built_binary
+            entry["launcher_binary_digest"] = built_launcher
         inventory[service] = entry
     return inventory
 
@@ -827,6 +838,7 @@ def main() -> None:
                         "make decision-gate-bench-evidence",
                         "make publish-production-images",
                         "make merge-production-images-env",
+                        "make build-production-launcher",
                         "make production-release-provenance",
                         "make sign-production-images",
                     ]
@@ -915,6 +927,13 @@ def main() -> None:
             if published_gate
             else (provenance["images"].get("serverware-decision-gate") or {}).get("binary_digest")
         ),
+        "production_launcher_binary_digest": (
+            (provenance["images"].get("serverware-decision-gate") or {}).get(
+                "launcher_binary_digest"
+            )
+            if args.production
+            else None
+        ),
         "image_ids": {service: item["image_id"] for service, item in provenance["images"].items()},
         "sbom_counts": {
             "python": len(provenance["sbom"]["python"]),
@@ -979,6 +998,13 @@ def main() -> None:
                 "out": args.out,
                 "provenance_digest": provenance_digest,
                 "release_signing_key_id": key_info["spki_sha256"],
+                "production_launcher_binary_digest": (
+                    (provenance["images"].get("serverware-decision-gate") or {}).get(
+                        "launcher_binary_digest"
+                    )
+                    if args.production
+                    else None
+                ),
                 "anchored": anchored,
                 "transparency_mode": anchor_response.get("mode"),
                 "inclusion_verified": inclusion.get("verified") is True,

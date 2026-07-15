@@ -1,0 +1,126 @@
+{
+  "apiVersion": "serverware.productionReadinessLaunch/v1",
+  "composeFile": {
+    "path": "/opt/serverware/releases/<source-digest>/docker-compose.production.yml",
+    "sha256": "sha256:<64-lowercase-hex>"
+  },
+  "inputs": {
+    "bench": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/decision-gate-rs-bench.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "imageSignatures": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/image-signatures.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "imageSignaturesSummary": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/image-signatures-summary.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "kmsMaterials": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/kms-materials.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "policyActivationSignature": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/policy-activation-verification.sig.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "policyActivationTrustedPublicKey": {
+      "path": "/opt/serverware/releases/<source-digest>/trust/policy-activation.pub.pem",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "policyActivationVerification": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/policy-activation-verification.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "policyBundle": {
+      "path": "/opt/serverware/releases/<source-digest>/policy/production-policy-bundle.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "policyIdentityVerification": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/production-policy-identity.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "policyTrustedPublicKey": {
+      "path": "/opt/serverware/releases/<source-digest>/trust/policy-identity.pub.pem",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "productionImagesBuild": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/production-images-build.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "productionImagesEnv": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/production-images.env",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "productionImagesPublished": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/production-images-published.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "releaseProvenance": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/release-provenance.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "releaseProvenanceSummary": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/release-provenance-summary.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "reproducibleBuildSignature": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/reproducible-build-verification.sig.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "reproducibleBuildTrustedPublicKey": {
+      "path": "/opt/serverware/releases/<source-digest>/trust/reproducible-build.pub.pem",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "reproducibleBuildVerification": {
+      "path": "/opt/serverware/releases/<source-digest>/evidence/reproducible-build-verification.json",
+      "sha256": "sha256:<64-lowercase-hex>"
+    }
+  },
+  "kind": "ProductionReadinessLaunch",
+  "outputs": {
+    "claimsFile": "/var/lib/serverware/production-proof/production-readiness-claims.json",
+    "completionProofOut": "/var/lib/serverware/production-proof/serverware-completion-proof.json",
+    "configOut": "/var/lib/serverware/production-proof/production-readiness-config.json",
+    "nitroEvidenceOut": "/var/lib/serverware/production-proof/nitro-kms-evidence.json",
+    "productionHostPreflight": "/var/lib/serverware/production-proof/production-host-preflight.json",
+    "proxyProofSummaryOut": "/var/lib/serverware/production-proof/proxy-response-proof-summary.json",
+    "readinessOut": "/var/lib/serverware/production-proof/production-readiness.json"
+  },
+  "productionEnv": {
+    "path": "/etc/serverware/production-readiness.env",
+    "sha256": "sha256:<64-lowercase-hex>"
+  },
+  "python": {
+        "importRoots": [
+            {
+                "path": "/opt/serverware/releases/<source-digest>",
+                "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+            },
+            {
+                "path": "/opt/serverware/releases/<source-digest>/runtime/python/lib/python3.12",
+                "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+            },
+            {
+                "path": "/opt/serverware/releases/<source-digest>/vendor",
+                "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+            }
+        ],
+    "path": "/opt/serverware/releases/<source-digest>/runtime/python/bin/python3",
+    "sha256": "sha256:<64-lowercase-hex>"
+  },
+  "releaseRoot": "/opt/serverware/releases/<source-digest>",
+  "scripts": {
+    "preflight": {
+      "path": "/opt/serverware/releases/<source-digest>/scripts/production_host_preflight.py",
+      "sha256": "sha256:<64-lowercase-hex>"
+    },
+    "runner": {
+      "path": "/opt/serverware/releases/<source-digest>/scripts/run_production_readiness.py",
+      "sha256": "sha256:<64-lowercase-hex>"
+    }
+  },
+  "sourceTreeDigest": "sha256:<source-digest>",
+  "stateDirectory": "/var/lib/serverware/production-proof"
+}

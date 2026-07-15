@@ -1,4 +1,4 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-launch-assets verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PLAYWRIGHT_RUN ?= uv run --isolated --python 3.11 --with-requirements requirements.lock --with playwright==1.61.0
@@ -61,6 +61,18 @@ EXTERNAL_CHECKPOINT_PROVIDER ?=
 EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY ?=
 DECISION_GATE_BENCH_FILE ?= .tmp/decision-gate-rs-bench.json
 PRODUCTION_DEPLOY_COMMAND ?=
+PRODUCTION_SOURCE_TREE_DIGEST ?=
+PRODUCTION_RELEASE_ROOT ?=
+PRODUCTION_STATE_DIRECTORY ?= /var/lib/serverware/production-proof
+PRODUCTION_LAUNCH_MANIFEST ?= /etc/serverware/production-release-launch.json
+PRODUCTION_SYSTEMD_UNIT_OUT ?= /etc/systemd/system/serverware-production-release-proof.service
+PRODUCTION_SYSTEMD_UNIT_NAME ?= serverware-production-release-proof.service
+PRODUCTION_LAUNCHER_BUILD_DIRECTORY ?= .tmp/production-launcher-artifact
+PRODUCTION_LAUNCHER_BUILD_PATH ?= $(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)/serverware-production-launcher
+PRODUCTION_LAUNCHER_INSTALL_PATH_FILE ?= .tmp/production-launcher-install-path
+PRODUCTION_RELEASE_PYTHON ?= $(PRODUCTION_RELEASE_ROOT)/runtime/python/bin/python3
+PRODUCTION_RELEASE_PYTHON_STDLIB ?= $(PRODUCTION_RELEASE_ROOT)/runtime/python/lib/python3.12
+PRODUCTION_RELEASE_PYTHON_VENDOR ?= $(PRODUCTION_RELEASE_ROOT)/vendor
 
 up:
 	docker compose up -d --build serverware demo-upstream audit-anchor
@@ -303,6 +315,68 @@ deploy-production:
 	@if [ -z "$(PRODUCTION_DEPLOY_COMMAND)" ]; then echo "PRODUCTION_DEPLOY_COMMAND is required and must deploy the published digest-pinned images to the production host" >&2; exit 2; fi
 	$(PRODUCTION_DEPLOY_COMMAND)
 
+build-production-launcher:
+	mkdir -p "$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)"
+	docker buildx build --platform linux/amd64 --target production-launcher-artifact --output "type=local,dest=$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" -f data-plane/decision-gate-rs/Dockerfile.production .
+	test -x "$(PRODUCTION_LAUNCHER_BUILD_PATH)"
+
+install-production-launcher:
+	@test "$$(id -u)" = 0 || { echo "install-production-launcher must run as root on the production host" >&2; exit 2; }
+	@test -x "$(PRODUCTION_LAUNCHER_BUILD_PATH)" || { echo "build-production-launcher must produce $(PRODUCTION_LAUNCHER_BUILD_PATH) first" >&2; exit 2; }
+	@set -eu; set -- $$(sha256sum "$(PRODUCTION_LAUNCHER_BUILD_PATH)"); digest="$$1"; expected=$$(python3 -c 'import json,sys; document=json.load(open(sys.argv[1], encoding="utf-8")); matches=[item.get("launcher_binary_digest") for item in document.get("images", []) if item.get("service") == "serverware-decision-gate"]; len(matches) == 1 or sys.exit("production build must contain exactly one decision-gate launcher digest"); print(matches[0])' "$(PRODUCTION_IMAGES_BUILD_FILE)"); test "sha256:$$digest" = "$$expected" || { echo "production launcher artifact does not match the independently reproducible production image" >&2; exit 2; }; destination="/opt/serverware/launchers/sha256-$$digest/serverware-production-launcher"; install -d -o root -g root -m 0755 "$${destination%/*}"; install -o root -g root -m 0500 "$(PRODUCTION_LAUNCHER_BUILD_PATH)" "$$destination"; mkdir -p "$$(dirname "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)")"; printf '%s\n' "$$destination" > "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"; chmod 0600 "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"
+
+generate-production-launch-manifest:
+	@test "$$(id -u)" = 0 || { echo "generate-production-launch-manifest must run as root on the production host" >&2; exit 2; }
+	@test -n "$(PRODUCTION_RELEASE_ROOT)" || { echo "PRODUCTION_RELEASE_ROOT is required" >&2; exit 2; }
+	@printf '%s' "$(PRODUCTION_SOURCE_TREE_DIGEST)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_SOURCE_TREE_DIGEST must be sha256:<64 lowercase hex>" >&2; exit 2; }
+	@set -eu; launcher_path=$$(cat "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"); install -d -o root -g root -m 0700 "$(PRODUCTION_STATE_DIRECTORY)" /run/serverware; python3 scripts/generate_production_launch_manifest.py \
+		--output "$(PRODUCTION_LAUNCH_MANIFEST)" \
+		--systemd-unit-out "$(PRODUCTION_SYSTEMD_UNIT_OUT)" \
+		--launcher-path "$$launcher_path" \
+		--release-root "$(PRODUCTION_RELEASE_ROOT)" \
+		--state-directory "$(PRODUCTION_STATE_DIRECTORY)" \
+		--source-tree-digest "$(PRODUCTION_SOURCE_TREE_DIGEST)" \
+		--production-env "/etc/serverware/production-readiness.env" \
+		--python "$(PRODUCTION_RELEASE_PYTHON)" \
+		--python-import-root "$(PRODUCTION_RELEASE_ROOT)" \
+		--python-import-root "$(PRODUCTION_RELEASE_PYTHON_STDLIB)" \
+		--python-import-root "$(PRODUCTION_RELEASE_PYTHON_VENDOR)" \
+		--preflight-script "$(PRODUCTION_RELEASE_ROOT)/scripts/production_host_preflight.py" \
+		--runner-script "$(PRODUCTION_RELEASE_ROOT)/scripts/run_production_readiness.py" \
+		--compose-file "$(PRODUCTION_RELEASE_ROOT)/docker-compose.production.yml" \
+		--production-images-build "$(PRODUCTION_RELEASE_ROOT)/evidence/production-images-build.json" \
+		--production-images-env "$(PRODUCTION_RELEASE_ROOT)/evidence/production-images.env" \
+		--production-images-published "$(PRODUCTION_RELEASE_ROOT)/evidence/production-images-published.json" \
+		--release-provenance-summary "$(PRODUCTION_RELEASE_ROOT)/evidence/release-provenance-summary.json" \
+		--release-provenance "$(PRODUCTION_RELEASE_ROOT)/evidence/release-provenance.json" \
+		--image-signatures-summary "$(PRODUCTION_RELEASE_ROOT)/evidence/image-signatures-summary.json" \
+		--image-signatures "$(PRODUCTION_RELEASE_ROOT)/evidence/image-signatures.json" \
+		--bench "$(PRODUCTION_RELEASE_ROOT)/evidence/decision-gate-rs-bench.json" \
+		--kms-materials "$(PRODUCTION_RELEASE_ROOT)/evidence/kms-materials.json" \
+		--policy-bundle "$(PRODUCTION_RELEASE_ROOT)/policy/production-policy-bundle.json" \
+		--policy-trusted-public-key "$(PRODUCTION_RELEASE_ROOT)/trust/policy-identity.pub.pem" \
+		--policy-identity-verification "$(PRODUCTION_RELEASE_ROOT)/evidence/production-policy-identity.json" \
+		--policy-activation-verification "$(PRODUCTION_RELEASE_ROOT)/evidence/policy-activation-verification.json" \
+		--policy-activation-signature "$(PRODUCTION_RELEASE_ROOT)/evidence/policy-activation-verification.sig.json" \
+		--policy-activation-trusted-public-key "$(PRODUCTION_RELEASE_ROOT)/trust/policy-activation.pub.pem" \
+		--reproducible-build-verification "$(PRODUCTION_RELEASE_ROOT)/evidence/reproducible-build-verification.json" \
+		--reproducible-build-signature "$(PRODUCTION_RELEASE_ROOT)/evidence/reproducible-build-verification.sig.json" \
+		--reproducible-build-trusted-public-key "$(PRODUCTION_RELEASE_ROOT)/trust/reproducible-build.pub.pem" \
+		--config-out "$(PRODUCTION_STATE_DIRECTORY)/production-readiness-config.json" \
+		--claims-file "$(PRODUCTION_STATE_DIRECTORY)/production-readiness-claims.json" \
+		--nitro-evidence-out "$(PRODUCTION_STATE_DIRECTORY)/nitro-kms-evidence.json" \
+		--readiness-out "$(PRODUCTION_STATE_DIRECTORY)/production-readiness.json" \
+		--completion-proof-out "$(PRODUCTION_STATE_DIRECTORY)/serverware-completion-proof.json" \
+		--proxy-proof-summary-out "$(PRODUCTION_STATE_DIRECTORY)/proxy-response-proof-summary.json" \
+		--production-host-preflight "$(PRODUCTION_STATE_DIRECTORY)/production-host-preflight.json" \
+		--print-sha256
+	/usr/bin/systemctl daemon-reload
+
+run-production-readiness-final:
+	@test "$$(id -u)" = 0 || { echo "run-production-readiness-final must run as root on the production host" >&2; exit 2; }
+	/usr/bin/systemctl start "$(PRODUCTION_SYSTEMD_UNIT_NAME)"
+	@test "$$(/usr/bin/systemctl show --property=Result --value "$(PRODUCTION_SYSTEMD_UNIT_NAME)")" = success
+
 production-release-proof:
 	$(MAKE) verify-credential-policy-contracts
 	$(MAKE) verify-control-plane-startup
@@ -317,12 +391,14 @@ production-release-proof:
 	$(MAKE) decision-gate-bench-evidence
 	$(MAKE) publish-production-images
 	$(MAKE) merge-production-images-env
+	$(MAKE) build-production-launcher
 	$(MAKE) production-release-provenance
 	$(MAKE) sign-production-images
 	$(MAKE) prepare-aws-kms-materials
-	$(MAKE) production-host-preflight
 	$(MAKE) deploy-production
-	$(MAKE) run-production-readiness
+	$(MAKE) install-production-launcher
+	$(MAKE) generate-production-launch-manifest
+	$(MAKE) run-production-readiness-final
 
 capture-reproducible-build:
 	@if [ -z "$(REPRODUCIBLE_BUILD_BUILDER_ID)" ] || [ -z "$(REPRODUCIBLE_BUILD_SIGNING_KEY)" ]; then echo "REPRODUCIBLE_BUILD_BUILDER_ID and REPRODUCIBLE_BUILD_SIGNING_KEY are required" >&2; exit 2; fi
@@ -391,7 +467,13 @@ verify-production-policy-identity:
 verify-production-host-preflight:
 	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_production_host_preflight.py
 
+verify-production-launch-assets:
+	python3 -I scripts/test_production_launch_assets.py
+	python3 -I scripts/test_production_launcher_adversarial.py
+	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin serverware-production-launcher
+
 verify-production-release-proof:
+	$(MAKE) verify-production-launch-assets
 	python3 scripts/test_production_release_proof_target.py
 
 verify-credential-policy-contracts:

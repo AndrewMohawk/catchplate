@@ -50,12 +50,14 @@ def main() -> None:
         "decision-gate-bench-evidence",
         "publish-production-images",
         "merge-production-images-env",
+        "build-production-launcher",
         "production-release-provenance",
         "sign-production-images",
         "prepare-aws-kms-materials",
-        "production-host-preflight",
         "deploy-production",
-        "run-production-readiness",
+        "install-production-launcher",
+        "generate-production-launch-manifest",
+        "run-production-readiness-final",
     ]
     release_targets = recursive_make_targets(body)
     positions = []
@@ -69,8 +71,8 @@ def main() -> None:
         raise AssertionError("production-release-proof disables final preflight")
     if "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS" in body:
         raise AssertionError("production-release-proof enables the test-only preflight bypass")
-    if release_targets.index("production-host-preflight") > release_targets.index("deploy-production"):
-        raise AssertionError("production-release-proof deploys before full host preflight")
+    if "production-host-preflight" in release_targets or "run-production-readiness" in release_targets:
+        raise AssertionError("production-release-proof bypasses the closed native launcher path")
     if release_targets.index("validate-production-policy-identity") > release_targets.index("build-production-images"):
         raise AssertionError("production-release-proof builds before validating production principal identity")
 
@@ -160,6 +162,42 @@ def main() -> None:
     deploy_body = target_body(makefile, "deploy-production")
     if "PRODUCTION_DEPLOY_COMMAND" not in deploy_body or "is required" not in deploy_body:
         raise AssertionError("deploy-production does not fail closed without an explicit deployment command")
+
+    launcher_build_body = target_body(makefile, "build-production-launcher")
+    for required in (
+        "--platform linux/amd64",
+        "--target production-launcher-artifact",
+        "Dockerfile.production",
+    ):
+        if required not in launcher_build_body:
+            raise AssertionError(f"production launcher build omits {required}")
+
+    launcher_install_body = target_body(makefile, "install-production-launcher")
+    for required in ("id -u", "sha256sum", "/opt/serverware/launchers/sha256-", "-m 0500"):
+        if required not in launcher_install_body:
+            raise AssertionError(f"production launcher installation omits {required}")
+    if "launcher_binary_digest" not in launcher_install_body or "independently reproducible production image" not in launcher_install_body:
+        raise AssertionError("production launcher installation is not bound to independent-build evidence")
+
+    launch_manifest_body = target_body(makefile, "generate-production-launch-manifest")
+    for required in (
+        "generate_production_launch_manifest.py",
+        "--systemd-unit-out",
+        "--launcher-path",
+        "--source-tree-digest",
+        "--python-import-root \"$(PRODUCTION_RELEASE_ROOT)\"",
+        "--production-host-preflight",
+        "/usr/bin/systemctl daemon-reload",
+    ):
+        if required not in launch_manifest_body:
+            raise AssertionError(f"production launch-manifest generation omits {required}")
+
+    final_launcher_body = target_body(makefile, "run-production-readiness-final")
+    for required in ("id -u", "/usr/bin/systemctl start", "--property=Result"):
+        if required not in final_launcher_body:
+            raise AssertionError(f"final production launcher target omits {required}")
+    if "python3" in final_launcher_body or "scripts/run_production_readiness.py" in final_launcher_body:
+        raise AssertionError("final production launcher target starts Python outside systemd")
 
     bench_body = target_body(makefile, "decision-gate-bench-evidence")
     if "$(DECISION_GATE_BENCH_FILE)" not in bench_body or "bench_decision_gate.py --self-test" not in bench_body:

@@ -57,6 +57,7 @@ def request_json(
     headers: dict[str, str] | None = None,
     payload: Any | None = None,
     ca_bundle: Path | None = None,
+    timeout: int = 10,
 ) -> dict[str, Any]:
     data = None if payload is None else canonical_json(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
@@ -64,7 +65,7 @@ def request_json(
         req.add_header("Content-Type", "application/json")
     context = ssl.create_default_context(cafile=str(ca_bundle)) if ca_bundle else None
     return json.loads(
-        request_bytes(req, timeout=10, max_bytes=8 * 1024 * 1024, context=context).body
+        request_bytes(req, timeout=timeout, max_bytes=8 * 1024 * 1024, context=context).body
     )
 
 
@@ -700,6 +701,7 @@ def main() -> None:
         headers=anchor_headers,
         payload={"records": [record]},
         ca_bundle=anchor_ca_bundle,
+        timeout=60,
     )
     accepted = (anchor_response.get("anchors") or [{}])[0]
     sequence = accepted.get("sequence")
@@ -707,6 +709,7 @@ def main() -> None:
         f"{args.anchor.rstrip('/')}/anchors/inclusion/{sequence}",
         headers=anchor_headers,
         ca_bundle=anchor_ca_bundle,
+        timeout=60,
     )
     if inclusion.get("verified") is not True:
         raise RuntimeError(f"image signature transparency inclusion proof did not verify: {inclusion}")

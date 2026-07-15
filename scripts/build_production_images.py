@@ -20,6 +20,10 @@ DEFAULT_IMAGES = (
     ("serverware-control", "Dockerfile.production", "serverware/control:production-local"),
     ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", "serverware/decision-gate:production-local"),
 )
+DECISION_GATE_BINARY_PATHS = {
+    "binary_digest": "/usr/local/bin/serverware-decision-gate",
+    "launcher_binary_digest": "/usr/local/libexec/serverware-production-launcher",
+}
 
 
 def canonical_json(value: Any) -> str:
@@ -117,8 +121,15 @@ def image_file_sha256(image: str, path: str) -> str:
         digest: str | None = None
         with tarfile.open(fileobj=process.stdout, mode="r|*") as archive:
             for member in archive:
-                if member.name.lstrip("./") != wanted:
+                member_path = member.name
+                while member_path.startswith("./"):
+                    member_path = member_path[2:]
+                if member_path != wanted:
                     continue
+                if digest is not None:
+                    raise RuntimeError(f"production image contains duplicate path: {path}")
+                if not member.isfile():
+                    raise RuntimeError(f"production image path is not a regular file: {path}")
                 extracted = archive.extractfile(member)
                 if extracted is None:
                     raise RuntimeError(f"production image path is not a regular file: {path}")
@@ -137,6 +148,13 @@ def image_file_sha256(image: str, path: str) -> str:
             process.kill()
             process.wait()
         maybe_run(["docker", "rm", "-f", container_id])
+
+
+def decision_gate_binary_digests(image: str) -> dict[str, str]:
+    return {
+        field: image_file_sha256(image, path)
+        for field, path in DECISION_GATE_BINARY_PATHS.items()
+    }
 
 
 def main() -> None:
@@ -171,19 +189,16 @@ def main() -> None:
         print(f"==> building {spec['service']} with {spec['dockerfile']}", file=sys.stderr)
         run(spec["argv"])
         built_image_id = image_id(spec["tag"])
-        binary_digest = None
+        binary_digests: dict[str, str] = {}
         if spec["service"] == "serverware-decision-gate":
-            binary_digest = image_file_sha256(
-                built_image_id,
-                "/usr/local/bin/serverware-decision-gate",
-            )
+            binary_digests = decision_gate_binary_digests(built_image_id)
         images.append(
             {
                 "service": spec["service"],
                 "tag": spec["tag"],
                 "dockerfile": spec["dockerfile"],
                 "image_id": built_image_id,
-                **({"binary_digest": binary_digest} if binary_digest else {}),
+                **binary_digests,
             }
         )
     no_shell = verify_no_shell([str(item["image_id"]) for item in images])

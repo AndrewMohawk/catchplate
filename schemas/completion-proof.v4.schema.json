@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/completion-proof.v4.schema.json",
+  "title": "Serverware Release Completion Proof v4",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "ok",
+    "verification_passed",
+    "verification_mode",
+    "result_scope",
+    "readiness_only",
+    "readiness_ok",
+    "completion_status",
+    "release_completion",
+    "final_completion",
+    "hardware_proof",
+    "assurance_ceiling",
+    "generated_at_unix",
+    "artifacts",
+    "production_readiness",
+    "production_readiness_config",
+    "current_completion_host",
+    "production_env_binding",
+    "running_production_containers",
+    "production_host_preflight",
+    "bootstrap_launcher",
+    "nitro_kms_evidence",
+    "nitro_evidence_binding",
+    "hardware_assurance_evidence",
+    "final_challenge_consumption",
+    "production_images_build",
+    "production_images_published",
+    "release_provenance",
+    "image_signatures",
+    "benchmark",
+    "release_security_evidence",
+    "production_proxy_response_proof",
+    "proof_path",
+    "integrity_metadata"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.completionProof/v4"},
+    "kind": {"enum": ["ServerwareCompletionProof", "ServerwarePreEnclaveReadiness"]},
+    "ok": {"const": true},
+    "verification_passed": {"const": true},
+    "verification_mode": {"enum": ["readiness", "final"]},
+    "result_scope": {"enum": ["readiness-only", "final-completion"]},
+    "readiness_only": {"type": "boolean"},
+    "readiness_ok": {"const": true},
+    "completion_status": {"enum": ["pre-enclave-readiness", "hardware-backed-release-completion"]},
+    "release_completion": {"enum": ["not-final", "pass"]},
+    "final_completion": {"type": "boolean"},
+    "hardware_proof": {"type": "boolean"},
+    "assurance_ceiling": {"type": "object"},
+    "generated_at_unix": {"type": "integer", "minimum": 1},
+    "artifacts": {"type": "object"},
+    "production_readiness": {"type": "object"},
+    "production_readiness_config": {"type": "object"},
+    "current_completion_host": {"type": "object"},
+    "production_env_binding": {"type": "object"},
+    "running_production_containers": {"type": "object"},
+    "production_host_preflight": {"type": "object"},
+    "bootstrap_launcher": {
+      "oneOf": [
+        {"$ref": "#/$defs/readinessLauncher"},
+        {"$ref": "#/$defs/bootstrapLauncher"}
+      ]
+    },
+    "nitro_kms_evidence": {"type": "object"},
+    "nitro_evidence_binding": {"type": "object"},
+    "hardware_assurance_evidence": {"type": "object"},
+    "final_challenge_consumption": {"type": "object"},
+    "production_images_build": {"type": "object"},
+    "production_images_published": {"type": "object"},
+    "release_provenance": {"type": "object"},
+    "image_signatures": {"type": "object"},
+    "benchmark": {"type": "object"},
+    "release_security_evidence": {"type": "object"},
+    "production_proxy_response_proof": {"type": "object"},
+    "proof_path": {"$ref": "#/$defs/normalizedPath"},
+    "proof_sha256": {"$ref": "#/$defs/sha256"},
+    "proof_sha256_path": {"$ref": "#/$defs/normalizedPath"},
+    "integrity_metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generation",
+        "detached_sha256_path",
+        "scope",
+        "independently_authenticated",
+        "authenticity_requires_external_signature_or_checkpoint"
+      ],
+      "properties": {
+        "generation": {"type": "string", "pattern": "^[0-9a-f]{32}$"},
+        "detached_sha256_path": {"$ref": "#/$defs/normalizedPath"},
+        "scope": {"const": "checksum-only"},
+        "independently_authenticated": {"const": false},
+        "authenticity_requires_external_signature_or_checkpoint": {"const": true}
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"verification_mode": {"const": "readiness"}}},
+      "then": {
+        "properties": {
+          "kind": {"const": "ServerwarePreEnclaveReadiness"},
+          "result_scope": {"const": "readiness-only"},
+          "readiness_only": {"const": true},
+          "completion_status": {"const": "pre-enclave-readiness"},
+          "release_completion": {"const": "not-final"},
+          "final_completion": {"const": false},
+          "hardware_proof": {"const": false},
+          "bootstrap_launcher": {"$ref": "#/$defs/readinessLauncher"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"verification_mode": {"const": "final"}}},
+      "then": {
+        "properties": {
+          "kind": {"const": "ServerwareCompletionProof"},
+          "result_scope": {"const": "final-completion"},
+          "readiness_only": {"const": false},
+          "completion_status": {"const": "hardware-backed-release-completion"},
+          "release_completion": {"const": "pass"},
+          "final_completion": {"const": true},
+          "hardware_proof": {"const": true},
+          "bootstrap_launcher": {"$ref": "#/$defs/bootstrapLauncher"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/[^\\u0000]+$",
+      "not": {"pattern": "(^|/)\\.{1,2}(/|$)|//"}
+    },
+    "normalizedPath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096,
+      "pattern": "^[^\\u0000]+$",
+      "not": {"pattern": "(^|/)\\.{1,2}(/|$)|//"}
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "inode",
+        "mode",
+        "ownerUid",
+        "ownerGid",
+        "linkCount",
+        "size",
+        "modifiedUnixNanos",
+        "changedUnixNanos"
+      ],
+      "properties": {
+        "device": {"type": "integer", "minimum": 0},
+        "inode": {"type": "integer", "minimum": 0},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "ownerUid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "ownerGid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "linkCount": {"const": 1},
+        "size": {"type": "integer", "minimum": 0},
+        "modifiedUnixNanos": {"type": "integer"},
+        "changedUnixNanos": {"type": "integer"}
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "metadata"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      }
+    },
+    "argv": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflightSha256", "readinessSha256"],
+      "properties": {
+        "preflightSha256": {"$ref": "#/$defs/sha256"},
+        "readinessSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["names", "sha256"],
+      "properties": {
+        "names": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "prefixItems": [
+            {"const": "LANG"},
+            {"const": "LC_ALL"},
+            {"const": "PATH"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_FD"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"},
+            {"const": "TZ"}
+          ],
+          "items": false
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "readinessLauncher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required", "verified"],
+      "properties": {
+        "required": {"const": false},
+        "verified": {"const": false}
+      }
+    },
+    "bootstrapLauncher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "launchId",
+        "sha256",
+        "bootIdSha256",
+        "sourceTreeDigest",
+        "launcher",
+        "manifest",
+        "argv",
+        "environment",
+        "sealed",
+        "sealMask"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.bootstrapReceipt/v1"},
+        "kind": {"const": "ProductionBootstrapReceipt"},
+        "launchId": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bootIdSha256": {"$ref": "#/$defs/sha256"},
+        "sourceTreeDigest": {"$ref": "#/$defs/sha256"},
+        "launcher": {"$ref": "#/$defs/file"},
+        "manifest": {"$ref": "#/$defs/file"},
+        "argv": {"$ref": "#/$defs/argv"},
+        "environment": {"$ref": "#/$defs/environment"},
+        "sealed": {"const": true},
+        "sealMask": {"type": "integer", "minimum": 15}
+      }
+    }
+  }
+}

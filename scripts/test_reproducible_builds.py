@@ -80,9 +80,12 @@ def write_rootfs(
     service: str,
     *,
     binary: bytes,
+    launcher: bytes | None,
     mtime: int,
     reverse_order: bool,
     runtime_marker: bytes,
+    launcher_kind: str = "file",
+    duplicate_launcher: bool = False,
 ) -> None:
     actions: list[tuple[str, tuple[Any, ...]]] = []
     if service == "serverware-control":
@@ -100,6 +103,7 @@ def write_rootfs(
                 ("directory", ("usr",)),
                 ("directory", ("usr/local",)),
                 ("directory", ("usr/local/bin",)),
+                ("directory", ("usr/local/libexec",)),
                 (
                     "file",
                     (
@@ -112,6 +116,15 @@ def write_rootfs(
                 ("hardlink", ("usr/local/bin/serverware-decision-gate-copy", verifier.RUST_BINARY_PATH)),
             ]
         )
+        if launcher is not None:
+            if launcher_kind == "file":
+                actions.append(("file", (verifier.LAUNCHER_BINARY_PATH, launcher, 0o755, {})))
+            elif launcher_kind == "symlink":
+                actions.append(("symlink", (verifier.LAUNCHER_BINARY_PATH, "/tmp/launcher")))
+            else:
+                raise AssertionError(f"unknown launcher fixture kind: {launcher_kind}")
+            if duplicate_launcher:
+                actions.append(("file", (verifier.LAUNCHER_BINARY_PATH, launcher, 0o755, {})))
     actions.extend(
         [
             ("directory", ("etc",)),
@@ -148,6 +161,7 @@ def build_artifact(
     *,
     generated_at: int,
     binary_digest: str,
+    launcher_digest: str,
     source_digest: str,
     gate_image_id: str = digest("b"),
 ) -> dict[str, Any]:
@@ -164,6 +178,7 @@ def build_artifact(
             "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
             "image_id": gate_image_id,
             "binary_digest": binary_digest,
+            "launcher_binary_digest": launcher_digest,
         },
     ]
     return {
@@ -260,6 +275,8 @@ def assert_success(
     gate = next(image for image in images if image["service"] == "serverware-decision-gate")
     if gate.get("rust_binary_sha256") != verifier.sha256_bytes(b"same-rust-binary"):
         raise AssertionError(f"success result did not bind the extracted Rust binary: {gate}")
+    if gate.get("launcher_binary_sha256") != verifier.sha256_bytes(b"same-static-launcher"):
+        raise AssertionError(f"success result did not bind the extracted launcher binary: {gate}")
 
 
 def assert_forged_content_rejected(
@@ -287,6 +304,59 @@ def assert_forged_content_rejected(
     fields = {item.get("field") for item in parsed["mismatches"]}
     if not any("rust_binary.sha256" in str(field) for field in fields):
         raise AssertionError(f"forged Rust binary mismatch was not reported: {parsed['mismatches']}")
+
+
+def assert_forged_launcher_rejected(
+    base: dict[str, Any],
+    left: Path,
+    output: Path,
+    source_digest: str,
+    trusted_builders: dict[str, Any],
+    builder_id: str,
+    signing_key: Ed25519PrivateKey,
+) -> None:
+    forged = copy.deepcopy(base)
+    gate = next(image for image in forged["images"] if image["service"] == "serverware-decision-gate")
+    launcher_entry = next(
+        entry for entry in gate["content"]["entries"] if entry["path"] == verifier.LAUNCHER_BINARY_PATH
+    )
+    launcher_entry["sha256"] = digest("8")
+    gate["declared_launcher_binary_sha256"] = digest("8")
+    gate["launcher_binary_sha256"] = digest("8")
+    refresh_content_digest(gate)
+    verifier.sign_manifest(forged, builder_id, signing_key)
+    verifier.validate_manifest(forged)
+    write_manifest(output, forged)
+    parsed = load_and_compare(left, output, source_digest, trusted_builders)
+    if parsed.get("reproducible") is not False or not parsed.get("mismatches"):
+        raise AssertionError(f"signed forged launcher mismatch was accepted: {parsed}")
+    fields = {str(item.get("field")) for item in parsed["mismatches"]}
+    if not any("launcher_binary_sha256" in field for field in fields):
+        raise AssertionError(f"forged launcher mismatch was not reported: {parsed['mismatches']}")
+
+
+def assert_capture_rejected(
+    build: dict[str, Any],
+    archives: dict[str, Path],
+    builder_id: str,
+    signing_key: Ed25519PrivateKey,
+    expected: str,
+) -> None:
+    try:
+        verifier.build_manifest_from_archives(
+            build,
+            encoded(build, pretty=False),
+            archives,
+            engine_image_id_verified=True,
+            source_labels_verified=True,
+            builder_id=builder_id,
+            signing_key=signing_key,
+        )
+    except verifier.VerificationError as exc:
+        if expected not in str(exc):
+            raise AssertionError(f"launcher capture rejection did not mention {expected!r}: {exc}") from exc
+        return
+    raise AssertionError(f"invalid launcher capture was accepted; expected {expected!r}")
 
 
 def assert_forged_image_id_rejected(
@@ -331,6 +401,14 @@ def assert_schema_forgery_rejected(base: dict[str, Any]) -> None:
     extra["images"][0]["content"]["unrecognized"] = True
     refresh_evidence_digest(extra)
     assert_validation_error(extra, "extra=")
+
+    missing_launcher = copy.deepcopy(base)
+    gate = next(
+        image for image in missing_launcher["images"] if image["service"] == "serverware-decision-gate"
+    )
+    gate.pop("launcher_binary_sha256")
+    refresh_evidence_digest(missing_launcher)
+    assert_validation_error(missing_launcher, "launcher_binary_sha256")
 
 
 def assert_unbound_and_stale_forgery_rejected(base: dict[str, Any], source_digest: str) -> None:
@@ -476,6 +554,8 @@ def assert_same_key_rejected(
 def main() -> None:
     binary = b"same-rust-binary"
     binary_digest = verifier.sha256_bytes(binary)
+    launcher = b"same-static-launcher"
+    launcher_digest = verifier.sha256_bytes(launcher)
     source_digest = serverware_source_tree.source_tree_digest(ROOT)
     left_builder = "builder.example/alpha"
     right_builder = "builder.example/bravo"
@@ -505,6 +585,7 @@ def main() -> None:
                 left_archives[service],
                 service,
                 binary=binary,
+                launcher=launcher,
                 mtime=10,
                 reverse_order=False,
                 runtime_marker=b"left-runtime-hosts\n",
@@ -513,6 +594,7 @@ def main() -> None:
                 right_archives[service],
                 service,
                 binary=binary,
+                launcher=launcher,
                 mtime=999,
                 reverse_order=True,
                 runtime_marker=b"right-runtime-hosts\n",
@@ -521,13 +603,62 @@ def main() -> None:
         left_build = build_artifact(
             generated_at=100,
             binary_digest=binary_digest,
+            launcher_digest=launcher_digest,
             source_digest=source_digest,
         )
         right_build = build_artifact(
             generated_at=200,
             binary_digest=binary_digest,
+            launcher_digest=launcher_digest,
             source_digest=source_digest,
         )
+
+        missing_declaration = copy.deepcopy(right_build)
+        missing_declaration["images"][1].pop("launcher_binary_digest")
+        assert_capture_rejected(
+            missing_declaration,
+            right_archives,
+            right_builder,
+            right_key,
+            "launcher_binary_digest",
+        )
+
+        mismatched_declaration = copy.deepcopy(right_build)
+        mismatched_declaration["images"][1]["launcher_binary_digest"] = digest("9")
+        assert_capture_rejected(
+            mismatched_declaration,
+            right_archives,
+            right_builder,
+            right_key,
+            "launcher binary digest does not match",
+        )
+
+        for fixture_name, fixture_launcher, fixture_kind, duplicate, expected in (
+            ("missing", None, "file", False, "one regular launcher binary"),
+            ("symlink", launcher, "symlink", False, "one regular launcher binary"),
+            ("duplicate", launcher, "file", True, "contains duplicate path"),
+        ):
+            invalid_gate_archive = temp / f"{fixture_name}-launcher-gate.tar"
+            write_rootfs(
+                invalid_gate_archive,
+                "serverware-decision-gate",
+                binary=binary,
+                launcher=fixture_launcher,
+                launcher_kind=fixture_kind,
+                duplicate_launcher=duplicate,
+                mtime=999,
+                reverse_order=False,
+                runtime_marker=b"invalid-runtime-hosts\n",
+            )
+            invalid_archives = dict(right_archives)
+            invalid_archives["serverware-decision-gate"] = invalid_gate_archive
+            assert_capture_rejected(
+                right_build,
+                invalid_archives,
+                right_builder,
+                right_key,
+                expected,
+            )
         left_raw = encoded(left_build, pretty=True)
         right_raw = encoded(right_build, pretty=False)
         left_manifest = verifier.build_manifest_from_archives(
@@ -550,6 +681,10 @@ def main() -> None:
         )
         verifier.validate_manifest(left_manifest)
         verifier.validate_manifest(right_manifest)
+        for manifest in (left_manifest, right_manifest):
+            gate = next(image for image in manifest["images"] if image["service"] == "serverware-decision-gate")
+            if gate.get("launcher_binary_sha256") != launcher_digest:
+                raise AssertionError(f"signed capture manifest omitted the launcher binary digest: {gate}")
         left_path = temp / "left-manifest.json"
         right_path = temp / "right-manifest.json"
         write_manifest(left_path, left_manifest)
@@ -560,6 +695,15 @@ def main() -> None:
             right_manifest,
             left_path,
             temp / "forged-content.json",
+            source_digest,
+            trusted_builders,
+            right_builder,
+            right_key,
+        )
+        assert_forged_launcher_rejected(
+            right_manifest,
+            left_path,
+            temp / "forged-launcher.json",
             source_digest,
             trusted_builders,
             right_builder,
@@ -630,6 +774,8 @@ def main() -> None:
                 "tests": [
                     "normalized-success",
                     "forged-rootfs-and-rust-binary-mismatch",
+                    "signed-forged-launcher-mismatch",
+                    "launcher-missing-nonregular-duplicate-and-declaration-mismatch",
                     "forged-image-id-mismatch",
                     "missing-and-extra-fields",
                     "unbound-mutation-and-stale-source",

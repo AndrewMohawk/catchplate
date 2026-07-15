@@ -879,6 +879,10 @@ def env_check(
             status["launcher_trust"]["startup_environment_contract"] = (
                 run_production_readiness.validate_final_launcher_contract(loaded)
             )
+            bootstrap_receipt, _ = run_production_readiness.load_sealed_bootstrap_receipt(
+                required=True
+            )
+            status["launcher_trust"]["bootstrap_receipt"] = bootstrap_receipt
             status["executing_script"] = verify_current_preflight_script_binding(loaded)
     except Exception as exc:
         status["error"] = str(exc)
@@ -1150,10 +1154,23 @@ def artifact_check(
                 "decision-gate benchmark binary digest does not match "
                 "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST"
             )
+        production_launcher_binary = next(
+            (
+                item.get("launcher_binary_digest")
+                for item in production_images["images"]
+                if item.get("service") == "serverware-decision-gate"
+            ),
+            None,
+        )
+        production_launcher_binary = handoff.require_sha256(
+            production_launcher_binary,
+            "production image launcher binary digest",
+        )
         release_document = handoff.verify_release_provenance_document(
             Path(args.release_provenance),
             summary_digest=release_summary["digest"],
             expected_source_tree_digest=production_images["source_tree_digest"],
+            expected_launcher_binary_digest=production_launcher_binary,
             trust=release_trust,
         )
         signatures = handoff.image_signature_scope(

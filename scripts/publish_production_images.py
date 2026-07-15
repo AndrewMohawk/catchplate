@@ -40,6 +40,14 @@ def load_build(path: Path) -> dict[str, Any]:
     images = parsed.get("images")
     if not isinstance(images, list) or not images:
         raise ValueError("production image build artifact has no images")
+    decision_gate_images = [
+        image
+        for image in images
+        if isinstance(image, dict) and image.get("service") == "serverware-decision-gate"
+    ]
+    if len(decision_gate_images) != 1:
+        raise ValueError("production image build artifact must contain exactly one decision-gate image")
+    decision_gate_declared_digests(decision_gate_images[0])
     return parsed
 
 
@@ -89,6 +97,19 @@ def validate_image_id(value: Any) -> str:
     return value
 
 
+def validate_digest(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not SHA256_RE.fullmatch(value):
+        raise ValueError(f"{label} must be sha256:<64 hex>")
+    return value
+
+
+def decision_gate_declared_digests(image: dict[str, Any]) -> dict[str, str]:
+    return {
+        field: validate_digest(image.get(field), f"decision-gate {field}")
+        for field in build_production_images.DECISION_GATE_BINARY_PATHS
+    }
+
+
 def repo_digest_from_inspect(repo: str, repo_digests: list[Any]) -> str | None:
     prefix = repo + "@sha256:"
     candidates = [item for item in repo_digests if isinstance(item, str) and item.startswith(prefix)]
@@ -122,6 +143,7 @@ def imagetools_repo_digest(repo: str, tag: str) -> str:
 def publish_image(image: dict[str, Any], *, registry_prefix: str, tag: str, use_imagetools: bool) -> dict[str, Any]:
     service = str(image.get("service") or "")
     local_id = validate_image_id(image.get("image_id"))
+    declared_digests = decision_gate_declared_digests(image) if service == "serverware-decision-gate" else {}
     repo = target_repo(registry_prefix, service)
     target = f"{repo}:{tag}"
     run(["docker", "tag", local_id, target])
@@ -133,26 +155,23 @@ def publish_image(image: dict[str, Any], *, registry_prefix: str, tag: str, use_
         raise RuntimeError(f"docker push did not expose a repo digest for {target}")
     run(["docker", "pull", digest_ref])
     remote_image_id = run(["docker", "image", "inspect", "--format", "{{.Id}}", digest_ref])
-    binary_digest = None
+    measured_digests: dict[str, str] = {}
     if service == "serverware-decision-gate":
-        expected_binary_digest = image.get("binary_digest")
-        if not isinstance(expected_binary_digest, str) or not SHA256_RE.fullmatch(expected_binary_digest):
-            raise RuntimeError("decision-gate build artifact is missing its measured binary digest")
-        binary_digest = build_production_images.image_file_sha256(
-            digest_ref,
-            "/usr/local/bin/serverware-decision-gate",
-        )
-        if binary_digest != expected_binary_digest:
-            raise RuntimeError(
-                f"published decision-gate binary digest mismatch: build has {expected_binary_digest}, registry has {binary_digest}"
-            )
+        for field, path in build_production_images.DECISION_GATE_BINARY_PATHS.items():
+            measured = build_production_images.image_file_sha256(digest_ref, path)
+            expected = declared_digests[field]
+            if measured != expected:
+                raise RuntimeError(
+                    f"published decision-gate {field} mismatch: build has {expected}, registry has {measured}"
+                )
+            measured_digests[field] = measured
     return {
         "service": service,
         "local_image_id": local_id,
         "tag": target,
         "repo_digest": digest_ref,
         "remote_image_id": remote_image_id,
-        **({"binary_digest": binary_digest} if binary_digest else {}),
+        **measured_digests,
     }
 
 

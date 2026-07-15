@@ -33,6 +33,7 @@ VERIFICATION_API_VERSION = "serverware.reproducibleBuildVerification/v2"
 VERIFICATION_KIND = "ReproducibleBuildVerification"
 CONTENT_ALGORITHM = "serverware.normalizedRootfs/v1"
 RUST_BINARY_PATH = "usr/local/bin/serverware-decision-gate"
+LAUNCHER_BINARY_PATH = "usr/local/libexec/serverware-production-launcher"
 EXPECTED_SERVICES = {
     "serverware-control": "Dockerfile.production",
     "serverware-decision-gate": "data-plane/decision-gate-rs/Dockerfile.production",
@@ -374,7 +375,7 @@ def validate_build_artifact(document: dict[str, Any]) -> dict[str, Any]:
         seen_services.add(service)
         expected_fields = {"service", "tag", "dockerfile", "image_id"}
         if service == "serverware-decision-gate":
-            expected_fields.add("binary_digest")
+            expected_fields |= {"binary_digest", "launcher_binary_digest"}
         require_exact_fields(raw_image, expected_fields, label)
         dockerfile = validate_relative_path(raw_image["dockerfile"], f"{label}.dockerfile")
         if dockerfile != EXPECTED_SERVICES[service]:
@@ -392,6 +393,9 @@ def validate_build_artifact(document: dict[str, Any]) -> dict[str, Any]:
         if service == "serverware-decision-gate":
             normalized["declared_rust_binary_sha256"] = require_sha256(
                 raw_image["binary_digest"], f"{label}.binary_digest"
+            )
+            normalized["declared_launcher_binary_sha256"] = require_sha256(
+                raw_image["launcher_binary_digest"], f"{label}.launcher_binary_digest"
             )
         normalized_images.append(normalized)
     if seen_services != set(EXPECTED_SERVICES):
@@ -558,11 +562,26 @@ def rootfs_manifest(path: Path) -> dict[str, Any]:
     }
 
 
-def rust_binary_from_content(content: dict[str, Any]) -> dict[str, str]:
-    matches = [entry for entry in content["entries"] if entry.get("path") == RUST_BINARY_PATH]
+def regular_file_from_content(
+    content: dict[str, Any], path: str, label: str
+) -> dict[str, str]:
+    matches = [entry for entry in content["entries"] if entry.get("path") == path]
     if len(matches) != 1 or matches[0].get("type") != "file":
-        raise VerificationError(f"decision-gate rootfs must contain one regular file at /{RUST_BINARY_PATH}")
-    return {"path": "/" + RUST_BINARY_PATH, "sha256": require_sha256(matches[0].get("sha256"), "Rust binary digest")}
+        raise VerificationError(
+            f"decision-gate rootfs must contain one regular {label} at /{path}"
+        )
+    return {
+        "path": "/" + path,
+        "sha256": require_sha256(matches[0].get("sha256"), f"{label} digest"),
+    }
+
+
+def rust_binary_from_content(content: dict[str, Any]) -> dict[str, str]:
+    return regular_file_from_content(content, RUST_BINARY_PATH, "Rust binary")
+
+
+def launcher_binary_from_content(content: dict[str, Any]) -> dict[str, str]:
+    return regular_file_from_content(content, LAUNCHER_BINARY_PATH, "launcher binary")
 
 
 def build_manifest_from_archives(
@@ -600,6 +619,12 @@ def build_manifest_from_archives(
                     "extracted decision-gate Rust binary digest does not match the production build artifact"
                 )
             image["rust_binary"] = rust_binary
+            launcher_binary = launcher_binary_from_content(content)
+            if launcher_binary["sha256"] != image["declared_launcher_binary_sha256"]:
+                raise VerificationError(
+                    "extracted decision-gate launcher binary digest does not match the production build artifact"
+                )
+            image["launcher_binary_sha256"] = launcher_binary["sha256"]
         images.append(image)
     manifest: dict[str, Any] = {
         "apiVersion": MANIFEST_API_VERSION,
@@ -786,7 +811,12 @@ def validate_manifest(document: dict[str, Any]) -> dict[str, Any]:
         seen_services.add(service)
         expected_fields = {"service", "dockerfile", "image_ref", "image_id", "capture", "content"}
         if service == "serverware-decision-gate":
-            expected_fields |= {"declared_rust_binary_sha256", "rust_binary"}
+            expected_fields |= {
+                "declared_rust_binary_sha256",
+                "rust_binary",
+                "declared_launcher_binary_sha256",
+                "launcher_binary_sha256",
+            }
         image = require_exact_fields(image_value, expected_fields, label)
         dockerfile = validate_relative_path(image["dockerfile"], f"{label}.dockerfile")
         if dockerfile != EXPECTED_SERVICES[service]:
@@ -819,6 +849,16 @@ def validate_manifest(document: dict[str, Any]) -> dict[str, Any]:
             content_binary = rust_binary_from_content(content)["sha256"]
             if len({declared, extracted, content_binary}) != 1:
                 raise VerificationError(f"{label} Rust binary digests do not match")
+            declared_launcher = require_sha256(
+                image["declared_launcher_binary_sha256"],
+                f"{label}.declared_launcher_binary_sha256",
+            )
+            extracted_launcher = require_sha256(
+                image["launcher_binary_sha256"], f"{label}.launcher_binary_sha256"
+            )
+            content_launcher = launcher_binary_from_content(content)["sha256"]
+            if len({declared_launcher, extracted_launcher, content_launcher}) != 1:
+                raise VerificationError(f"{label} launcher binary digests do not match")
     if seen_services != set(EXPECTED_SERVICES):
         raise VerificationError("reproducibility manifest service set does not match the production contract")
     if [image["service"] for image in images] != sorted(EXPECTED_SERVICES):
@@ -1051,6 +1091,7 @@ def image_bindings(manifest: dict[str, Any]) -> list[dict[str, Any]]:
         }
         if image["service"] == "serverware-decision-gate":
             binding["rust_binary_sha256"] = image["rust_binary"]["sha256"]
+            binding["launcher_binary_sha256"] = image["launcher_binary_sha256"]
         bindings.append(binding)
     return bindings
 

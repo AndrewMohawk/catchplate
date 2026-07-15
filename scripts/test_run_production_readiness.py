@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import hashlib
 import os
 import shlex
@@ -147,7 +148,171 @@ def proof_policy_bundle(
     }
 
 
+def verify_sealed_bootstrap_receipt_contract() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+
+    def metadata(*, mode: int = 0o100400, link_count: int = 1) -> dict[str, int]:
+        return {
+            "device": 1,
+            "inode": 2,
+            "mode": mode,
+            "ownerUid": 0,
+            "ownerGid": 0,
+            "linkCount": link_count,
+            "size": 128,
+            "modifiedUnixNanos": 1,
+            "changedUnixNanos": 1,
+        }
+
+    def file_record(path: str, character: str) -> dict[str, object]:
+        return {
+            "path": path,
+            "sha256": "sha256:" + character * 64,
+            "metadata": metadata(),
+        }
+
+    launcher_digest = "sha256:" + "3" * 64
+    receipt = {
+        "apiVersion": run_production_readiness.BOOTSTRAP_RECEIPT_API_VERSION,
+        "kind": run_production_readiness.BOOTSTRAP_RECEIPT_KIND,
+        "launchId": "1" * 64,
+        "bootIdSha256": "sha256:" + "2" * 64,
+        "launcher": file_record(
+            "/opt/serverware/launchers/sha256-"
+            + launcher_digest.removeprefix("sha256:")
+            + "/serverware-production-launcher",
+            "3",
+        ),
+        "manifest": file_record("/etc/serverware/production-release-launch.json", "4"),
+        "sourceTreeDigest": "sha256:" + "5" * 64,
+        "productionEnv": file_record("/etc/serverware/production-readiness.env", "9"),
+        "python": {
+            **file_record("/opt/serverware/releases/fixture/python/bin/python3", "a"),
+            "importRoots": [
+                {
+                    "path": "/opt/serverware/releases/fixture",
+                    "sha256": "sha256:" + "b" * 64,
+                    "metadata": metadata(mode=0o40555, link_count=2),
+                }
+            ],
+        },
+        "scripts": {
+            "preflight": file_record(
+                "/opt/serverware/releases/fixture/scripts/production_host_preflight.py", "c"
+            ),
+            "runner": file_record(
+                "/opt/serverware/releases/fixture/scripts/run_production_readiness.py", "d"
+            ),
+        },
+        "composeFile": file_record(
+            "/opt/serverware/releases/fixture/docker-compose.production.yml", "e"
+        ),
+        "inputs": {
+            name: file_record(f"/opt/serverware/releases/fixture/evidence/{name}.json", "f")
+            for name in sorted(run_production_readiness.BOOTSTRAP_RECEIPT_INPUT_NAMES)
+        },
+        "argv": {"preflightSha256": "sha256:" + "6" * 64, "readinessSha256": "sha256:" + "7" * 64},
+        "environment": {
+            "names": run_production_readiness.BOOTSTRAP_RECEIPT_COMMITTED_ENV_NAMES,
+            "sha256": "sha256:" + "8" * 64,
+        },
+    }
+
+    def open_receipt(data: bytes, *, seal: bool) -> int:
+        descriptor = os.memfd_create("serverware-bootstrap-receipt-test", os.MFD_ALLOW_SEALING)
+        os.write(descriptor, data)
+        if seal:
+            fcntl.fcntl(
+                descriptor,
+                1033,
+                run_production_readiness.REQUIRED_BOOTSTRAP_RECEIPT_SEALS,
+            )
+        return descriptor
+
+    canonical = canonical_json(receipt).encode("ascii")
+    descriptor = open_receipt(canonical, seal=True)
+    environment = {
+        run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(descriptor),
+        run_production_readiness.BOOTSTRAP_RECEIPT_SHA256_ENV: (
+            "sha256:" + hashlib.sha256(canonical).hexdigest()
+        ),
+        run_production_readiness.BOOTSTRAP_RECEIPT_API_VERSION_ENV: (
+            run_production_readiness.BOOTSTRAP_RECEIPT_API_VERSION
+        ),
+    }
+    try:
+        summary, selected = run_production_readiness.load_sealed_bootstrap_receipt(
+            environment,
+            required=True,
+        )
+        if (
+            selected != descriptor
+            or summary is None
+            or summary.get("sealed") is not True
+            or summary.get("launchId") != receipt["launchId"]
+        ):
+            raise AssertionError(f"sealed bootstrap receipt summary is invalid: {summary}")
+    finally:
+        os.close(descriptor)
+
+    unsealed = open_receipt(canonical, seal=False)
+    try:
+        try:
+            run_production_readiness.load_sealed_bootstrap_receipt(
+                {**environment, run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(unsealed)},
+                required=True,
+            )
+        except ValueError as exc:
+            if "immutable seals" not in str(exc):
+                raise
+        else:
+            raise AssertionError("bootstrap receipt validation accepted a writable memfd")
+    finally:
+        os.close(unsealed)
+
+    mutations = []
+    wrong_launcher_path = json.loads(json.dumps(receipt))
+    wrong_launcher_path["launcher"]["path"] = "/opt/serverware/launchers/unbound/serverware-production-launcher"
+    mutations.append(("non-content-addressed launcher", wrong_launcher_path))
+    missing_input = json.loads(json.dumps(receipt))
+    missing_input["inputs"].pop("bench")
+    mutations.append(("open input set", missing_input))
+    open_metadata = json.loads(json.dumps(receipt))
+    open_metadata["manifest"]["metadata"]["unexpected"] = 1
+    mutations.append(("open nested metadata", open_metadata))
+    for label, mutated in mutations:
+        mutated_bytes = canonical_json(mutated).encode("ascii")
+        mutated_descriptor = open_receipt(mutated_bytes, seal=True)
+        try:
+            try:
+                run_production_readiness.load_sealed_bootstrap_receipt(
+                    {
+                        **environment,
+                        run_production_readiness.BOOTSTRAP_RECEIPT_FD_ENV: str(mutated_descriptor),
+                        run_production_readiness.BOOTSTRAP_RECEIPT_SHA256_ENV: (
+                            "sha256:" + hashlib.sha256(mutated_bytes).hexdigest()
+                        ),
+                    },
+                    required=True,
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(f"bootstrap receipt accepted {label}")
+        finally:
+            os.close(mutated_descriptor)
+
+
 def main() -> None:
+    for invalid_path in ("relative/path", "/", "/tmp/../etc/passwd", "/tmp//receipt", "/tmp/receipt/"):
+        try:
+            run_production_readiness._normalized_absolute_receipt_path(invalid_path, "test")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"bootstrap receipt accepted a non-normalized path: {invalid_path}")
+    verify_sealed_bootstrap_receipt_contract()
     with tempfile.TemporaryDirectory() as tmp_raw:
         tmp = Path(tmp_raw).resolve()
         expected_client_request_digest = "sha256:" + "a" * 64

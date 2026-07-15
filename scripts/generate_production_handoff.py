@@ -228,10 +228,15 @@ def verify_production_images_build(path: Path, *, check_current_tree: bool) -> d
             raise ValueError("production image entry is missing service")
         image_id = require_sha256(image.get("image_id"), f"{service} image_id")
         binary_digest = None
+        launcher_binary_digest = None
         if service == "serverware-decision-gate":
             binary_digest = require_sha256(
                 image.get("binary_digest"),
                 "serverware-decision-gate production image binary digest",
+            )
+            launcher_binary_digest = require_sha256(
+                image.get("launcher_binary_digest"),
+                "serverware production launcher binary digest",
             )
         normalized_images.append(
             {
@@ -240,6 +245,11 @@ def verify_production_images_build(path: Path, *, check_current_tree: bool) -> d
                 "image_id": image_id,
                 "tag": image.get("tag"),
                 **({"binary_digest": binary_digest} if binary_digest else {}),
+                **(
+                    {"launcher_binary_digest": launcher_binary_digest}
+                    if launcher_binary_digest
+                    else {}
+                ),
             }
         )
     return {
@@ -340,6 +350,7 @@ def verify_release_provenance_document(
     *,
     summary_digest: str,
     expected_source_tree_digest: str,
+    expected_launcher_binary_digest: str,
     trust: dict[str, str],
 ) -> dict[str, Any]:
     document = load_json(document_path, "release provenance document")
@@ -374,6 +385,20 @@ def verify_release_provenance_document(
             "release provenance source tree digest does not match production image build: "
             f"provenance={source_tree_digest} production_images={expected_source_tree_digest}"
         )
+    images = provenance.get("images") if isinstance(provenance.get("images"), dict) else {}
+    decision_gate = (
+        images.get("serverware-decision-gate")
+        if isinstance(images.get("serverware-decision-gate"), dict)
+        else {}
+    )
+    launcher_binary_digest = require_sha256(
+        decision_gate.get("launcher_binary_digest"),
+        "release provenance production launcher binary digest",
+    )
+    if launcher_binary_digest != expected_launcher_binary_digest:
+        raise ValueError(
+            "release provenance production launcher digest does not match the measured production build"
+        )
     signature = document.get("signature")
     public_key_pem = document.get("release_signing_public_key_pem")
     if not isinstance(signature, str) or not signature or not isinstance(public_key_pem, str) or not public_key_pem:
@@ -399,6 +424,7 @@ def verify_release_provenance_document(
             "provenance_digest": document_digest,
             "signature": signature,
             "release_signing_key_id": release_signing_key_id,
+            "production_launcher_binary_digest": launcher_binary_digest,
         },
         expected_external_provider=trust["external_provider"],
         expected_external_log_id=trust["external_log_id"],
@@ -420,6 +446,7 @@ def verify_release_provenance_document(
         "sbom_cyclonedx_sha256": require_sha256(cyclonedx.get("sha256"), "release provenance CycloneDX SBOM digest"),
         "sbom_cyclonedx_components": sbom_components,
         "release_signing_key_id": release_signing_key_id,
+        "production_launcher_binary_digest": launcher_binary_digest,
         "external_transparency": external_transparency,
         "transparency_record_digest": release_record["record_digest"],
     }
@@ -700,6 +727,9 @@ def production_commands(
     kms_spec: Path,
     kms_out: Path,
 ) -> dict[str, Any]:
+    source_tree_digest = str((build.get("metadata") or {}).get("source_tree_digest") or "")
+    require_sha256(source_tree_digest, "production image source tree digest")
+    release_root = f"/opt/serverware/releases/{source_tree_digest.replace(':', '-', 1)}"
     commands = [
         ["make", "build-production-images"],
         [
@@ -727,6 +757,7 @@ def production_commands(
                 "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
                 f"PRODUCTION_READINESS_ENV={env_file}",
             ],
+            ["make", "build-production-launcher"],
             [
                 "make",
                 "production-release-provenance",
@@ -749,20 +780,15 @@ def production_commands(
                 f"AWS_KMS_MATERIALS_SPEC={kms_spec}",
                 f"AWS_KMS_MATERIALS_OUT={kms_out}",
             ],
+            ["make", "deploy-production"],
+            ["make", "install-production-launcher"],
             [
                 "make",
-                "production-host-preflight",
-                "PRODUCTION_IMAGES_ENV_OUT=.tmp/production-images.env",
-                f"PRODUCTION_READINESS_ENV={env_file}",
-                f"AWS_KMS_MATERIALS_OUT={kms_out}",
-                "PRODUCTION_HOST_PREFLIGHT_OUT=.tmp/production-host-preflight.json",
+                "generate-production-launch-manifest",
+                f"PRODUCTION_RELEASE_ROOT={release_root}",
+                f"PRODUCTION_SOURCE_TREE_DIGEST={source_tree_digest}",
             ],
-            [
-                "make",
-                "run-production-readiness",
-                f"PRODUCTION_READINESS_ENV={env_file}",
-                f"AWS_KMS_MATERIALS_OUT={kms_out}",
-            ],
+            ["make", "run-production-readiness-final"],
         ]
     )
     one_shot = ["make", "production-release-proof"]
@@ -773,6 +799,8 @@ def production_commands(
             f"PRODUCTION_READINESS_ENV={env_file}",
             f"AWS_KMS_MATERIALS_SPEC={kms_spec}",
             f"AWS_KMS_MATERIALS_OUT={kms_out}",
+            f"PRODUCTION_RELEASE_ROOT={release_root}",
+            f"PRODUCTION_SOURCE_TREE_DIGEST={source_tree_digest}",
         ]
     )
     return {
@@ -829,6 +857,18 @@ def main() -> None:
             pass_key="release_provenance",
             digest_key="provenance_digest",
         )
+        production_launcher_binary_digest = next(
+            (
+                item.get("launcher_binary_digest")
+                for item in production_images["images"]
+                if item.get("service") == "serverware-decision-gate"
+            ),
+            None,
+        )
+        production_launcher_binary_digest = require_sha256(
+            production_launcher_binary_digest,
+            "production image launcher binary digest",
+        )
         image_signatures_summary = verify_summary(
             Path(args.image_signatures_summary),
             label="image signatures summary",
@@ -839,6 +879,7 @@ def main() -> None:
             Path(args.release_provenance),
             summary_digest=release_provenance["digest"],
             expected_source_tree_digest=production_images["source_tree_digest"],
+            expected_launcher_binary_digest=production_launcher_binary_digest,
             trust=release_trust,
         )
         published_images_env = production_images_env_status(Path(args.production_images_env))
@@ -873,7 +914,9 @@ def main() -> None:
             remaining.append("publish production images to create .tmp/production-images.env, then run make sign-production-images")
         elif signatures["covers_published_production_images"] is not True:
             remaining.append("run make sign-production-images with .tmp/production-images.env after registry publish")
-        remaining.append("run make run-production-readiness to produce .tmp/serverware-completion-proof.json")
+        remaining.append(
+            "install the immutable release tree and run make production-release-proof so systemd produces the final completion proof"
+        )
         result = {
             "apiVersion": "serverware.productionHandoff/v1",
             "kind": "ProductionHandoff",

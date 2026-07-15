@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import hashlib
 import hmac
 import json
@@ -73,7 +74,50 @@ PINNED_PYTHON_SCRIPTS = {
     "verify_release_completion.py": VERIFY_RELEASE_COMPLETION_SCRIPT_SHA256_ENV,
 }
 FINAL_LAUNCHER_CONTRACT_ENV = "SERVERWARE_FINAL_LAUNCHER_CONTRACT"
-FINAL_LAUNCHER_CONTRACT = "root-owned-minimal-environment-v1"
+FINAL_LAUNCHER_CONTRACT = "descriptor-sealed-bootstrap-v2"
+BOOTSTRAP_RECEIPT_FD_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_FD"
+BOOTSTRAP_RECEIPT_SHA256_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"
+BOOTSTRAP_RECEIPT_API_VERSION_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"
+BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v1"
+BOOTSTRAP_RECEIPT_KIND = "ProductionBootstrapReceipt"
+BOOTSTRAP_RECEIPT_ENV_NAMES = frozenset(
+    (
+        BOOTSTRAP_RECEIPT_FD_ENV,
+        BOOTSTRAP_RECEIPT_SHA256_ENV,
+        BOOTSTRAP_RECEIPT_API_VERSION_ENV,
+    )
+)
+BOOTSTRAP_RECEIPT_INPUT_NAMES = frozenset(
+    (
+        "productionImagesBuild",
+        "productionImagesEnv",
+        "productionImagesPublished",
+        "releaseProvenanceSummary",
+        "releaseProvenance",
+        "imageSignaturesSummary",
+        "imageSignatures",
+        "bench",
+        "kmsMaterials",
+        "policyBundle",
+        "policyTrustedPublicKey",
+        "policyIdentityVerification",
+        "policyActivationVerification",
+        "policyActivationSignature",
+        "policyActivationTrustedPublicKey",
+        "reproducibleBuildVerification",
+        "reproducibleBuildSignature",
+        "reproducibleBuildTrustedPublicKey",
+    )
+)
+BOOTSTRAP_RECEIPT_COMMITTED_ENV_NAMES = [
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    BOOTSTRAP_RECEIPT_API_VERSION_ENV,
+    BOOTSTRAP_RECEIPT_FD_ENV,
+    BOOTSTRAP_RECEIPT_SHA256_ENV,
+    "TZ",
+]
 POLICY_TRUST_ROOT_ENV = "SERVERWARE_POLICY_IDENTITY_TRUSTED_PUBLIC_KEY"
 POLICY_TRUST_ROOT_ID_ENV = "SERVERWARE_POLICY_IDENTITY_TRUSTED_PUBLIC_KEY_ID"
 POLICY_ACTIVATION_TRUST_ROOT_ENV = (
@@ -117,7 +161,19 @@ COMPLETION_P99_LIMIT_ENV = "SERVERWARE_COMPLETION_P99_LIMIT_MS"
 MAX_COMPLETION_PROOF_BYTES = 64 * 1024 * 1024
 MAX_EXECUTABLE_BYTES = 256 * 1024 * 1024
 MAX_PRODUCTION_ENV_BYTES = 8 * 1024 * 1024
+MAX_BOOTSTRAP_RECEIPT_BYTES = 4 * 1024 * 1024
 COMPLETION_PROOF_FUTURE_SKEW_SECONDS = 5
+LINUX_F_GET_SEALS = 1034
+LINUX_F_SEAL_SEAL = 0x0001
+LINUX_F_SEAL_SHRINK = 0x0002
+LINUX_F_SEAL_GROW = 0x0004
+LINUX_F_SEAL_WRITE = 0x0008
+REQUIRED_BOOTSTRAP_RECEIPT_SEALS = (
+    LINUX_F_SEAL_SEAL
+    | LINUX_F_SEAL_SHRINK
+    | LINUX_F_SEAL_GROW
+    | LINUX_F_SEAL_WRITE
+)
 FINAL_CHILD_FIXED_ENV = {
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
@@ -192,6 +248,287 @@ def canonical_json(value: Any) -> str:
 
 def sha256_prefixed_bytes(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
+
+
+def bootstrap_receipt_environment(
+    environment: dict[str, str] | None = None,
+) -> dict[str, str]:
+    source = dict(os.environ) if environment is None else environment
+    present = BOOTSTRAP_RECEIPT_ENV_NAMES & set(source)
+    if not present:
+        return {}
+    if present != BOOTSTRAP_RECEIPT_ENV_NAMES:
+        missing = sorted(BOOTSTRAP_RECEIPT_ENV_NAMES - present)
+        raise ValueError(
+            "bootstrap receipt environment is incomplete; missing " + ", ".join(missing)
+        )
+    return {name: source[name] for name in sorted(BOOTSTRAP_RECEIPT_ENV_NAMES)}
+
+
+def _closed_object(value: Any, fields: set[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, dict) or set(value) != fields:
+        raise ValueError(f"bootstrap receipt {label} does not match its closed schema")
+    return value
+
+
+def _normalized_absolute_receipt_path(value: Any, label: str) -> str:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError(f"bootstrap receipt {label} path is invalid")
+    path = Path(value)
+    if (
+        not path.is_absolute()
+        or value == "/"
+        or os.path.normpath(value) != value
+        or str(path) != value
+    ):
+        raise ValueError(f"bootstrap receipt {label} path must be normalized and absolute")
+    return value
+
+
+def _validate_receipt_metadata(
+    value: Any,
+    label: str,
+    *,
+    require_single_link: bool = True,
+) -> dict[str, Any]:
+    metadata = _closed_object(
+        value,
+        {
+            "device",
+            "inode",
+            "mode",
+            "ownerUid",
+            "ownerGid",
+            "linkCount",
+            "size",
+            "modifiedUnixNanos",
+            "changedUnixNanos",
+        },
+        f"{label}.metadata",
+    )
+    for field in ("device", "inode", "mode", "ownerUid", "ownerGid", "linkCount", "size"):
+        number = metadata[field]
+        if type(number) is not int or number < 0:
+            raise ValueError(f"bootstrap receipt {label}.metadata.{field} is invalid")
+    for field in ("modifiedUnixNanos", "changedUnixNanos"):
+        if type(metadata[field]) is not int:
+            raise ValueError(f"bootstrap receipt {label}.metadata.{field} is invalid")
+    if metadata["mode"] > 0xFFFFFFFF or metadata["ownerUid"] > 0xFFFFFFFF or metadata["ownerGid"] > 0xFFFFFFFF:
+        raise ValueError(f"bootstrap receipt {label} metadata exceeds the platform bounds")
+    if require_single_link and metadata["linkCount"] != 1:
+        raise ValueError(f"bootstrap receipt {label} must bind a single-link filesystem object")
+    return metadata
+
+
+def _validate_receipt_file(value: Any, label: str) -> dict[str, Any]:
+    record = _closed_object(value, {"path", "sha256", "metadata"}, label)
+    _normalized_absolute_receipt_path(record["path"], label)
+    if SHA256_RE.fullmatch(str(record["sha256"])) is None:
+        raise ValueError(f"bootstrap receipt {label}.sha256 is invalid")
+    _validate_receipt_metadata(record["metadata"], label)
+    return record
+
+
+def validate_bootstrap_receipt_summary(value: Any) -> dict[str, Any]:
+    summary = _closed_object(
+        value,
+        {
+            "apiVersion",
+            "kind",
+            "launchId",
+            "sha256",
+            "bootIdSha256",
+            "sourceTreeDigest",
+            "launcher",
+            "manifest",
+            "argv",
+            "environment",
+            "sealed",
+            "sealMask",
+        },
+        "summary",
+    )
+    if summary["apiVersion"] != BOOTSTRAP_RECEIPT_API_VERSION or summary["kind"] != BOOTSTRAP_RECEIPT_KIND:
+        raise ValueError("bootstrap receipt summary identity is invalid")
+    if re.fullmatch(r"[0-9a-f]{64}", str(summary["launchId"])) is None:
+        raise ValueError("bootstrap receipt summary launchId is invalid")
+    for field in ("sha256", "bootIdSha256", "sourceTreeDigest"):
+        if SHA256_RE.fullmatch(str(summary[field])) is None:
+            raise ValueError(f"bootstrap receipt summary {field} is invalid")
+    launcher = _validate_receipt_file(summary["launcher"], "launcher")
+    launcher_hex = str(launcher["sha256"])[len("sha256:") :]
+    expected_launcher_path = (
+        f"/opt/serverware/launchers/sha256-{launcher_hex}/serverware-production-launcher"
+    )
+    if launcher["path"] != expected_launcher_path:
+        raise ValueError("bootstrap receipt launcher path is not content-addressed by its digest")
+    _validate_receipt_file(summary["manifest"], "manifest")
+    argv = _closed_object(summary["argv"], {"preflightSha256", "readinessSha256"}, "argv")
+    for field in ("preflightSha256", "readinessSha256"):
+        if SHA256_RE.fullmatch(str(argv[field])) is None:
+            raise ValueError(f"bootstrap receipt argv.{field} is invalid")
+    environment = _closed_object(summary["environment"], {"names", "sha256"}, "environment")
+    if environment["names"] != BOOTSTRAP_RECEIPT_COMMITTED_ENV_NAMES:
+        raise ValueError("bootstrap receipt environment names do not match the closed launcher environment")
+    if SHA256_RE.fullmatch(str(environment["sha256"])) is None:
+        raise ValueError("bootstrap receipt environment digest is invalid")
+    if summary["sealed"] is not True or type(summary["sealMask"]) is not int:
+        raise ValueError("bootstrap receipt summary does not claim an immutable sealed descriptor")
+    if summary["sealMask"] & REQUIRED_BOOTSTRAP_RECEIPT_SEALS != REQUIRED_BOOTSTRAP_RECEIPT_SEALS:
+        raise ValueError("bootstrap receipt summary seal mask is incomplete")
+    return summary
+
+
+def load_sealed_bootstrap_receipt(
+    environment: dict[str, str] | None = None,
+    *,
+    required: bool,
+) -> tuple[dict[str, Any] | None, int | None]:
+    receipt_env = bootstrap_receipt_environment(environment)
+    if not receipt_env:
+        if required:
+            raise ValueError("final execution requires a sealed native-launcher bootstrap receipt")
+        return None, None
+    if not sys.platform.startswith("linux"):
+        raise ValueError("sealed bootstrap receipts require Linux")
+
+    raw_descriptor = receipt_env[BOOTSTRAP_RECEIPT_FD_ENV]
+    if re.fullmatch(r"[1-9][0-9]*", raw_descriptor) is None:
+        raise ValueError("bootstrap receipt descriptor must be a positive decimal integer")
+    descriptor = int(raw_descriptor)
+    if descriptor <= 2:
+        raise ValueError("bootstrap receipt descriptor must not use a standard stream")
+    expected_sha256 = receipt_env[BOOTSTRAP_RECEIPT_SHA256_ENV]
+    if SHA256_RE.fullmatch(expected_sha256) is None:
+        raise ValueError("bootstrap receipt digest must be sha256:<64 lowercase hex>")
+    if receipt_env[BOOTSTRAP_RECEIPT_API_VERSION_ENV] != BOOTSTRAP_RECEIPT_API_VERSION:
+        raise ValueError("bootstrap receipt environment has the wrong API version")
+
+    try:
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        raise ValueError("bootstrap receipt descriptor is not open") from exc
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError("bootstrap receipt descriptor must refer to a regular memfd")
+    if metadata.st_size <= 0 or metadata.st_size > MAX_BOOTSTRAP_RECEIPT_BYTES:
+        raise ValueError("bootstrap receipt size is outside the accepted bound")
+    try:
+        seals = fcntl.fcntl(descriptor, LINUX_F_GET_SEALS)
+    except OSError as exc:
+        raise ValueError("bootstrap receipt descriptor is not a sealable memfd") from exc
+    if seals & REQUIRED_BOOTSTRAP_RECEIPT_SEALS != REQUIRED_BOOTSTRAP_RECEIPT_SEALS:
+        raise ValueError("bootstrap receipt memfd is missing mandatory immutable seals")
+
+    chunks: list[bytes] = []
+    offset = 0
+    while offset < metadata.st_size:
+        chunk = os.pread(descriptor, min(64 * 1024, metadata.st_size - offset), offset)
+        if not chunk:
+            raise ValueError("bootstrap receipt ended before its declared size")
+        chunks.append(chunk)
+        offset += len(chunk)
+    data = b"".join(chunks)
+    actual_sha256 = sha256_prefixed_bytes(data)
+    if not hmac.compare_digest(actual_sha256, expected_sha256):
+        raise ValueError("bootstrap receipt bytes do not match the launcher digest")
+    try:
+        receipt = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("bootstrap receipt is not valid UTF-8 JSON") from exc
+    required_keys = {
+        "apiVersion",
+        "kind",
+        "launchId",
+        "bootIdSha256",
+        "launcher",
+        "manifest",
+        "sourceTreeDigest",
+        "productionEnv",
+        "python",
+        "scripts",
+        "composeFile",
+        "inputs",
+        "argv",
+        "environment",
+    }
+    if not isinstance(receipt, dict) or set(receipt) != required_keys:
+        raise ValueError("bootstrap receipt must use the closed v1 top-level schema")
+    if receipt.get("apiVersion") != BOOTSTRAP_RECEIPT_API_VERSION:
+        raise ValueError("bootstrap receipt has the wrong API version")
+    if receipt.get("kind") != BOOTSTRAP_RECEIPT_KIND:
+        raise ValueError("bootstrap receipt has the wrong kind")
+    if re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("launchId", ""))) is None:
+        raise ValueError("bootstrap receipt launchId must be 32 random bytes in lowercase hex")
+    for field in ("bootIdSha256", "sourceTreeDigest"):
+        if SHA256_RE.fullmatch(str(receipt.get(field, ""))) is None:
+            raise ValueError(f"bootstrap receipt {field} must be a SHA-256 digest")
+    launcher = _validate_receipt_file(receipt["launcher"], "launcher")
+    launcher_hex = str(launcher["sha256"])[len("sha256:") :]
+    if launcher["path"] != (
+        f"/opt/serverware/launchers/sha256-{launcher_hex}/serverware-production-launcher"
+    ):
+        raise ValueError("bootstrap receipt launcher path is not content-addressed by its digest")
+    for field in ("manifest", "productionEnv", "composeFile"):
+        _validate_receipt_file(receipt[field], field)
+    python_record = _closed_object(
+        receipt["python"],
+        {"path", "sha256", "metadata", "importRoots"},
+        "python",
+    )
+    _normalized_absolute_receipt_path(python_record["path"], "python")
+    if SHA256_RE.fullmatch(str(python_record["sha256"])) is None:
+        raise ValueError("bootstrap receipt python.sha256 is invalid")
+    _validate_receipt_metadata(python_record["metadata"], "python")
+    import_roots = python_record["importRoots"]
+    if not isinstance(import_roots, list) or not 1 <= len(import_roots) <= 64:
+        raise ValueError("bootstrap receipt python.importRoots must contain 1-64 measured roots")
+    seen_import_roots: set[str] = set()
+    for index, value in enumerate(import_roots):
+        label = f"python.importRoots[{index}]"
+        root = _closed_object(value, {"path", "sha256", "metadata"}, label)
+        path = _normalized_absolute_receipt_path(root["path"], label)
+        if path in seen_import_roots:
+            raise ValueError("bootstrap receipt python.importRoots contains a duplicate path")
+        seen_import_roots.add(path)
+        if SHA256_RE.fullmatch(str(root["sha256"])) is None:
+            raise ValueError(f"bootstrap receipt {label}.sha256 is invalid")
+        _validate_receipt_metadata(root["metadata"], label, require_single_link=False)
+    scripts = _closed_object(receipt["scripts"], {"preflight", "runner"}, "scripts")
+    _validate_receipt_file(scripts["preflight"], "scripts.preflight")
+    _validate_receipt_file(scripts["runner"], "scripts.runner")
+    inputs = receipt["inputs"]
+    if not isinstance(inputs, dict) or set(inputs) != BOOTSTRAP_RECEIPT_INPUT_NAMES:
+        raise ValueError("bootstrap receipt inputs do not match the closed production input set")
+    for name, value in inputs.items():
+        _validate_receipt_file(value, f"inputs.{name}")
+    argv = _closed_object(receipt["argv"], {"preflightSha256", "readinessSha256"}, "argv")
+    for field in ("preflightSha256", "readinessSha256"):
+        if SHA256_RE.fullmatch(str(argv[field])) is None:
+            raise ValueError(f"bootstrap receipt argv.{field} is invalid")
+    committed_environment = _closed_object(
+        receipt["environment"], {"names", "sha256"}, "environment"
+    )
+    if committed_environment["names"] != BOOTSTRAP_RECEIPT_COMMITTED_ENV_NAMES:
+        raise ValueError("bootstrap receipt environment names do not match the closed launcher environment")
+    if SHA256_RE.fullmatch(str(committed_environment["sha256"])) is None:
+        raise ValueError("bootstrap receipt environment.sha256 is invalid")
+    if canonical_json(receipt).encode("ascii") != data:
+        raise ValueError("bootstrap receipt is not canonical compact JSON")
+    summary = {
+        "apiVersion": receipt["apiVersion"],
+        "kind": receipt["kind"],
+        "launchId": receipt["launchId"],
+        "sha256": actual_sha256,
+        "bootIdSha256": receipt["bootIdSha256"],
+        "sourceTreeDigest": receipt["sourceTreeDigest"],
+        "launcher": receipt["launcher"],
+        "manifest": receipt["manifest"],
+        "argv": receipt["argv"],
+        "environment": receipt["environment"],
+        "sealed": True,
+        "sealMask": seals,
+    }
+    return validate_bootstrap_receipt_summary(summary), descriptor
 
 
 def normalize_command_value(value: Any, label: str) -> list[str] | None:
@@ -1126,6 +1463,7 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         "production_env_binding",
         "running_production_containers",
         "production_host_preflight",
+        "bootstrap_launcher",
         "nitro_kms_evidence",
         "nitro_evidence_binding",
         "hardware_assurance_evidence",
@@ -1141,11 +1479,11 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         "integrity_metadata",
     }
     if set(proof) != required_fields:
-        raise ValueError("completion proof persisted field set does not match the v3 contract")
+        raise ValueError("completion proof persisted field set does not match the v4 contract")
     verification_mode = expected.verification_mode if expected is not None else proof.get("verification_mode")
     is_final = verification_mode == "final"
     expected_contract = {
-        "apiVersion": "serverware.completionProof/v3",
+        "apiVersion": "serverware.completionProof/v4",
         "kind": "ServerwareCompletionProof" if is_final else "ServerwarePreEnclaveReadiness",
         "ok": True,
         "verification_passed": True,
@@ -1162,6 +1500,16 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
     for field, value in expected_contract.items():
         if proof.get(field) != value:
             raise ValueError(f"completion proof persisted {field} does not match the expected contract")
+    bootstrap_launcher = proof.get("bootstrap_launcher")
+    if is_final:
+        expected_receipt = getattr(expected, "bootstrap_receipt", None) if expected is not None else None
+        if not isinstance(bootstrap_launcher, dict) or bootstrap_launcher.get("sealed") is not True:
+            raise ValueError("final completion proof is missing its sealed bootstrap launcher binding")
+        validate_bootstrap_receipt_summary(bootstrap_launcher)
+        if expected_receipt is not None and bootstrap_launcher != expected_receipt:
+            raise ValueError("final completion proof bootstrap launcher binding changed during execution")
+    elif bootstrap_launcher != {"required": False, "verified": False}:
+        raise ValueError("readiness-only proof must not claim a verified bootstrap launcher")
     if not isinstance(proof.get("generated_at_unix"), int) or proof["generated_at_unix"] <= 0:
         raise ValueError("completion proof generated_at_unix is invalid")
     if expected is not None:
@@ -2146,6 +2494,7 @@ def run_commands(
     executable_pins: dict[str, tuple[str, str]] | None = None,
     script_digest_pins: dict[str, tuple[str, str]] | None = None,
     isolated_python: bool = False,
+    pass_fds: tuple[int, ...] = (),
 ) -> None:
     for command in commands:
         label = command["label"]
@@ -2159,6 +2508,7 @@ def run_commands(
             cwd=ROOT,
             env=env,
             check=False,
+            pass_fds=pass_fds,
         )
         if result.returncode != 0:
             raise SystemExit(result.returncode)
@@ -2426,6 +2776,15 @@ def main() -> None:
             args.launcher_env_binding["startup_environment_contract"] = (
                 validate_final_launcher_contract(loaded)
             )
+            if args.dry_run:
+                args.bootstrap_receipt = None
+                args.bootstrap_receipt_fd = None
+            else:
+                (
+                    args.bootstrap_receipt,
+                    args.bootstrap_receipt_fd,
+                ) = load_sealed_bootstrap_receipt(required=True)
+                args.launcher_env_binding["bootstrap_receipt"] = args.bootstrap_receipt
         except ValueError as exc:
             print(f"production readiness env error: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
@@ -2638,7 +2997,10 @@ def main() -> None:
 
     if args.verification_mode == "final":
         try:
-            env = build_final_child_environment(loaded)
+            env = build_final_child_environment(
+                loaded,
+                additions=bootstrap_receipt_environment() if not args.dry_run else None,
+            )
         except ValueError as exc:
             print(f"production readiness env error: {exc}", file=sys.stderr)
             raise SystemExit(1) from exc
@@ -3164,6 +3526,11 @@ def main() -> None:
     if images_env.exists():
         env["SERVERWARE_PRODUCTION_IMAGES_ENV_SHA256"] = sha256_prefixed_file(images_env)
     commands = command_plan(args)
+    bootstrap_pass_fds = (
+        (args.bootstrap_receipt_fd,)
+        if getattr(args, "bootstrap_receipt_fd", None) is not None
+        else ()
+    )
     if args.dry_run:
         print(
             canonical_json(
@@ -3183,6 +3550,7 @@ def main() -> None:
             executable_pins=getattr(args, "pre_use_executable_pins", None),
             script_digest_pins=getattr(args, "script_digest_pins", None),
             isolated_python=args.verification_mode == "final",
+            pass_fds=bootstrap_pass_fds,
         )
         return
     run_commands(
@@ -3191,6 +3559,7 @@ def main() -> None:
         executable_pins=getattr(args, "pre_use_executable_pins", None),
         script_digest_pins=getattr(args, "script_digest_pins", None),
         isolated_python=args.verification_mode == "final",
+        pass_fds=bootstrap_pass_fds,
     )
     summary = run_collector(commands[-2], args, env)
     args.proxy_tls_channel_binding = summary["tls_channel_binding"]
@@ -3200,6 +3569,7 @@ def main() -> None:
         executable_pins=getattr(args, "pre_use_executable_pins", None),
         script_digest_pins=getattr(args, "script_digest_pins", None),
         isolated_python=args.verification_mode == "final",
+        pass_fds=bootstrap_pass_fds,
     )
     try:
         verify_completion_output(Path(args.completion_proof_out), args)

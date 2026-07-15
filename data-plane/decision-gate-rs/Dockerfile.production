@@ -10,6 +10,24 @@ COPY data-plane/decision-gate-rs/Cargo.lock ./Cargo.lock
 COPY data-plane/decision-gate-rs/src ./src
 RUN cargo build --release --locked
 
+FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build
+
+ARG SOURCE_DATE_EPOCH="0"
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
+
+WORKDIR /src
+RUN apk add --no-cache musl=1.2.5-r12 musl-dev=1.2.5-r12
+COPY data-plane/decision-gate-rs/Cargo.toml ./Cargo.toml
+COPY data-plane/decision-gate-rs/Cargo.lock ./Cargo.lock
+COPY data-plane/decision-gate-rs/src ./src
+RUN cargo build --release --locked --bin serverware-production-launcher \
+    && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
+    && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0
+
+FROM scratch AS production-launcher-artifact
+COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher
+
 FROM gcr.io/distroless/cc-debian12:nonroot@sha256:ce0d66bc0f64aae46e6a03add867b07f42cc7b8799c949c2e898057b7f75a151
 
 ARG SERVERWARE_IMAGE_SOURCE="https://github.com/example/private-deployment"
@@ -26,6 +44,7 @@ LABEL org.opencontainers.image.title="Serverware decision gate" \
 
 COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/serverware-decision-gate
 COPY --from=build /src/target/release/serverware-proof-client /usr/local/bin/serverware-proof-client
+COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher
 USER nonroot:nonroot
 EXPOSE 9090
 ENTRYPOINT ["/usr/local/bin/serverware-decision-gate"]

@@ -2170,6 +2170,12 @@ def verify_release_provenance(
             "provenance_digest": digest,
             "signature": signature,
             "release_signing_key_id": release_signing_key_id,
+            "production_launcher_binary_digest": require_sha256(
+                ((provenance.get("images") or {}).get("serverware-decision-gate") or {}).get(
+                    "launcher_binary_digest"
+                ),
+                "release provenance production launcher binary digest",
+            ),
         },
         expected_external_provider=expected_external_provider,
         expected_external_log_id=expected_external_log_id,
@@ -2203,6 +2209,17 @@ def verify_release_provenance(
     cyclonedx = sbom.get("cyclonedx") if isinstance(sbom.get("cyclonedx"), dict) else {}
     sbom_components = cyclonedx.get("components")
     require(isinstance(sbom_components, int) and sbom_components > 0, "release provenance CycloneDX SBOM component count is invalid")
+    production_launcher_binary_digest = require_sha256(
+        ((provenance.get("images") or {}).get("serverware-decision-gate") or {}).get(
+            "launcher_binary_digest"
+        ),
+        "release provenance production launcher binary digest",
+    )
+    require(
+        summary.get("production_launcher_binary_digest")
+        == production_launcher_binary_digest,
+        "release provenance summary production launcher digest mismatch",
+    )
     return {
         "provenance_digest": digest,
         "release_signing_key_id": release_signing_key_id,
@@ -2213,6 +2230,7 @@ def verify_release_provenance(
         "compose_config_sha256": compose_config_sha256,
         "sbom_cyclonedx_sha256": require_sha256(cyclonedx.get("sha256"), "release provenance CycloneDX SBOM digest"),
         "sbom_cyclonedx_components": sbom_components,
+        "production_launcher_binary_digest": production_launcher_binary_digest,
     }
 
 
@@ -2238,10 +2256,15 @@ def verify_production_image_build(build: dict[str, Any], source_tree_digest: str
         require(service not in seen_services, f"duplicate production image build service: {service}")
         seen_services.add(service)
         binary_digest = None
+        launcher_binary_digest = None
         if service == "serverware-decision-gate":
             binary_digest = require_sha256(
                 image.get("binary_digest"),
                 "serverware-decision-gate production image binary digest",
+            )
+            launcher_binary_digest = require_sha256(
+                image.get("launcher_binary_digest"),
+                "serverware production launcher binary digest",
             )
         normalized.append(
             {
@@ -2250,6 +2273,11 @@ def verify_production_image_build(build: dict[str, Any], source_tree_digest: str
                 "dockerfile": image.get("dockerfile"),
                 "tag": image.get("tag"),
                 **({"binary_digest": binary_digest} if binary_digest else {}),
+                **(
+                    {"launcher_binary_digest": launcher_binary_digest}
+                    if launcher_binary_digest
+                    else {}
+                ),
             }
         )
     require(
@@ -2298,6 +2326,14 @@ def verify_published_images(
                 require_sha256(image.get("binary_digest"), "published decision-gate binary digest")
                 == build_by_service[service]["binary_digest"],
                 "published decision-gate executable does not match the measured build executable",
+            )
+            require(
+                require_sha256(
+                    image.get("launcher_binary_digest"),
+                    "published production launcher binary digest",
+                )
+                == build_by_service[service]["launcher_binary_digest"],
+                "published production launcher does not match the measured build launcher",
             )
         repo_digest, digest = require_image_ref(image.get("repo_digest"), f"{service} published repo digest")
         published_refs.append(repo_digest)
@@ -2699,6 +2735,7 @@ def verify_production_host_preflight(
     preflight_signing_public_key: FileSnapshot | None = None,
     preflight_signing_key_id: str | None = None,
     preflight_max_age_seconds: int | None = None,
+    expected_bootstrap_receipt: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     production_env_snapshot = load_production_env_snapshot(
         snapshots.by_key["production_readiness_env"]
@@ -2884,7 +2921,21 @@ def verify_production_host_preflight(
     production_env = checks.get("production_env") if isinstance(checks.get("production_env"), dict) else {}
     require(production_env.get("ok") is True, "production host preflight production env check did not pass")
     preflight_executing_script: dict[str, Any] | None = None
+    preflight_bootstrap_receipt: dict[str, Any] | None = None
     if verification_mode == "final":
+        launcher_trust = (
+            production_env.get("launcher_trust")
+            if isinstance(production_env.get("launcher_trust"), dict)
+            else {}
+        )
+        candidate_receipt = launcher_trust.get("bootstrap_receipt")
+        require(
+            isinstance(expected_bootstrap_receipt, dict)
+            and isinstance(candidate_receipt, dict)
+            and candidate_receipt == expected_bootstrap_receipt,
+            "production host preflight is not bound to the current sealed launcher receipt",
+        )
+        preflight_bootstrap_receipt = candidate_receipt
         candidate = production_env.get("executing_script")
         require(
             isinstance(candidate, dict)
@@ -3218,6 +3269,7 @@ def verify_production_host_preflight(
             "certificate_not_after": runtime_trust.get("certificate_not_after"),
         },
         "authenticity": preflight_authenticity,
+        "bootstrap_receipt": preflight_bootstrap_receipt,
         "executing_script": preflight_executing_script,
         "production_env_keys": production_env.get("env_keys") or [],
         "production_readiness_env_sha256": production_env_file.get("sha256"),
@@ -7098,6 +7150,15 @@ def verify_release_security_evidence(
         reproduced_gate.get("rust_binary_sha256") == production_gate.get("binary_digest"),
         "reproducible-build Rust binary digest does not match the production build",
     )
+    production_launcher_binary_digest = require_sha256(
+        production_gate.get("launcher_binary_digest"),
+        "production build launcher binary digest",
+    )
+    require(
+        reproduced_gate.get("launcher_binary_sha256")
+        == production_launcher_binary_digest,
+        "reproducible-build launcher binary digest does not match the production build",
+    )
     preflight_security = preflight.get("release_security_evidence") or {}
     require(preflight_security.get("policy_identity") == identity, "completion policy identity differs from host preflight")
     require(
@@ -7116,10 +7177,55 @@ def verify_release_security_evidence(
             **{key: value for key, value in reproducibility.items() if key != "report"},
             "scope": reproducibility_scope,
             "sourceTreeDigest": reproducibility_report.get("source_tree_digest"),
+            "productionLauncherBinaryDigest": production_launcher_binary_digest,
             "productionBuildBound": True,
         },
         "benchmarkPolicyBound": True,
         "nitroAttestedPolicyBound": True,
+    }
+
+
+def verify_bootstrap_launcher_authorization(
+    bootstrap_receipt: dict[str, Any],
+    *,
+    signed_provenance_digest: str,
+    independently_reproduced_digest: str,
+) -> dict[str, Any]:
+    receipt_launcher = bootstrap_receipt.get("launcher")
+    require(isinstance(receipt_launcher, dict), "sealed launcher receipt has no launcher identity")
+    receipt_launcher_digest = require_sha256(
+        receipt_launcher.get("sha256"),
+        "sealed launcher receipt executable digest",
+    )
+    signed_provenance_digest = require_sha256(
+        signed_provenance_digest,
+        "signed provenance production launcher digest",
+    )
+    independently_reproduced_digest = require_sha256(
+        independently_reproduced_digest,
+        "independent-build production launcher digest",
+    )
+    require(
+        receipt_launcher_digest
+        == signed_provenance_digest
+        == independently_reproduced_digest,
+        "executed launcher digest does not match signed provenance and independent-build evidence",
+    )
+    expected_launcher_path = (
+        "/opt/serverware/launchers/sha256-"
+        + receipt_launcher_digest.removeprefix("sha256:")
+        + "/serverware-production-launcher"
+    )
+    require(
+        receipt_launcher.get("path") == expected_launcher_path,
+        "executed launcher path is not content-addressed by the independently authorized digest",
+    )
+    return {
+        "sha256": receipt_launcher_digest,
+        "path": expected_launcher_path,
+        "signed_provenance_bound": True,
+        "independent_build_bound": True,
+        "content_addressed_path_bound": True,
     }
 
 
@@ -7288,7 +7394,11 @@ def main() -> None:
             "final verification mode requires --final-challenge-authority-provider",
         )
         require(not args.skip_current_host_check, "final verification mode forbids --skip-current-host-check")
+        bootstrap_receipt, _ = run_production_readiness.load_sealed_bootstrap_receipt(
+            required=True
+        )
     else:
+        bootstrap_receipt = None
         require(
             not any(
                 (
@@ -7460,6 +7570,7 @@ def main() -> None:
         ),
         preflight_signing_key_id=args.production_host_preflight_signing_key_id,
         preflight_max_age_seconds=args.production_host_preflight_max_age_seconds,
+        expected_bootstrap_receipt=bootstrap_receipt,
     )
     current_host_summary = verify_current_completion_host(
         preflight_summary,
@@ -7779,6 +7890,12 @@ def main() -> None:
         },
         "independently verified release identity",
     )
+    if bootstrap_receipt is not None:
+        require(
+            bootstrap_receipt.get("sourceTreeDigest")
+            == provenance_summary_out["source_tree_digest"],
+            "sealed launcher receipt source tree does not match signed release provenance",
+        )
     if hardware_assurance_document is not None:
         require(
             trusted_hardware_verifier_public_key_pem is not None,
@@ -7810,6 +7927,20 @@ def main() -> None:
         attested_runtime=attested_runtime,
         preflight=preflight_summary,
     )
+    if bootstrap_receipt is not None:
+        launcher_authorization = verify_bootstrap_launcher_authorization(
+            bootstrap_receipt,
+            signed_provenance_digest=provenance_summary_out[
+                "production_launcher_binary_digest"
+            ],
+            independently_reproduced_digest=(
+                release_security_summary.get("reproducible_builds") or {}
+            ).get("productionLauncherBinaryDigest"),
+        )
+        provenance_summary_out["executed_production_launcher"] = launcher_authorization
+        release_security_summary["reproducible_builds"][
+            "executedProductionLauncherBound"
+        ] = True
     policy_snapshot = verify_and_compile_policy_snapshot(
         final_file_snapshots["policy_bundle"],
         final_file_snapshots["policy_trusted_public_key"],
@@ -7910,7 +8041,7 @@ def main() -> None:
             }
 
     proof = {
-        "apiVersion": "serverware.completionProof/v3",
+        "apiVersion": "serverware.completionProof/v4",
         "kind": "ServerwareCompletionProof" if assurance["final_completion"] else "ServerwarePreEnclaveReadiness",
         "ok": True,
         "verification_passed": True,
@@ -7937,6 +8068,9 @@ def main() -> None:
         "production_env_binding": production_env_binding,
         "running_production_containers": running_containers,
         "production_host_preflight": preflight_summary,
+        "bootstrap_launcher": bootstrap_receipt
+        if bootstrap_receipt is not None
+        else {"required": False, "verified": False},
         "nitro_kms_evidence": nitro_summary,
         "nitro_evidence_binding": nitro_binding,
         "hardware_assurance_evidence": hardware_assurance_summary

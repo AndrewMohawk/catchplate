@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -51,7 +52,13 @@ def assert_base_images_pinned(path: Path) -> None:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip().upper().startswith("FROM ")
     ]
-    if not from_lines or any("@sha256:" not in line for line in from_lines):
+    mutable = [
+        line
+        for line in from_lines
+        if "@sha256:" not in line
+        and re.fullmatch(r"FROM\s+scratch(?:\s+AS\s+[A-Za-z0-9._-]+)?", line, re.IGNORECASE) is None
+    ]
+    if not from_lines or mutable:
         raise AssertionError(f"{path} contains a mutable production base image: {from_lines}")
 
 
@@ -94,8 +101,8 @@ def assert_production_dependencies() -> None:
     compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
     if "SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY" in compose:
         raise AssertionError("default docker-compose.yml must not enable the mitmproxy prototype")
-    if '"8080:9090"' not in compose:
-        raise AssertionError("default docker-compose.yml must expose the Rust decision gate on the agent proxy port")
+    if '"127.0.0.1:8080:9090"' not in compose:
+        raise AssertionError("default docker-compose.yml must expose the Rust decision gate on a loopback-only agent proxy port")
     production_compose_path = ROOT / "docker-compose.production.yml"
     production_compose = production_compose_path.read_text(encoding="utf-8")
     if "SERVERWARE_DECISION_GATE_BASE" in production_compose:
@@ -124,9 +131,11 @@ def assert_production_dependencies() -> None:
         "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-google-oauth-secret",
         "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-x-oauth-secret",
         "SERVERWARE_OIDC_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-oidc-secret",
+        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": "/tmp/serverware-compose-test-response-signing-key",
         "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY": "/tmp/serverware-compose-test-enrollment-verifier.pub.pem",
         "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY": "/tmp/serverware-compose-test-hardware-verifier.pub.pem",
         "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY": "/tmp/serverware-compose-test-final-authority.pub.pem",
+        "SERVERWARE_WEBAUTHN_RECOVERY_ROOT_PUBLIC_KEY": "/tmp/serverware-compose-test-recovery-root.pub.pem",
         "SERVERWARE_AUDIT_ANCHOR_TLS_DIR": "/tmp/serverware-compose-test-anchor-tls",
     }
     compose_env.update(bind_mount_fixtures)
@@ -180,6 +189,43 @@ def assert_reproducible_rust_binary_config() -> None:
             raise AssertionError(f"{relative} must omit nondeterministic GNU linker build IDs")
         if "cargo build --release --locked" not in dockerfile:
             raise AssertionError(f"{relative} must build the lockfile-pinned Rust release")
+
+
+def assert_static_launcher_artifact_embedded() -> None:
+    path = ROOT / "data-plane" / "decision-gate-rs" / "Dockerfile.production"
+    dockerfile = path.read_text(encoding="utf-8")
+    required = (
+        "FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build",
+        "musl=1.2.5-r12 musl-dev=1.2.5-r12",
+        "FROM scratch AS production-launcher-artifact",
+        "COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher",
+        "COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher",
+    )
+    missing = [line for line in required if line not in dockerfile]
+    if missing:
+        raise AssertionError(f"production decision-gate image does not preserve the static launcher artifact contract: {missing}")
+
+
+def assert_launcher_digest_measurement_contract() -> None:
+    gate_digest = sha256_prefixed(b"decision-gate")
+    launcher_digest = sha256_prefixed(b"static-launcher")
+    with mock.patch.object(
+        build_production_images,
+        "image_file_sha256",
+        side_effect=[gate_digest, launcher_digest],
+    ) as measured:
+        digests = build_production_images.decision_gate_binary_digests("sha256:" + "a" * 64)
+    if digests != {
+        "binary_digest": gate_digest,
+        "launcher_binary_digest": launcher_digest,
+    }:
+        raise AssertionError(f"production image build did not declare both decision-gate binary digests: {digests}")
+    expected_calls = [
+        mock.call("sha256:" + "a" * 64, "/usr/local/bin/serverware-decision-gate"),
+        mock.call("sha256:" + "a" * 64, "/usr/local/libexec/serverware-production-launcher"),
+    ]
+    if measured.call_args_list != expected_calls:
+        raise AssertionError(f"production image build measured the wrong binary paths: {measured.call_args_list}")
 
 
 def sha256_prefixed(value: bytes) -> str:
@@ -626,6 +672,8 @@ def main() -> None:
     assert_dockerignore()
     assert_production_dependencies()
     assert_reproducible_rust_binary_config()
+    assert_static_launcher_artifact_embedded()
+    assert_launcher_digest_measurement_contract()
     assert_release_python_dependency_inventory()
     assert_malformed_python_locks_fail_closed()
     assert_source_tree_digest_covers_untracked_source()

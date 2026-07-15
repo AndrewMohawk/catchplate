@@ -1,0 +1,57 @@
+[Unit]
+Description=Serverware closed production release proof
+Documentation=https://github.com/example/private-deployment
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+ConditionFileIsExecutable=/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher
+ConditionPathIsReadWrite=/var/lib/serverware/production-proof
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher --manifest /etc/serverware/production-release-launch.json --manifest-sha256 sha256:<manifest-sha256>
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+
+# The launcher discards the service manager environment and constructs its
+# closed child environment. Keep this service free of environment imports,
+# preparatory commands, shells, and additional launcher arguments.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictRealtime=yes
+
+# AWS Nitro Secure Module access is the only device exception. Remove both
+# NSM lines on non-Nitro hosts; no other device may be added to this unit.
+DevicePolicy=closed
+DeviceAllow=/dev/nsm rw
+BindReadOnlyPaths=-/dev/nsm
+
+# The immutable release and /etc trust material stay read-only. The proof state,
+# launch receipts, and the pinned local Docker socket are the only write paths.
+ReadWritePaths=/var/lib/serverware/production-proof /run/serverware /run/docker.sock
+RuntimeDirectory=serverware
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

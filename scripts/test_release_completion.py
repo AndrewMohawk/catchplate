@@ -535,10 +535,16 @@ def refresh_release_provenance(summary: dict[str, Any], document: dict[str, Any]
             "provenance_digest": provenance_digest,
             "signature": signature,
             "release_signing_key_id": key_info["key_id"],
+            "production_launcher_binary_digest": provenance["images"][
+                "serverware-decision-gate"
+            ]["launcher_binary_digest"],
         }
     )
     summary["provenance_digest"] = provenance_digest
     summary["release_signing_key_id"] = key_info["key_id"]
+    summary["production_launcher_binary_digest"] = provenance["images"][
+        "serverware-decision-gate"
+    ]["launcher_binary_digest"]
 
 
 def sha256_file(path: Path) -> str:
@@ -549,6 +555,151 @@ def sha256_file(path: Path) -> str:
 
 def digest(char: str) -> str:
     return "sha256:" + char * 64
+
+
+def bootstrap_receipt_fixture() -> dict[str, Any]:
+    def metadata(*, mode: int = 0o100400, link_count: int = 1) -> dict[str, int]:
+        return {
+            "device": 1,
+            "inode": 2,
+            "mode": mode,
+            "ownerUid": 0,
+            "ownerGid": 0,
+            "linkCount": link_count,
+            "size": 128,
+            "modifiedUnixNanos": 1,
+            "changedUnixNanos": 1,
+        }
+
+    def file_record(path: str, character: str) -> dict[str, Any]:
+        return {"path": path, "sha256": digest(character), "metadata": metadata()}
+
+    launcher_digest = digest("3")
+    return {
+        "apiVersion": "serverware.bootstrapReceipt/v1",
+        "kind": "ProductionBootstrapReceipt",
+        "launchId": "1" * 64,
+        "bootIdSha256": digest("2"),
+        "launcher": file_record(
+            "/opt/serverware/launchers/sha256-"
+            + launcher_digest.removeprefix("sha256:")
+            + "/serverware-production-launcher",
+            "3",
+        ),
+        "manifest": file_record("/etc/serverware/production-release-launch.json", "4"),
+        "sourceTreeDigest": SOURCE_TREE_DIGEST,
+        "productionEnv": file_record("/etc/serverware/production-readiness.env", "5"),
+        "python": {
+            **file_record("/opt/serverware/releases/fixture/runtime/python/bin/python3", "6"),
+            "importRoots": [
+                {
+                    "path": "/opt/serverware/releases/fixture",
+                    "sha256": digest("7"),
+                    "metadata": metadata(mode=0o40555, link_count=2),
+                }
+            ],
+        },
+        "scripts": {
+            "preflight": file_record(
+                "/opt/serverware/releases/fixture/scripts/production_host_preflight.py", "8"
+            ),
+            "runner": file_record(
+                "/opt/serverware/releases/fixture/scripts/run_production_readiness.py", "9"
+            ),
+        },
+        "composeFile": file_record(
+            "/opt/serverware/releases/fixture/docker-compose.production.yml", "a"
+        ),
+        "inputs": {
+            name: file_record(f"/opt/serverware/releases/fixture/evidence/{name}.json", "b")
+            for name in sorted(run_production_readiness.BOOTSTRAP_RECEIPT_INPUT_NAMES)
+        },
+        "argv": {"preflightSha256": digest("c"), "readinessSha256": digest("d")},
+        "environment": {
+            "names": run_production_readiness.BOOTSTRAP_RECEIPT_COMMITTED_ENV_NAMES,
+            "sha256": digest("e"),
+        },
+    }
+
+
+def bootstrap_receipt_summary(receipt: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "apiVersion": receipt["apiVersion"],
+        "kind": receipt["kind"],
+        "launchId": receipt["launchId"],
+        "sha256": digest("f"),
+        "bootIdSha256": receipt["bootIdSha256"],
+        "sourceTreeDigest": receipt["sourceTreeDigest"],
+        "launcher": receipt["launcher"],
+        "manifest": receipt["manifest"],
+        "argv": receipt["argv"],
+        "environment": receipt["environment"],
+        "sealed": True,
+        "sealMask": run_production_readiness.REQUIRED_BOOTSTRAP_RECEIPT_SEALS,
+    }
+
+
+def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
+    from jsonschema import Draft202012Validator
+
+    receipt_schema = json.loads((ROOT / "schemas/bootstrap-receipt.v1.schema.json").read_text(encoding="utf-8"))
+    completion_schema = json.loads((ROOT / "schemas/completion-proof.v4.schema.json").read_text(encoding="utf-8"))
+    Draft202012Validator.check_schema(receipt_schema)
+    Draft202012Validator.check_schema(completion_schema)
+    receipt = bootstrap_receipt_fixture()
+    Draft202012Validator(receipt_schema).validate(receipt)
+    open_receipt = json.loads(json.dumps(receipt))
+    open_receipt["launcher"]["metadata"]["unexpected"] = True
+    if not list(Draft202012Validator(receipt_schema).iter_errors(open_receipt)):
+        raise AssertionError("bootstrap receipt schema accepted an open nested metadata object")
+    return Draft202012Validator(completion_schema), receipt
+
+
+def verify_launcher_three_way_binding() -> None:
+    receipt = bootstrap_receipt_summary(bootstrap_receipt_fixture())
+    launcher_digest = receipt["launcher"]["sha256"]
+    verified = verify_release_completion.verify_bootstrap_launcher_authorization(
+        receipt,
+        signed_provenance_digest=launcher_digest,
+        independently_reproduced_digest=launcher_digest,
+    )
+    if not all(
+        verified.get(field) is True
+        for field in (
+            "signed_provenance_bound",
+            "independent_build_bound",
+            "content_addressed_path_bound",
+        )
+    ):
+        raise AssertionError(f"launcher authorization omitted a required binding: {verified}")
+    for label, provenance_digest, reproduced_digest in (
+        ("provenance", digest("0"), launcher_digest),
+        ("independent build", launcher_digest, digest("0")),
+    ):
+        try:
+            verify_release_completion.verify_bootstrap_launcher_authorization(
+                receipt,
+                signed_provenance_digest=provenance_digest,
+                independently_reproduced_digest=reproduced_digest,
+            )
+        except ValueError as exc:
+            if "does not match signed provenance and independent-build evidence" not in str(exc):
+                raise AssertionError(f"{label} mismatch failed ambiguously: {exc}") from exc
+        else:
+            raise AssertionError(f"launcher authorization accepted a {label} digest mismatch")
+    wrong_path = json.loads(json.dumps(receipt))
+    wrong_path["launcher"]["path"] = "/opt/serverware/launchers/unbound/serverware-production-launcher"
+    try:
+        verify_release_completion.verify_bootstrap_launcher_authorization(
+            wrong_path,
+            signed_provenance_digest=launcher_digest,
+            independently_reproduced_digest=launcher_digest,
+        )
+    except ValueError as exc:
+        if "not content-addressed" not in str(exc):
+            raise AssertionError(f"launcher path mismatch failed ambiguously: {exc}") from exc
+    else:
+        raise AssertionError("launcher authorization accepted a non-content-addressed path")
 
 
 PINNED_EXECUTABLE_NAMES = {
@@ -2695,6 +2846,14 @@ def release_provenance() -> tuple[dict[str, Any], dict[str, Any]]:
         "compose_config_sha256": digest("4"),
         "compose": {"file": "docker-compose.production.yml", "sha256": digest("4")},
         "sbom": {"cyclonedx": {"sha256": digest("5"), "components": 204}},
+        "images": {
+            "serverware-control": {"image_id": digest("a")},
+            "serverware-decision-gate": {
+                "image_id": digest("b"),
+                "binary_digest": digest("9"),
+                "launcher_binary_digest": digest("e"),
+            },
+        },
         "anchor_chain": {"ok": True, "mode": "signed-merkle-transparency-log"},
     }
     provenance_digest = sha256_prefixed_json(provenance)
@@ -2704,12 +2863,14 @@ def release_provenance() -> tuple[dict[str, Any], dict[str, Any]]:
         "provenance_digest": provenance_digest,
         "signature": signature,
         "release_signing_key_id": key_info["key_id"],
+        "production_launcher_binary_digest": digest("e"),
     }
     document = {
         "provenance": provenance,
         "provenance_digest": provenance_digest,
         "signature": signature,
         "release_signing_key_id": key_info["key_id"],
+        "production_launcher_binary_digest": digest("e"),
         "release_signing_public_key_pem": key_info["public_key_pem"],
         "transparency": transparency_for_record(record),
     }
@@ -2720,6 +2881,7 @@ def release_provenance() -> tuple[dict[str, Any], dict[str, Any]]:
         "inclusion_verified": True,
         "provenance_digest": provenance_digest,
         "release_signing_key_id": key_info["key_id"],
+        "production_launcher_binary_digest": digest("e"),
         "transparency_mode": "signed-merkle-transparency-log",
     }
     return summary, document
@@ -2886,6 +3048,7 @@ def production_images_build() -> dict[str, Any]:
                 "dockerfile": "data-plane/decision-gate-rs/Dockerfile.production",
                 "image_id": digest("b"),
                 "binary_digest": digest("9"),
+                "launcher_binary_digest": digest("e"),
             },
         ],
     }
@@ -2914,6 +3077,7 @@ def production_images_published() -> dict[str, Any]:
                 "repo_digest": gate_ref,
                 "remote_image_id": digest("d"),
                 "binary_digest": digest("9"),
+                "launcher_binary_digest": digest("e"),
             },
         ],
         "remote_no_shell": {"ok": True},
@@ -4617,6 +4781,8 @@ def test_live_runtime_projection_and_container_artifact_binding() -> None:
 
 
 def main() -> None:
+    completion_schema_validator, receipt_schema_fixture = verify_release_proof_schemas()
+    verify_launcher_three_way_binding()
     verify_cosign_ecdsa_signature_compatibility()
     verify_ed25519_signature_canonicalization()
     test_final_file_snapshots()
@@ -4633,6 +4799,7 @@ def main() -> None:
             item = {"service": image["service"], "image_id": image["image_id"]}
             if image["service"] == "serverware-decision-gate":
                 item["rust_binary_sha256"] = image["binary_digest"]
+                item["launcher_binary_sha256"] = image["launcher_binary_digest"]
             reproduced_images.append(item)
         test_production_release_input_preflight.release_security_fixture(
             tmp,
@@ -4962,8 +5129,24 @@ def main() -> None:
         if not concurrent_sidecar.is_file():
             raise AssertionError("a concurrently committed completion proof lost its checksum generation")
         run_production_readiness.verify_completion_output(out_path)
+        completion_schema_validator.validate(proof)
+        final_schema_fixture = json.loads(json.dumps(proof))
+        final_schema_fixture.update(
+            {
+                "kind": "ServerwareCompletionProof",
+                "verification_mode": "final",
+                "result_scope": "final-completion",
+                "readiness_only": False,
+                "completion_status": "hardware-backed-release-completion",
+                "release_completion": "pass",
+                "final_completion": True,
+                "hardware_proof": True,
+                "bootstrap_launcher": bootstrap_receipt_summary(receipt_schema_fixture),
+            }
+        )
+        completion_schema_validator.validate(final_schema_fixture)
         if (
-            proof.get("apiVersion") != "serverware.completionProof/v3"
+            proof.get("apiVersion") != "serverware.completionProof/v4"
             or proof.get("kind") != "ServerwarePreEnclaveReadiness"
             or proof.get("verification_mode") != "readiness"
             or proof.get("result_scope") != "readiness-only"

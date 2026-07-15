@@ -39,6 +39,7 @@ from serverware.adapters import X_V2_READ_OPERATION_PATHS, X_V2_READ_OPERATIONS,
 from serverware.constraints import (
     _enforce_request_time_window,
     evaluate_request_constraints,
+    evaluate_response_binding_sources,
     evaluate_response_constraints,
     reset_local_constraint_state,
 )
@@ -170,6 +171,41 @@ def epoch_ms_days_ago(days: int) -> int:
 def assert_denied(decision, error: str) -> None:
     assert not decision.allowed, decision
     assert decision.payload.get("error") == error, decision.payload
+
+
+def assert_response_binding_denied(
+    decision,
+    error: str,
+    *,
+    binding_id: str | None,
+    evidence: bool = True,
+    sensitive_values: tuple[str, ...] = (),
+) -> None:
+    assert_denied(decision, error)
+    expected_keys = {
+        "error",
+        "constraint_id",
+        "constraint_type",
+    }
+    if evidence:
+        expected_keys.add("evidence_digest")
+        evidence_digest = decision.payload["evidence_digest"]
+        assert evidence_digest.startswith("sha256:") and len(evidence_digest) == 71
+        assert set(evidence_digest.removeprefix("sha256:")) <= set("0123456789abcdef")
+    else:
+        assert "evidence_digest" not in decision.payload
+    if binding_id is None:
+        assert "binding_id" not in decision.payload
+    else:
+        expected_keys.add("binding_id")
+        assert decision.payload["binding_id"] == binding_id
+    assert set(decision.payload) == expected_keys, decision.payload
+    rendered_denial = json.dumps(
+        {"reason": decision.reason, "payload": decision.payload},
+        sort_keys=True,
+    )
+    for value in sensitive_values:
+        assert value not in rendered_denial, rendered_denial
 
 
 def schema_validation_available() -> bool:
@@ -696,6 +732,185 @@ def main() -> None:
     assert_policy_rejected(
         invalid,
         "compiler accepted an unbounded generic required header",
+        validate_schema=validate_schema,
+    )
+
+    def response_binding_candidate() -> tuple[dict, dict]:
+        candidate = copy.deepcopy(examples)
+        stripe_candidate = next(
+            item
+            for item in candidate["routes"]
+            if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+        )
+        binding_constraint = next(
+            constraint
+            for constraint in stripe_candidate["constraints"]
+            if constraint["type"] == "responseBinding"
+        )
+        return candidate, binding_constraint
+
+    def generated_response_bindings(count: int) -> list[dict]:
+        return [
+            {
+                "id": f"binding-{index}",
+                "operationField": "amount",
+                "responseField": f"field_{index}",
+                "comparison": "canonicalInteger",
+            }
+            for index in range(count)
+        ]
+
+    for binding_count in (1, 8):
+        valid, response_binding = response_binding_candidate()
+        response_binding["bindings"] = generated_response_bindings(binding_count)
+        compile_policy_bundle(valid, validate_schema=validate_schema)
+    for binding_count in (0, 9):
+        invalid, response_binding = response_binding_candidate()
+        response_binding["bindings"] = generated_response_bindings(binding_count)
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted {binding_count} response bindings",
+            validate_schema=validate_schema,
+        )
+
+    invalid, response_binding = response_binding_candidate()
+    response_binding["phase"] = "request"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a response binding in the request phase",
+        validate_schema=validate_schema,
+    )
+    invalid, response_binding = response_binding_candidate()
+    response_binding["unexpected"] = True
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an extra response binding constraint field",
+        validate_schema=validate_schema,
+    )
+    invalid, response_binding = response_binding_candidate()
+    response_binding["bindings"][0]["unexpected"] = True
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an extra response binding field",
+        validate_schema=validate_schema,
+    )
+    invalid, response_binding = response_binding_candidate()
+    response_binding["bindings"][1]["id"] = response_binding["bindings"][0]["id"]
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted duplicate response binding ids",
+        validate_schema=validate_schema,
+    )
+    invalid, response_binding = response_binding_candidate()
+    response_binding["bindings"][1]["responseField"] = response_binding["bindings"][0][
+        "responseField"
+    ]
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted duplicate response binding paths",
+        validate_schema=validate_schema,
+    )
+    for malformed_path in (".amount", "amount.", "amount..value", "amount[*]"):
+        invalid, response_binding = response_binding_candidate()
+        response_binding["bindings"][0]["responseField"] = malformed_path
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted malformed response binding path {malformed_path!r}",
+            validate_schema=validate_schema,
+        )
+    invalid, response_binding = response_binding_candidate()
+    response_binding["bindings"][0]["comparison"] = "caseInsensitive"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an unsupported response binding comparison",
+        validate_schema=validate_schema,
+    )
+    invalid, response_binding = response_binding_candidate()
+    response_binding["bindings"][0]["operationField"] = "uncaptured"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a response binding source not captured by the operation classifier",
+        validate_schema=validate_schema,
+    )
+    for missing_field in ("successStatusCodes", "contentTypes"):
+        invalid, response_binding = response_binding_candidate()
+        response_binding.pop(missing_field)
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted response binding without {missing_field}",
+            validate_schema=validate_schema,
+        )
+    for field, value in (
+        ("successStatusCodes", [199]),
+        ("successStatusCodes", [200, 200]),
+        ("contentTypes", ["Application/JSON"]),
+        ("contentTypes", ["application/json", "application/json"]),
+    ):
+        invalid, response_binding = response_binding_candidate()
+        response_binding[field] = value
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted invalid response binding {field}",
+            validate_schema=validate_schema,
+        )
+    invalid, _ = response_binding_candidate()
+    stripe_candidate = next(
+        item
+        for item in invalid["routes"]
+        if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+    )
+    form_constraint = next(
+        constraint
+        for constraint in stripe_candidate["constraints"]
+        if constraint["type"] == "formBody"
+    )
+    form_constraint["requiredFields"].remove("amount")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an optional response binding source",
+        validate_schema=validate_schema,
+    )
+    invalid, _ = response_binding_candidate()
+    stripe_candidate = next(
+        item
+        for item in invalid["routes"]
+        if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+    )
+    form_constraint = next(
+        constraint
+        for constraint in stripe_candidate["constraints"]
+        if constraint["type"] == "formBody"
+    )
+    form_constraint["fields"]["amount"]["type"] = "string"
+    form_constraint["fields"]["amount"].pop("min")
+    form_constraint["fields"]["amount"].pop("max")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a mistyped response binding source",
+        validate_schema=validate_schema,
+    )
+    invalid, _ = response_binding_candidate()
+    stripe_candidate = next(
+        item
+        for item in invalid["routes"]
+        if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+    )
+    stripe_candidate["adapter"]["config"]["response"]["mode"] = "stream"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a streaming response binding",
+        validate_schema=validate_schema,
+    )
+    invalid, response_binding = response_binding_candidate()
+    gmail_candidate = next(
+        item
+        for item in invalid["routes"]
+        if item["id"] == "example.gmail.last_30_days"
+    )
+    gmail_candidate["constraints"].append(copy.deepcopy(response_binding))
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted response binding on a non-generic adapter",
         validate_schema=validate_schema,
     )
     invalid = copy.deepcopy(examples)
@@ -1761,7 +1976,353 @@ def main() -> None:
         "confirm": "true",
         "metadata.agent_request_id": "req-123",
     }, stripe_operation
+    assert evaluate_response_binding_sources(stripe_route, stripe_operation).allowed
     assert request_decision(stripe_route, stripe_request, "stripe.payment_intents.create").allowed
+
+    matching_stripe_response = flow(
+        "POST",
+        "https://api.stripe.com/v1/payment_intents",
+        response={
+            "id": "pi_12345678",
+            "object": "payment_intent",
+            "amount": 5000,
+            "currency": "usd",
+            "payment_method": "pm_12345678",
+            "status": "succeeded",
+        },
+    )
+    matching_stripe_response.metadata.update(
+        {
+            "serverware_operation": stripe_operation,
+            "serverware_policy_hash": "sha256:" + "1" * 64,
+            "serverware_request_digest": "sha256:" + "2" * 64,
+            "serverware_operation_digest": "sha256:" + "3" * 64,
+        }
+    )
+    matching_binding_decision = evaluate_response_constraints(
+        matching_stripe_response,
+        stripe_route,
+        constraint_types={"responseBinding"},
+    )
+    assert matching_binding_decision.allowed
+    assert len(matching_binding_decision.payload["bindings"]) == 3
+    assert "pm_12345678" not in json.dumps(matching_binding_decision.payload)
+    assert evaluate_response_constraints(matching_stripe_response, stripe_route).allowed
+    wrong_stripe_object = copy.deepcopy(matching_stripe_response)
+    wrong_stripe_object.response.raw_content = json.dumps(
+        {
+            "id": "obj_12345678",
+            "object": "arbitrary",
+            "amount": 5000,
+            "currency": "usd",
+            "payment_method": "pm_12345678",
+        }
+    ).encode("utf-8")
+    assert_denied(
+        evaluate_response_constraints(wrong_stripe_object, stripe_route),
+        "response_json_field_pattern_denied",
+    )
+    if evaluate_response is not None:
+        original_response_log = runtime.log_request
+        response_logs: list[tuple] = []
+        runtime.log_request = lambda *args, **_kwargs: response_logs.append(args)
+        try:
+            audited_response = copy.deepcopy(matching_stripe_response)
+            audited_response.metadata.update(
+                {
+                    "serverware_route": stripe_route,
+                    "serverware_route_id": stripe_route.id,
+                    "serverware_params": {},
+                    "serverware_principal_id": "agent:example",
+                    "serverware_credential_id": stripe_route.credential_ref,
+                    "serverware_credential_version": 1,
+                }
+            )
+            assert evaluate_response(audited_response).allowed
+            released_event = response_logs[-1][6]
+            assert released_event["response_validation"]["ok"] is True
+            assert len(released_event["response_validation"]["bindings"]) == 3
+            assert "serverware_operation" not in released_event
+            assert "pm_12345678" not in json.dumps(released_event)
+
+            response_logs.clear()
+            denied_response = copy.deepcopy(audited_response)
+            denied_response.response.raw_content = json.dumps(
+                {
+                    "id": "pi_12345678",
+                    "object": "payment_intent",
+                    "amount": 5001,
+                    "currency": "usd",
+                    "payment_method": "pm_12345678",
+                }
+            ).encode("utf-8")
+            assert_denied(evaluate_response(denied_response), "response_binding_mismatch")
+            blocked_event = response_logs[-1][6]
+            assert blocked_event["response_validation"]["ok"] is False
+            assert blocked_event["response_validation"]["binding_id"] == "amount"
+            assert blocked_event["response_validation"]["evidence_digest"].startswith("sha256:")
+            assert "pm_12345678" not in json.dumps(blocked_event)
+            assert "5001" not in json.dumps(blocked_event)
+        finally:
+            runtime.log_request = original_response_log
+
+    for status_code, headers, expected_error in (
+        (201, {"content-type": "application/json"}, "response_binding_status_denied"),
+        (200, {"content-type": "text/plain"}, "response_binding_content_type_denied"),
+        (200, {"content-type": "application/json", "content-encoding": "gzip"}, "response_binding_content_encoding_denied"),
+    ):
+        denied_envelope = copy.deepcopy(matching_stripe_response)
+        denied_envelope.response.status_code = status_code
+        denied_envelope.response.headers = headers
+        assert_response_binding_denied(
+            evaluate_response_constraints(
+                denied_envelope,
+                stripe_route,
+                constraint_types={"responseBinding"},
+            ),
+            expected_error,
+            binding_id=None,
+        )
+
+    for array_body in (
+        b'[{"amount":5000,"currency":"usd","payment_method":"pm_12345678"}]',
+        b'[{"amount":5000},{"currency":"usd"},{"payment_method":"pm_12345678"}]',
+    ):
+        array_response = copy.deepcopy(matching_stripe_response)
+        array_response.response.raw_content = array_body
+        assert_response_binding_denied(
+            evaluate_response_constraints(
+                array_response,
+                stripe_route,
+                constraint_types={"responseBinding"},
+            ),
+            "response_binding_object_required",
+            binding_id=None,
+        )
+    nested_array_route = copy.deepcopy(stripe_route)
+    nested_binding = next(
+        constraint
+        for constraint in nested_array_route.constraints
+        if constraint.get("type") == "responseBinding"
+    )
+    nested_binding["bindings"][0]["responseField"] = "data.amount"
+    nested_array_response = copy.deepcopy(matching_stripe_response)
+    nested_array_response.response.raw_content = (
+        b'{"data":[{"amount":5000}],"currency":"usd","payment_method":"pm_12345678"}'
+    )
+    assert_response_binding_denied(
+        evaluate_response_constraints(
+            nested_array_response,
+            nested_array_route,
+            constraint_types={"responseBinding"},
+        ),
+        "response_binding_field_ambiguous",
+        binding_id="amount",
+    )
+    for invalid_body, sensitive_values in (
+        (
+            b'{"amount":5000,"currency":"response-json-canary-a","currency":"usd"}',
+            ("response-json-canary-a",),
+        ),
+        (b'{"amount":NaN,"currency":"usd"}', ()),
+    ):
+        invalid_json_response = flow(
+            "POST",
+            "https://api.stripe.com/v1/payment_intents",
+            response={},
+        )
+        invalid_json_response.response.raw_content = invalid_body
+        invalid_json_response.metadata["serverware_operation"] = stripe_operation
+        decision = evaluate_response_constraints(
+            invalid_json_response,
+            stripe_route,
+            constraint_types={"responseBinding"},
+        )
+        assert_response_binding_denied(
+            decision,
+            "response_binding_json_invalid",
+            binding_id=None,
+            sensitive_values=sensitive_values,
+        )
+
+    for response, binding_id, expected_error in (
+        (
+            {"amount": 5001, "currency": "usd", "payment_method": "pm_12345678"},
+            "amount",
+            "response_binding_mismatch",
+        ),
+        (
+            {"amount": 5000, "currency": "eur", "payment_method": "pm_12345678"},
+            "currency",
+            "response_binding_mismatch",
+        ),
+        (
+            {"amount": 5000, "currency": "usd"},
+            "payment-method",
+            "response_binding_field_ambiguous",
+        ),
+        (
+            {"currency": "usd", "payment_method": "pm_12345678"},
+            "amount",
+            "response_binding_field_ambiguous",
+        ),
+        (
+            {"amount": "5000", "currency": "usd", "payment_method": "pm_12345678"},
+            "amount",
+            "response_binding_mismatch",
+        ),
+        (
+            {"amount": 5000.0, "currency": "usd", "payment_method": "pm_12345678"},
+            "amount",
+            "response_binding_mismatch",
+        ),
+        (
+            {"amount": True, "currency": "usd", "payment_method": "pm_12345678"},
+            "amount",
+            "response_binding_mismatch",
+        ),
+        (
+            {"amount": 5000, "currency": 7, "payment_method": "pm_12345678"},
+            "currency",
+            "response_binding_mismatch",
+        ),
+    ):
+        mismatched = flow(
+            "POST",
+            "https://api.stripe.com/v1/payment_intents",
+            response=response,
+        )
+        mismatched.metadata["serverware_operation"] = stripe_operation
+        decision = evaluate_response_constraints(
+            mismatched,
+            stripe_route,
+            constraint_types={"responseBinding"},
+        )
+        assert_response_binding_denied(
+            decision,
+            expected_error,
+            binding_id=binding_id,
+        )
+        assert decision.status_code == 502
+
+    missing_binding_source = dict(stripe_operation)
+    missing_binding_source.pop("amount")
+    decision = evaluate_response_binding_sources(stripe_route, missing_binding_source)
+    assert_response_binding_denied(
+        decision,
+        "response_binding_source_missing",
+        binding_id="amount",
+        evidence=False,
+    )
+    noncanonical_binding_source = {**stripe_operation, "amount": "05000"}
+    assert_response_binding_denied(
+        evaluate_response_binding_sources(stripe_route, noncanonical_binding_source),
+        "response_binding_source_invalid",
+        binding_id="amount",
+        evidence=False,
+    )
+
+    source_canary = "request-source-canary-never-disclose"
+    assert_response_binding_denied(
+        evaluate_response_binding_sources(
+            stripe_route,
+            {**stripe_operation, "amount": source_canary},
+        ),
+        "response_binding_source_invalid",
+        binding_id="amount",
+        evidence=False,
+        sensitive_values=(source_canary,),
+    )
+
+    i64_route = SimpleNamespace(
+        constraints=(
+            {
+                "id": "signed-i64-response-binding",
+                "type": "responseBinding",
+                "phase": "response",
+                "successStatusCodes": [200],
+                "contentTypes": ["application/json"],
+                "bindings": [
+                    {
+                        "id": "signed-i64",
+                        "operationField": "authorized_value",
+                        "responseField": "value",
+                        "comparison": "canonicalInteger",
+                    }
+                ],
+            },
+        )
+    )
+    min_i64 = -(2**63)
+    max_i64 = 2**63 - 1
+    for boundary in (min_i64, max_i64):
+        boundary_operation = {"authorized_value": str(boundary)}
+        assert evaluate_response_binding_sources(i64_route, boundary_operation).allowed
+        boundary_response = flow(
+            "POST",
+            "https://api.example.test/i64",
+            response={"value": boundary},
+        )
+        boundary_response.metadata["serverware_operation"] = boundary_operation
+        assert evaluate_response_constraints(
+            boundary_response,
+            i64_route,
+            constraint_types={"responseBinding"},
+        ).allowed
+
+    for out_of_range in (min_i64 - 1, max_i64 + 1):
+        assert_response_binding_denied(
+            evaluate_response_binding_sources(
+                i64_route,
+                {"authorized_value": str(out_of_range)},
+            ),
+            "response_binding_source_invalid",
+            binding_id="signed-i64",
+            evidence=False,
+        )
+        out_of_range_response = flow(
+            "POST",
+            "https://api.example.test/i64",
+            response={"value": out_of_range},
+        )
+        out_of_range_response.metadata["serverware_operation"] = {
+            "authorized_value": str(max_i64 if out_of_range > 0 else min_i64)
+        }
+        assert_response_binding_denied(
+            evaluate_response_constraints(
+                out_of_range_response,
+                i64_route,
+                constraint_types={"responseBinding"},
+            ),
+            "response_binding_mismatch",
+            binding_id="signed-i64",
+        )
+
+    for suffix in ("a", "b"):
+        request_canary = f"request-binding-canary-{suffix}-never-disclose"
+        response_canary = f"response-binding-canary-{suffix}-never-disclose"
+        canary_operation = {**stripe_operation, "currency": request_canary}
+        canary_response = flow(
+            "POST",
+            "https://api.stripe.com/v1/payment_intents",
+            response={
+                "amount": 5000,
+                "currency": response_canary,
+                "payment_method": "pm_12345678",
+            },
+        )
+        canary_response.metadata["serverware_operation"] = canary_operation
+        decision = evaluate_response_constraints(
+            canary_response,
+            stripe_route,
+            constraint_types={"responseBinding"},
+        )
+        assert_response_binding_denied(
+            decision,
+            "response_binding_mismatch",
+            binding_id="currency",
+            sensitive_values=(request_canary, response_canary),
+        )
 
     stale_stripe_route = SimpleNamespace(
         credential_ref=stripe_route.credential_ref,

@@ -16,6 +16,7 @@ from serverware import db, runtime
 from serverware.adapters import get_adapter
 from serverware.constraints import (
     evaluate_request_constraints,
+    evaluate_response_binding_sources,
     evaluate_response_constraints,
     shared_rate_limit_claims,
 )
@@ -993,6 +994,16 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     )
 
     def pre_reserve_denial(decision: PolicyDecision) -> RequestEvaluation:
+        denial_audit_context = dict(pre_policy_audit_context)
+        if (decision.payload or {}).get("constraint_type") == "responseBinding":
+            denial_audit_context["response_validation"] = {
+                "ok": False,
+                **{
+                    key: decision.payload[key]
+                    for key in ("error", "constraint_id", "constraint_type", "binding_id")
+                    if key in decision.payload
+                },
+            }
         runtime.log_request(
             route.id,
             flow.request.method,
@@ -1000,7 +1011,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             "blocked",
             decision.status_code,
             decision.reason,
-            pre_policy_audit_context,
+            denial_audit_context,
         )
         return RequestEvaluation(
             decision,
@@ -1063,6 +1074,9 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     )
     if not constraint_decision.allowed:
         return pre_reserve_denial(constraint_decision)
+    response_binding_source_decision = evaluate_response_binding_sources(route, operation_fields)
+    if not response_binding_source_decision.allowed:
+        return pre_reserve_denial(response_binding_source_decision)
 
     try:
         credential_version_value = runtime.get_credential_version(route.credential_ref)
@@ -1607,6 +1621,10 @@ def _evaluate_response(
             {"error": "response_policy_context_missing"},
         )
     status_code = flow.response.status_code if flow.response else None
+    raw_upstream_response = flow.response.raw_content if flow.response else b""
+    upstream_response_body_sha256 = (
+        "sha256:" + hashlib.sha256(raw_upstream_response or b"").hexdigest()
+    )
     audit_context = {
         "principal_id": flow.metadata.get("serverware_principal_id"),
         "policy_hash": flow.metadata.get("serverware_policy_hash"),
@@ -1622,9 +1640,30 @@ def _evaluate_response(
         ),
         "route_adapter": getattr(route, "adapter_type", None),
     }
+    response_binding_audit: dict[str, Any] | None = None
     if status_code is not None and 200 <= status_code < 300:
-        semantic_decision = evaluate_response_constraints(flow, route, constraint_types={"responseJson"})
+        semantic_decision = evaluate_response_constraints(
+            flow, route, constraint_types={"responseJson", "responseBinding"}
+        )
         if not semantic_decision.allowed:
+            payload = semantic_decision.payload or {}
+            response_binding_audit = {
+                key: payload[key]
+                for key in (
+                    "error",
+                    "constraint_id",
+                    "constraint_type",
+                    "binding_id",
+                    "evidence_digest",
+                )
+                if key in payload
+            }
+            denied_audit_context = dict(audit_context)
+            denied_audit_context["response_validation"] = {
+                "ok": False,
+                **response_binding_audit,
+            }
+            denied_audit_context["response_body_sha256"] = upstream_response_body_sha256
             runtime.log_request(
                 route_id,
                 flow.request.method,
@@ -1632,9 +1671,14 @@ def _evaluate_response(
                 "blocked",
                 semantic_decision.status_code,
                 semantic_decision.reason,
-                audit_context,
+                denied_audit_context,
             )
             return semantic_decision
+        if semantic_decision.payload.get("bindings"):
+            response_binding_audit = {
+                "ok": True,
+                "bindings": semantic_decision.payload["bindings"],
+            }
     adapter = get_adapter(route.adapter_type)
     decision = adapter.validate_response(flow, route, params)
     if not decision.allowed:
@@ -1684,6 +1728,10 @@ def _evaluate_response(
             502,
             {"error": "response_credential_reflection"},
         )
+    if response_binding_audit is not None:
+        audit_context = dict(audit_context)
+        audit_context["response_validation"] = response_binding_audit
+        audit_context["response_body_sha256"] = upstream_response_body_sha256
     runtime.log_request(
         route_id,
         flow.request.method,

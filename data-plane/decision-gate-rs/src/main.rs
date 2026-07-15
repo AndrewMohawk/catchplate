@@ -330,6 +330,7 @@ struct ResponsePolicy {
     adapter_type: String,
     response_config: Value,
     has_response_constraints: bool,
+    has_response_binding: bool,
     credential_bearing: bool,
 }
 
@@ -2299,6 +2300,121 @@ fn valid_response_json_path(path: &str) -> bool {
         })
 }
 
+fn valid_operation_field(path: &str) -> bool {
+    let mut bytes = path.bytes();
+    matches!(bytes.next(), Some(first) if first.is_ascii_alphabetic())
+        && path.len() <= 128
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
+}
+
+fn validate_response_binding_constraint(
+    route_id: &str,
+    constraint_id: &str,
+    constraint: &Map<String, Value>,
+) -> Result<(), String> {
+    let success_status_codes = constraint
+        .get("successStatusCodes")
+        .and_then(Value::as_array)
+        .filter(|statuses| (1..=8).contains(&statuses.len()))
+        .ok_or_else(|| {
+            format!(
+                "route {route_id} responseBinding {constraint_id} must define 1-8 successStatusCodes"
+            )
+        })?;
+    let mut unique_statuses = HashSet::new();
+    if success_status_codes.iter().any(|status| {
+        status
+            .as_u64()
+            .is_none_or(|status| !(200..=299).contains(&status) || !unique_statuses.insert(status))
+    }) {
+        return Err(format!(
+            "route {route_id} responseBinding {constraint_id} has invalid successStatusCodes"
+        ));
+    }
+    let content_types = constraint
+        .get("contentTypes")
+        .and_then(Value::as_array)
+        .filter(|content_types| (1..=4).contains(&content_types.len()))
+        .ok_or_else(|| {
+            format!("route {route_id} responseBinding {constraint_id} must define 1-4 contentTypes")
+        })?;
+    let mut unique_content_types = HashSet::new();
+    if content_types.iter().any(|content_type| {
+        content_type.as_str().is_none_or(|content_type| {
+            content_type.is_empty()
+                || content_type != content_type.to_ascii_lowercase()
+                || !content_type.contains('/')
+                || content_type.bytes().any(|byte| {
+                    !(byte.is_ascii_alphanumeric()
+                        || matches!(
+                            byte,
+                            b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-' | b'/'
+                        ))
+                })
+                || !unique_content_types.insert(content_type)
+        })
+    }) {
+        return Err(format!(
+            "route {route_id} responseBinding {constraint_id} has invalid contentTypes"
+        ));
+    }
+    let bindings = constraint
+        .get("bindings")
+        .and_then(Value::as_array)
+        .filter(|bindings| (1..=8).contains(&bindings.len()))
+        .ok_or_else(|| {
+            format!("route {route_id} responseBinding {constraint_id} must define 1-8 bindings")
+        })?;
+    let mut binding_ids = HashSet::new();
+    let mut response_fields = HashSet::new();
+    for binding in bindings {
+        let binding = binding.as_object().ok_or_else(|| {
+            format!("route {route_id} responseBinding {constraint_id} has an invalid binding")
+        })?;
+        let expected = ["id", "operationField", "responseField", "comparison"];
+        if binding.len() != expected.len()
+            || expected.iter().any(|field| !binding.contains_key(*field))
+        {
+            return Err(format!(
+                "route {route_id} responseBinding {constraint_id} has an invalid binding"
+            ));
+        }
+        let binding_id = binding.get("id").and_then(Value::as_str).unwrap_or("");
+        if !valid_operation_field(binding_id) || !binding_ids.insert(binding_id) {
+            return Err(format!(
+                "route {route_id} responseBinding {constraint_id} has an invalid or duplicate binding id"
+            ));
+        }
+        let operation_field = binding
+            .get("operationField")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !valid_operation_field(operation_field) {
+            return Err(format!(
+                "route {route_id} responseBinding {constraint_id} binding {binding_id} has an invalid operationField"
+            ));
+        }
+        let response_field = binding
+            .get("responseField")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if !valid_response_json_path(response_field) || !response_fields.insert(response_field) {
+            return Err(format!(
+                "route {route_id} responseBinding {constraint_id} binding {binding_id} has an invalid or duplicate responseField"
+            ));
+        }
+        if !matches!(
+            binding.get("comparison").and_then(Value::as_str),
+            Some("exactString" | "canonicalInteger")
+        ) {
+            return Err(format!(
+                "route {route_id} responseBinding {constraint_id} binding {binding_id} has an invalid comparison"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_field_rule_type_compatibility(
     route_id: &str,
     constraint_type: &str,
@@ -3579,7 +3695,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             let supported_phase = match constraint_type {
                 "rateLimit" | "operationPolicy" | "queryDateWindow" | "queryNumericBounds"
                 | "requestTimeWindow" | "jsonBody" | "formBody" => "request",
-                "responseDateWindow" | "responseJson" => "response",
+                "responseDateWindow" | "responseJson" | "responseBinding" => "response",
                 _ => {
                     return Err(format!(
                         "route {route_id} constraint {constraint_id} type {constraint_type} is not supported by the Rust runtime"
@@ -3635,6 +3751,12 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     "operations",
                 ],
                 "responseJson" => &["required", "items", "fields", "operations"],
+                "responseBinding" => &[
+                    "successStatusCodes",
+                    "contentTypes",
+                    "bindings",
+                    "operations",
+                ],
                 _ => &[],
             };
             let common_fields = [
@@ -3905,8 +4027,14 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             if constraint_type == "responseJson" {
                 validate_response_json_constraint(route_id, constraint_id, constraint)?;
             }
+            if constraint_type == "responseBinding" {
+                validate_response_binding_constraint(route_id, constraint_id, constraint)?;
+            }
             if let Some(operations) = constraint.get("operations") {
-                if !matches!(constraint_type, "responseDateWindow" | "responseJson") {
+                if !matches!(
+                    constraint_type,
+                    "responseDateWindow" | "responseJson" | "responseBinding"
+                ) {
                     return Err(format!(
                         "route {route_id} constraint {constraint_id} operations are supported only for response constraints"
                     ));
@@ -3935,6 +4063,141 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     return Err(format!(
                         "route {route_id} {constraint_type} {constraint_id} has invalid operations"
                     ));
+                }
+            }
+            if constraint_type == "responseBinding" {
+                if adapter_type != "generic.rest" {
+                    return Err(format!(
+                        "route {route_id} responseBinding is currently supported only for generic.rest"
+                    ));
+                }
+                let request_config = route
+                    .get("adapter")
+                    .and_then(|adapter| adapter.get("config"))
+                    .and_then(|config| config.get("request"))
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        format!(
+                            "route {route_id} responseBinding requires generic.rest request configuration"
+                        )
+                    })?;
+                if request_config.get("bodyMode").and_then(Value::as_str) != Some("formUrlencoded")
+                {
+                    return Err(format!(
+                        "route {route_id} responseBinding currently requires generic.rest formUrlencoded requests"
+                    ));
+                }
+                let response_config = route
+                    .get("adapter")
+                    .and_then(|adapter| adapter.get("config"))
+                    .and_then(|config| config.get("response"))
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        format!(
+                            "route {route_id} responseBinding requires buffered JSON response configuration"
+                        )
+                    })?;
+                if response_config.get("mode").and_then(Value::as_str) != Some("json")
+                    || response_config
+                        .get("maxBodyBytes")
+                        .and_then(Value::as_u64)
+                        .is_none_or(|limit| !(1..=65_536).contains(&limit))
+                {
+                    return Err(format!(
+                        "route {route_id} responseBinding requires a buffered JSON response capped at 65536 bytes"
+                    ));
+                }
+                let operation = route
+                    .get("adapter")
+                    .and_then(|adapter| adapter.get("config"))
+                    .and_then(|config| config.get("request"))
+                    .and_then(|request| request.get("operation"))
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        format!(
+                            "route {route_id} responseBinding {constraint_id} requires generic.rest request.operation"
+                        )
+                    })?;
+                let operation_name = operation.get("name").and_then(Value::as_str).unwrap_or("");
+                if constraint
+                    .get("operations")
+                    .and_then(Value::as_array)
+                    .is_some_and(|operations| {
+                        !operations
+                            .iter()
+                            .any(|candidate| candidate.as_str() == Some(operation_name))
+                    })
+                {
+                    return Err(format!(
+                        "route {route_id} responseBinding {constraint_id} does not include its configured operation"
+                    ));
+                }
+                let mut available = HashSet::from(["operation"]);
+                if let Some(fields) = operation.get("formFields").and_then(Value::as_array) {
+                    available.extend(fields.iter().filter_map(Value::as_str));
+                }
+                let form_constraint = constraints
+                    .iter()
+                    .find(|candidate| {
+                        candidate.get("type").and_then(Value::as_str) == Some("formBody")
+                    })
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        format!("route {route_id} responseBinding requires a formBody constraint")
+                    })?;
+                let required_fields = form_constraint
+                    .get("requiredFields")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .collect::<HashSet<_>>();
+                let field_rules = form_constraint
+                    .get("fields")
+                    .and_then(Value::as_object)
+                    .ok_or_else(|| {
+                        format!("route {route_id} responseBinding requires typed formBody fields")
+                    })?;
+                for binding in constraint
+                    .get("bindings")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
+                    let source = binding
+                        .get("operationField")
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if !available.contains(source) {
+                        return Err(format!(
+                            "route {route_id} responseBinding {constraint_id} source {source} is not captured by generic.rest request.operation"
+                        ));
+                    }
+                    if source == "operation" {
+                        continue;
+                    }
+                    if !required_fields.contains(source) {
+                        return Err(format!(
+                            "route {route_id} responseBinding {constraint_id} source {source} must be required by formBody"
+                        ));
+                    }
+                    let expected_type = if binding.get("comparison").and_then(Value::as_str)
+                        == Some("canonicalInteger")
+                    {
+                        "integer"
+                    } else {
+                        "string"
+                    };
+                    if field_rules
+                        .get(source)
+                        .and_then(|rule| rule.get("type"))
+                        .and_then(Value::as_str)
+                        != Some(expected_type)
+                    {
+                        return Err(format!(
+                            "route {route_id} responseBinding {constraint_id} source {source} must use formBody type {expected_type}"
+                        ));
+                    }
                 }
             }
             if constraint_type == "rateLimit" {
@@ -7164,7 +7427,6 @@ fn decision_audit_event(
         "flow_id",
         "grant_id",
         "approval_id",
-        "operation",
     ] {
         if let Some(value) = decision.get(key) {
             event.insert(key.to_string(), value.clone());
@@ -7815,8 +8077,7 @@ fn post_release_authorization(
             .map_err(|err| format!("read release authorization {operation} response: {err}"))?;
         if bytes.len() > MAX_CONTROL_PLANE_ATTESTATION_BYTES as usize {
             return Err(format!(
-                "release authorization {operation} response exceeds {} bytes",
-                MAX_CONTROL_PLANE_ATTESTATION_BYTES
+                "release authorization {operation} response exceeds {MAX_CONTROL_PLANE_ATTESTATION_BYTES} bytes"
             ));
         }
         if status == StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
@@ -8030,8 +8291,7 @@ fn reserve_release_authorization(
         > MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES
     {
         return Err(format!(
-            "release authorization canonical request exceeds {} bytes",
-            MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES
+            "release authorization canonical request exceeds {MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES} bytes"
         ));
     }
     if digest_json_ensure_ascii(canonical_request) != request_digest {
@@ -9508,6 +9768,288 @@ fn constraint_payload(
 
 fn constraint_error(constraint: &Value, error: &str, reason: &str) -> Value {
     constraint_payload(constraint, error, reason, Map::new())
+}
+
+fn canonical_i64(value: &str) -> Option<i64> {
+    let digits = if value == "0" {
+        return Some(0);
+    } else if let Some(rest) = value.strip_prefix('-') {
+        rest
+    } else {
+        value
+    };
+    if digits.is_empty()
+        || digits.starts_with('0')
+        || !digits.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return None;
+    }
+    value.parse::<i64>().ok()
+}
+
+fn response_binding_error(
+    constraint: &Value,
+    binding: Option<&Value>,
+    error: &str,
+    reason: &str,
+    result: &str,
+    status_code: u16,
+) -> Value {
+    let mut extra = Map::new();
+    extra.insert("status_code".to_string(), json!(status_code));
+    extra.insert(
+        "evidence_result".to_string(),
+        Value::String(result.to_string()),
+    );
+    if let Some(comparison) = binding
+        .and_then(|item| item.get("comparison"))
+        .and_then(Value::as_str)
+    {
+        extra.insert(
+            "evidence_comparison".to_string(),
+            Value::String(comparison.to_string()),
+        );
+    }
+    if let Some(binding_id) = binding
+        .and_then(|item| item.get("id"))
+        .and_then(Value::as_str)
+    {
+        extra.insert(
+            "binding_id".to_string(),
+            Value::String(binding_id.to_string()),
+        );
+    }
+    constraint_payload(constraint, error, reason, extra)
+}
+
+fn bind_response_validation_evidence(decision: &Value, body: &[u8], mut payload: Value) -> Value {
+    if payload.get("constraint_type").and_then(Value::as_str) != Some("responseBinding") {
+        return payload;
+    }
+    let response_body_sha256 = sha256_prefixed(body);
+    let evidence = json!({
+        "policy_hash":decision.get("policy_hash").and_then(Value::as_str).unwrap_or_default(),
+        "request_digest":decision.get("request_digest").and_then(Value::as_str).unwrap_or_default(),
+        "operation_digest":decision.get("operation_digest").and_then(Value::as_str).unwrap_or_default(),
+        "response_body_sha256":response_body_sha256,
+        "constraint_id":payload.get("constraint_id").and_then(Value::as_str).unwrap_or("unnamed"),
+        "binding_id":payload.get("binding_id").and_then(Value::as_str).unwrap_or("constraint"),
+        "comparison":payload.get("evidence_comparison").and_then(Value::as_str).unwrap_or("none"),
+        "result":payload.get("evidence_result").and_then(Value::as_str).unwrap_or("unknown"),
+    });
+    if let Some(object) = payload.as_object_mut() {
+        object.insert(
+            "evidence_digest".to_string(),
+            Value::String(digest_json_ensure_ascii(&evidence)),
+        );
+        object.insert(
+            "response_body_sha256".to_string(),
+            Value::String(response_body_sha256),
+        );
+        object.remove("evidence_comparison");
+        object.remove("evidence_result");
+    }
+    payload
+}
+
+fn response_binding_success_validation(
+    route: &Route,
+    decision: &Value,
+    body: &[u8],
+    operation: &Value,
+) -> Value {
+    let response_body_sha256 = sha256_prefixed(body);
+    let mut bindings = Vec::new();
+    for constraint in &route.constraints {
+        if constraint.get("type").and_then(Value::as_str) != Some("responseBinding")
+            || response_binding_applies(constraint, operation) != Ok(true)
+        {
+            continue;
+        }
+        for binding in constraint
+            .get("bindings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let constraint_id = constraint
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed");
+            let binding_id = binding
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed");
+            let evidence = json!({
+                "policy_hash":decision.get("policy_hash").and_then(Value::as_str).unwrap_or_default(),
+                "request_digest":decision.get("request_digest").and_then(Value::as_str).unwrap_or_default(),
+                "operation_digest":decision.get("operation_digest").and_then(Value::as_str).unwrap_or_default(),
+                "response_body_sha256":response_body_sha256,
+                "constraint_id":constraint_id,
+                "binding_id":binding_id,
+                "comparison":binding.get("comparison").and_then(Value::as_str).unwrap_or("none"),
+                "result":"match",
+            });
+            bindings.push(json!({
+                "constraint_id":constraint_id,
+                "binding_id":binding_id,
+                "evidence_digest":digest_json_ensure_ascii(&evidence),
+            }));
+        }
+    }
+    if bindings.is_empty() {
+        Value::Null
+    } else {
+        json!({"ok":true,"bindings":bindings,"response_body_sha256":response_body_sha256})
+    }
+}
+
+fn merge_response_validation(mut base: Value, binding: &Value) -> Value {
+    if binding.is_null() {
+        return base;
+    }
+    if let (Some(base), Some(binding)) = (base.as_object_mut(), binding.as_object()) {
+        for (key, value) in binding {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    base
+}
+
+fn response_binding_applies(constraint: &Value, operation: &Value) -> Result<bool, Value> {
+    let Some(operations) = constraint.get("operations").and_then(Value::as_array) else {
+        return Ok(true);
+    };
+    let Some(name) = operation.get("operation").and_then(Value::as_str) else {
+        return Err(response_binding_error(
+            constraint,
+            None,
+            "response_binding_operation_context_missing",
+            "response binding operation context is missing",
+            "operation-missing",
+            403,
+        ));
+    };
+    Ok(operations
+        .iter()
+        .filter_map(Value::as_str)
+        .any(|candidate| candidate == name))
+}
+
+fn validate_response_binding_sources(route: &Route, operation: &Value) -> Result<(), Value> {
+    for constraint in &route.constraints {
+        if constraint.get("type").and_then(Value::as_str) != Some("responseBinding") {
+            continue;
+        }
+        if !response_binding_applies(constraint, operation)? {
+            continue;
+        }
+        for binding in constraint
+            .get("bindings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let source_field = binding
+                .get("operationField")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let Some(source) = operation.get(source_field).and_then(Value::as_str) else {
+                return Err(response_binding_error(
+                    constraint,
+                    Some(binding),
+                    "response_binding_source_missing",
+                    "response binding source is missing or invalid",
+                    "source-missing",
+                    403,
+                ));
+            };
+            if source.len() > 4096 {
+                return Err(response_binding_error(
+                    constraint,
+                    Some(binding),
+                    "response_binding_source_missing",
+                    "response binding source is missing or invalid",
+                    "source-missing",
+                    403,
+                ));
+            }
+            if binding.get("comparison").and_then(Value::as_str) == Some("canonicalInteger")
+                && canonical_i64(source).is_none()
+            {
+                return Err(response_binding_error(
+                    constraint,
+                    Some(binding),
+                    "response_binding_source_invalid",
+                    "response binding integer source is not canonical",
+                    "source-invalid",
+                    403,
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_response_binding_envelope(
+    route: &Route,
+    status: StatusCode,
+    content_type: Option<&str>,
+    operation: &Value,
+) -> Result<(), Value> {
+    for constraint in &route.constraints {
+        if constraint.get("type").and_then(Value::as_str) != Some("responseBinding")
+            || !response_binding_applies(constraint, operation)?
+        {
+            continue;
+        }
+        let status_allowed = constraint
+            .get("successStatusCodes")
+            .and_then(Value::as_array)
+            .is_some_and(|statuses| {
+                statuses
+                    .iter()
+                    .filter_map(Value::as_u64)
+                    .any(|allowed| allowed == u64::from(status.as_u16()))
+            });
+        if !status_allowed {
+            return Err(response_binding_error(
+                constraint,
+                None,
+                "response_binding_status_denied",
+                "response status is not admitted by the binding",
+                "status-denied",
+                502,
+            ));
+        }
+        let media_type = content_type
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let content_type_allowed = constraint
+            .get("contentTypes")
+            .and_then(Value::as_array)
+            .is_some_and(|content_types| {
+                content_types
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .any(|allowed| allowed == media_type)
+            });
+        if !content_type_allowed {
+            return Err(response_binding_error(
+                constraint,
+                None,
+                "response_binding_content_type_denied",
+                "response content type is not admitted by the binding",
+                "content-type-denied",
+                502,
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn bind_provider_account_scope(
@@ -11578,10 +12120,105 @@ fn enforce_response_json(constraint: &Value, body: &[u8]) -> Result<(), Value> {
     Ok(())
 }
 
+fn enforce_response_binding(
+    constraint: &Value,
+    body: &[u8],
+    operation: &Value,
+) -> Result<(), Value> {
+    let payload = strict_json_value_from_slice(body).map_err(|_| {
+        response_binding_error(
+            constraint,
+            None,
+            "response_binding_json_invalid",
+            "response binding body is not strict JSON",
+            "response-invalid-json",
+            502,
+        )
+    })?;
+    if !payload.is_object() {
+        return Err(response_binding_error(
+            constraint,
+            None,
+            "response_binding_object_required",
+            "response binding requires a top-level JSON object",
+            "response-object-required",
+            502,
+        ));
+    }
+    for binding in constraint
+        .get("bindings")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        let source_field = binding
+            .get("operationField")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let source = operation
+            .get(source_field)
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                response_binding_error(
+                    constraint,
+                    Some(binding),
+                    "response_binding_source_missing",
+                    "response binding source is missing",
+                    "source-missing",
+                    502,
+                )
+            })?;
+        let response_field = binding
+            .get("responseField")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let Some(value) = object_value_at_path(&payload, response_field) else {
+            return Err(response_binding_error(
+                constraint,
+                Some(binding),
+                "response_binding_field_ambiguous",
+                "response binding field is missing or ambiguous",
+                "response-field-count",
+                502,
+            ));
+        };
+        let matches = match binding.get("comparison").and_then(Value::as_str) {
+            Some("exactString") => value.as_str() == Some(source),
+            Some("canonicalInteger") => canonical_i64(source)
+                .zip(value.as_i64())
+                .is_some_and(|(expected, actual)| expected == actual),
+            _ => false,
+        };
+        if !matches {
+            return Err(response_binding_error(
+                constraint,
+                Some(binding),
+                "response_binding_mismatch",
+                "response does not match the authorized operation context",
+                "mismatch",
+                502,
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn object_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current.as_object()?.get(segment)?;
+    }
+    if current.is_array() || current.is_object() {
+        None
+    } else {
+        Some(current)
+    }
+}
+
 fn validate_response_constraints(
     route: &Route,
     body: &[u8],
-    operation: Option<&str>,
+    operation: Option<&Value>,
 ) -> Result<(), Value> {
     validate_response_constraints_for_type(route, body, operation, None)
 }
@@ -11589,7 +12226,7 @@ fn validate_response_constraints(
 fn validate_response_constraints_for_type(
     route: &Route,
     body: &[u8],
-    operation: Option<&str>,
+    operation: Option<&Value>,
     required_type: Option<&str>,
 ) -> Result<(), Value> {
     for constraint in &route.constraints {
@@ -11603,7 +12240,17 @@ fn validate_response_constraints_for_type(
             continue;
         }
         if let Some(operations) = constraint.get("operations").and_then(Value::as_array) {
-            let Some(operation) = operation else {
+            let Some(operation_context) = operation else {
+                let mut extra = Map::new();
+                extra.insert("status_code".to_string(), json!(502));
+                return Err(constraint_payload(
+                    constraint,
+                    "response_operation_context_missing",
+                    "response operation context is missing",
+                    extra,
+                ));
+            };
+            let Some(operation) = operation_context.get("operation").and_then(Value::as_str) else {
                 let mut extra = Map::new();
                 extra.insert("status_code".to_string(), json!(502));
                 return Err(constraint_payload(
@@ -11624,6 +12271,19 @@ fn validate_response_constraints_for_type(
         match kind {
             "responseDateWindow" => enforce_response_date_window(constraint, body)?,
             "responseJson" => enforce_response_json(constraint, body)?,
+            "responseBinding" => {
+                let Some(operation) = operation else {
+                    return Err(response_binding_error(
+                        constraint,
+                        None,
+                        "response_binding_operation_context_missing",
+                        "response binding operation context is missing",
+                        "operation-missing",
+                        502,
+                    ));
+                };
+                enforce_response_binding(constraint, body, operation)?;
+            }
             _ => {}
         }
     }
@@ -11921,6 +12581,18 @@ fn decide_internal_with_mode(
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("credential_constraint_denied")
+            .to_string();
+        return deny_for_route(status, &reason, payload, route, started);
+    }
+    if let Err(payload) = validate_response_binding_sources(route, &operation) {
+        let status = payload
+            .get("status_code")
+            .and_then(Value::as_u64)
+            .unwrap_or(403) as u16;
+        let reason = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("response_binding_source_invalid")
             .to_string();
         return deny_for_route(status, &reason, payload, route, started);
     }
@@ -15126,6 +15798,29 @@ fn block_forward_response(
     status: StatusCode,
     payload: Value,
 ) -> Vec<u8> {
+    let response_validation = Value::Object(
+        [
+            ("ok", Value::Bool(false)),
+            (
+                "error",
+                payload.get("error").cloned().unwrap_or(Value::Null),
+            ),
+        ]
+        .into_iter()
+        .chain(
+            [
+                "constraint_id",
+                "constraint_type",
+                "binding_id",
+                "evidence_digest",
+                "response_body_sha256",
+            ]
+            .into_iter()
+            .filter_map(|key| payload.get(key).cloned().map(|value| (key, value))),
+        )
+        .map(|(key, value)| (key.to_string(), value))
+        .collect(),
+    );
     enqueue_audit(
         state,
         "data_plane.response.blocked",
@@ -15136,8 +15831,7 @@ fn block_forward_response(
             "blocked",
             json!({
                 "upstream_status":status.as_u16(),
-                "response_validation":{"ok":false,"error":payload.get("error").cloned().unwrap_or(Value::Null)},
-                "payload":payload.clone(),
+                "response_validation":response_validation,
             }),
         ),
     );
@@ -15164,6 +15858,9 @@ fn response_policy_for_decision(
             .constraints
             .iter()
             .any(|constraint| constraint_phase_includes(constraint, "response")),
+        has_response_binding: route_match.route.constraints.iter().any(|constraint| {
+            constraint.get("type").and_then(Value::as_str) == Some("responseBinding")
+        }),
         credential_bearing: route_match
             .route
             .credential_ref
@@ -16219,6 +16916,7 @@ fn validate_policy_json_response(
     response_config: &Value,
     adapter_type: &str,
     credential_bearing: bool,
+    binding_validation: &Value,
     response_secret_guard: &ResponseSecretGuard,
 ) -> Vec<u8> {
     if let Some(payload) =
@@ -16252,7 +16950,10 @@ fn validate_policy_json_response(
             released_headers,
             Vec::new(),
             response_secret_guard,
-            json!({"ok":true,"mode":"headers_only","body_redacted":true,"adapter":adapter_type}),
+            merge_response_validation(
+                json!({"ok":true,"mode":"headers_only","body_redacted":true,"adapter":adapter_type}),
+                binding_validation,
+            ),
         );
     }
     let paths = allowed_field_paths(response_config);
@@ -16279,7 +16980,10 @@ fn validate_policy_json_response(
             released_headers,
             body,
             response_secret_guard,
-            json!({"ok":true,"mode":"adapter_passthrough","adapter":adapter_type}),
+            merge_response_validation(
+                json!({"ok":true,"mode":"adapter_passthrough","adapter":adapter_type}),
+                binding_validation,
+            ),
         );
     }
     let mut payload = match strict_json_value_from_slice(&body) {
@@ -16311,7 +17015,10 @@ fn validate_policy_json_response(
             released_headers,
             bytes,
             response_secret_guard,
-            json!({"ok":true,"mode":"json","allowed_fields_redacted":redacted,"adapter":adapter_type}),
+            merge_response_validation(
+                json!({"ok":true,"mode":"json","allowed_fields_redacted":redacted,"adapter":adapter_type}),
+                binding_validation,
+            ),
         ),
         Err(_) => block_forward_response(
             state,
@@ -16394,17 +17101,45 @@ fn validate_forward_response(
             json!({"error":"response_body_too_large","maxBodyBytes":max_body}),
         );
     }
-    let operation = decision
-        .get("operation")
-        .and_then(|value| value.get("operation"))
-        .and_then(Value::as_str);
+    let operation = decision.get("operation");
+    if status.is_success() {
+        let operation_context = operation.unwrap_or(&Value::Null);
+        if let Err(payload) = validate_response_binding_envelope(
+            route_match.route,
+            status,
+            content_type,
+            operation_context,
+        ) {
+            return block_forward_response(
+                state,
+                decision,
+                method,
+                url,
+                status,
+                bind_response_validation_evidence(decision, &body, payload),
+            );
+        }
+    }
     if route_match.route.adapter_type != "gmail.v1" {
-        if status.as_u16() < 400 {
+        if status.is_success() {
             if let Err(payload) = validate_response_constraints(route_match.route, &body, operation)
             {
-                return block_forward_response(state, decision, method, url, status, payload);
+                return block_forward_response(
+                    state,
+                    decision,
+                    method,
+                    url,
+                    status,
+                    bind_response_validation_evidence(decision, &body, payload),
+                );
             }
         }
+        let binding_validation = operation
+            .filter(|_| status.is_success())
+            .map(|operation| {
+                response_binding_success_validation(route_match.route, decision, &body, operation)
+            })
+            .unwrap_or(Value::Null);
         return validate_policy_json_response(
             state,
             snapshot,
@@ -16418,6 +17153,7 @@ fn validate_forward_response(
             &response_config,
             &route_match.route.adapter_type,
             credential_bearing,
+            &binding_validation,
             response_secret_guard,
         );
     }
@@ -16435,7 +17171,23 @@ fn validate_forward_response(
             &response_config,
             "gmail.v1",
             credential_bearing,
+            &Value::Null,
             response_secret_guard,
+        );
+    }
+    if let Err(payload) = validate_response_constraints_for_type(
+        route_match.route,
+        &body,
+        operation,
+        Some("responseBinding"),
+    ) {
+        return block_forward_response(
+            state,
+            decision,
+            method,
+            url,
+            status,
+            bind_response_validation_evidence(decision, &body, payload),
         );
     }
     if let Err(payload) = validate_response_constraints_for_type(
@@ -16668,6 +17420,19 @@ fn finalize_upstream_response(
     let base_response_policy =
         response_policy_for_decision(snapshot, decision, request_method, upstream_url)
             .expect("validated response policy context");
+    if base_response_policy.has_response_binding
+        && status.is_success()
+        && upstream_headers.get_all("content-type").iter().count() != 1
+    {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            json!({"error":"response_binding_content_type_ambiguous"}),
+        ));
+    }
     let response_config =
         match response_config_for_status(&base_response_policy.response_config, status) {
             Ok(config) => config,
@@ -16713,6 +17478,7 @@ fn finalize_upstream_response(
         adapter_type: base_response_policy.adapter_type,
         response_config,
         has_response_constraints: base_response_policy.has_response_constraints,
+        has_response_binding: base_response_policy.has_response_binding,
         credential_bearing: base_response_policy.credential_bearing,
     };
     let Some(response_body_limit) = response_policy
@@ -22176,6 +22942,106 @@ mod tests {
     }
 
     #[test]
+    fn missing_response_binding_source_is_denied_before_upstream_contact() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking upstream listener");
+        let upstream = listener.local_addr().expect("test upstream address");
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok(_) => return true,
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("accept test upstream request: {err}"),
+                }
+            }
+            false
+        });
+
+        let mut snapshot = (*test_snapshot(1)).clone();
+        let route = &mut snapshot.routes[0];
+        route.scheme = "http".to_string();
+        route.host = upstream.ip().to_string();
+        route.port = upstream.port();
+        route.methods = HashSet::from(["POST".to_string()]);
+        route.adapter_config = json!({
+            "request":{
+                "allowedHeaders":["content-type"],
+                "allowedQueryKeys":[],
+                "bodyMode":"formUrlencoded",
+                "maxBodyBytes":1024,
+                "operation":{
+                    "name":"stripe.payment_intents.create",
+                    "formFields":["amount","currency"]
+                }
+            },
+            "response":{"mode":"json","maxBodyBytes":1024,"allowedFields":["amount","currency"]}
+        });
+        route.constraints = vec![
+            json!({
+                "id":"bounded-form",
+                "type":"formBody",
+                "allowedFields":["currency"],
+                "requiredFields":["currency"],
+                "fields":{"currency":{"type":"string","equals":"usd"}}
+            }),
+            json!({
+                "id":"stripe-response",
+                "type":"responseBinding",
+                "phase":"response",
+                "successStatusCodes":[200],
+                "contentTypes":["application/json"],
+                "operations":["stripe.payment_intents.create"],
+                "bindings":[{
+                    "id":"amount",
+                    "operationField":"amount",
+                    "responseField":"amount",
+                    "comparison":"canonicalInteger"
+                }]
+            }),
+        ];
+        let snapshot = Arc::new(snapshot);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let result = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "POST".to_string(),
+                target: format!("http://{upstream}/resource"),
+                headers: BTreeMap::from([(
+                    "content-type".to_string(),
+                    "application/x-www-form-urlencoded".to_string(),
+                )]),
+                body: b"currency=usd".to_vec(),
+                client_ip: Some("127.0.0.1".to_string()),
+            },
+            Some("agent:test"),
+            None,
+            None,
+            false,
+        );
+        let response = match result {
+            ForwardResult::Buffered(response) => {
+                String::from_utf8(response).expect("buffered HTTP denial")
+            }
+            ForwardResult::Streamed => panic!("missing binding source unexpectedly streamed"),
+        };
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(
+            response.contains("response_binding_source_missing"),
+            "{response}"
+        );
+        assert!(
+            !server.join().expect("test upstream thread"),
+            "request with a missing response-binding source contacted the upstream"
+        );
+    }
+
+    #[test]
     fn jit_policy_admission_matches_python_and_schema_contract() {
         let mut route = generic_policy_route("none", json!(1024));
         route["jit"] = valid_jit_policy();
@@ -22719,6 +23585,7 @@ mod tests {
             adapter_type: "generic.rest".to_string(),
             response_config: json!({"mode":"stream","maxBodyBytes":1024}),
             has_response_constraints: true,
+            has_response_binding: false,
             credential_bearing: false,
         };
         assert!(streaming_response_policy(&policy).is_none());
@@ -22754,7 +23621,12 @@ mod tests {
         let missing = validate_response_constraints(&route, detail, None)
             .expect_err("missing response operation context must fail closed");
         assert_eq!(missing["error"], "response_operation_context_missing");
-        assert!(validate_response_constraints(&route, detail, Some("gmail.message.get")).is_ok());
+        assert!(validate_response_constraints(
+            &route,
+            detail,
+            Some(&json!({"operation":"gmail.message.get"})),
+        )
+        .is_ok());
 
         let list = format!(
             r#"{{"messages":[{{"internalDate":"{}"}}]}}"#,
@@ -22763,15 +23635,165 @@ mod tests {
         assert!(validate_response_constraints(
             &route,
             list.as_bytes(),
-            Some("gmail.messages.list"),
+            Some(&json!({"operation":"gmail.messages.list"})),
         )
         .is_ok());
         assert!(validate_response_constraints(
             &route,
             br#"{"messages":[]}"#,
-            Some("gmail.messages.list"),
+            Some(&json!({"operation":"gmail.messages.list"})),
         )
         .is_ok());
+    }
+
+    #[test]
+    fn response_bindings_match_operation_context_and_fail_closed() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.constraints = vec![json!({
+            "id":"stripe-payment-intent-response",
+            "type":"responseBinding",
+            "phase":"response",
+            "successStatusCodes":[200],
+            "contentTypes":["application/json"],
+            "operations":["stripe.payment_intents.create"],
+            "bindings":[
+                {"id":"amount","operationField":"amount","responseField":"amount","comparison":"canonicalInteger"},
+                {"id":"currency","operationField":"currency","responseField":"currency","comparison":"exactString"},
+                {"id":"payment-method","operationField":"payment_method","responseField":"payment_method","comparison":"exactString"}
+            ]
+        })];
+        let operation = json!({
+            "operation":"stripe.payment_intents.create",
+            "amount":"5000",
+            "currency":"usd",
+            "payment_method":"pm_12345678"
+        });
+        let response_decision = json!({
+            "policy_hash":format!("sha256:{}", "1".repeat(64)),
+            "request_digest":format!("sha256:{}", "2".repeat(64)),
+            "operation_digest":format!("sha256:{}", "3".repeat(64)),
+        });
+        validate_response_binding_sources(&route, &operation)
+            .expect("complete binding sources must be admitted before release");
+        validate_response_constraints(
+            &route,
+            br#"{"amount":5000,"currency":"usd","payment_method":"pm_12345678"}"#,
+            Some(&operation),
+        )
+        .expect("matching Stripe response must pass");
+        let success_validation = response_binding_success_validation(
+            &route,
+            &response_decision,
+            br#"{"amount":5000,"currency":"usd","payment_method":"pm_12345678"}"#,
+            &operation,
+        );
+        assert_eq!(
+            success_validation["bindings"].as_array().map(Vec::len),
+            Some(3)
+        );
+        assert!(!success_validation.to_string().contains("pm_12345678"));
+
+        let status_denied = validate_response_binding_envelope(
+            &route,
+            StatusCode::CREATED,
+            Some("application/json"),
+            &operation,
+        )
+        .expect_err("unlisted success status must fail closed");
+        assert_eq!(status_denied["error"], "response_binding_status_denied");
+        let media_denied = validate_response_binding_envelope(
+            &route,
+            StatusCode::OK,
+            Some("text/plain"),
+            &operation,
+        )
+        .expect_err("unlisted response media type must fail closed");
+        assert_eq!(
+            media_denied["error"],
+            "response_binding_content_type_denied"
+        );
+
+        let root_array = validate_response_constraints(
+            &route,
+            br#"[{"amount":5000,"currency":"usd","payment_method":"pm_12345678"}]"#,
+            Some(&operation),
+        )
+        .expect_err("top-level arrays must never satisfy response bindings");
+        assert_eq!(root_array["error"], "response_binding_object_required");
+        let split_array = validate_response_constraints(
+            &route,
+            br#"[{"amount":5000},{"currency":"usd"},{"payment_method":"pm_12345678"}]"#,
+            Some(&operation),
+        )
+        .expect_err("fields split across array elements must fail closed");
+        assert_eq!(split_array["error"], "response_binding_object_required");
+
+        let mut evidence_digests = Vec::new();
+        for (body, expected_binding) in [
+            (
+                br#"{"amount":5001,"currency":"usd","payment_method":"pm_12345678"}"#.as_slice(),
+                "amount",
+            ),
+            (
+                br#"{"amount":5000,"currency":"eur","payment_method":"pm_12345678"}"#.as_slice(),
+                "currency",
+            ),
+            (
+                br#"{"amount":5000,"currency":"usd"}"#.as_slice(),
+                "payment-method",
+            ),
+            (
+                br#"{"amount":"5000","currency":"usd","payment_method":"pm_12345678"}"#.as_slice(),
+                "amount",
+            ),
+        ] {
+            let denied = validate_response_constraints(&route, body, Some(&operation))
+                .expect_err("mismatched response binding must fail closed");
+            let denied = bind_response_validation_evidence(&response_decision, body, denied);
+            assert_eq!(denied["binding_id"], expected_binding);
+            assert_eq!(denied["status_code"], 502);
+            assert!(denied["evidence_digest"]
+                .as_str()
+                .is_some_and(is_sha256_digest));
+            evidence_digests.push(
+                denied["evidence_digest"]
+                    .as_str()
+                    .expect("evidence digest")
+                    .to_string(),
+            );
+            let evidence = denied.to_string();
+            assert!(!evidence.contains("5001"));
+            assert!(!evidence.contains("eur"));
+        }
+        assert_ne!(evidence_digests[0], evidence_digests[1]);
+        let audit_event = decision_audit_event(
+            &json!({
+                "operation":operation,
+                "request_digest":format!("sha256:{}", "2".repeat(64)),
+                "operation_digest":format!("sha256:{}", "3".repeat(64)),
+            }),
+            "POST",
+            &Url::parse("https://api.stripe.com/v1/payment_intents").expect("URL"),
+            "blocked",
+            json!({"response_validation":{"ok":false}}),
+        );
+        assert!(audit_event.get("operation").is_none());
+
+        let mut missing_source = operation.clone();
+        missing_source
+            .as_object_mut()
+            .expect("operation object")
+            .remove("amount");
+        let denied = validate_response_binding_sources(&route, &missing_source)
+            .expect_err("missing request source must deny before credential release");
+        assert_eq!(denied["error"], "response_binding_source_missing");
+        assert_eq!(denied["binding_id"], "amount");
+
+        let mut noncanonical = operation.clone();
+        noncanonical["amount"] = json!("05000");
+        let denied = validate_response_binding_sources(&route, &noncanonical)
+            .expect_err("noncanonical integer source must deny before release");
+        assert_eq!(denied["error"], "response_binding_source_invalid");
     }
 
     #[test]
@@ -22789,8 +23811,12 @@ mod tests {
             "required":true
         })];
         let unproven = br#"{"messages":[{"id":"unproven-1"}]}"#;
-        let error = validate_response_constraints(&route, unproven, Some("gmail.messages.list"))
-            .expect_err("released Gmail items without age evidence must fail closed");
+        let error = validate_response_constraints(
+            &route,
+            unproven,
+            Some(&json!({"operation":"gmail.messages.list"})),
+        )
+        .expect_err("released Gmail items without age evidence must fail closed");
         assert_eq!(error["error"], "response_date_field_missing");
     }
 
@@ -22920,10 +23946,18 @@ mod tests {
             .expect_err("operation-scoped responseJson requires operation context");
         assert_eq!(missing["error"], "response_operation_context_missing");
         assert_eq!(missing["status_code"], 502);
-        validate_response_constraints(&route, br#"{}"#, Some("widgets.other"))
-            .expect("non-matching operations skip the response constraint");
-        let matching = validate_response_constraints(&route, br#"{}"#, Some("widgets.read"))
-            .expect_err("matching operation enforces the response constraint");
+        validate_response_constraints(
+            &route,
+            br#"{}"#,
+            Some(&json!({"operation":"widgets.other"})),
+        )
+        .expect("non-matching operations skip the response constraint");
+        let matching = validate_response_constraints(
+            &route,
+            br#"{}"#,
+            Some(&json!({"operation":"widgets.read"})),
+        )
+        .expect_err("matching operation enforces the response constraint");
         assert_eq!(matching["error"], "response_json_items_missing");
     }
 
@@ -24202,6 +25236,78 @@ mod tests {
             .expect_err("whole-form constraints must not be admitted for streamed forms");
         assert!(error.contains("formUrlencodedStream"));
         assert!(error.contains("formBody"));
+    }
+
+    #[test]
+    fn response_binding_policy_admission_is_bounded_and_captured() {
+        let mut route = generic_policy_route("formUrlencoded", json!(65_536));
+        route["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"stripe.payment_intents.create",
+            "formFields":["amount","currency","payment_method"]
+        });
+        route["constraints"] = json!([
+            {
+                "id":"stripe-form",
+                "type":"formBody",
+                "phase":"request",
+                "contentTypes":["application/x-www-form-urlencoded"],
+                "allowedFields":["amount","currency","payment_method"],
+                "requiredFields":["amount","currency","payment_method"],
+                "fields":{
+                    "amount":{"type":"integer","min":1,"max":100000},
+                    "currency":{"type":"string","maxLength":3},
+                    "payment_method":{"type":"string","maxLength":128}
+                }
+            },
+            {
+                "id":"stripe-response",
+                "type":"responseBinding",
+                "phase":"response",
+                "successStatusCodes":[200],
+                "contentTypes":["application/json"],
+                "operations":["stripe.payment_intents.create"],
+                "bindings":[
+                    {"id":"amount","operationField":"amount","responseField":"amount","comparison":"canonicalInteger"},
+                    {"id":"currency","operationField":"currency","responseField":"currency","comparison":"exactString"}
+                ]
+            }
+        ]);
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("bounded captured response bindings must load");
+
+        let mut uncaptured = route.clone();
+        uncaptured["constraints"][1]["bindings"][0]["operationField"] = json!("uncaptured");
+        let error = validate_policy_capabilities(&policy_with_route(uncaptured))
+            .expect_err("uncaptured operation sources must fail admission");
+        assert!(error.contains("not captured"), "{error}");
+
+        let mut optional_source = route.clone();
+        optional_source["constraints"][0]["requiredFields"] = json!(["currency", "payment_method"]);
+        let error = validate_policy_capabilities(&policy_with_route(optional_source))
+            .expect_err("optional binding sources must fail admission");
+        assert!(error.contains("must be required by formBody"), "{error}");
+
+        let mut mistyped_source = route.clone();
+        mistyped_source["constraints"][0]["fields"]["amount"] =
+            json!({"type":"string","maxLength":32});
+        let error = validate_policy_capabilities(&policy_with_route(mistyped_source))
+            .expect_err("mistyped binding sources must fail admission");
+        assert!(error.contains("must use formBody type integer"), "{error}");
+
+        let mut wrong_operation = route.clone();
+        wrong_operation["constraints"][1]["operations"] = json!(["stripe.other"]);
+        let error = validate_policy_capabilities(&policy_with_route(wrong_operation))
+            .expect_err("non-applicable generic binding must fail admission");
+        assert!(error.contains("does not include"), "{error}");
+
+        let mut streaming = route;
+        streaming["adapter"]["config"]["response"]["mode"] = json!("stream");
+        let error = validate_policy_capabilities(&policy_with_route(streaming))
+            .expect_err("response binding cannot admit streaming release");
+        assert!(
+            error.contains("requires a buffered JSON response"),
+            "{error}"
+        );
     }
 
     #[test]

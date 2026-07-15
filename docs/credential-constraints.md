@@ -58,6 +58,8 @@ For a credential-bearing `generic.rest` route, buffered `bodyMode: "json"` requi
 
 `responseJson`: validates the semantic contract of a buffered JSON success response before release. It can apply to every normalized operation or only named operations, validate the root value or objects selected through explicit item paths, and apply the shared `fieldRule` assertions to every selected item. It validates data; it does not select or redact fields.
 
+`responseBinding`: binds fields captured in the authorized request operation to fields in a buffered JSON success response. It rejects a missing or invalid request source before credential release and rejects a missing, ambiguous, mistyped, or mismatched response field before any upstream response bytes are released.
+
 ## Generic Required Request Headers
 
 `generic.rest` routes can require ordinary provider request headers through `adapter.config.request.requiredHeaders`. This is adapter policy, not a route-level `constraint` and not principal identity. A principal's top-level `principals[].requiredHeaders` participates in client authentication and must be visible during HTTPS `CONNECT`; an adapter-required header is checked only after principal and route matching, then forwarded to the upstream provider.
@@ -199,6 +201,56 @@ An absent field is allowed unless its own field rule has `required: true`. `resp
 Both the Python policy engine and production Rust gate evaluate `responseJson` against the bounded, parsed upstream success body before applying `allowedFields`. This ordering lets a contract validate a provider field even when that field is not released. API-specific projection then runs, `responseDateWindow` evaluates the canonicalized response where required, structural projection removes unlisted fields, response headers are normalized, and the final credential-reflection guard scans the projected output.
 
 Policy admission rejects `responseJson` with the wrong phase, missing or empty `fields`, invalid or duplicate operation/item paths, wildcard paths, empty or unsupported field rules, unsafe patterns, type-incompatible rules, or inconsistent bounds. Whole-body response constraints cannot be combined with a streaming response mode. At runtime, invalid JSON, missing operation context, absent required items or fields, and any type/value/bound violation block the response with a synthetic `502`; errors use the `response_json_*` family and no upstream body bytes are released.
+
+### Request-to-response bindings
+
+`responseBinding` proves that selected fields in a successful upstream JSON response agree with the operation that Serverware authorized. It does not read arbitrary request paths and it does not redact the response. For example, the tokenized Stripe PaymentIntent route binds the captured form amount, currency, and payment-method token to Stripe's response:
+
+```json
+{
+  "id": "payment-intent-response-binding",
+  "type": "responseBinding",
+  "phase": "response",
+  "operations": ["stripe.payment_intents.create"],
+  "successStatusCodes": [200],
+  "contentTypes": ["application/json"],
+  "bindings": [
+    {
+      "id": "amount",
+      "operationField": "amount",
+      "responseField": "amount",
+      "comparison": "canonicalInteger"
+    },
+    {
+      "id": "currency",
+      "operationField": "currency",
+      "responseField": "currency",
+      "comparison": "exactString"
+    },
+    {
+      "id": "payment-method",
+      "operationField": "payment_method",
+      "responseField": "payment_method",
+      "comparison": "exactString"
+    }
+  ]
+}
+```
+
+`phase` is required and must be `response`. `successStatusCodes` explicitly admits 1-8 unique `2xx` statuses; a different success status is a binding failure, not an implicit success. `contentTypes` explicitly admits 1-4 unique lower-case media types and the upstream response must contain exactly one matching `Content-Type`. An absent, duplicate, or different content type fails closed, as does any non-identity `Content-Encoding`. `operations` is optional; when present it is a non-empty, unique list and the constraint applies only to those exact normalized operation names. A matching response without operation context fails closed. Each constraint defines 1-8 bindings. Every binding has exactly `id`, `operationField`, `responseField`, and `comparison`; binding IDs and response fields must be unique.
+
+`operationField` is an exact key lookup in the adapter's flat normalized operation map. Dots in a key are literal: `metadata.agent_request_id` names one flat captured key and does not traverse nested request data. A source must be a string no larger than 4096 UTF-8 bytes. The v1 primitive is admitted only for `generic.rest` routes with a buffered `formUrlencoded` request and a `json` response capped at 65,536 bytes. Policy admission requires `request.operation`, limits available sources to the literal `operation` key plus the exact names declared in `request.operation.formFields`, and proves each non-operation source is required and typed by `formBody`. `canonicalInteger` sources require `type: "integer"`; `exactString` sources require `type: "string"`. A missing, duplicate, non-string, oversized, or otherwise invalid source denies the request before request quota reservation, JIT grant consumption, credential lease acquisition, credential injection, or upstream contact.
+
+`responseField` is a unique explicit dotted JSON path, not an operation-map key. Empty components and wildcards are forbidden. The response root and every intermediate node must be JSON objects; arrays are never traversed, even single-element arrays. The final value must be a scalar. This prevents fields from separate array elements from being combined into a false match. Missing paths, arrays, objects, or other non-scalar final values fail closed. The two comparisons are deliberately narrow:
+
+- `exactString` requires the response value to be a JSON string exactly equal to the captured source. There is no trimming, case folding, Unicode normalization, or scalar coercion.
+- `canonicalInteger` requires the source string to match `0|-?[1-9][0-9]*` and fit the signed 64-bit range `-9223372036854775808` through `9223372036854775807`. The response must be an equal JSON integer in that range, not a string, boolean, or floating-point value. Leading zeroes, `+`, `-0`, decimal points, and exponents are not canonical.
+
+The validation order is fail closed. Policy admission validates the bounded binding shape, response envelope, required typed sources, and adapter capture contract. At request time the adapter validates and classifies the request, ordinary request-body constraints run first so malformed or duplicate form fields keep their canonical denial, and then Serverware validates all applicable binding sources before any credential lookup or release state is reserved or consumed. At response time Serverware validates the configured success status and media envelope, then runs `responseBinding` and `responseJson` against the original bounded upstream entity before adapter semantic validation, canonicalization, `responseDateWindow`, structural `allowedFields` projection, released-header checks, and the final credential-reflection guard.
+
+Response binding is considered only for upstream `2xx` responses, and only configured `successStatusCodes` can pass. Redirects are blocked separately, and `4xx`/`5xx` bodies use the bounded error response profile without applying success bindings. An unapproved success status or media type, invalid JSON, missing operation context, a missing object-only response path, a type mismatch, or an unequal value produces a synthetic `502`; the upstream body is replaced and no upstream status, headers, or body bytes are released to the agent. Because binding requires the complete body before release, any route with `responseBinding` is rejected at policy admission when its response mode is streaming, including structured streaming modes. The development mitmproxy transport also forces response buffering in `responseheaders`; non-development deployments use the Rust decision gate.
+
+Binding failures emit value-free evidence: the error family, constraint ID, optional binding ID, raw upstream entity digest, and a SHA-256 evidence digest. The digest commits to the policy hash, request digest, operation digest, raw response-body digest, constraint ID, binding ID, comparison, and result class. Successful bindings emit one value-free evidence digest per binding using the same event material with result `match`. Neither captured request values, observed response values, the response entity, nor the full operation map are included in response audit events. Exact replay of the same attested event material is stable; different request, operation, or response bytes produce different evidence.
 
 Validation is not redaction. Every credential-bearing `generic.rest` or `x.v2` response profile using `mode: "json"` must also define a non-empty, unique `allowedFields` projection, including any configured JSON error profile. A `responseJson` constraint never satisfies this requirement. Missing, empty, duplicate, wildcard, or malformed projections reject policy activation; the runtime check independently blocks with `response_allowed_fields_missing` and `502` if an invalid profile reaches response handling.
 

@@ -167,6 +167,21 @@ def assert_production_dependencies() -> None:
         raise AssertionError("production decision-gate worker count exceeds the 512 MiB memory safety bound")
 
 
+def assert_reproducible_rust_binary_config() -> None:
+    cargo = (ROOT / "data-plane" / "decision-gate-rs" / "Cargo.toml").read_text(encoding="utf-8")
+    if "[profile.release]" not in cargo or 'strip = "symbols"' not in cargo:
+        raise AssertionError("Rust release binaries must strip nondeterministic symbol tables")
+    for relative in (
+        "data-plane/decision-gate-rs/Dockerfile",
+        "data-plane/decision-gate-rs/Dockerfile.production",
+    ):
+        dockerfile = (ROOT / relative).read_text(encoding="utf-8")
+        if "--build-id=none" not in dockerfile:
+            raise AssertionError(f"{relative} must omit nondeterministic GNU linker build IDs")
+        if "cargo build --release --locked" not in dockerfile:
+            raise AssertionError(f"{relative} must build the lockfile-pinned Rust release")
+
+
 def sha256_prefixed(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
@@ -610,6 +625,7 @@ def assert_production_release_key_is_pinned() -> None:
 def main() -> None:
     assert_dockerignore()
     assert_production_dependencies()
+    assert_reproducible_rust_binary_config()
     assert_release_python_dependency_inventory()
     assert_malformed_python_locks_fail_closed()
     assert_source_tree_digest_covers_untracked_source()

@@ -88,8 +88,10 @@ SUPPORTED_CONSTRAINTS = {
     "formBody",
     "responseDateWindow",
     "responseJson",
+    "responseBinding",
 }
-REQUEST_CONSTRAINTS = SUPPORTED_CONSTRAINTS - {"responseDateWindow", "responseJson"}
+RESPONSE_CONSTRAINTS = {"responseDateWindow", "responseJson", "responseBinding"}
+REQUEST_CONSTRAINTS = SUPPORTED_CONSTRAINTS - RESPONSE_CONSTRAINTS
 FAIL_CLOSED_DEFAULTS = {
     "action": "deny",
     "failMode": "closed",
@@ -204,6 +206,7 @@ CONSTRAINT_TYPE_FIELDS = {
         "operations",
     },
     "responseJson": {"required", "items", "fields", "operations"},
+    "responseBinding": {"successStatusCodes", "contentTypes", "bindings", "operations"},
 }
 
 
@@ -251,6 +254,8 @@ def strict_json_loads(raw: str | bytes | bytearray) -> Any:
         return value
 
     def finite_int(text: str) -> int:
+        if text == "-0":
+            raise ValueError("JSON integer must use canonical zero")
         value = int(text)
         if not _is_finite_json_number(value):
             raise ValueError("JSON number must be finite and representable")
@@ -1059,6 +1064,7 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
         if constraint.get("operations") is not None and constraint_type not in {
             "responseDateWindow",
             "responseJson",
+            "responseBinding",
         }:
             raise PolicyBundleError(
                 f"route {route_id} constraint {constraint_id} operations are supported only for response constraints"
@@ -1263,7 +1269,85 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                 or len(formats) != len(set(formats))
             ):
                 raise PolicyBundleError(f"route {route_id} responseDateWindow {constraint_id} has invalid formats")
-        if constraint_type in {"responseDateWindow", "responseJson"}:
+        elif constraint_type == "responseBinding":
+            success_status_codes = constraint.get("successStatusCodes")
+            if (
+                not isinstance(success_status_codes, list)
+                or not 1 <= len(success_status_codes) <= 8
+                or any(
+                    isinstance(status, bool)
+                    or not isinstance(status, int)
+                    or not 200 <= status <= 299
+                    for status in success_status_codes
+                )
+                or len(success_status_codes) != len(set(success_status_codes))
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} responseBinding {constraint_id} must define 1-8 unique 2xx successStatusCodes"
+                )
+            content_types = constraint.get("contentTypes")
+            if (
+                not isinstance(content_types, list)
+                or not 1 <= len(content_types) <= 4
+                or any(
+                    not isinstance(content_type, str)
+                    or content_type != content_type.lower()
+                    or re.fullmatch(r"[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+", content_type)
+                    is None
+                    for content_type in content_types
+                )
+                or len(content_types) != len(set(content_types))
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} responseBinding {constraint_id} must define 1-4 unique lower-case contentTypes"
+                )
+            bindings = constraint.get("bindings")
+            if not isinstance(bindings, list) or not 1 <= len(bindings) <= 8:
+                raise PolicyBundleError(
+                    f"route {route_id} responseBinding {constraint_id} must define 1-8 bindings"
+                )
+            seen_binding_ids: set[str] = set()
+            seen_response_fields: set[str] = set()
+            required_fields = {"id", "operationField", "responseField", "comparison"}
+            for binding in bindings:
+                if not isinstance(binding, dict) or set(binding) != required_fields:
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} has an invalid binding"
+                    )
+                binding_id = binding.get("id")
+                operation_field = binding.get("operationField")
+                response_field = binding.get("responseField")
+                if (
+                    not isinstance(binding_id, str)
+                    or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", binding_id) is None
+                    or binding_id in seen_binding_ids
+                ):
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} has an invalid or duplicate binding id"
+                    )
+                if (
+                    not isinstance(operation_field, str)
+                    or re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,127}", operation_field) is None
+                ):
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} binding {binding_id} has an invalid operationField"
+                    )
+                if (
+                    not isinstance(response_field, str)
+                    or len(response_field) > 256
+                    or RESPONSE_FIELD_PATH_RE.fullmatch(response_field) is None
+                    or response_field in seen_response_fields
+                ):
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} binding {binding_id} has an invalid or duplicate responseField"
+                    )
+                if binding.get("comparison") not in {"exactString", "canonicalInteger"}:
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} binding {binding_id} has an invalid comparison"
+                    )
+                seen_binding_ids.add(binding_id)
+                seen_response_fields.add(response_field)
+        if constraint_type in RESPONSE_CONSTRAINTS:
             operations = constraint.get("operations")
             if operations is not None and (
                 not isinstance(operations, list)
@@ -1416,6 +1500,84 @@ def _validate_credential_request_body_constraint(
         f"route {route_id} credential-bearing generic.rest bodyMode {request_mode} requires "
         f"a {required_constraint} constraint with non-empty allowedFields"
     )
+
+
+def _validate_response_binding_sources(
+    route_id: str,
+    adapter_type: str,
+    adapter_config: dict[str, Any],
+    constraints: tuple[dict[str, Any], ...],
+) -> None:
+    response_bindings = [
+        constraint for constraint in constraints if constraint.get("type") == "responseBinding"
+    ]
+    if not response_bindings:
+        return
+    if adapter_type != "generic.rest":
+        raise PolicyBundleError(
+            f"route {route_id} responseBinding is currently supported only for generic.rest"
+        )
+    request = adapter_config.get("request") or {}
+    response = adapter_config.get("response") or {}
+    if request.get("bodyMode") != "formUrlencoded":
+        raise PolicyBundleError(
+            f"route {route_id} responseBinding currently requires generic.rest formUrlencoded requests"
+        )
+    if (
+        response.get("mode") != "json"
+        or not 1 <= int(response.get("maxBodyBytes") or 0) <= 65536
+    ):
+        raise PolicyBundleError(
+            f"route {route_id} responseBinding requires a buffered JSON response capped at 65536 bytes"
+        )
+    operation = request.get("operation") or {}
+    operation_name = operation.get("name")
+    available_fields = {"operation"}
+    available_fields.update(str(item) for item in operation.get("formFields") or [])
+    form_constraints = [
+        constraint for constraint in constraints if constraint.get("type") == "formBody"
+    ]
+    required_fields = {
+        str(field)
+        for constraint in form_constraints
+        for field in constraint.get("requiredFields") or []
+    }
+    field_rules = {
+        str(field): rule
+        for constraint in form_constraints
+        for field, rule in (constraint.get("fields") or {}).items()
+    }
+    for constraint in response_bindings:
+        constraint_id = str(constraint.get("id") or "unnamed")
+        operations = constraint.get("operations") or []
+        if operations and operation_name not in operations:
+            raise PolicyBundleError(
+                f"route {route_id} responseBinding {constraint_id} does not include its configured operation"
+            )
+        for binding in constraint.get("bindings") or []:
+            source = str(binding.get("operationField") or "")
+            if source not in available_fields:
+                raise PolicyBundleError(
+                    f"route {route_id} responseBinding {constraint_id} source {source} "
+                    "is not captured by generic.rest request.operation"
+                )
+            if source == "operation":
+                continue
+            if source not in required_fields:
+                raise PolicyBundleError(
+                    f"route {route_id} responseBinding {constraint_id} source {source} "
+                    "must be required by formBody"
+                )
+            expected_type = (
+                "integer"
+                if binding.get("comparison") == "canonicalInteger"
+                else "string"
+            )
+            if (field_rules.get(source) or {}).get("type") != expected_type:
+                raise PolicyBundleError(
+                    f"route {route_id} responseBinding {constraint_id} source {source} "
+                    f"must use formBody type {expected_type}"
+                )
 
 
 def _validate_response_headers(
@@ -1914,6 +2076,7 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             credential_ref,
             constraints,
         )
+        _validate_response_binding_sources(route_id, adapter_type, adapter_config, constraints)
         _validate_provider_account_rate_limits(
             route_id,
             constraints,

@@ -24,7 +24,7 @@
   <text x="806" y="166" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Gmail client lists messages</text>
   <text x="806" y="194" font-family="Arial, sans-serif" font-size="13" fill="#17211d">npm publish retries after JIT</text>
   <text x="806" y="222" font-family="Arial, sans-serif" font-size="13" fill="#17211d">X search stays read-only</text>
-  <text x="806" y="250" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Stripe checkout requires approval</text>
+  <text x="806" y="250" font-family="Arial, sans-serif" font-size="13" fill="#17211d">Tokenized PaymentIntent requires JIT</text>
   <rect x="806" y="286" width="248" height="82" rx="6" fill="#fee2e2" stroke="#fecaca"/>
   <text x="828" y="318" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#991b1b">Unknown routes fail closed</text>
   <text x="828" y="346" font-family="Arial, sans-serif" font-size="12" fill="#991b1b">No credential is released to the agent</text>

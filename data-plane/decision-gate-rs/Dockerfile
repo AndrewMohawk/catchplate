@@ -1,10 +1,14 @@
 FROM rust:1.88-slim-bookworm AS build
 
+ARG SOURCE_DATE_EPOCH="0"
+ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
+
 WORKDIR /src
 COPY data-plane/decision-gate-rs/Cargo.toml ./Cargo.toml
 COPY data-plane/decision-gate-rs/Cargo.lock ./Cargo.lock
 COPY data-plane/decision-gate-rs/src ./src
-RUN cargo build --release
+RUN cargo build --release --locked
 
 FROM debian:bookworm-slim
 

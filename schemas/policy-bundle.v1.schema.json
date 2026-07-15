@@ -120,7 +120,8 @@
             "jsonBody",
             "formBody",
             "responseDateWindow",
-            "responseJson"
+            "responseJson",
+            "responseBinding"
           ]
         },
         "phase": {"enum": ["request", "response"]},
@@ -185,6 +186,13 @@
           }
         },
         "contentTypes": {"type": "array", "items": {"type": "string"}},
+        "successStatusCodes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 200, "maximum": 299}
+        },
         "allowedFields": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
         "requiredFields": {"type": "array", "items": {"type": "string"}},
         "deniedFields": {"type": "array", "items": {"type": "string"}},
@@ -200,13 +208,29 @@
           "uniqueItems": true,
           "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
         },
+        "bindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "required": ["id", "operationField", "responseField", "comparison"],
+            "additionalProperties": false,
+            "properties": {
+              "id": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
+              "operationField": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
+              "responseField": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^[A-Za-z0-9_-]+(?:\\.[A-Za-z0-9_-]+)*$"},
+              "comparison": {"enum": ["exactString", "canonicalInteger"]}
+            }
+          }
+        },
         "extensions": {"type": "object", "maxProperties": 0, "additionalProperties": false}
       },
       "allOf": [
         {
           "if": {
             "required": ["type"],
-            "properties": {"type": {"enum": ["responseDateWindow", "responseJson"]}}
+            "properties": {"type": {"enum": ["responseDateWindow", "responseJson", "responseBinding"]}}
           },
           "then": {
             "required": ["phase"],
@@ -261,6 +285,10 @@
         {
           "if": {"properties": {"type": {"const": "responseJson"}}, "required": ["type"]},
           "then": {"required": ["phase", "fields"]}
+        },
+        {
+          "if": {"properties": {"type": {"const": "responseBinding"}}, "required": ["type"]},
+          "then": {"required": ["phase", "successStatusCodes", "contentTypes", "bindings"]}
         }
       ]
     }

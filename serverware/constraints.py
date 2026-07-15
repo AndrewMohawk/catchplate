@@ -25,7 +25,9 @@ SUPPORTED_REQUEST_CONSTRAINTS = {
     "jsonBody",
     "formBody",
 }
-SUPPORTED_RESPONSE_CONSTRAINTS = {"responseDateWindow", "responseJson"}
+SUPPORTED_RESPONSE_CONSTRAINTS = {"responseDateWindow", "responseJson", "responseBinding"}
+MIN_I64 = -(2**63)
+MAX_I64 = 2**63 - 1
 
 
 @dataclass
@@ -107,6 +109,7 @@ def evaluate_response_constraints(
     *,
     constraint_types: set[str] | None = None,
 ) -> PolicyDecision:
+    binding_evidence: list[dict[str, str]] = []
     for constraint in route.constraints:
         constraint_type = str(constraint.get("type") or "")
         if constraint_type not in SUPPORTED_RESPONSE_CONSTRAINTS:
@@ -132,11 +135,21 @@ def evaluate_response_constraints(
             decision = _enforce_response_date_window(constraint, flow)
         elif constraint_type == "responseJson":
             decision = _enforce_response_json(constraint, flow)
+        elif constraint_type == "responseBinding":
+            operation_fields = flow.metadata.get("serverware_operation") or {}
+            decision = _validate_response_binding_envelope(constraint, flow)
+            if decision.allowed:
+                decision = _enforce_response_binding(constraint, flow, operation_fields)
         else:
             decision = PolicyDecision(True)
         if not decision.allowed:
             return decision
-    return PolicyDecision(True)
+        if constraint_type == "responseBinding":
+            binding_evidence.extend(decision.payload.get("bindings") or [])
+    return PolicyDecision(
+        True,
+        payload={"bindings": binding_evidence} if binding_evidence else {},
+    )
 
 
 def _phase_includes(constraint: dict[str, Any], phase: str) -> bool:
@@ -160,6 +173,177 @@ def _deny(constraint: dict[str, Any], reason: str, error: str, **payload: Any) -
             **payload,
         },
     )
+
+
+def _canonical_i64(value: Any) -> int | None:
+    if not isinstance(value, str) or re.fullmatch(r"(?:0|-?[1-9][0-9]*)", value) is None:
+        return None
+    parsed = int(value)
+    return parsed if MIN_I64 <= parsed <= MAX_I64 else None
+
+
+def _binding_evidence_digest(
+    constraint: dict[str, Any],
+    binding: dict[str, Any] | None,
+    result: str,
+    flow: Any,
+) -> str:
+    raw = flow.response.raw_content if getattr(flow, "response", None) is not None else b""
+    evidence = {
+        "policy_hash": str(flow.metadata.get("serverware_policy_hash") or ""),
+        "request_digest": str(flow.metadata.get("serverware_request_digest") or ""),
+        "operation_digest": str(flow.metadata.get("serverware_operation_digest") or ""),
+        "response_body_sha256": "sha256:" + hashlib.sha256(raw or b"").hexdigest(),
+        "constraint_id": str(constraint.get("id") or "unnamed"),
+        "binding_id": str((binding or {}).get("id") or "constraint"),
+        "comparison": str((binding or {}).get("comparison") or "none"),
+        "result": result,
+    }
+    return "sha256:" + hashlib.sha256(canonical_json(evidence).encode("utf-8")).hexdigest()
+
+
+def _binding_denial(
+    constraint: dict[str, Any],
+    binding: dict[str, Any] | None,
+    *,
+    error: str,
+    reason: str,
+    result: str,
+    status_code: int,
+    flow: Any | None = None,
+) -> PolicyDecision:
+    payload: dict[str, Any] = {"statusCode": status_code}
+    if flow is not None:
+        payload["evidence_digest"] = _binding_evidence_digest(
+            constraint, binding, result, flow
+        )
+    if binding is not None:
+        payload["binding_id"] = str(binding.get("id") or "unnamed")
+    return _deny(constraint, reason, error, **payload)
+
+
+def _response_header_values(flow: Any, name: str) -> list[str]:
+    headers = flow.response.headers
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        return [str(value) for value in get_all(name)]
+    value = headers.get(name)
+    return [] if value is None else [str(value)]
+
+
+def _validate_response_binding_envelope(
+    constraint: dict[str, Any], flow: Any
+) -> PolicyDecision:
+    if flow.response is None:
+        return _binding_denial(
+            constraint,
+            None,
+            error="response_binding_response_missing",
+            reason="response binding requires a response",
+            result="response-missing",
+            status_code=502,
+            flow=flow,
+        )
+    status_code = int(flow.response.status_code)
+    if status_code not in constraint.get("successStatusCodes", []):
+        return _binding_denial(
+            constraint,
+            None,
+            error="response_binding_status_denied",
+            reason="response status is not admitted by the binding",
+            result="status-denied",
+            status_code=502,
+            flow=flow,
+        )
+    content_types = _response_header_values(flow, "content-type")
+    if len(content_types) != 1:
+        return _binding_denial(
+            constraint,
+            None,
+            error="response_binding_content_type_ambiguous",
+            reason="response binding requires exactly one content type",
+            result="content-type-count",
+            status_code=502,
+            flow=flow,
+        )
+    media_type = content_types[0].split(";", 1)[0].strip().lower()
+    if media_type not in constraint.get("contentTypes", []):
+        return _binding_denial(
+            constraint,
+            None,
+            error="response_binding_content_type_denied",
+            reason="response content type is not admitted by the binding",
+            result="content-type-denied",
+            status_code=502,
+            flow=flow,
+        )
+    content_encodings = _response_header_values(flow, "content-encoding")
+    if len(content_encodings) > 1 or (
+        content_encodings and content_encodings[0].strip().lower() != "identity"
+    ):
+        return _binding_denial(
+            constraint,
+            None,
+            error="response_binding_content_encoding_denied",
+            reason="response binding requires an identity-encoded body",
+            result="content-encoding-denied",
+            status_code=502,
+            flow=flow,
+        )
+    return PolicyDecision(True)
+
+
+def _constraint_matches_operation(
+    constraint: dict[str, Any], operation_fields: dict[str, Any]
+) -> tuple[bool, PolicyDecision | None]:
+    operations = constraint.get("operations") or []
+    if not operations:
+        return True, None
+    operation = operation_fields.get("operation")
+    if not isinstance(operation, str) or not operation:
+        return False, _binding_denial(
+            constraint,
+            None,
+            error="response_binding_operation_context_missing",
+            reason="response binding operation context is missing",
+            result="operation-missing",
+            status_code=403,
+        )
+    return operation in operations, None
+
+
+def evaluate_response_binding_sources(
+    route: Any, operation_fields: dict[str, Any]
+) -> PolicyDecision:
+    for constraint in route.constraints:
+        if constraint.get("type") != "responseBinding":
+            continue
+        applies, denial = _constraint_matches_operation(constraint, operation_fields)
+        if denial is not None:
+            return denial
+        if not applies:
+            continue
+        for binding in constraint.get("bindings") or []:
+            value = operation_fields.get(str(binding.get("operationField") or ""))
+            if not isinstance(value, str) or len(value.encode("utf-8")) > 4096:
+                return _binding_denial(
+                    constraint,
+                    binding,
+                    error="response_binding_source_missing",
+                    reason="response binding source is missing or invalid",
+                    result="source-missing",
+                    status_code=403,
+                )
+            if binding.get("comparison") == "canonicalInteger" and _canonical_i64(value) is None:
+                return _binding_denial(
+                    constraint,
+                    binding,
+                    error="response_binding_source_invalid",
+                    reason="response binding integer source is not canonical",
+                    result="source-invalid",
+                    status_code=403,
+                )
+    return PolicyDecision(True)
 
 
 def _rate_key(
@@ -940,6 +1124,122 @@ def _enforce_response_json(constraint: dict[str, Any], flow: Any) -> PolicyDecis
             if not decision.allowed:
                 return decision
     return PolicyDecision(True)
+
+
+def _enforce_response_binding(
+    constraint: dict[str, Any], flow: Any, operation_fields: dict[str, Any]
+) -> PolicyDecision:
+    if not flow.response:
+        return _binding_denial(
+            constraint,
+            None,
+            error="response_binding_response_missing",
+            reason="response binding has no response to validate",
+            result="response-missing",
+            status_code=502,
+            flow=flow,
+        )
+    try:
+        raw = flow.response.raw_content
+        if raw is None:
+            raw = flow.response.get_content(strict=False) or b""
+        payload = strict_json_loads(raw)
+    except Exception:
+        return _binding_denial(
+            constraint,
+            None,
+            error="response_binding_json_invalid",
+            reason="response binding body is not strict JSON",
+            result="response-invalid-json",
+            status_code=502,
+            flow=flow,
+        )
+    if not isinstance(payload, dict):
+        return _binding_denial(
+            constraint,
+            None,
+            error="response_binding_object_required",
+            reason="response binding requires a top-level JSON object",
+            result="response-object-required",
+            status_code=502,
+            flow=flow,
+        )
+
+    for binding in constraint.get("bindings") or []:
+        source = operation_fields.get(str(binding.get("operationField") or ""))
+        if not isinstance(source, str):
+            return _binding_denial(
+                constraint,
+                binding,
+                error="response_binding_source_missing",
+                reason="response binding source is missing",
+                result="source-missing",
+                status_code=502,
+                flow=flow,
+            )
+        found, actual = _object_value_at_path(
+            payload, str(binding.get("responseField") or "")
+        )
+        if not found:
+            return _binding_denial(
+                constraint,
+                binding,
+                error="response_binding_field_ambiguous",
+                reason="response binding field is missing or ambiguous",
+                result="response-field-count",
+                status_code=502,
+                flow=flow,
+            )
+        comparison = binding.get("comparison")
+        if comparison == "exactString":
+            matches = isinstance(actual, str) and actual == source
+        elif comparison == "canonicalInteger":
+            expected = _canonical_i64(source)
+            matches = (
+                expected is not None
+                and isinstance(actual, int)
+                and not isinstance(actual, bool)
+                and MIN_I64 <= actual <= MAX_I64
+                and actual == expected
+            )
+        else:
+            matches = False
+        if not matches:
+            return _binding_denial(
+                constraint,
+                binding,
+                error="response_binding_mismatch",
+                reason="response does not match the authorized operation context",
+                result="mismatch",
+                status_code=502,
+                flow=flow,
+            )
+    return PolicyDecision(
+        True,
+        payload={
+            "bindings": [
+                {
+                    "constraint_id": str(constraint.get("id") or "unnamed"),
+                    "binding_id": str(binding.get("id") or "unnamed"),
+                    "evidence_digest": _binding_evidence_digest(
+                        constraint, binding, "match", flow
+                    ),
+                }
+                for binding in constraint.get("bindings") or []
+            ]
+        },
+    )
+
+
+def _object_value_at_path(value: Any, path: str) -> tuple[bool, Any]:
+    current = value
+    for part in path.split("."):
+        if not isinstance(current, dict) or part not in current:
+            return False, None
+        current = current[part]
+    if isinstance(current, (dict, list)):
+        return False, None
+    return True, current
 
 
 def _enforce_field_rule(

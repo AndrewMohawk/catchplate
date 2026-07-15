@@ -221,6 +221,12 @@ class ServerwareAddon:
                 {"error": "request_hook_failed_closed"},
             )
 
+    def responseheaders(self, flow: http.HTTPFlow) -> None:
+        # The development transport must retain the complete upstream entity until
+        # response constraints have run; otherwise mitmproxy streaming settings
+        # could release bytes before a synthetic denial replaces the response.
+        flow.response.stream = False
+
     def response(self, flow: http.HTTPFlow) -> None:
         try:
             if flow.metadata.get("serverware_blocked_response") is not True:

@@ -828,6 +828,16 @@ try{policyCredentialInjection(xReadOnly,null,xWriteTemplate);writeScopeAccepted=
 if(writeScopeAccepted)process.exit(32);
 const xWriter={...xReadOnly,metadata:{...xReadOnly.metadata,scopes:['tweet.read','tweet.write','users.read']}};
 if(policyCredentialInjection(xWriter,null,xWriteTemplate).type!=='bearer')process.exit(33);
+const stripeTemplate={provider:'stripe',injection:{type:'bearer'}};
+const stripeCredential={id:'cred-stripe',kind:'bearer',metadata:{provider:'stripe'}};
+if(policyCredentialInjection(stripeCredential,null,stripeTemplate).type!=='bearer')process.exit(34);
+for(const credential of [
+  {id:'unbound-stripe',kind:'bearer',metadata:{}},
+  {id:'wrong-stripe',kind:'bearer',metadata:{provider:'github'}}
+]){
+  let failed=false;try{policyCredentialInjection(credential,null,stripeTemplate)}catch(_){failed=true}
+  if(!failed)process.exit(35);
+}
 for(const credential of [
   {id:'header',kind:'header',metadata:{}},
   {id:'header',kind:'header',metadata:{injection_name:'authorization'}},
@@ -956,6 +966,72 @@ function credentialToJson(value){return value;}
             )
             if "idempotency-key" not in stripe_required_headers:
                 raise AssertionError("Stripe payment template does not require a bounded idempotency key")
+            stripe_response_binding = next(
+                (
+                    item
+                    for item in templates["stripe_payment_intent_jit"].get("constraints", [])
+                    if item.get("id") == "payment-intent-response-binding"
+                ),
+                None,
+            )
+            if stripe_response_binding != {
+                "id": "payment-intent-response-binding",
+                "type": "responseBinding",
+                "phase": "response",
+                "operations": ["stripe.payment_intents.create"],
+                "successStatusCodes": [200],
+                "contentTypes": ["application/json"],
+                "bindings": [
+                    {
+                        "id": "amount",
+                        "operationField": "amount",
+                        "responseField": "amount",
+                        "comparison": "canonicalInteger",
+                    },
+                    {
+                        "id": "currency",
+                        "operationField": "currency",
+                        "responseField": "currency",
+                        "comparison": "exactString",
+                    },
+                    {
+                        "id": "payment-method",
+                        "operationField": "payment_method",
+                        "responseField": "payment_method",
+                        "comparison": "exactString",
+                    },
+                ],
+            }:
+                raise AssertionError("Stripe payment template does not bind its success response")
+            stripe_response_shape = next(
+                (
+                    item
+                    for item in templates["stripe_payment_intent_jit"].get("constraints", [])
+                    if item.get("id") == "payment-intent-response-shape"
+                ),
+                None,
+            )
+            if stripe_response_shape != {
+                "id": "payment-intent-response-shape",
+                "type": "responseJson",
+                "phase": "response",
+                "operations": ["stripe.payment_intents.create"],
+                "fields": {
+                    "id": {
+                        "required": True,
+                        "type": "string",
+                        "minLength": 4,
+                        "maxLength": 255,
+                        "pattern": "^pi_[A-Za-z0-9]{1,252}$",
+                    },
+                    "object": {
+                        "required": True,
+                        "type": "string",
+                        "equals": "payment_intent",
+                    },
+                },
+            }:
+                raise AssertionError("Stripe payment template does not prove PaymentIntent identity")
 
             for index, (template_id, template) in enumerate(templates.items(), start=1):
                 candidate = copy.deepcopy(snapshot.raw)

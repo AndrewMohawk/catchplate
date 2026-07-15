@@ -11300,26 +11300,6 @@ UI_HTML = r"""
         path: '/',
         injection: {"type":"bearer"},
         policies: [{"type":"approval","ttl_seconds":30,"scope":"request_digest"}]
-      },
-      stripe_readonly: {
-        label: 'Stripe customer read-only',
-        name: 'Stripe read-only customers',
-        host: 'api.stripe.com',
-        path: '/v1/customers',
-        injection: {"type":"bearer"},
-        policies: [{"type":"queryNumericBounds","parameters":["limit"],"min":1,"max":25,"integer":true}]
-      },
-      stripe_payment_intent_jit: {
-        label: 'Stripe payment with approval',
-        name: 'Stripe bounded PaymentIntent',
-        host: 'api.stripe.com',
-        path: '/v1/payment_intents',
-        injection: {"type":"bearer"},
-        policies: [
-          {"type":"rateLimit","max":5,"windowSeconds":86400,"store":"shared","key":{"scope":["principal","credential","route"]}},
-          {"type":"formBody","allowedFields":["amount","currency","payment_method","confirm","metadata.agent_request_id"],"requiredFields":["amount","currency","payment_method","confirm"]},
-          {"type":"approval","ttl_seconds":60,"scope":"request_digest"}
-        ]
       }
     };
 
@@ -11385,7 +11365,7 @@ UI_HTML = r"""
         constraints: [{id: 'stripe-page-cap', type: 'queryNumericBounds', parameters: ['limit'], min: 1, max: 25, integer: true}]
       },
       stripe_payment_intent_jit: {
-        label: 'Stripe payment + YubiKey JIT',
+        label: 'Tokenized PaymentIntent create + hardware JIT',
         routeId: 'stripe.payment-intent.tokenized-jit',
         provider: 'stripe',
         injection: {type: 'bearer'},
@@ -11393,7 +11373,9 @@ UI_HTML = r"""
         adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'idempotency-key', 'user-agent'], requiredHeaders: {'idempotency-key': {type: 'string', minLength: 1, maxLength: 255, pattern: '^[-A-Za-z0-9._:]{1,255}$'}}, allowedQueryKeys: [], bodyMode: 'formUrlencoded', maxBodyBytes: 16384, operation: {name: 'stripe.payment_intents.create', formFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'amount', 'currency', 'status', 'payment_method', 'created'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
           {id: 'payment-intent-five-per-day', type: 'rateLimit', max: 5, windowSeconds: 86400, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
-          {id: 'payment-intent-tokenized-only', type: 'formBody', contentTypes: ['application/x-www-form-urlencoded'], allowedFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id'], requiredFields: ['amount', 'currency', 'payment_method', 'confirm'], deniedFields: ['payment_method_data.card.number', 'payment_method_data.card.cvc', 'source', 'card'], fields: {amount: {type: 'integer', min: 50, max: 50000}, currency: {type: 'string', equals: 'usd'}, payment_method: {type: 'string', pattern: '^pm_[A-Za-z0-9]{8,64}$', maxLength: 67}, confirm: {type: 'string', equals: 'true'}, 'metadata.agent_request_id': {type: 'string', maxLength: 128}}}
+          {id: 'payment-intent-tokenized-only', type: 'formBody', contentTypes: ['application/x-www-form-urlencoded'], allowedFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id'], requiredFields: ['amount', 'currency', 'payment_method', 'confirm'], deniedFields: ['payment_method_data.card.number', 'payment_method_data.card.cvc', 'source', 'card'], fields: {amount: {type: 'integer', min: 50, max: 50000}, currency: {type: 'string', equals: 'usd'}, payment_method: {type: 'string', pattern: '^pm_[A-Za-z0-9]{8,64}$', maxLength: 67}, confirm: {type: 'string', equals: 'true'}, 'metadata.agent_request_id': {type: 'string', maxLength: 128}}},
+          {id: 'payment-intent-response-shape', type: 'responseJson', phase: 'response', operations: ['stripe.payment_intents.create'], fields: {id: {required: true, type: 'string', minLength: 4, maxLength: 255, pattern: '^pi_[A-Za-z0-9]{1,252}$'}, object: {required: true, type: 'string', equals: 'payment_intent'}}},
+          {id: 'payment-intent-response-binding', type: 'responseBinding', phase: 'response', operations: ['stripe.payment_intents.create'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'amount', operationField: 'amount', responseField: 'amount', comparison: 'canonicalInteger'}, {id: 'currency', operationField: 'currency', responseField: 'currency', comparison: 'exactString'}, {id: 'payment-method', operationField: 'payment_method', responseField: 'payment_method', comparison: 'exactString'}]}
         ],
         jit: {required: true, mode: 'perOperation', ttlSeconds: 60, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'requestDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
       },
@@ -12656,11 +12638,11 @@ UI_HTML = r"""
       if (storedInjection && activeInjection && !injectionShapesCompatible(activeInjection, storedInjection)) {
         throw new Error(`Credential ${credential.id} does not match its active PolicyBundle injection shape`);
       }
+      const providerId = String(activeCredential?.provider || credential?.metadata?.provider_id || credential?.metadata?.provider || '');
+      if (template.provider && providerId !== template.provider) {
+        throw new Error(`Credential ${credential?.id || activeCredential?.id || 'unknown'} belongs to ${providerId || 'an unknown provider'}, not ${template.provider}`);
+      }
       if (credential?.kind === 'oauth2') {
-        const providerId = String(credential.metadata?.provider_id || '');
-        if (!providerId || providerId !== template.provider) {
-          throw new Error(`OAuth credential ${credential.id} belongs to ${providerId || 'an unknown provider'}, not ${template.provider}`);
-        }
         const grantedScopes = new Set(oauthCredentialGrantedScopes(credential));
         const missingScopes = (template.requiredScopes || []).filter((scope) => !grantedScopes.has(scope));
         if (missingScopes.length) {
@@ -12955,6 +12937,7 @@ UI_HTML = r"""
       if (!provider) {
         $('credential-name').value = `${template.label} credential`;
         $('credential-kind').value = 'bearer';
+        $('credential-metadata').value = JSON.stringify({provider: template.provider}, null, 2);
         syncCredentialKindFields(true);
         focusPortalForm('credential-form');
         return {mode: 'static-credential'};

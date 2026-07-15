@@ -398,6 +398,169 @@ def _assert_no_horizontal_overflow(page: Any, *, label: str) -> None:
     )
 
 
+def _assert_stripe_uses_manual_credential_flow(
+    page: Any, browser_observations: list[dict[str, Any]]
+) -> None:
+    oauth_requests_before = sum(
+        1
+        for item in browser_observations
+        if item.get("type") == "request" and "/api/oauth/" in item.get("url", "")
+    )
+    oauth_state_before = page.evaluate(
+        """
+        () => ({
+          provider: document.querySelector('#oauth-provider')?.value || '',
+          draft: sessionStorage.getItem('serverware.oauthDraft'),
+          setupSessionId: state.oauthSetupSessionId
+        })
+        """
+    )
+    credential_form_before = {
+        "name": page.locator("#credential-name").input_value(),
+        "kind": page.locator("#credential-kind").input_value(),
+        "metadata": page.locator("#credential-metadata").input_value(),
+    }
+
+    page.locator("#setup-template").select_option("stripe_payment_intent_jit")
+    page.locator("#setup-principal").select_option("agent:demo")
+    # The setup action records a durable run against an active route before it opens
+    # the credential form. Reuse a seeded route only for this UI-path assertion.
+    page.locator("#setup-route-id").fill("demo.echo")
+    page.wait_for_function(
+        """
+        () => document.querySelector('#setup-template')?.value === 'stripe_payment_intent_jit'
+          && document.querySelector('#setup-connect-button')?.textContent === 'Add credential'
+        """,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+
+    setup_credential = page.locator("#setup-credential")
+    unrelated_bearer = setup_credential.locator(
+        "option[value='cred-demo-bearer']"
+    )
+    _require(
+        unrelated_bearer.count() == 1 and unrelated_bearer.is_disabled(),
+        "Stripe setup did not reject the unrelated seeded bearer credential",
+    )
+    _require(
+        setup_credential.input_value() == "",
+        "Stripe setup silently selected an unrelated bearer credential",
+    )
+    _require(
+        page.locator("#oauth-provider option[value='stripe']").count() == 0,
+        "Stripe was incorrectly exposed as an OAuth provider",
+    )
+    add_credential = page.get_by_role("button", name="Add credential", exact=True)
+    _require(add_credential.is_enabled(), "Stripe manual credential action is disabled")
+    add_credential.click()
+    page.wait_for_function(
+        """
+        () => {
+          try {
+            const metadata = JSON.parse(document.querySelector('#credential-metadata')?.value || '{}');
+            return document.querySelector('#credential-kind')?.value === 'bearer'
+              && metadata.provider === 'stripe'
+              && new URL(window.location.href).searchParams.has('setup');
+          } catch (_) {
+            return false;
+          }
+        }
+        """,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    _require(
+        page.locator("#credential-name").input_value()
+        == "Tokenized PaymentIntent create + hardware JIT credential",
+        "Stripe manual credential name was not prefilled",
+    )
+    _require(
+        json.loads(page.locator("#credential-metadata").input_value())
+        == {"provider": "stripe"},
+        "Stripe provider metadata was not prefilled",
+    )
+    _require(
+        page.evaluate("document.activeElement?.id") == "credential-name",
+        "Stripe setup did not focus the manual static credential form",
+    )
+
+    stripe_state = page.evaluate(
+        """
+        () => ({
+          sessionId: state.setupSession?.id || null,
+          revision: state.setupSession?.revision ?? null,
+          oauthSetupSessionId: state.oauthSetupSessionId,
+          oauthProvider: document.querySelector('#oauth-provider')?.value || '',
+          oauthDraft: sessionStorage.getItem('serverware.oauthDraft')
+        })
+        """
+    )
+    _require(stripe_state["sessionId"], "Stripe setup did not create its temporary run")
+    _require(
+        stripe_state["oauthSetupSessionId"] == oauth_state_before["setupSessionId"],
+        "Stripe manual setup was incorrectly attached to OAuth state",
+    )
+    _require(
+        stripe_state["oauthProvider"] == oauth_state_before["provider"]
+        and stripe_state["oauthDraft"] == oauth_state_before["draft"],
+        "Stripe manual setup changed the selected OAuth provider or draft",
+    )
+    oauth_requests_after = sum(
+        1
+        for item in browser_observations
+        if item.get("type") == "request" and "/api/oauth/" in item.get("url", "")
+    )
+    _require(
+        oauth_requests_after == oauth_requests_before,
+        "Stripe manual setup started an OAuth request",
+    )
+
+    cancelled = page.evaluate(
+        """
+        async ({sessionId, revision}) => {
+          const token = sessionStorage.getItem('serverware.adminToken') || '';
+          const response = await fetch(`/api/setup/sessions/${encodeURIComponent(sessionId)}/cancel`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Serverware-Admin-Token': token,
+              'Authorization': `Bearer ${token}`
+            },
+            credentials: 'same-origin',
+            body: JSON.stringify({
+              expectedRevision: revision,
+              reason: 'Browser Stripe manual credential flow assertion complete'
+            })
+          });
+          return {status: response.status, text: await response.text()};
+        }
+        """,
+        {"sessionId": stripe_state["sessionId"], "revision": stripe_state["revision"]},
+    )
+    _require(
+        200 <= cancelled["status"] < 300,
+        f"temporary Stripe setup run could not be cancelled: {cancelled}",
+    )
+    page.locator("#setup-session").select_option("")
+    page.wait_for_function(
+        """
+        () => !new URL(window.location.href).searchParams.has('setup')
+          && state.setupSession === null
+        """,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    page.locator("#setup-template").select_option("gmail_recent")
+    page.locator("#credential-name").fill(credential_form_before["name"])
+    page.locator("#credential-kind").select_option(credential_form_before["kind"])
+    page.locator("#credential-metadata").fill(credential_form_before["metadata"])
+    page.wait_for_function(
+        """
+        () => document.querySelector('#setup-template')?.value === 'gmail_recent'
+          && document.querySelector('#setup-connect-button')?.textContent === 'Connect credential'
+        """,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+
+
 def _connect_oauth(
     page: Any,
     context: Any,
@@ -804,6 +967,7 @@ def _run_browser_journey(
                 raise AssertionError(
                     f"demo seed failed: {seed_status}; refresh stack: {refresh_stack}"
                 )
+            _assert_stripe_uses_manual_credential_flow(page, browser_observations)
             if screenshots_dir is not None:
                 _capture_screenshot(
                     page,

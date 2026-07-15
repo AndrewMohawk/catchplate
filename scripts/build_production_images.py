@@ -5,6 +5,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import stat
 import subprocess
 import sys
 import tarfile
@@ -16,6 +18,8 @@ from typing import Any
 import serverware_source_tree
 
 ROOT = Path(__file__).resolve().parent.parent
+BUILD_API_VERSION = "serverware.productionImagesBuild/v2"
+BUILD_KIND = "ProductionImagesBuild"
 DEFAULT_IMAGES = (
     ("serverware-control", "Dockerfile.production", "serverware/control:production-local"),
     ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", "serverware/decision-gate:production-local"),
@@ -24,6 +28,12 @@ DECISION_GATE_BINARY_PATHS = {
     "binary_digest": "/usr/local/bin/serverware-decision-gate",
     "launcher_binary_digest": "/usr/local/libexec/serverware-production-launcher",
 }
+LAUNCH_AUTHORITY_ROOT = ROOT / "data-plane/decision-gate-rs/trust/launch-authority-root.ed25519.hex"
+ED25519_SPKI_DER_PREFIX = bytes.fromhex("302a300506032b6570032100")
+LAUNCH_AUTHORITY_METADATA_FIELDS = (
+    "launch_authority_key_id",
+    "launch_authority_root_sha256",
+)
 
 
 def canonical_json(value: Any) -> str:
@@ -53,6 +63,83 @@ def source_tree_digest() -> str:
     return serverware_source_tree.source_tree_digest(ROOT)
 
 
+def _decode_ed25519_point(public_key: bytes) -> tuple[int, int]:
+    prime = (1 << 255) - 19
+    encoded = int.from_bytes(public_key, "little")
+    x_sign = encoded >> 255
+    y = encoded & ((1 << 255) - 1)
+    if y >= prime:
+        raise ValueError("non-canonical point encoding")
+
+    d = (-121665 * pow(121666, prime - 2, prime)) % prime
+    y_squared = y * y % prime
+    denominator = (d * y_squared + 1) % prime
+    if denominator == 0:
+        raise ValueError("point is not on the Ed25519 curve")
+    x_squared = (y_squared - 1) * pow(denominator, prime - 2, prime) % prime
+    x = pow(x_squared, (prime + 3) // 8, prime)
+    if x * x % prime != x_squared:
+        x = x * pow(2, (prime - 1) // 4, prime) % prime
+    if x * x % prime != x_squared:
+        raise ValueError("point is not on the Ed25519 curve")
+    if x & 1 != x_sign:
+        x = prime - x
+    if x == 0 and x_sign:
+        raise ValueError("non-canonical point encoding")
+    return x, y
+
+
+def _ed25519_point_add(first: tuple[int, int], second: tuple[int, int]) -> tuple[int, int]:
+    prime = (1 << 255) - 19
+    d = (-121665 * pow(121666, prime - 2, prime)) % prime
+    x1, y1 = first
+    x2, y2 = second
+    product = d * x1 * x2 * y1 * y2 % prime
+    x_denominator = (1 + product) % prime
+    y_denominator = (1 - product) % prime
+    if x_denominator == 0 or y_denominator == 0:
+        raise ValueError("invalid Ed25519 point")
+    return (
+        (x1 * y2 + y1 * x2) * pow(x_denominator, prime - 2, prime) % prime,
+        (y1 * y2 + x1 * x2) * pow(y_denominator, prime - 2, prime) % prime,
+    )
+
+
+def _validate_ed25519_public_key(public_key: bytes) -> None:
+    if len(public_key) != 32:
+        raise ValueError("Ed25519 public keys must contain 32 bytes")
+    point = _decode_ed25519_point(public_key)
+    multiplied = point
+    for _ in range(3):
+        multiplied = _ed25519_point_add(multiplied, multiplied)
+    if multiplied == (0, 1):
+        raise ValueError("weak Ed25519 public key")
+
+
+def launch_authority_metadata(path: Path = LAUNCH_AUTHORITY_ROOT) -> dict[str, str]:
+    try:
+        path_metadata = path.lstat()
+        if not stat.S_ISREG(path_metadata.st_mode):
+            raise RuntimeError(f"launch authority trust root is not a regular file: {path}")
+        tracked_bytes = path.read_bytes()
+    except OSError as exc:
+        raise RuntimeError(f"could not read launch authority trust root {path}: {exc}") from exc
+    if re.fullmatch(rb"[0-9a-f]{64}\n", tracked_bytes) is None:
+        raise RuntimeError(
+            "launch authority trust root must be exactly 64 lowercase hex characters followed by LF"
+        )
+    public_key = bytes.fromhex(tracked_bytes[:-1].decode("ascii"))
+    try:
+        _validate_ed25519_public_key(public_key)
+    except ValueError as exc:
+        raise RuntimeError(f"launch authority trust root is not a valid Ed25519 public key: {exc}") from exc
+    return {
+        "launch_authority_key_id": "sha256:"
+        + hashlib.sha256(ED25519_SPKI_DER_PREFIX + public_key).hexdigest(),
+        "launch_authority_root_sha256": "sha256:" + hashlib.sha256(tracked_bytes).hexdigest(),
+    }
+
+
 def build_metadata() -> dict[str, str]:
     raw_epoch = os.getenv("SOURCE_DATE_EPOCH") or maybe_run(["git", "show", "-s", "--format=%ct", "HEAD"]) or "0"
     try:
@@ -67,6 +154,7 @@ def build_metadata() -> dict[str, str]:
         "created": datetime.fromtimestamp(source_date_epoch, timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
         "source_date_epoch": str(source_date_epoch),
         "source_tree_digest": source_tree_digest(),
+        **launch_authority_metadata(),
     }
 
 
@@ -157,6 +245,12 @@ def decision_gate_binary_digests(image: str) -> dict[str, str]:
     }
 
 
+def image_launch_authority_binding(service: str, metadata: dict[str, str]) -> dict[str, str]:
+    if service != "serverware-decision-gate":
+        return {}
+    return {field: metadata[field] for field in LAUNCH_AUTHORITY_METADATA_FIELDS}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build local shell-free Serverware production image candidates.")
     parser.add_argument("--control-tag", default="serverware/control:production-local")
@@ -199,12 +293,13 @@ def main() -> None:
                 "dockerfile": spec["dockerfile"],
                 "image_id": built_image_id,
                 **binary_digests,
+                **image_launch_authority_binding(spec["service"], metadata),
             }
         )
     no_shell = verify_no_shell([str(item["image_id"]) for item in images])
     result = {
-        "apiVersion": "serverware.productionImagesBuild/v1",
-        "kind": "ProductionImagesBuild",
+        "apiVersion": BUILD_API_VERSION,
+        "kind": BUILD_KIND,
         "ok": True,
         "generated_at_unix": int(time.time()),
         "metadata": metadata,

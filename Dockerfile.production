@@ -9,6 +9,38 @@ COPY requirements.lock .
 RUN python -m pip install --no-cache-dir --no-compile --require-hashes --target=/deps -r requirements.lock \
     && find /deps -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
+FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS production-python-runtime-tree
+
+ARG SOURCE_DATE_EPOCH="0"
+# This artifact closes CPython, libpython, stdlib, extension modules, and vendor.
+# The host PT_INTERP target and recursive system DSO graph remain external.
+COPY --from=python-deps /deps /deps
+RUN set -eu; \
+    mkdir -p /runtime/python/bin /runtime/python/lib/python3.11 /vendor; \
+    cp -L /usr/local/bin/python3 /runtime/python/bin/python3; \
+    cp -RL /usr/local/lib/python3.11/. /runtime/python/lib/python3.11/; \
+    rm -rf \
+        /runtime/python/lib/python3.11/site-packages \
+        /runtime/python/lib/python3.11/ensurepip \
+        /runtime/python/lib/python3.11/idlelib \
+        /runtime/python/lib/python3.11/tkinter \
+        /runtime/python/lib/python3.11/__pycache__; \
+    cp -L /usr/local/lib/libpython3.11.so.1.0 /runtime/python/lib/libpython3.11.so.1.0; \
+    cp -RL /deps/. /vendor/; \
+    test -x /runtime/python/bin/python3; \
+    test -f /runtime/python/lib/libpython3.11.so.1.0; \
+    test -n "$(find /runtime/python/lib/python3.11/lib-dynload -maxdepth 1 -type f -name '*.so' -print -quit)"; \
+    test -z "$(find /runtime /vendor -type l -print -quit)"; \
+    find /runtime /vendor -type d -exec chmod 0755 {} +; \
+    find /runtime /vendor -type f -exec chmod 0444 {} +; \
+    chmod 0555 /runtime/python/bin/python3; \
+    find /runtime /vendor -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +; \
+    /runtime/python/bin/python3 -I -c 'import _ssl, sys; assert sys.version_info[:2] == (3, 11); assert sys.prefix == "/runtime/python"'
+
+FROM scratch AS production-python-runtime-artifact
+COPY --from=production-python-runtime-tree /runtime /runtime
+COPY --from=production-python-runtime-tree /vendor /vendor
+
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS runtime-tree
 
 ARG SOURCE_DATE_EPOCH="0"

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/launch-authorization.v1.schema.json",
+  "title": "Serverware Production Launch Authorization v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["apiVersion", "kind", "statement", "signature"],
+  "properties": {
+    "apiVersion": {"const": "serverware.launchAuthorization/v1"},
+    "kind": {"const": "ProductionLaunchAuthorization"},
+    "statement": {"$ref": "#/$defs/statement"},
+    "signature": {"$ref": "#/$defs/signature"}
+  },
+  "$defs": {
+    "hex64": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+    },
+    "statement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationId",
+        "authorityKeyId",
+        "requestSha256",
+        "issuedAtUnixSeconds",
+        "expiresAtUnixSeconds",
+        "useLimit"
+      ],
+      "properties": {
+        "authorizationId": {"$ref": "#/$defs/hex64"},
+        "authorityKeyId": {"$ref": "#/$defs/sha256"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "issuedAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expiresAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "useLimit": {"const": 1}
+      }
+    }
+  }
+}

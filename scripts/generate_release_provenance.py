@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
 import shlex
 import ssl
+import stat
 import subprocess
 import sys
 import tempfile
@@ -25,20 +27,36 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+    Ed25519PrivateKey,
+    Ed25519PublicKey,
+)
 
 import serverware_source_tree
 from serverware.http_client import request_bytes
+import build_production_images
 import merge_production_images_env
+import publish_production_images
 import run_production_readiness
+import verify_reproducible_builds
 
-DEV_SERVICES = ("serverware", "audit-anchor", "grant-store", "demo-upstream", "decision-gate-rs")
+DEV_SERVICES = (
+    "serverware",
+    "audit-anchor",
+    "grant-store",
+    "demo-upstream",
+    "decision-gate-rs",
+)
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+PRODUCTION_PROVENANCE_VERSION = 2
+PRODUCTION_PROVENANCE_RECORD_TYPE = "release.provenance.v2"
 LOCK_REQUIREMENT_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9](?:[A-Za-z0-9._-]{0,126}[A-Za-z0-9])?)"
     r"==(?P<version>[A-Za-z0-9][A-Za-z0-9._+!-]{0,127})\s+\\$"
 )
-LOCK_HASH_RE = re.compile(r"^--hash=(?P<digest>sha256:[0-9a-f]{64})(?:\s+(?P<continued>\\))?$")
+LOCK_HASH_RE = re.compile(
+    r"^--hash=(?P<digest>sha256:[0-9a-f]{64})(?:\s+(?P<continued>\\))?$"
+)
 
 
 def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
@@ -58,7 +76,10 @@ def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
 MAX_PYTHON_MANIFEST_BYTES = 8 * 1024 * 1024
+MAX_RELEASE_INPUT_BYTES = 16 * 1024 * 1024
 
 
 def canonical_json(value: Any) -> str:
@@ -78,7 +99,9 @@ def b64e(value: bytes) -> str:
 
 
 def run(args: list[str], *, input_bytes: bytes | None = None) -> str:
-    return subprocess.check_output(args, cwd=ROOT, input=input_bytes, text=input_bytes is None).strip()
+    return subprocess.check_output(
+        args, cwd=ROOT, input=input_bytes, text=input_bytes is None
+    ).strip()
 
 
 def request_json(
@@ -96,7 +119,9 @@ def request_json(
         req.add_header("Content-Type", "application/json")
     context = ssl.create_default_context(cafile=str(ca_bundle)) if ca_bundle else None
     return json.loads(
-        request_bytes(req, timeout=timeout, max_bytes=8 * 1024 * 1024, context=context).body
+        request_bytes(
+            req, timeout=timeout, max_bytes=8 * 1024 * 1024, context=context
+        ).body
     )
 
 
@@ -105,13 +130,76 @@ def path_from_arg(raw: str) -> Path:
     return path if path.is_absolute() else ROOT / path
 
 
-def load_json(path: Path, label: str) -> dict[str, Any]:
+def reject_duplicate_json_object_keys(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON object key: {key}")
+        value[key] = item
+    return value
+
+
+def reject_non_finite_json_constant(value: str) -> Any:
+    raise ValueError(f"non-finite JSON number is forbidden: {value}")
+
+
+def read_bounded_regular_file(path: Path, label: str, *, max_bytes: int) -> bytes:
+    if not hasattr(os, "O_NOFOLLOW"):
+        raise ValueError(f"{label} cannot be opened safely on this platform")
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+    )
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"{label} must be a regular non-symlink file: {path}")
+        if metadata.st_size < 1 or metadata.st_size > max_bytes:
+            raise ValueError(
+                f"{label} must contain between 1 and {max_bytes} bytes: {path}"
+            )
+        chunks: list[bytes] = []
+        remaining = max_bytes + 1
+        while remaining:
+            chunk = os.read(descriptor, min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > max_bytes:
+            raise ValueError(f"{label} exceeds {max_bytes} bytes: {path}")
+        if len(data) != metadata.st_size:
+            raise ValueError(f"{label} changed while it was being snapshotted: {path}")
+        return data
+    finally:
+        os.close(descriptor)
+
+
+def load_json_snapshot(
+    path: Path,
+    label: str,
+    *,
+    max_bytes: int = MAX_RELEASE_INPUT_BYTES,
+) -> tuple[dict[str, Any], bytes]:
+    try:
+        data = read_bounded_regular_file(path, label, max_bytes=max_bytes)
+        value = json.loads(
+            data.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_json_object_keys,
+            parse_constant=reject_non_finite_json_constant,
+        )
     except Exception as exc:
         raise ValueError(f"{label} is not valid JSON: {path}") from exc
     if not isinstance(value, dict):
         raise ValueError(f"{label} must be a JSON object: {path}")
+    return value, data
+
+
+def load_json(path: Path, label: str) -> dict[str, Any]:
+    value, _ = load_json_snapshot(path, label)
     return value
 
 
@@ -119,6 +207,15 @@ def require_sha256(value: Any, label: str) -> str:
     if not isinstance(value, str) or SHA256_RE.fullmatch(value) is None:
         raise ValueError(f"{label} must be sha256:<64 lowercase hex>")
     return value
+
+
+def launch_authority_binding(value: Any, label: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return {
+        field: require_sha256(value.get(field), f"{label} {field}")
+        for field in build_production_images.LAUNCH_AUTHORITY_METADATA_FIELDS
+    }
 
 
 def validate_production_anchor(url: str, token: str) -> None:
@@ -129,7 +226,9 @@ def validate_production_anchor(url: str, token: str) -> None:
     if hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(".localhost"):
         raise ValueError("production release anchor must not be loopback")
     if len(token) < 32:
-        raise ValueError("production release anchor token must be at least 32 characters")
+        raise ValueError(
+            "production release anchor token must be at least 32 characters"
+        )
 
 
 def load_release_key(
@@ -140,9 +239,13 @@ def load_release_key(
 ) -> Ed25519PrivateKey:
     if require_owner_only:
         if path.is_symlink() or not path.is_file():
-            raise ValueError("production release signing key must be an existing regular non-symlink file")
+            raise ValueError(
+                "production release signing key must be an existing regular non-symlink file"
+            )
         if path.stat().st_mode & 0o077:
-            raise ValueError("production release signing key must not be accessible by group or other users")
+            raise ValueError(
+                "production release signing key must not be accessible by group or other users"
+            )
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
@@ -166,7 +269,9 @@ def load_release_key(
 
 def load_release_public_key(path: Path) -> Ed25519PublicKey:
     if path.is_symlink() or not path.is_file():
-        raise ValueError("trusted release public key must be an existing regular non-symlink file")
+        raise ValueError(
+            "trusted release public key must be an existing regular non-symlink file"
+        )
     if path.stat().st_size > 65536:
         raise ValueError("trusted release public key exceeds 65536 bytes")
     key = serialization.load_pem_public_key(path.read_bytes())
@@ -184,7 +289,9 @@ def public_key_id(key: Ed25519PublicKey) -> str:
     )
 
 
-def load_production_release_key(private_path: Path, trusted_public_path: Path) -> Ed25519PrivateKey:
+def load_production_release_key(
+    private_path: Path, trusted_public_path: Path
+) -> Ed25519PrivateKey:
     private_key = load_release_key(
         private_path,
         allow_create=False,
@@ -241,7 +348,9 @@ def development_python_sbom(path: Path) -> list[dict[str, str]]:
         if not line or line.startswith("#"):
             continue
         name, version = (line.split("==", 1) + [""])[:2] if "==" in line else (line, "")
-        items.append({"ecosystem": "pypi", "name": name, "version": version, "requirement": line})
+        items.append(
+            {"ecosystem": "pypi", "name": name, "version": version, "requirement": line}
+        )
     return items
 
 
@@ -272,18 +381,26 @@ def parse_hashed_requirements_lock(data: bytes) -> list[dict[str, Any]]:
         stripped = raw.strip()
         if not stripped or stripped.startswith("#"):
             if current is not None:
-                raise ValueError(f"requirements lock has an interrupted entry before line {line_number}")
+                raise ValueError(
+                    f"requirements lock has an interrupted entry before line {line_number}"
+                )
             continue
 
         if current is None:
             if raw != raw.lstrip():
-                raise ValueError(f"requirements lock has an unexpected continuation at line {line_number}")
+                raise ValueError(
+                    f"requirements lock has an unexpected continuation at line {line_number}"
+                )
             match = LOCK_REQUIREMENT_RE.fullmatch(stripped)
             if match is None:
-                raise ValueError(f"requirements lock has an unsupported requirement at line {line_number}")
+                raise ValueError(
+                    f"requirements lock has an unsupported requirement at line {line_number}"
+                )
             name = canonical_python_name(match.group("name"))
             if name in names:
-                raise ValueError(f"requirements lock has a duplicate package at line {line_number}")
+                raise ValueError(
+                    f"requirements lock has a duplicate package at line {line_number}"
+                )
             current = {
                 "ecosystem": "pypi",
                 "name": name,
@@ -295,13 +412,19 @@ def parse_hashed_requirements_lock(data: bytes) -> list[dict[str, Any]]:
             continue
 
         if raw == raw.lstrip():
-            raise ValueError(f"requirements lock entry at line {current['line']} has no hashes")
+            raise ValueError(
+                f"requirements lock entry at line {current['line']} has no hashes"
+            )
         match = LOCK_HASH_RE.fullmatch(stripped)
         if match is None:
-            raise ValueError(f"requirements lock has an invalid hash continuation at line {line_number}")
+            raise ValueError(
+                f"requirements lock has an invalid hash continuation at line {line_number}"
+            )
         digest = match.group("digest")
         if digest in current["hashes"]:
-            raise ValueError(f"requirements lock has a duplicate hash at line {line_number}")
+            raise ValueError(
+                f"requirements lock has a duplicate hash at line {line_number}"
+            )
         current["hashes"].append(digest)
         if match.group("continued") is None:
             hashes = sorted(current["hashes"])
@@ -314,7 +437,9 @@ def parse_hashed_requirements_lock(data: bytes) -> list[dict[str, Any]]:
             current = None
 
     if current is not None:
-        raise ValueError(f"requirements lock entry at line {current['line']} is unterminated")
+        raise ValueError(
+            f"requirements lock entry at line {current['line']} is unterminated"
+        )
     if not items:
         raise ValueError("requirements lock contains no packages")
     return sorted(items, key=lambda item: (item["name"], item["version"]))
@@ -332,7 +457,9 @@ def python_dependency_inventory(
     production: bool,
     path: Path | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    selected = path or ROOT / ("requirements.lock" if production else "requirements.txt")
+    selected = path or ROOT / (
+        "requirements.lock" if production else "requirements.txt"
+    )
     data = read_python_manifest(selected)
     if production:
         items = parse_hashed_requirements_lock(data)
@@ -364,7 +491,9 @@ def python_sbom(*, production: bool = False) -> list[dict[str, Any]]:
 
 
 def rust_sbom() -> list[dict[str, str]]:
-    lock = tomllib.loads((ROOT / "data-plane/decision-gate-rs/Cargo.lock").read_text(encoding="utf-8"))
+    lock = tomllib.loads(
+        (ROOT / "data-plane/decision-gate-rs/Cargo.lock").read_text(encoding="utf-8")
+    )
     items = []
     for package in lock.get("package", []):
         item = {
@@ -377,7 +506,9 @@ def rust_sbom() -> list[dict[str, str]]:
         if package.get("checksum"):
             item["checksum"] = str(package["checksum"])
         items.append(item)
-    return sorted(items, key=lambda item: (item["name"], item["version"], item.get("source", "")))
+    return sorted(
+        items, key=lambda item: (item["name"], item["version"], item.get("source", ""))
+    )
 
 
 def package_url(ecosystem: str, name: str, version: str) -> str:
@@ -403,8 +534,14 @@ def cyclonedx_sbom(
         if item.get("hashes_sha256"):
             properties.extend(
                 [
-                    {"name": "serverware:pipArtifactHashCount", "value": str(item["hash_count"])},
-                    {"name": "serverware:pipArtifactHashesSha256", "value": item["hashes_sha256"]},
+                    {
+                        "name": "serverware:pipArtifactHashCount",
+                        "value": str(item["hash_count"]),
+                    },
+                    {
+                        "name": "serverware:pipArtifactHashesSha256",
+                        "value": item["hashes_sha256"],
+                    },
                 ]
             )
         components.append(
@@ -431,11 +568,15 @@ def cyclonedx_sbom(
         if checksum:
             component["hashes"] = [{"alg": "SHA-256", "content": checksum}]
         if item.get("source"):
-            component["externalReferences"] = [{"type": "distribution", "url": item["source"]}]
+            component["externalReferences"] = [
+                {"type": "distribution", "url": item["source"]}
+            ]
         components.append(component)
 
     components = sorted(components, key=lambda item: (item["purl"], item["bom-ref"]))
-    serial_seed = sha256_prefixed_json({"components": components, "source_tree": source_digest})
+    serial_seed = sha256_prefixed_json(
+        {"components": components, "source_tree": source_digest}
+    )
     return {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -460,10 +601,22 @@ def cyclonedx_sbom(
             },
             "properties": [
                 {"name": "serverware:sourceTreeDigest", "value": source_digest},
-                {"name": "serverware:pythonDependencyManifest", "value": python_manifest["path"]},
-                {"name": "serverware:pythonDependencyManifestFormat", "value": python_manifest["format"]},
-                {"name": "serverware:pythonDependencyManifestMode", "value": python_manifest["mode"]},
-                {"name": "serverware:pythonDependencyManifestSha256", "value": python_manifest["sha256"]},
+                {
+                    "name": "serverware:pythonDependencyManifest",
+                    "value": python_manifest["path"],
+                },
+                {
+                    "name": "serverware:pythonDependencyManifestFormat",
+                    "value": python_manifest["format"],
+                },
+                {
+                    "name": "serverware:pythonDependencyManifestMode",
+                    "value": python_manifest["mode"],
+                },
+                {
+                    "name": "serverware:pythonDependencyManifestSha256",
+                    "value": python_manifest["sha256"],
+                },
                 {
                     "name": "serverware:pythonDependencyManifestRequiresHashes",
                     "value": str(bool(python_manifest["require_hashes"])).lower(),
@@ -532,22 +685,50 @@ def production_image_inventory(
 ) -> dict[str, Any]:
     build = load_json(build_path, "production image build artifact")
     published = load_json(published_path, "published production image artifact")
+    if (
+        build.get("apiVersion") != build_production_images.BUILD_API_VERSION
+        or build.get("kind") != build_production_images.BUILD_KIND
+    ):
+        raise ValueError(
+            f"production image build artifact must use {build_production_images.BUILD_API_VERSION}"
+        )
+    if (
+        published.get("apiVersion") != publish_production_images.PUBLISHED_API_VERSION
+        or published.get("kind") != publish_production_images.PUBLISHED_KIND
+    ):
+        raise ValueError(
+            f"published production image artifact must use {publish_production_images.PUBLISHED_API_VERSION}"
+        )
     if build.get("ok") is not True or published.get("ok") is not True:
         raise ValueError("production image build and publish artifacts must both be ok")
-    build_source = ((build.get("metadata") or {}).get("source_tree_digest"))
+    build_metadata = (
+        build.get("metadata") if isinstance(build.get("metadata"), dict) else {}
+    )
+    build_source = build_metadata.get("source_tree_digest")
     if build_source != expected_source_tree_digest:
-        raise ValueError("production image build source tree does not match current release source tree")
+        raise ValueError(
+            "production image build source tree does not match current release source tree"
+        )
+    expected_launch_authority = launch_authority_binding(
+        build_metadata, "production image build metadata"
+    )
     if ((build.get("no_shell") or {}).get("ok")) is not True:
         raise ValueError("production image build did not pass no-shell verification")
     if ((published.get("remote_no_shell") or {}).get("ok")) is not True:
-        raise ValueError("published production images did not pass remote no-shell verification")
+        raise ValueError(
+            "published production images did not pass remote no-shell verification"
+        )
 
     image_value = merge_production_images_env.load_images_fragment(images_env_path)
     image_refs = merge_production_images_env.validate_production_images(image_value)
     assignments = merge_production_images_env.service_image_assignments(image_refs)
     expected_refs = {
-        "serverware-control": assignments[merge_production_images_env.CONTROL_IMAGE_KEY],
-        "serverware-decision-gate": assignments[merge_production_images_env.DECISION_GATE_IMAGE_KEY],
+        "serverware-control": assignments[
+            merge_production_images_env.CONTROL_IMAGE_KEY
+        ],
+        "serverware-decision-gate": assignments[
+            merge_production_images_env.DECISION_GATE_IMAGE_KEY
+        ],
     }
     build_by_service = {
         str(item.get("service")): item
@@ -559,32 +740,63 @@ def production_image_inventory(
         for item in published.get("images") or []
         if isinstance(item, dict) and item.get("service")
     }
-    if set(build_by_service) != set(expected_refs) or set(published_by_service) != set(expected_refs):
-        raise ValueError("production build, publish, and image-ref artifacts must contain exactly control and decision-gate")
+    if set(build_by_service) != set(expected_refs) or set(published_by_service) != set(
+        expected_refs
+    ):
+        raise ValueError(
+            "production build, publish, and image-ref artifacts must contain exactly control and decision-gate"
+        )
 
     inventory: dict[str, Any] = {}
     for service, expected_ref in expected_refs.items():
         built = build_by_service[service]
         pushed = published_by_service[service]
-        local_image_id = require_sha256(built.get("image_id"), f"{service} local image id")
+        local_image_id = require_sha256(
+            built.get("image_id"), f"{service} local image id"
+        )
         if pushed.get("local_image_id") != local_image_id:
-            raise ValueError(f"published {service} was not produced from the measured local image")
-        remote_image_id = require_sha256(pushed.get("remote_image_id"), f"{service} remote image id")
+            raise ValueError(
+                f"published {service} was not produced from the measured local image"
+            )
+        remote_image_id = require_sha256(
+            pushed.get("remote_image_id"), f"{service} remote image id"
+        )
+        config_id = require_sha256(
+            pushed.get("config_id"), f"{service} published config id"
+        )
+        if not (
+            hmac.compare_digest(local_image_id, remote_image_id)
+            and hmac.compare_digest(local_image_id, config_id)
+        ):
+            raise ValueError(
+                f"published {service} local, remote, and approved config IDs must be identical"
+            )
         if pushed.get("repo_digest") != expected_ref:
-            raise ValueError(f"published {service} digest ref does not match the immutable image fragment")
-        manifest_digest = require_sha256(expected_ref.rsplit("@", 1)[1], f"{service} registry manifest digest")
+            raise ValueError(
+                f"published {service} digest ref does not match the immutable image fragment"
+            )
+        manifest_digest = require_sha256(
+            expected_ref.rsplit("@", 1)[1], f"{service} registry manifest digest"
+        )
         entry = {
             "image_id": manifest_digest,
             "repo_digests": [expected_ref],
+            "config_id": config_id,
             "local_build_image_id": local_image_id,
             "remote_image_id": remote_image_id,
             "dockerfile": built.get("dockerfile"),
         }
         if service == "serverware-decision-gate":
-            built_binary = require_sha256(built.get("binary_digest"), "built decision-gate binary digest")
-            published_binary = require_sha256(pushed.get("binary_digest"), "published decision-gate binary digest")
+            built_binary = require_sha256(
+                built.get("binary_digest"), "built decision-gate binary digest"
+            )
+            published_binary = require_sha256(
+                pushed.get("binary_digest"), "published decision-gate binary digest"
+            )
             if built_binary != published_binary:
-                raise ValueError("published decision-gate executable does not match the measured build executable")
+                raise ValueError(
+                    "published decision-gate executable does not match the measured build executable"
+                )
             built_launcher = require_sha256(
                 built.get("launcher_binary_digest"),
                 "built production launcher binary digest",
@@ -594,14 +806,229 @@ def production_image_inventory(
                 "published production launcher binary digest",
             )
             if built_launcher != published_launcher:
-                raise ValueError("published production launcher does not match the measured build launcher")
+                raise ValueError(
+                    "published production launcher does not match the measured build launcher"
+                )
+            built_launch_authority = launch_authority_binding(
+                built, "built decision-gate launch authority"
+            )
+            published_launch_authority = launch_authority_binding(
+                pushed, "published decision-gate launch authority"
+            )
+            if built_launch_authority != expected_launch_authority:
+                raise ValueError(
+                    "built decision-gate launch-authority binding does not match build metadata"
+                )
+            if published_launch_authority != expected_launch_authority:
+                raise ValueError(
+                    "published decision-gate launch-authority binding does not match the measured build"
+                )
             entry["binary_digest"] = built_binary
             entry["launcher_binary_digest"] = built_launcher
+            entry.update(expected_launch_authority)
         inventory[service] = entry
     return inventory
 
 
-def production_compose_model(*, compose_file: Path, env_file: Path, images: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+def production_reproducibility_binding(
+    path: Path,
+    *,
+    expected_source_tree_digest: str,
+    expected_images: dict[str, Any],
+) -> dict[str, Any]:
+    verification, verification_bytes = load_json_snapshot(
+        path,
+        "reproducible build verification",
+    )
+    if (
+        verification.get("apiVersion")
+        != verify_reproducible_builds.VERIFICATION_API_VERSION
+        or verification.get("kind") != verify_reproducible_builds.VERIFICATION_KIND
+    ):
+        raise ValueError(
+            "reproducible build verification must use "
+            f"{verify_reproducible_builds.VERIFICATION_API_VERSION}"
+        )
+    if (
+        verification.get("ok") is not True
+        or verification.get("reproducible") is not True
+    ):
+        raise ValueError("reproducible build verification is not a reproducible pass")
+    if verification.get("mismatches") != []:
+        raise ValueError("reproducible build verification contains mismatches")
+    scope = (
+        verification.get("scope") if isinstance(verification.get("scope"), dict) else {}
+    )
+    if (
+        scope.get("artifact_reproducibility_only") is not True
+        or scope.get("independent_execution_proven") is not True
+        or scope.get("hardware_proof") is not False
+    ):
+        raise ValueError(
+            "reproducible build verification does not prove independent artifact builds"
+        )
+    source_tree_digest = require_sha256(
+        verification.get("source_tree_digest"),
+        "reproducible build verification source_tree_digest",
+    )
+    if source_tree_digest != expected_source_tree_digest:
+        raise ValueError(
+            "reproducible build verification source tree does not match release source"
+        )
+    comparison_sha256 = require_sha256(
+        verification.get("comparison_sha256"),
+        "reproducible build verification comparison_sha256",
+    )
+    inputs = (
+        verification.get("inputs")
+        if isinstance(verification.get("inputs"), dict)
+        else {}
+    )
+    builders: list[dict[str, str]] = []
+    for side in ("left", "right"):
+        input_value = inputs.get(side) if isinstance(inputs.get(side), dict) else {}
+        attestation = (
+            input_value.get("attestation")
+            if isinstance(input_value.get("attestation"), dict)
+            else {}
+        )
+        builder_id = attestation.get("builder_id")
+        if not isinstance(builder_id, str) or not builder_id:
+            raise ValueError(
+                f"reproducible build verification {side} builder identity is missing"
+            )
+        key_id = require_sha256(
+            attestation.get("key_id"),
+            f"reproducible build verification {side} builder key_id",
+        )
+        if (
+            attestation.get("signature_verified") is not True
+            or attestation.get("operator_trusted") is not True
+        ):
+            raise ValueError(
+                f"reproducible build verification {side} builder is not trusted and signature-verified"
+            )
+        builders.append({"builder_id": builder_id, "key_id": key_id})
+    if len({item["builder_id"] for item in builders}) != 2:
+        raise ValueError(
+            "reproducible build verification builders are not independent identities"
+        )
+    if len({item["key_id"] for item in builders}) != 2:
+        raise ValueError(
+            "reproducible build verification builders do not use independent keys"
+        )
+
+    images = verification.get("images")
+    if not isinstance(images, list):
+        raise ValueError("reproducible build verification images must be a list")
+    by_service = {
+        str(item.get("service")): item
+        for item in images
+        if isinstance(item, dict) and item.get("service")
+    }
+    if (
+        set(by_service) != {"serverware-control", "serverware-decision-gate"}
+        or len(images) != 2
+    ):
+        raise ValueError(
+            "reproducible build verification must bind exactly both production images"
+        )
+    if set(expected_images) != {"serverware-control", "serverware-decision-gate"}:
+        raise ValueError(
+            "release inventory must contain exactly both production images"
+        )
+
+    image_bindings: list[dict[str, str]] = []
+    for service in ("serverware-control", "serverware-decision-gate"):
+        reproducible_image_id = require_sha256(
+            by_service[service].get("image_id"),
+            f"reproducible build verification {service} image_id",
+        )
+        expected_image_id = require_sha256(
+            expected_images[service].get("local_build_image_id"),
+            f"release inventory {service} local build image id",
+        )
+        remote_image_id = require_sha256(
+            expected_images[service].get("remote_image_id", expected_image_id),
+            f"release inventory {service} remote image id",
+        )
+        approved_config_id = require_sha256(
+            expected_images[service].get("config_id", remote_image_id),
+            f"release inventory {service} approved config id",
+        )
+        if not (
+            hmac.compare_digest(expected_image_id, remote_image_id)
+            and hmac.compare_digest(expected_image_id, approved_config_id)
+        ):
+            raise ValueError(
+                f"release inventory {service} local, remote, and approved config IDs differ"
+            )
+        if reproducible_image_id != expected_image_id:
+            raise ValueError(
+                f"reproducible {service} image ID does not match production build evidence"
+            )
+        image_bindings.append({"service": service, "image_id": reproducible_image_id})
+
+    gate = by_service["serverware-decision-gate"]
+    reproducible_rust_binary = require_sha256(
+        gate.get("rust_binary_sha256"),
+        "reproducible build verification decision-gate Rust binary digest",
+    )
+    expected_rust_binary = require_sha256(
+        expected_images["serverware-decision-gate"].get("binary_digest"),
+        "release inventory decision-gate Rust binary digest",
+    )
+    if reproducible_rust_binary != expected_rust_binary:
+        raise ValueError(
+            "reproducible decision-gate Rust binary does not match production build evidence"
+        )
+    reproducible_launcher = require_sha256(
+        gate.get("launcher_binary_sha256"),
+        "reproducible build verification launcher binary digest",
+    )
+    expected_launcher = require_sha256(
+        expected_images["serverware-decision-gate"].get("launcher_binary_digest"),
+        "release inventory launcher binary digest",
+    )
+    if reproducible_launcher != expected_launcher:
+        raise ValueError(
+            "reproducible production launcher does not match build and publish evidence"
+        )
+    reproducible_launch_authority = launch_authority_binding(
+        gate, "reproducible build verification decision-gate launch authority"
+    )
+    expected_launch_authority = launch_authority_binding(
+        expected_images["serverware-decision-gate"],
+        "release inventory decision-gate launch authority",
+    )
+    if reproducible_launch_authority != expected_launch_authority:
+        raise ValueError(
+            "reproducible decision-gate launch-authority binding does not match build and publish evidence"
+        )
+    return {
+        "apiVersion": verify_reproducible_builds.VERIFICATION_API_VERSION,
+        "kind": verify_reproducible_builds.VERIFICATION_KIND,
+        "verification_sha256": sha256_prefixed_bytes(verification_bytes),
+        "comparison_sha256": comparison_sha256,
+        "source_tree_digest": source_tree_digest,
+        "builders": builders,
+        "images": [
+            image_bindings[0],
+            {
+                **image_bindings[1],
+                "rust_binary_sha256": reproducible_rust_binary,
+                "launcher_binary_sha256": reproducible_launcher,
+                **reproducible_launch_authority,
+            },
+        ],
+        "launcher_binary_sha256": reproducible_launcher,
+        **reproducible_launch_authority,
+    }
+
+
+def production_compose_model(
+    *, compose_file: Path, env_file: Path, images: dict[str, Any]
+) -> tuple[str, dict[str, Any]]:
     loaded_env = run_production_readiness.load_env_file(env_file)
     raw = run(
         [
@@ -629,27 +1056,47 @@ def production_compose_model(*, compose_file: Path, env_file: Path, images: dict
         "decision-gate-rs": images["serverware-decision-gate"]["repo_digests"][0],
     }
     if set(services) != set(expected_images):
-        raise ValueError(f"production Compose services must be exactly {sorted(expected_images)}")
+        raise ValueError(
+            f"production Compose services must be exactly {sorted(expected_images)}"
+        )
     for service, expected_image in expected_images.items():
         config = services[service]
         if not isinstance(config, dict) or config.get("image") != expected_image:
-            raise ValueError(f"production Compose service {service} does not use its immutable published image")
+            raise ValueError(
+                f"production Compose service {service} does not use its immutable published image"
+            )
         if "build" in config:
-            raise ValueError(f"production Compose service {service} must not contain a build directive")
+            raise ValueError(
+                f"production Compose service {service} must not contain a build directive"
+            )
     networks = model.get("networks") if isinstance(model.get("networks"), dict) else {}
     for name in ("gate-control", "anchor-control"):
-        if not isinstance(networks.get(name), dict) or networks[name].get("internal") is not True:
+        if (
+            not isinstance(networks.get(name), dict)
+            or networks[name].get("internal") is not True
+        ):
             raise ValueError(f"production Compose network {name} must be internal")
     if set((services["audit-anchor"].get("networks") or {})) != {"anchor-control"}:
-        raise ValueError("production audit-anchor must only join the internal anchor-control network")
+        raise ValueError(
+            "production audit-anchor must only join the internal anchor-control network"
+        )
     for service in ("serverware", "decision-gate-rs"):
         devices = services[service].get("devices") or []
-        if not any(isinstance(item, dict) and item.get("source") == "/dev/nsm" for item in devices):
-            raise ValueError(f"production Compose service {service} must receive /dev/nsm")
+        if not any(
+            isinstance(item, dict) and item.get("source") == "/dev/nsm"
+            for item in devices
+        ):
+            raise ValueError(
+                f"production Compose service {service} must receive /dev/nsm"
+            )
         mounts = services[service].get("volumes") or []
         expected_artifacts = {
-            "/run/serverware/release/release-provenance.json": loaded_env.get("SERVERWARE_RELEASE_PROVENANCE_FILE"),
-            "/run/serverware/release/image-signatures.json": loaded_env.get("SERVERWARE_IMAGE_SIGNATURES_FILE"),
+            "/run/serverware/release/release-provenance.json": loaded_env.get(
+                "SERVERWARE_RELEASE_PROVENANCE_FILE"
+            ),
+            "/run/serverware/release/image-signatures.json": loaded_env.get(
+                "SERVERWARE_IMAGE_SIGNATURES_FILE"
+            ),
         }
         for target, source in expected_artifacts.items():
             if not any(
@@ -660,21 +1107,43 @@ def production_compose_model(*, compose_file: Path, env_file: Path, images: dict
                 and item.get("read_only") is True
                 for item in mounts
             ):
-                raise ValueError(f"production Compose service {service} must read-only mount {target}")
+                raise ValueError(
+                    f"production Compose service {service} must read-only mount {target}"
+                )
     serverware_env = services["serverware"].get("environment") or {}
     if serverware_env.get("SERVERWARE_DECISION_GATE_BASE"):
-        raise ValueError("production control plane must not use the gate's local management API")
-    if serverware_env.get("SERVERWARE_AUDIT_ANCHOR_URL") != "https://audit-anchor:9100/anchors":
-        raise ValueError("production audit-anchor transport must use the internal HTTPS endpoint")
-    if serverware_env.get("SERVERWARE_AUDIT_ANCHOR_CA_BUNDLE") != "/run/serverware/tls/ca.pem":
-        raise ValueError("production control plane must verify the audit-anchor TLS certificate")
+        raise ValueError(
+            "production control plane must not use the gate's local management API"
+        )
+    if (
+        serverware_env.get("SERVERWARE_AUDIT_ANCHOR_URL")
+        != "https://audit-anchor:9100/anchors"
+    ):
+        raise ValueError(
+            "production audit-anchor transport must use the internal HTTPS endpoint"
+        )
+    if (
+        serverware_env.get("SERVERWARE_AUDIT_ANCHOR_CA_BUNDLE")
+        != "/run/serverware/tls/ca.pem"
+    ):
+        raise ValueError(
+            "production control plane must verify the audit-anchor TLS certificate"
+        )
     gate_env = services["decision-gate-rs"].get("environment") or {}
     if gate_env.get("SERVERWARE_DECISION_GATE_MANAGEMENT_HOST") != "127.0.0.1":
-        raise ValueError("production decision-gate management listener must bind container loopback")
+        raise ValueError(
+            "production decision-gate management listener must bind container loopback"
+        )
     anchor_env = services["audit-anchor"].get("environment") or {}
-    if anchor_env.get("SERVERWARE_AUDIT_ANCHOR_TLS_CERT_FILE") != "/run/serverware/anchor-tls/audit-anchor.crt":
+    if (
+        anchor_env.get("SERVERWARE_AUDIT_ANCHOR_TLS_CERT_FILE")
+        != "/run/serverware/anchor-tls/audit-anchor.crt"
+    ):
         raise ValueError("production audit-anchor TLS certificate path is not fixed")
-    if anchor_env.get("SERVERWARE_AUDIT_ANCHOR_TLS_KEY_FILE") != "/run/serverware/anchor-tls/audit-anchor.key":
+    if (
+        anchor_env.get("SERVERWARE_AUDIT_ANCHOR_TLS_KEY_FILE")
+        != "/run/serverware/anchor-tls/audit-anchor.key"
+    ):
         raise ValueError("production audit-anchor TLS key path is not fixed")
     anchor_mounts = services["audit-anchor"].get("volumes") or []
     if not any(
@@ -685,7 +1154,9 @@ def production_compose_model(*, compose_file: Path, env_file: Path, images: dict
         and item.get("read_only") is True
         for item in anchor_mounts
     ):
-        raise ValueError("production audit-anchor must read-only mount its TLS directory")
+        raise ValueError(
+            "production audit-anchor must read-only mount its TLS directory"
+        )
     canonical = canonical_json(model)
     summary = {
         "file": str(compose_file),
@@ -708,22 +1179,52 @@ def write_container_file(service: str, path: str, data: bytes) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Generate signed Serverware release provenance and anchor it.")
-    parser.add_argument("--production", action="store_true", help="Bind provenance to published images and docker-compose.production.yml.")
+    parser = argparse.ArgumentParser(
+        description="Generate signed Serverware release provenance and anchor it."
+    )
+    parser.add_argument(
+        "--production",
+        action="store_true",
+        help="Bind provenance to published images and docker-compose.production.yml.",
+    )
     parser.add_argument("--base", default=os.getenv("BASE", "http://localhost:3000"))
-    parser.add_argument("--gate", default=os.getenv("DECISION_GATE_BASE", "http://localhost:9090"))
-    parser.add_argument("--anchor", default=os.getenv("SERVERWARE_RELEASE_ANCHOR_BASE", os.getenv("AUDIT_ANCHOR_BASE", "")))
-    parser.add_argument("--anchor-ca-bundle", default=os.getenv("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""))
-    parser.add_argument("--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN", "dev-admin-token"))
-    parser.add_argument("--anchor-token", default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN", ""))
+    parser.add_argument(
+        "--gate", default=os.getenv("DECISION_GATE_BASE", "http://localhost:9090")
+    )
+    parser.add_argument(
+        "--anchor",
+        default=os.getenv(
+            "SERVERWARE_RELEASE_ANCHOR_BASE", os.getenv("AUDIT_ANCHOR_BASE", "")
+        ),
+    )
+    parser.add_argument(
+        "--anchor-ca-bundle",
+        default=os.getenv("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""),
+    )
+    parser.add_argument(
+        "--admin-token", default=os.getenv("SERVERWARE_ADMIN_TOKEN", "dev-admin-token")
+    )
+    parser.add_argument(
+        "--anchor-token", default=os.getenv("SERVERWARE_AUDIT_ANCHOR_TOKEN", "")
+    )
     parser.add_argument("--env-file", default="ops/production-readiness.env")
     parser.add_argument("--compose-file", default="docker-compose.production.yml")
-    parser.add_argument("--production-images-build", default=".tmp/production-images-build.json")
-    parser.add_argument("--production-images-published", default=".tmp/production-images-published.json")
+    parser.add_argument(
+        "--production-images-build", default=".tmp/production-images-build.json"
+    )
+    parser.add_argument(
+        "--production-images-published", default=".tmp/production-images-published.json"
+    )
     parser.add_argument("--production-images-env", default=".tmp/production-images.env")
+    parser.add_argument(
+        "--reproducible-build-verification",
+        default=".tmp/reproducible-build-verification.json",
+    )
     parser.add_argument("--out", default=".tmp/release-provenance.json")
     parser.add_argument("--sbom-out", default=".tmp/sbom.cdx.json")
-    parser.add_argument("--key", default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY", ""))
+    parser.add_argument(
+        "--key", default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY", "")
+    )
     parser.add_argument(
         "--trusted-public-key",
         default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
@@ -739,10 +1240,18 @@ def main() -> None:
         env_file = path_from_arg(args.env_file)
         compose_file = path_from_arg(args.compose_file)
         loaded_env = run_production_readiness.load_env_file(env_file)
-        args.anchor = args.anchor or loaded_env.get("SERVERWARE_RELEASE_ANCHOR_BASE", "")
-        args.anchor_token = args.anchor_token or loaded_env.get("SERVERWARE_AUDIT_ANCHOR_TOKEN", "")
-        args.anchor_ca_bundle = args.anchor_ca_bundle or loaded_env.get("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", "")
-        args.key = args.key or loaded_env.get("SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY", "")
+        args.anchor = args.anchor or loaded_env.get(
+            "SERVERWARE_RELEASE_ANCHOR_BASE", ""
+        )
+        args.anchor_token = args.anchor_token or loaded_env.get(
+            "SERVERWARE_AUDIT_ANCHOR_TOKEN", ""
+        )
+        args.anchor_ca_bundle = args.anchor_ca_bundle or loaded_env.get(
+            "SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", ""
+        )
+        args.key = args.key or loaded_env.get(
+            "SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY", ""
+        )
         args.trusted_public_key = args.trusted_public_key or loaded_env.get(
             "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""
         )
@@ -761,15 +1270,27 @@ def main() -> None:
             images_env_path=path_from_arg(args.production_images_env),
             expected_source_tree_digest=source["digest"],
         )
+        reproducible_build = production_reproducibility_binding(
+            path_from_arg(args.reproducible_build_verification),
+            expected_source_tree_digest=source["digest"],
+            expected_images=images,
+        )
+        production_launch_authority = launch_authority_binding(
+            images["serverware-decision-gate"],
+            "production decision-gate release inventory",
+        )
         compose_config, compose_summary = production_compose_model(
             compose_file=compose_file,
             env_file=env_file,
             images=images,
         )
         if loaded_env.get("SERVERWARE_PRODUCTION_IMAGES") != ",".join(
-            images[service]["repo_digests"][0] for service in ("serverware-control", "serverware-decision-gate")
+            images[service]["repo_digests"][0]
+            for service in ("serverware-control", "serverware-decision-gate")
         ):
-            raise ValueError("production readiness env image list does not match the published image evidence")
+            raise ValueError(
+                "production readiness env image list does not match the published image evidence"
+            )
         containers: dict[str, Any] = {}
         control_attestation = None
         gate_attestation = None
@@ -790,14 +1311,24 @@ def main() -> None:
         gate_attestation = None
         audit_verify = None
         anchor_verify = None
-    anchor_ca_bundle = path_from_arg(args.anchor_ca_bundle) if args.anchor_ca_bundle else None
+        reproducible_build = None
+        production_launch_authority = None
+    anchor_ca_bundle = (
+        path_from_arg(args.anchor_ca_bundle) if args.anchor_ca_bundle else None
+    )
     if args.production and anchor_ca_bundle and not anchor_ca_bundle.is_file():
-        raise ValueError(f"production release anchor CA bundle does not exist: {anchor_ca_bundle}")
+        raise ValueError(
+            f"production release anchor CA bundle does not exist: {anchor_ca_bundle}"
+        )
     admin_headers = {"X-Serverware-Admin-Token": args.admin_token}
     anchor_headers = {"X-Serverware-Audit-Anchor-Token": args.anchor_token}
     if not args.production:
-        control_attestation = request_json(f"{args.base.rstrip('/')}/attestation?nonce={nonce}-control")
-        gate_attestation = request_json(f"{args.gate.rstrip('/')}/attestation?nonce={nonce}-gate")
+        control_attestation = request_json(
+            f"{args.base.rstrip('/')}/attestation?nonce={nonce}-control"
+        )
+        gate_attestation = request_json(
+            f"{args.gate.rstrip('/')}/attestation?nonce={nonce}-gate"
+        )
         audit_verify = request_json(
             f"{args.base.rstrip('/')}/api/audit/verify",
             headers=admin_headers,
@@ -819,18 +1350,24 @@ def main() -> None:
     )
     sbom_out_path = ROOT / args.sbom_out
     sbom_out_path.parent.mkdir(parents=True, exist_ok=True)
-    sbom_out_path.write_text(json.dumps(cyclonedx, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    sbom_out_path.write_text(
+        json.dumps(cyclonedx, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
     cyclonedx_digest = sha256_prefixed_bytes(sbom_out_path.read_bytes())
     provenance = {
-        "version": 1,
+        "version": PRODUCTION_PROVENANCE_VERSION if args.production else 1,
         "created_at": created_at,
-        "source": "serverware-digest-pinned-production-release" if args.production else "serverware-docker-dev-release",
+        "source": "serverware-digest-pinned-production-release"
+        if args.production
+        else "serverware-docker-dev-release",
         "compose_config_sha256": sha256_prefixed_bytes(compose_config.encode("utf-8")),
         "compose": compose_summary,
         "source_tree": source,
         "build_recipe": {
             "source_tree_digest": source["digest"],
-            "compose_config_sha256": sha256_prefixed_bytes(compose_config.encode("utf-8")),
+            "compose_config_sha256": sha256_prefixed_bytes(
+                compose_config.encode("utf-8")
+            ),
             "commands": [
                 *(
                     [
@@ -854,6 +1391,14 @@ def main() -> None:
             "rebuild_verifier": "scripts/verify_codebase_attestation.py",
         },
         "images": images,
+        **(
+            {
+                "launch_authority": production_launch_authority,
+                "reproducible_build": reproducible_build,
+            }
+            if args.production
+            else {}
+        ),
         "containers": containers,
         "sbom": {
             "format": "serverware.sbom/v1",
@@ -876,7 +1421,9 @@ def main() -> None:
             if not args.production
             else None
         ),
-        "runtime_evidence": "separate-production-host-readiness-proof" if args.production else "development-compose-runtime",
+        "runtime_evidence": "separate-production-host-readiness-proof"
+        if args.production
+        else "development-compose-runtime",
         "audit_chain": audit_verify,
         "anchor_chain": anchor_verify,
     }
@@ -888,7 +1435,9 @@ def main() -> None:
             path_from_arg(args.trusted_public_key),
         )
     else:
-        key = load_release_key(path_from_arg(args.key or ".tmp/release-signing-ed25519.pem"))
+        key = load_release_key(
+            path_from_arg(args.key or ".tmp/release-signing-ed25519.pem")
+        )
     key_info = public_key_info(key)
     signature = "ed25519:" + b64e(key.sign(canonical_json(provenance).encode("utf-8")))
     document = {
@@ -904,28 +1453,44 @@ def main() -> None:
     if not args.production:
         atomic_write_json(out_path, document)
         write_container_file("serverware", args.container_out, out_path.read_bytes())
-        published_control = request_json(f"{args.base.rstrip('/')}/attestation?nonce={nonce}-published-control")
-        published_gate = request_json(f"{args.gate.rstrip('/')}/attestation?nonce={nonce}-published-gate")
+        published_control = request_json(
+            f"{args.base.rstrip('/')}/attestation?nonce={nonce}-published-control"
+        )
+        published_gate = request_json(
+            f"{args.gate.rstrip('/')}/attestation?nonce={nonce}-published-gate"
+        )
         if published_control.get("provenance_digest") != provenance_digest:
-            raise RuntimeError(f"control-plane attestation did not bind provenance digest: {published_control}")
+            raise RuntimeError(
+                f"control-plane attestation did not bind provenance digest: {published_control}"
+            )
         if published_gate.get("provenance_digest") != provenance_digest:
-            raise RuntimeError(f"decision-gate attestation did not bind provenance digest: {published_gate}")
+            raise RuntimeError(
+                f"decision-gate attestation did not bind provenance digest: {published_gate}"
+            )
     else:
         published_control = None
         published_gate = None
 
     record = {
-        "type": "release.provenance.v1",
+        "type": PRODUCTION_PROVENANCE_RECORD_TYPE
+        if args.production
+        else "release.provenance.v1",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "provenance_digest": provenance_digest,
         "signature": signature,
         "release_signing_key_id": key_info["spki_sha256"],
-        "control_plane_policy_hash": published_control.get("policy_bundle_digest") if published_control else None,
-        "decision_gate_policy_hash": published_gate.get("policy_bundle_digest") if published_gate else None,
+        "control_plane_policy_hash": published_control.get("policy_bundle_digest")
+        if published_control
+        else None,
+        "decision_gate_policy_hash": published_gate.get("policy_bundle_digest")
+        if published_gate
+        else None,
         "data_plane_binary_digest": (
             published_gate.get("data_plane_binary_digest")
             if published_gate
-            else (provenance["images"].get("serverware-decision-gate") or {}).get("binary_digest")
+            else (provenance["images"].get("serverware-decision-gate") or {}).get(
+                "binary_digest"
+            )
         ),
         "production_launcher_binary_digest": (
             (provenance["images"].get("serverware-decision-gate") or {}).get(
@@ -934,7 +1499,19 @@ def main() -> None:
             if args.production
             else None
         ),
-        "image_ids": {service: item["image_id"] for service, item in provenance["images"].items()},
+        **(
+            {
+                **production_launch_authority,
+                "reproducible_build_verification_sha256": reproducible_build[
+                    "verification_sha256"
+                ],
+            }
+            if args.production
+            else {}
+        ),
+        "image_ids": {
+            service: item["image_id"] for service, item in provenance["images"].items()
+        },
         "sbom_counts": {
             "python": len(provenance["sbom"]["python"]),
             "rust": len(provenance["sbom"]["rust"]),
@@ -956,9 +1533,14 @@ def main() -> None:
         ca_bundle=anchor_ca_bundle,
         timeout=60,
     )
-    anchored = any((item.get("record") or {}).get("provenance_digest") == provenance_digest for item in anchors.get("items", []))
+    anchored = any(
+        (item.get("record") or {}).get("provenance_digest") == provenance_digest
+        for item in anchors.get("items", [])
+    )
     if not anchored:
-        raise RuntimeError("release provenance digest was not found in the transparency anchor log")
+        raise RuntimeError(
+            "release provenance digest was not found in the transparency anchor log"
+        )
     accepted = (anchor_response.get("anchors") or [{}])[0]
     sequence = accepted.get("sequence")
     inclusion = request_json(
@@ -968,9 +1550,15 @@ def main() -> None:
         timeout=60,
     )
     if inclusion.get("verified") is not True:
-        raise RuntimeError(f"release provenance inclusion proof did not verify: {inclusion}")
-    if (inclusion.get("item") or {}).get("record", {}).get("provenance_digest") != provenance_digest:
-        raise RuntimeError(f"release provenance inclusion proof returned the wrong record: {inclusion}")
+        raise RuntimeError(
+            f"release provenance inclusion proof did not verify: {inclusion}"
+        )
+    if (inclusion.get("item") or {}).get("record", {}).get(
+        "provenance_digest"
+    ) != provenance_digest:
+        raise RuntimeError(
+            f"release provenance inclusion proof returned the wrong record: {inclusion}"
+        )
 
     document["published_attestations"] = (
         {
@@ -1005,15 +1593,29 @@ def main() -> None:
                     if args.production
                     else None
                 ),
+                **(
+                    {
+                        **production_launch_authority,
+                        "reproducible_build_verification_sha256": reproducible_build[
+                            "verification_sha256"
+                        ],
+                    }
+                    if args.production
+                    else {}
+                ),
                 "anchored": anchored,
                 "transparency_mode": anchor_response.get("mode"),
                 "inclusion_verified": inclusion.get("verified") is True,
                 "sbom": {
                     "python": len(provenance["sbom"]["python"]),
                     "python_manifest": provenance["sbom"]["python_manifest"]["path"],
-                    "python_manifest_sha256": provenance["sbom"]["python_manifest"]["sha256"],
+                    "python_manifest_sha256": provenance["sbom"]["python_manifest"][
+                        "sha256"
+                    ],
                     "rust": len(provenance["sbom"]["rust"]),
-                    "cyclonedx_components": provenance["sbom"]["cyclonedx"]["components"],
+                    "cyclonedx_components": provenance["sbom"]["cyclonedx"][
+                        "components"
+                    ],
                     "cyclonedx_sha256": provenance["sbom"]["cyclonedx"]["sha256"],
                 },
             },

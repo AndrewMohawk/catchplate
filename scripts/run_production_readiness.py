@@ -24,7 +24,10 @@ from urllib.parse import urlsplit
 
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT))
+SCRIPT_DIRECTORY = ROOT / "scripts"
+sys.path[:0] = [str(SCRIPT_DIRECTORY), str(ROOT)]
+
+import launch_authorization  # noqa: E402
 KEY_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 PLACEHOLDER_RE = re.compile(
     r"(<[^>]+>|\$\{[^}]+\}|CHANGE[_-]?ME|REPLACE[_-]?ME|FILL[_-]?ME|TODO|TBD)",
@@ -78,8 +81,35 @@ FINAL_LAUNCHER_CONTRACT = "descriptor-sealed-bootstrap-v2"
 BOOTSTRAP_RECEIPT_FD_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_FD"
 BOOTSTRAP_RECEIPT_SHA256_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"
 BOOTSTRAP_RECEIPT_API_VERSION_ENV = "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"
-BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v1"
+BOOTSTRAP_RECEIPT_API_VERSION = "serverware.bootstrapReceipt/v2"
 BOOTSTRAP_RECEIPT_KIND = "ProductionBootstrapReceipt"
+LAUNCH_AUTHORITY_ROOT_PATH = (
+    ROOT
+    / "data-plane"
+    / "decision-gate-rs"
+    / "trust"
+    / "launch-authority-root.ed25519.hex"
+)
+ED25519_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+FINAL_SECURITY_ROLE_NAMES = (
+    "launch_authority_signer",
+    "release_provenance_signer",
+    "image_signature_signer",
+    "rekor_transparency_log",
+    "external_checkpoint_log",
+    "control_plane_response_signer",
+    "policy_identity_signer",
+    "policy_activation_signer",
+    "reproducible_build_report_signer",
+    "reproducible_builder_left",
+    "reproducible_builder_right",
+    "production_host_preflight_signer",
+    "proxy_proof_collector",
+    "proxy_response_statement_signer",
+    "proxy_vendor_tee_verifier",
+    "hardware_assurance_verifier",
+    "final_challenge_authority",
+)
 BOOTSTRAP_RECEIPT_ENV_NAMES = frozenset(
     (
         BOOTSTRAP_RECEIPT_FD_ENV,
@@ -250,6 +280,237 @@ def sha256_prefixed_bytes(value: bytes) -> str:
     return "sha256:" + hashlib.sha256(value).hexdigest()
 
 
+def load_launch_authority_identity() -> dict[str, Any]:
+    path = LAUNCH_AUTHORITY_ROOT_PATH
+    validate_secure_ancestors(path, "launch authority trust root")
+    raw, metadata = read_regular_file_once(
+        path,
+        "launch authority trust root",
+        max_bytes=65,
+    )
+    if metadata.st_uid not in {0, os.geteuid()}:
+        raise ValueError("launch authority trust root must be owned by root or the executing user")
+    if stat.S_IMODE(metadata.st_mode) & 0o022:
+        raise ValueError("launch authority trust root must not be writable by group or other")
+    if re.fullmatch(rb"[0-9a-f]{64}\n", raw) is None:
+        raise ValueError(
+            "launch authority trust root must contain exactly 32 lowercase-hex bytes and one LF"
+        )
+    spki = ED25519_SPKI_PREFIX + bytes.fromhex(raw[:-1].decode("ascii"))
+    try:
+        key_id = launch_authorization.spki_key_id(spki)
+    except launch_authorization.LaunchAuthorizationError as exc:
+        raise ValueError(f"launch authority trust root is invalid: {exc}") from exc
+    return {
+        "spki": spki,
+        "keyId": key_id,
+        "rootSha256": sha256_prefixed_bytes(raw),
+    }
+
+
+def load_launch_authority_spki() -> bytes:
+    return load_launch_authority_identity()["spki"]
+
+
+def _validate_receipt_launch_authorization(
+    value: Any,
+    *,
+    verify_signature: bool,
+    authority_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    authorization = _closed_object(
+        value,
+        {
+            "request",
+            "requestSha256",
+            "envelope",
+            "authorizationSha256",
+            "verifiedAtUnixSeconds",
+        },
+        "launchAuthorization",
+    )
+    try:
+        request = launch_authorization.validate_launch_authorization_request(
+            authorization["request"]
+        )
+        request_sha256 = launch_authorization.launch_authorization_request_sha256(request)
+        envelope = launch_authorization.validate_launch_authorization(
+            authorization["envelope"]
+        )
+    except launch_authorization.LaunchAuthorizationError as exc:
+        raise ValueError(f"bootstrap receipt launch authorization is invalid: {exc}") from exc
+    if not hmac.compare_digest(str(authorization["requestSha256"]), request_sha256):
+        raise ValueError("bootstrap receipt launch authorization request digest mismatch")
+    envelope_bytes = launch_authorization.canonical_json_bytes(envelope)
+    authorization_sha256 = sha256_prefixed_bytes(envelope_bytes)
+    if not hmac.compare_digest(
+        str(authorization["authorizationSha256"]), authorization_sha256
+    ):
+        raise ValueError("bootstrap receipt launch authorization envelope digest mismatch")
+    verified_at = authorization["verifiedAtUnixSeconds"]
+    if (
+        type(verified_at) is not int
+        or verified_at < 1
+        or verified_at > launch_authorization.MAX_SAFE_INTEGER
+    ):
+        raise ValueError("bootstrap receipt launch authorization verification time is invalid")
+    statement = envelope["statement"]
+    if not hmac.compare_digest(statement["requestSha256"], request_sha256):
+        raise ValueError(
+            "bootstrap receipt launch authorization statement request digest mismatch"
+        )
+    if not (
+        statement["issuedAtUnixSeconds"]
+        <= verified_at + launch_authorization.MAX_FUTURE_SKEW_SECONDS
+        and verified_at < statement["expiresAtUnixSeconds"]
+    ):
+        raise ValueError(
+            "bootstrap receipt launch authorization verification time is outside its validity interval"
+        )
+    if verify_signature:
+        trusted_authority = (
+            load_launch_authority_identity()
+            if authority_identity is None
+            else authority_identity
+        )
+        authority_spki = trusted_authority.get("spki")
+        expected_key_id = trusted_authority.get("keyId")
+        if (
+            type(authority_spki) is not bytes
+            or SHA256_RE.fullmatch(str(expected_key_id)) is None
+        ):
+            raise ValueError("launch authority trust identity is invalid")
+        try:
+            launch_authorization.verify_launch_authorization(
+                envelope_bytes,
+                authority_public_key_spki_der=authority_spki,
+                expected_request_sha256=request_sha256,
+                expected_authority_key_id=expected_key_id,
+                now_unix_seconds=verified_at,
+            )
+        except launch_authorization.LaunchAuthorizationError as exc:
+            raise ValueError(
+                f"bootstrap receipt launch authorization verification failed: {exc}"
+            ) from exc
+    return {
+        "request": request,
+        "requestSha256": request_sha256,
+        "envelope": envelope,
+        "authorizationSha256": authorization_sha256,
+        "verifiedAtUnixSeconds": verified_at,
+    }
+
+
+def _validate_bootstrap_receipt_authorization_bindings(
+    receipt: dict[str, Any],
+    authorization: dict[str, Any],
+    *,
+    require_inputs: bool,
+) -> None:
+    request = authorization["request"]
+    bindings = (
+        ("launchId", "launcherNonce", receipt.get("launchId")),
+        ("bootIdSha256", "bootIdSha256", receipt.get("bootIdSha256")),
+        (
+            "launcher.sha256",
+            "launcherSha256",
+            (receipt.get("launcher") or {}).get("sha256")
+            if isinstance(receipt.get("launcher"), dict)
+            else None,
+        ),
+        (
+            "manifest.sha256",
+            "manifestSha256",
+            (receipt.get("manifest") or {}).get("sha256")
+            if isinstance(receipt.get("manifest"), dict)
+            else None,
+        ),
+        ("sourceTreeDigest", "sourceTreeDigest", receipt.get("sourceTreeDigest")),
+    )
+    for receipt_label, request_field, receipt_value in bindings:
+        request_value = request[request_field]
+        if type(receipt_value) is not str or not hmac.compare_digest(
+            receipt_value, request_value
+        ):
+            raise ValueError(
+                f"bootstrap receipt {receipt_label} does not match launch authorization {request_field}"
+            )
+    if not require_inputs:
+        return
+    inputs = receipt.get("inputs")
+    if not isinstance(inputs, dict):
+        raise ValueError("bootstrap receipt launch authorization has no measured input bindings")
+    for input_name, request_field in (
+        ("releaseProvenance", "releaseProvenanceSha256"),
+        (
+            "reproducibleBuildVerification",
+            "reproducibleBuildVerificationSha256",
+        ),
+    ):
+        record = inputs.get(input_name)
+        receipt_value = record.get("sha256") if isinstance(record, dict) else None
+        if type(receipt_value) is not str or not hmac.compare_digest(
+            receipt_value, request[request_field]
+        ):
+            raise ValueError(
+                f"bootstrap receipt inputs.{input_name}.sha256 does not match launch authorization {request_field}"
+            )
+
+
+def validate_bootstrap_receipt_launch_authorization(
+    receipt: dict[str, Any],
+    *,
+    verify_signature: bool,
+    require_inputs: bool,
+    authority_identity: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    authorization = _validate_receipt_launch_authorization(
+        receipt.get("launchAuthorization"),
+        verify_signature=verify_signature,
+        authority_identity=authority_identity,
+    )
+    _validate_bootstrap_receipt_authorization_bindings(
+        receipt,
+        authorization,
+        require_inputs=require_inputs,
+    )
+    return authorization
+
+
+def bootstrap_launch_authorization_identity(value: dict[str, Any]) -> dict[str, Any]:
+    authorization = validate_bootstrap_receipt_launch_authorization(
+        value,
+        verify_signature=False,
+        require_inputs=False,
+    )
+    request = authorization["request"]
+    statement = authorization["envelope"]["statement"]
+    return {
+        "authorization_id": statement["authorizationId"],
+        "authorization_sha256": authorization["authorizationSha256"],
+        "request_sha256": authorization["requestSha256"],
+        "authority_key_id": statement["authorityKeyId"],
+        "authority_root_sha256": value["launchAuthorityRootSha256"],
+        "launch_id": request["launcherNonce"],
+        "boot_id_sha256": request["bootIdSha256"],
+        "manifest_sha256": request["manifestSha256"],
+        "deployment_audience": request["deploymentAudience"],
+        "deployment_identity_sha256": request["deploymentIdentitySha256"],
+        "release_sequence": request["releaseSequence"],
+        "rollback_epoch": request["rollbackEpoch"],
+        "release_provenance_sha256": request["releaseProvenanceSha256"],
+        "provenance_digest": request["provenanceDigest"],
+        "source_tree_digest": request["sourceTreeDigest"],
+        "launcher_sha256": request["launcherSha256"],
+        "reproducible_build_verification_sha256": request[
+            "reproducibleBuildVerificationSha256"
+        ],
+        "issued_at_unix_seconds": statement["issuedAtUnixSeconds"],
+        "expires_at_unix_seconds": statement["expiresAtUnixSeconds"],
+        "verified_at_unix_seconds": authorization["verifiedAtUnixSeconds"],
+    }
+
+
 def bootstrap_receipt_environment(
     environment: dict[str, str] | None = None,
 ) -> dict[str, str]:
@@ -283,6 +544,40 @@ def _normalized_absolute_receipt_path(value: Any, label: str) -> str:
     ):
         raise ValueError(f"bootstrap receipt {label} path must be normalized and absolute")
     return value
+
+
+def _validate_receipt_python_layout(
+    python_path: str, import_paths: list[str]
+) -> None:
+    if len(import_paths) != 4:
+        raise ValueError(
+            "bootstrap receipt python.importRoots must contain exactly four ordered roots"
+        )
+    release_root = Path(import_paths[0])
+    expected_python = release_root / "runtime" / "python" / "bin" / "python3"
+    if Path(python_path) != expected_python:
+        raise ValueError(
+            "bootstrap receipt python path must be releaseRoot/runtime/python/bin/python3"
+        )
+    stdlib = Path(import_paths[1])
+    expected_stdlib_parent = release_root / "runtime" / "python" / "lib"
+    if (
+        stdlib.parent != expected_stdlib_parent
+        or re.fullmatch(r"python3\.(?:0|[1-9][0-9]*)", stdlib.name) is None
+    ):
+        raise ValueError(
+            "bootstrap receipt python.importRoots[1] must be the release CPython stdlib"
+        )
+    expected_paths = [
+        release_root,
+        stdlib,
+        stdlib / "lib-dynload",
+        release_root / "vendor",
+    ]
+    if [Path(value) for value in import_paths] != expected_paths:
+        raise ValueError(
+            "bootstrap receipt python.importRoots must be ordered as releaseRoot, stdlib, lib-dynload, vendor"
+        )
 
 
 def _validate_receipt_metadata(
@@ -339,6 +634,9 @@ def validate_bootstrap_receipt_summary(value: Any) -> dict[str, Any]:
             "sha256",
             "bootIdSha256",
             "sourceTreeDigest",
+            "launchAuthorization",
+            "launchAuthorityKeyId",
+            "launchAuthorityRootSha256",
             "launcher",
             "manifest",
             "argv",
@@ -363,6 +661,19 @@ def validate_bootstrap_receipt_summary(value: Any) -> dict[str, Any]:
     if launcher["path"] != expected_launcher_path:
         raise ValueError("bootstrap receipt launcher path is not content-addressed by its digest")
     _validate_receipt_file(summary["manifest"], "manifest")
+    validate_bootstrap_receipt_launch_authorization(
+        summary,
+        verify_signature=False,
+        require_inputs=False,
+    )
+    launch_statement = summary["launchAuthorization"]["envelope"]["statement"]
+    if (
+        SHA256_RE.fullmatch(str(summary["launchAuthorityKeyId"])) is None
+        or summary["launchAuthorityKeyId"] != launch_statement["authorityKeyId"]
+    ):
+        raise ValueError("bootstrap receipt summary launch authority key binding is invalid")
+    if SHA256_RE.fullmatch(str(summary["launchAuthorityRootSha256"])) is None:
+        raise ValueError("bootstrap receipt summary launch authority root digest is invalid")
     argv = _closed_object(summary["argv"], {"preflightSha256", "readinessSha256"}, "argv")
     for field in ("preflightSha256", "readinessSha256"):
         if SHA256_RE.fullmatch(str(argv[field])) is None:
@@ -443,6 +754,7 @@ def load_sealed_bootstrap_receipt(
         "launcher",
         "manifest",
         "sourceTreeDigest",
+        "launchAuthorization",
         "productionEnv",
         "python",
         "scripts",
@@ -452,7 +764,7 @@ def load_sealed_bootstrap_receipt(
         "environment",
     }
     if not isinstance(receipt, dict) or set(receipt) != required_keys:
-        raise ValueError("bootstrap receipt must use the closed v1 top-level schema")
+        raise ValueError("bootstrap receipt must use the closed v2 top-level schema")
     if receipt.get("apiVersion") != BOOTSTRAP_RECEIPT_API_VERSION:
         raise ValueError("bootstrap receipt has the wrong API version")
     if receipt.get("kind") != BOOTSTRAP_RECEIPT_KIND:
@@ -475,14 +787,17 @@ def load_sealed_bootstrap_receipt(
         {"path", "sha256", "metadata", "importRoots"},
         "python",
     )
-    _normalized_absolute_receipt_path(python_record["path"], "python")
+    python_path = _normalized_absolute_receipt_path(python_record["path"], "python")
     if SHA256_RE.fullmatch(str(python_record["sha256"])) is None:
         raise ValueError("bootstrap receipt python.sha256 is invalid")
     _validate_receipt_metadata(python_record["metadata"], "python")
     import_roots = python_record["importRoots"]
-    if not isinstance(import_roots, list) or not 1 <= len(import_roots) <= 64:
-        raise ValueError("bootstrap receipt python.importRoots must contain 1-64 measured roots")
+    if not isinstance(import_roots, list) or len(import_roots) != 4:
+        raise ValueError(
+            "bootstrap receipt python.importRoots must contain exactly four ordered roots"
+        )
     seen_import_roots: set[str] = set()
+    import_paths: list[str] = []
     for index, value in enumerate(import_roots):
         label = f"python.importRoots[{index}]"
         root = _closed_object(value, {"path", "sha256", "metadata"}, label)
@@ -490,9 +805,11 @@ def load_sealed_bootstrap_receipt(
         if path in seen_import_roots:
             raise ValueError("bootstrap receipt python.importRoots contains a duplicate path")
         seen_import_roots.add(path)
+        import_paths.append(path)
         if SHA256_RE.fullmatch(str(root["sha256"])) is None:
             raise ValueError(f"bootstrap receipt {label}.sha256 is invalid")
         _validate_receipt_metadata(root["metadata"], label, require_single_link=False)
+    _validate_receipt_python_layout(python_path, import_paths)
     scripts = _closed_object(receipt["scripts"], {"preflight", "runner"}, "scripts")
     _validate_receipt_file(scripts["preflight"], "scripts.preflight")
     _validate_receipt_file(scripts["runner"], "scripts.runner")
@@ -501,6 +818,13 @@ def load_sealed_bootstrap_receipt(
         raise ValueError("bootstrap receipt inputs do not match the closed production input set")
     for name, value in inputs.items():
         _validate_receipt_file(value, f"inputs.{name}")
+    launch_authority_identity = load_launch_authority_identity()
+    launch_authorization_receipt = validate_bootstrap_receipt_launch_authorization(
+        receipt,
+        verify_signature=True,
+        require_inputs=True,
+        authority_identity=launch_authority_identity,
+    )
     argv = _closed_object(receipt["argv"], {"preflightSha256", "readinessSha256"}, "argv")
     for field in ("preflightSha256", "readinessSha256"):
         if SHA256_RE.fullmatch(str(argv[field])) is None:
@@ -521,6 +845,9 @@ def load_sealed_bootstrap_receipt(
         "sha256": actual_sha256,
         "bootIdSha256": receipt["bootIdSha256"],
         "sourceTreeDigest": receipt["sourceTreeDigest"],
+        "launchAuthorization": launch_authorization_receipt,
+        "launchAuthorityKeyId": launch_authority_identity["keyId"],
+        "launchAuthorityRootSha256": launch_authority_identity["rootSha256"],
         "launcher": receipt["launcher"],
         "manifest": receipt["manifest"],
         "argv": receipt["argv"],
@@ -1428,6 +1755,7 @@ def sha256_prefixed_base64url(value: str, label: str) -> str:
 
 
 def verify_completion_output(path: Path, expected: argparse.Namespace | None = None) -> str:
+    """Verify a runner-authenticated proof, or readiness structure when expected is absent."""
     proof_bytes, proof_metadata = read_regular_file_once(
         path,
         "completion proof",
@@ -1479,11 +1807,26 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         "integrity_metadata",
     }
     if set(proof) != required_fields:
-        raise ValueError("completion proof persisted field set does not match the v4 contract")
-    verification_mode = expected.verification_mode if expected is not None else proof.get("verification_mode")
+        raise ValueError("completion proof persisted field set does not match the v5 contract")
+    persisted_mode = proof.get("verification_mode")
+    if persisted_mode not in {"readiness", "final"}:
+        raise ValueError(
+            "completion proof verification mode must be exactly readiness or final"
+        )
+    if expected is None and persisted_mode == "final":
+        raise ValueError(
+            "final completion proof verification requires caller-authenticated expected context"
+        )
+    verification_mode = (
+        expected.verification_mode if expected is not None else persisted_mode
+    )
+    if verification_mode not in {"readiness", "final"}:
+        raise ValueError(
+            "expected completion verification mode must be exactly readiness or final"
+        )
     is_final = verification_mode == "final"
     expected_contract = {
-        "apiVersion": "serverware.completionProof/v4",
+        "apiVersion": "serverware.completionProof/v5",
         "kind": "ServerwareCompletionProof" if is_final else "ServerwarePreEnclaveReadiness",
         "ok": True,
         "verification_passed": True,
@@ -1526,6 +1869,19 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         raise ValueError("completion proof final challenge contract is invalid")
     if is_final and (challenge.get("consumed") is not True or challenge.get("completion_identity") is None):
         raise ValueError("final completion proof did not persist consumed off-host challenge evidence")
+    if is_final:
+        completion_identity = challenge["completion_identity"]
+        expected_launch_identity = bootstrap_launch_authorization_identity(
+            bootstrap_launcher
+        )
+        if (
+            not isinstance(completion_identity, dict)
+            or completion_identity.get("launch_authorization")
+            != expected_launch_identity
+        ):
+            raise ValueError(
+                "final completion identity does not match the sealed launch authorization"
+            )
     if not is_final and challenge != {"required": False, "consumed": False}:
         raise ValueError("readiness proof persisted an invalid final challenge contract")
 
@@ -1743,19 +2099,68 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
                 "apiVersion",
                 "release_identity_sha256",
                 "current_host_identity_sha256",
+                "launch_authorization",
                 "hardware_verifier_key_id",
                 "hardware_assurance_document_sha256",
                 "hardware_assurance_signed_statement_sha256",
                 "challenge_nonce_sha256",
                 "proxy_server_statement_sha256",
+                "security_role_map_sha256",
             }
             if not isinstance(completion_identity, dict) or set(completion_identity) != completion_identity_fields:
                 raise ValueError("final completion identity does not match its schema")
             if completion_identity.get("apiVersion") != "serverware.finalCompletionIdentity/v1":
                 raise ValueError("final completion identity apiVersion is invalid")
-            for field in completion_identity_fields - {"apiVersion"}:
+            for field in completion_identity_fields - {
+                "apiVersion",
+                "launch_authorization",
+            }:
                 if SHA256_RE.fullmatch(str(completion_identity.get(field))) is None:
                     raise ValueError(f"final completion identity {field} is invalid")
+            security_role_map = proof["release_provenance"].get(
+                "security_role_map"
+            )
+            if (
+                not isinstance(security_role_map, dict)
+                or set(security_role_map)
+                != {"apiVersion", "verified", "roles", "sha256"}
+                or security_role_map.get("apiVersion")
+                != "serverware.securityRoleMap/v1"
+                or security_role_map.get("verified") is not True
+            ):
+                raise ValueError("final completion security role map is invalid")
+            security_roles = security_role_map.get("roles")
+            if (
+                not isinstance(security_roles, dict)
+                or set(security_roles) != set(FINAL_SECURITY_ROLE_NAMES)
+                or any(
+                    SHA256_RE.fullmatch(str(key_id)) is None
+                    for key_id in security_roles.values()
+                )
+                or len(set(security_roles.values())) != len(security_roles)
+            ):
+                raise ValueError(
+                    "final completion security role map is not closed and pairwise distinct"
+                )
+            canonical_role_digest = "sha256:" + hashlib.sha256(
+                canonical_json(
+                    {
+                        "apiVersion": "serverware.securityRoleMap/v1",
+                        "roles": {
+                            role: security_roles[role]
+                            for role in sorted(security_roles)
+                        },
+                    }
+                ).encode("utf-8")
+            ).hexdigest()
+            if (
+                security_role_map.get("sha256") != canonical_role_digest
+                or completion_identity.get("security_role_map_sha256")
+                != canonical_role_digest
+            ):
+                raise ValueError(
+                    "final completion identity does not bind the canonical security role map"
+                )
             if not isinstance(binding.get("executing_interpreter"), dict) or binding[
                 "executing_interpreter"
             ].get("matches_pinned_path_inode") is not True:

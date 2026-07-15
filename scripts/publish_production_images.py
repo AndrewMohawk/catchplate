@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import re
 import subprocess
@@ -14,6 +15,8 @@ import build_production_images
 
 ROOT = Path(__file__).resolve().parent.parent
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+PUBLISHED_API_VERSION = "serverware.productionImagesPublished/v2"
+PUBLISHED_KIND = "ProductionImagesPublished"
 
 
 def canonical_json(value: Any) -> str:
@@ -28,26 +31,117 @@ def run(command: list[str]) -> str:
     return result.stdout.strip()
 
 
+def require_exact_fields(value: Any, expected: set[str], label: str) -> dict[str, Any]:
+    if type(value) is not dict:
+        raise ValueError(f"{label} must be a JSON object")
+    actual = set(value)
+    if actual != expected:
+        missing = sorted(expected - actual)
+        extra = sorted(actual - expected)
+        raise ValueError(f"{label} fields do not match the closed contract: missing={missing} extra={extra}")
+    return value
+
+
+def launch_authority_binding(value: Any, label: str) -> dict[str, str]:
+    if type(value) is not dict:
+        raise ValueError(f"{label} must be a JSON object")
+    return {
+        field: validate_digest(value.get(field), f"{label} {field}")
+        for field in build_production_images.LAUNCH_AUTHORITY_METADATA_FIELDS
+    }
+
+
 def load_build(path: Path) -> dict[str, Any]:
     parsed = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(parsed, dict):
-        raise ValueError("production image build artifact must be a JSON object")
+    require_exact_fields(
+        parsed,
+        {
+            "apiVersion",
+            "kind",
+            "ok",
+            "generated_at_unix",
+            "metadata",
+            "images",
+            "no_shell",
+            "publish_requirement",
+        },
+        "production image build artifact",
+    )
+    if (
+        parsed.get("apiVersion") != build_production_images.BUILD_API_VERSION
+        or parsed.get("kind") != build_production_images.BUILD_KIND
+    ):
+        raise ValueError(
+            f"production image build artifact must use {build_production_images.BUILD_API_VERSION}"
+        )
     if parsed.get("ok") is not True:
         raise ValueError(f"production image build artifact is not ok: {parsed}")
-    no_shell = parsed.get("no_shell") if isinstance(parsed.get("no_shell"), dict) else {}
-    if no_shell.get("ok") is not True:
+    generated_at = parsed.get("generated_at_unix")
+    if type(generated_at) is not int or generated_at < 0:
+        raise ValueError("production image build generated_at_unix must be a non-negative integer")
+    metadata = require_exact_fields(
+        parsed.get("metadata"),
+        {
+            "source",
+            "revision",
+            "created",
+            "source_date_epoch",
+            "source_tree_digest",
+            *build_production_images.LAUNCH_AUTHORITY_METADATA_FIELDS,
+        },
+        "production image build metadata",
+    )
+    validate_digest(metadata.get("source_tree_digest"), "production image build metadata source_tree_digest")
+    expected_authority = launch_authority_binding(metadata, "production image build metadata")
+    no_shell = require_exact_fields(
+        parsed.get("no_shell"),
+        {"ok", "production_images_no_shell", "results", "failures"},
+        "production image build no_shell",
+    )
+    if no_shell.get("ok") is not True or no_shell.get("production_images_no_shell") != "pass":
         raise ValueError("production image build artifact did not pass no-shell verification")
+    if no_shell.get("failures") != []:
+        raise ValueError("production image build artifact contains no-shell failures")
     images = parsed.get("images")
-    if not isinstance(images, list) or not images:
-        raise ValueError("production image build artifact has no images")
-    decision_gate_images = [
-        image
-        for image in images
-        if isinstance(image, dict) and image.get("service") == "serverware-decision-gate"
-    ]
-    if len(decision_gate_images) != 1:
-        raise ValueError("production image build artifact must contain exactly one decision-gate image")
-    decision_gate_declared_digests(decision_gate_images[0])
+    if not isinstance(images, list) or len(images) != 2:
+        raise ValueError("production image build artifact must contain exactly two images")
+    seen_services: set[str] = set()
+    image_ids: set[str] = set()
+    for index, image in enumerate(images):
+        if type(image) is not dict:
+            raise ValueError(f"production image build images[{index}] must be a JSON object")
+        service = image.get("service")
+        if service not in {"serverware-control", "serverware-decision-gate"} or service in seen_services:
+            raise ValueError(f"production image build has unexpected or duplicate service: {service!r}")
+        seen_services.add(str(service))
+        expected_fields = {"service", "tag", "dockerfile", "image_id"}
+        if service == "serverware-decision-gate":
+            expected_fields |= {
+                *build_production_images.DECISION_GATE_BINARY_PATHS,
+                *build_production_images.LAUNCH_AUTHORITY_METADATA_FIELDS,
+            }
+        require_exact_fields(image, expected_fields, f"production image build {service}")
+        image_ids.add(validate_image_id(image.get("image_id")))
+        if service == "serverware-decision-gate":
+            decision_gate_declared_digests(image)
+            if launch_authority_binding(image, "production image build decision-gate") != expected_authority:
+                raise ValueError(
+                    "production image build decision-gate launch-authority binding does not match build metadata"
+                )
+    if seen_services != {"serverware-control", "serverware-decision-gate"}:
+        raise ValueError("production image build service set is incomplete")
+    results = no_shell.get("results")
+    if not isinstance(results, list) or len(results) != len(images):
+        raise ValueError("production image build no-shell results do not cover both images")
+    measured_ids = {
+        result.get("image")
+        for result in results
+        if isinstance(result, dict)
+        and result.get("ok") is True
+        and result.get("forbidden_shell_paths") == []
+    }
+    if measured_ids != image_ids:
+        raise ValueError("production image build no-shell results do not match the built image IDs")
     return parsed
 
 
@@ -140,10 +234,21 @@ def imagetools_repo_digest(repo: str, tag: str) -> str:
     return f"{repo}@{digest}"
 
 
-def publish_image(image: dict[str, Any], *, registry_prefix: str, tag: str, use_imagetools: bool) -> dict[str, Any]:
+def publish_image(
+    image: dict[str, Any],
+    *,
+    registry_prefix: str,
+    tag: str,
+    use_imagetools: bool,
+    expected_launch_authority: dict[str, str],
+) -> dict[str, Any]:
     service = str(image.get("service") or "")
     local_id = validate_image_id(image.get("image_id"))
     declared_digests = decision_gate_declared_digests(image) if service == "serverware-decision-gate" else {}
+    if service == "serverware-decision-gate":
+        declared_authority = launch_authority_binding(image, "decision-gate build image")
+        if declared_authority != expected_launch_authority:
+            raise ValueError("decision-gate build image launch-authority binding does not match build metadata")
     repo = target_repo(registry_prefix, service)
     target = f"{repo}:{tag}"
     run(["docker", "tag", local_id, target])
@@ -154,7 +259,14 @@ def publish_image(image: dict[str, Any], *, registry_prefix: str, tag: str, use_
     if digest_ref is None:
         raise RuntimeError(f"docker push did not expose a repo digest for {target}")
     run(["docker", "pull", digest_ref])
-    remote_image_id = run(["docker", "image", "inspect", "--format", "{{.Id}}", digest_ref])
+    remote_image_id = validate_image_id(
+        run(["docker", "image", "inspect", "--format", "{{.Id}}", digest_ref])
+    )
+    if not hmac.compare_digest(remote_image_id, local_id):
+        raise RuntimeError(
+            f"published {service} config ID mismatch: local build has {local_id}, "
+            f"registry digest resolves to {remote_image_id}"
+        )
     measured_digests: dict[str, str] = {}
     if service == "serverware-decision-gate":
         for field, path in build_production_images.DECISION_GATE_BINARY_PATHS.items():
@@ -165,11 +277,17 @@ def publish_image(image: dict[str, Any], *, registry_prefix: str, tag: str, use_
                     f"published decision-gate {field} mismatch: build has {expected}, registry has {measured}"
                 )
             measured_digests[field] = measured
+        if launch_authority_binding(image, "decision-gate build image after remote remeasurement") != expected_launch_authority:
+            raise RuntimeError(
+                "decision-gate launch-authority binding changed during remote launcher remeasurement"
+            )
+        measured_digests.update(expected_launch_authority)
     return {
         "service": service,
         "local_image_id": local_id,
         "tag": target,
         "repo_digest": digest_ref,
+        "config_id": local_id,
         "remote_image_id": remote_image_id,
         **measured_digests,
     }
@@ -228,6 +346,9 @@ def main() -> None:
 
     try:
         build = load_build(Path(args.build_file))
+        expected_launch_authority = launch_authority_binding(
+            build["metadata"], "production image build metadata"
+        )
         plan = command_plan(build, registry_prefix=args.registry_prefix, tag=args.tag)
         if args.dry_run:
             print(canonical_json({"ok": True, "build_file": args.build_file, "commands": plan, "out": args.out, "env_out": args.env_out}))
@@ -239,6 +360,7 @@ def main() -> None:
                 registry_prefix=args.registry_prefix,
                 tag=args.tag,
                 use_imagetools=not args.no_imagetools_fallback,
+                expected_launch_authority=expected_launch_authority,
             )
             for image in build["images"]
             if isinstance(image, dict)
@@ -246,8 +368,8 @@ def main() -> None:
         remote_no_shell = verify_published_no_shell(images)
         production_images = [item["repo_digest"] for item in images]
         result = {
-            "apiVersion": "serverware.productionImagesPublished/v1",
-            "kind": "ProductionImagesPublished",
+            "apiVersion": PUBLISHED_API_VERSION,
+            "kind": PUBLISHED_KIND,
             "ok": True,
             "generated_at_unix": int(time.time()),
             "source_build_file": args.build_file,

@@ -1124,11 +1124,16 @@ def artifact_check(
             expected_images=expected_images,
         )
         failures.extend(published_failures)
+        launch_authority = handoff.launch_authority_binding(
+            production_images,
+            "production images host preflight evidence",
+        )
         release_summary = handoff.verify_summary(
             Path(args.release_provenance_summary),
             label="release provenance summary",
             pass_key="release_provenance",
             digest_key="provenance_digest",
+            expected_launch_authority=launch_authority,
         )
         image_summary = handoff.verify_summary(
             Path(args.image_signatures_summary),
@@ -1171,6 +1176,11 @@ def artifact_check(
             summary_digest=release_summary["digest"],
             expected_source_tree_digest=production_images["source_tree_digest"],
             expected_launcher_binary_digest=production_launcher_binary,
+            expected_launch_authority=launch_authority,
+            expected_reproducible_build_verification_sha256=handoff.require_sha256(
+                release_summary.get("reproducible_build_verification_sha256"),
+                "release provenance summary reproducible build verification digest",
+            ),
             trust=release_trust,
         )
         signatures = handoff.image_signature_scope(

@@ -21,6 +21,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 import prepare_aws_kms_materials  # noqa: E402
 import publish_production_images  # noqa: E402
 import run_production_readiness  # noqa: E402
+import verify_reproducible_builds  # noqa: E402
 import verify_production_readiness  # noqa: E402
 import verify_production_policy_identity  # noqa: E402
 
@@ -32,8 +33,8 @@ ACTIVATION_PURPOSE = "policy-activation-verification"
 REPRODUCIBILITY_PURPOSE = "reproducible-build-verification"
 ACTIVATION_API_VERSION = "serverware.policyActivationEvidenceVerification/v1"
 ACTIVATION_KIND = "PolicyActivationEvidenceVerification"
-REPRODUCIBILITY_API_VERSION = "serverware.reproducibleBuildVerification/v1"
-REPRODUCIBILITY_KIND = "ReproducibleBuildVerification"
+REPRODUCIBILITY_API_VERSION = verify_reproducible_builds.VERIFICATION_API_VERSION
+REPRODUCIBILITY_KIND = verify_reproducible_builds.VERIFICATION_KIND
 PRE_PUBLISH_CONFIG_CHECKS = (
     verify_production_readiness.check_no_dev_or_fixture,
     verify_production_readiness.check_control_plane_security,

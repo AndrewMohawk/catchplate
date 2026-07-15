@@ -1,0 +1,327 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://serverware.invalid/schemas/bootstrap-receipt.v2.schema.json",
+  "title": "Serverware Production Bootstrap Receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "apiVersion",
+    "kind",
+    "launchId",
+    "bootIdSha256",
+    "launcher",
+    "manifest",
+    "sourceTreeDigest",
+    "launchAuthorization",
+    "productionEnv",
+    "python",
+    "scripts",
+    "composeFile",
+    "inputs",
+    "argv",
+    "environment"
+  ],
+  "properties": {
+    "apiVersion": {"const": "serverware.bootstrapReceipt/v2"},
+    "kind": {"const": "ProductionBootstrapReceipt"},
+    "launchId": {"$ref": "#/$defs/hex64"},
+    "bootIdSha256": {"$ref": "#/$defs/sha256"},
+    "launcher": {"$ref": "#/$defs/file"},
+    "manifest": {"$ref": "#/$defs/file"},
+    "sourceTreeDigest": {"$ref": "#/$defs/sha256"},
+    "launchAuthorization": {"$ref": "#/$defs/launchAuthorization"},
+    "productionEnv": {"$ref": "#/$defs/file"},
+    "python": {"$ref": "#/$defs/python"},
+    "scripts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflight", "runner"],
+      "properties": {
+        "preflight": {"$ref": "#/$defs/file"},
+        "runner": {"$ref": "#/$defs/file"}
+      }
+    },
+    "composeFile": {"$ref": "#/$defs/file"},
+    "inputs": {"$ref": "#/$defs/inputs"},
+    "argv": {"$ref": "#/$defs/argv"},
+    "environment": {"$ref": "#/$defs/environment"}
+  },
+  "$defs": {
+    "hex64": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "minLength": 2,
+      "maxLength": 4096,
+      "pattern": "^/[^\\u0000]+$",
+      "not": {"pattern": "(^|/)\\.{1,2}(/|$)|//"}
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device",
+        "inode",
+        "mode",
+        "ownerUid",
+        "ownerGid",
+        "linkCount",
+        "size",
+        "modifiedUnixNanos",
+        "changedUnixNanos"
+      ],
+      "properties": {
+        "device": {"type": "integer", "minimum": 0},
+        "inode": {"type": "integer", "minimum": 0},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "ownerUid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "ownerGid": {"type": "integer", "minimum": 0, "maximum": 4294967295},
+        "linkCount": {"type": "integer", "minimum": 1},
+        "size": {"type": "integer", "minimum": 0},
+        "modifiedUnixNanos": {"type": "integer"},
+        "changedUnixNanos": {"type": "integer"}
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "metadata"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "metadata": {
+          "allOf": [
+            {"$ref": "#/$defs/metadata"},
+            {"properties": {"linkCount": {"const": 1}}}
+          ]
+        }
+      }
+    },
+    "importRoot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "metadata"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "metadata": {"$ref": "#/$defs/metadata"}
+      }
+    },
+    "python": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "metadata", "importRoots"],
+      "properties": {
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "metadata": {
+          "allOf": [
+            {"$ref": "#/$defs/metadata"},
+            {"properties": {"linkCount": {"const": 1}}}
+          ]
+        },
+        "importRoots": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/importRoot"}
+        }
+      }
+    },
+    "launchAuthorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "request",
+        "requestSha256",
+        "envelope",
+        "authorizationSha256",
+        "verifiedAtUnixSeconds"
+      ],
+      "properties": {
+        "request": {"$ref": "#/$defs/authorizationRequest"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "envelope": {"$ref": "#/$defs/authorizationEnvelope"},
+        "authorizationSha256": {"$ref": "#/$defs/sha256"},
+        "verifiedAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "authorizationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "kind",
+        "launcherNonce",
+        "bootIdSha256",
+        "launcherSha256",
+        "manifestSha256",
+        "releaseProvenanceSha256",
+        "provenanceDigest",
+        "reproducibleBuildVerificationSha256",
+        "sourceTreeDigest",
+        "deploymentAudience",
+        "deploymentIdentitySha256",
+        "releaseSequence",
+        "rollbackEpoch"
+      ],
+      "properties": {
+        "apiVersion": {"const": "serverware.launchAuthorizationRequest/v1"},
+        "kind": {"const": "ProductionLaunchAuthorizationRequest"},
+        "launcherNonce": {"$ref": "#/$defs/hex64"},
+        "bootIdSha256": {"$ref": "#/$defs/sha256"},
+        "launcherSha256": {"$ref": "#/$defs/sha256"},
+        "manifestSha256": {"$ref": "#/$defs/sha256"},
+        "releaseProvenanceSha256": {"$ref": "#/$defs/sha256"},
+        "provenanceDigest": {"$ref": "#/$defs/sha256"},
+        "reproducibleBuildVerificationSha256": {"$ref": "#/$defs/sha256"},
+        "sourceTreeDigest": {"$ref": "#/$defs/sha256"},
+        "deploymentAudience": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"
+        },
+        "deploymentIdentitySha256": {"$ref": "#/$defs/sha256"},
+        "releaseSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "rollbackEpoch": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      }
+    },
+    "authorizationEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["apiVersion", "kind", "statement", "signature"],
+      "properties": {
+        "apiVersion": {"const": "serverware.launchAuthorization/v1"},
+        "kind": {"const": "ProductionLaunchAuthorization"},
+        "statement": {"$ref": "#/$defs/authorizationStatement"},
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{85}[AQgw]$"
+        }
+      }
+    },
+    "authorizationStatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationId",
+        "authorityKeyId",
+        "requestSha256",
+        "issuedAtUnixSeconds",
+        "expiresAtUnixSeconds",
+        "useLimit"
+      ],
+      "properties": {
+        "authorizationId": {"$ref": "#/$defs/hex64"},
+        "authorityKeyId": {"$ref": "#/$defs/sha256"},
+        "requestSha256": {"$ref": "#/$defs/sha256"},
+        "issuedAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "expiresAtUnixSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "useLimit": {"const": 1}
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "productionImagesBuild",
+        "productionImagesEnv",
+        "productionImagesPublished",
+        "releaseProvenanceSummary",
+        "releaseProvenance",
+        "imageSignaturesSummary",
+        "imageSignatures",
+        "bench",
+        "kmsMaterials",
+        "policyBundle",
+        "policyTrustedPublicKey",
+        "policyIdentityVerification",
+        "policyActivationVerification",
+        "policyActivationSignature",
+        "policyActivationTrustedPublicKey",
+        "reproducibleBuildVerification",
+        "reproducibleBuildSignature",
+        "reproducibleBuildTrustedPublicKey"
+      ],
+      "properties": {
+        "productionImagesBuild": {"$ref": "#/$defs/file"},
+        "productionImagesEnv": {"$ref": "#/$defs/file"},
+        "productionImagesPublished": {"$ref": "#/$defs/file"},
+        "releaseProvenanceSummary": {"$ref": "#/$defs/file"},
+        "releaseProvenance": {"$ref": "#/$defs/file"},
+        "imageSignaturesSummary": {"$ref": "#/$defs/file"},
+        "imageSignatures": {"$ref": "#/$defs/file"},
+        "bench": {"$ref": "#/$defs/file"},
+        "kmsMaterials": {"$ref": "#/$defs/file"},
+        "policyBundle": {"$ref": "#/$defs/file"},
+        "policyTrustedPublicKey": {"$ref": "#/$defs/file"},
+        "policyIdentityVerification": {"$ref": "#/$defs/file"},
+        "policyActivationVerification": {"$ref": "#/$defs/file"},
+        "policyActivationSignature": {"$ref": "#/$defs/file"},
+        "policyActivationTrustedPublicKey": {"$ref": "#/$defs/file"},
+        "reproducibleBuildVerification": {"$ref": "#/$defs/file"},
+        "reproducibleBuildSignature": {"$ref": "#/$defs/file"},
+        "reproducibleBuildTrustedPublicKey": {"$ref": "#/$defs/file"}
+      }
+    },
+    "argv": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["preflightSha256", "readinessSha256"],
+      "properties": {
+        "preflightSha256": {"$ref": "#/$defs/sha256"},
+        "readinessSha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["names", "sha256"],
+      "properties": {
+        "names": {
+          "type": "array",
+          "minItems": 7,
+          "maxItems": 7,
+          "prefixItems": [
+            {"const": "LANG"},
+            {"const": "LC_ALL"},
+            {"const": "PATH"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_API_VERSION"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_FD"},
+            {"const": "SERVERWARE_BOOTSTRAP_RECEIPT_SHA256"},
+            {"const": "TZ"}
+          ],
+          "items": false
+        },
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

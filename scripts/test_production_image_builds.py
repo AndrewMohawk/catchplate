@@ -18,6 +18,7 @@ import build_production_images
 import generate_release_provenance
 import serverware_source_tree
 import verify_codebase_attestation
+import verify_reproducible_builds
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -668,6 +669,125 @@ def assert_production_release_key_is_pinned() -> None:
             raise AssertionError("production release signing accepted an untrusted private key")
 
 
+def assert_production_reproducibility_binds_image_outputs() -> None:
+    def digest(character: str) -> str:
+        return "sha256:" + character * 64
+
+    launch_authority = build_production_images.launch_authority_metadata()
+    source_tree_digest = digest("1")
+    expected_images = {
+        "serverware-control": {
+            "local_build_image_id": digest("2"),
+        },
+        "serverware-decision-gate": {
+            "local_build_image_id": digest("3"),
+            "binary_digest": digest("4"),
+            "launcher_binary_digest": digest("5"),
+            **launch_authority,
+        },
+    }
+    verification = {
+        "apiVersion": verify_reproducible_builds.VERIFICATION_API_VERSION,
+        "kind": verify_reproducible_builds.VERIFICATION_KIND,
+        "ok": True,
+        "reproducible": True,
+        "scope": {
+            "artifact_reproducibility_only": True,
+            "independent_execution_proven": True,
+            "hardware_proof": False,
+        },
+        "inputs": {
+            "left": {
+                "attestation": {
+                    "builder_id": "builder.example/alpha",
+                    "key_id": digest("6"),
+                    "signature_verified": True,
+                    "operator_trusted": True,
+                }
+            },
+            "right": {
+                "attestation": {
+                    "builder_id": "builder.example/bravo",
+                    "key_id": digest("7"),
+                    "signature_verified": True,
+                    "operator_trusted": True,
+                }
+            },
+        },
+        "source_tree_digest": source_tree_digest,
+        "comparison_sha256": digest("8"),
+        "images": [
+            {
+                "service": "serverware-control",
+                "image_id": expected_images["serverware-control"][
+                    "local_build_image_id"
+                ],
+            },
+            {
+                "service": "serverware-decision-gate",
+                "image_id": expected_images["serverware-decision-gate"][
+                    "local_build_image_id"
+                ],
+                "rust_binary_sha256": expected_images["serverware-decision-gate"][
+                    "binary_digest"
+                ],
+                "launcher_binary_sha256": expected_images["serverware-decision-gate"][
+                    "launcher_binary_digest"
+                ],
+                **launch_authority,
+            },
+        ],
+        "mismatches": [],
+    }
+
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        verification_path = Path(tmp_raw) / "reproducible-build-verification.json"
+
+        def bind() -> dict[str, object]:
+            verification_path.write_text(
+                json.dumps(verification, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            return generate_release_provenance.production_reproducibility_binding(
+                verification_path,
+                expected_source_tree_digest=source_tree_digest,
+                expected_images=expected_images,
+            )
+
+        binding = bind()
+        if binding.get("images") != verification["images"]:
+            raise AssertionError(
+                f"production provenance did not retain exact reproducible image outputs: {binding}"
+            )
+
+        mutations = (
+            (0, "image_id", digest("9"), "serverware-control image ID"),
+            (1, "image_id", digest("a"), "serverware-decision-gate image ID"),
+            (
+                1,
+                "rust_binary_sha256",
+                digest("b"),
+                "decision-gate Rust binary",
+            ),
+        )
+        for index, field, invalid_value, expected_error in mutations:
+            original = verification["images"][index][field]
+            verification["images"][index][field] = invalid_value
+            try:
+                bind()
+            except ValueError as exc:
+                if expected_error not in str(exc):
+                    raise AssertionError(
+                        f"{field} mismatch failed for the wrong reason: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError(
+                    f"production provenance accepted mismatched {field}"
+                )
+            finally:
+                verification["images"][index][field] = original
+
+
 def main() -> None:
     assert_dockerignore()
     assert_production_dependencies()
@@ -681,6 +801,7 @@ def main() -> None:
     assert_source_tree_manifest_metadata_and_git_fallback()
     assert_release_source_tree_digest_callers_agree()
     assert_production_release_key_is_pinned()
+    assert_production_reproducibility_binds_image_outputs()
     assert_distroless_no_shell(ROOT / "Dockerfile.production", "gcr.io/distroless/python3-debian12")
     assert_base_images_pinned(ROOT / "Dockerfile.production")
     assert_oci_traceability(ROOT / "Dockerfile.production")

@@ -1,9 +1,9 @@
 [Unit]
 Description=Serverware closed production release proof
 Documentation=https://github.com/example/private-deployment
-After=network-online.target docker.service
-Wants=network-online.target
-Requires=docker.service
+After=network-online.target docker.service serverware-launch-authority-relay.socket
+Wants=network-online.target serverware-launch-authority-relay.socket
+Requires=docker.service serverware-launch-authority-relay.socket
 ConditionFileIsExecutable=/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher
 ConditionPathIsReadWrite=/var/lib/serverware/production-proof
 
@@ -12,7 +12,7 @@ Type=oneshot
 User=root
 Group=root
 UMask=0077
-ExecStart=/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher --manifest /etc/serverware/production-release-launch.json --manifest-sha256 sha256:<manifest-sha256>
+ExecStart=/opt/serverware/launchers/sha256-<launcher-sha256>/serverware-production-launcher --manifest /etc/serverware/production-release-launch.json
 StandardInput=null
 StandardOutput=journal
 StandardError=journal
@@ -47,11 +47,11 @@ DevicePolicy=closed
 DeviceAllow=/dev/nsm rw
 BindReadOnlyPaths=-/dev/nsm
 
-# The immutable release and /etc trust material stay read-only. The proof state,
-# launch receipts, and the pinned local Docker socket are the only write paths.
-ReadWritePaths=/var/lib/serverware/production-proof /run/serverware /run/docker.sock
-RuntimeDirectory=serverware
-RuntimeDirectoryMode=0700
+# The immutable release, /etc trust material, and relay socket directory stay
+# read-only. Proof state, launch receipts, and Docker socket access are the only
+# writable paths. The relay socket unit alone owns /run/serverware lifecycle.
+ReadOnlyPaths=/run/serverware
+ReadWritePaths=/var/lib/serverware/production-proof /run/docker.sock
 
 [Install]
 WantedBy=multi-user.target

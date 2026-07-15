@@ -8,6 +8,7 @@ WORKDIR /src
 COPY data-plane/decision-gate-rs/Cargo.toml ./Cargo.toml
 COPY data-plane/decision-gate-rs/Cargo.lock ./Cargo.lock
 COPY data-plane/decision-gate-rs/src ./src
+COPY data-plane/decision-gate-rs/trust ./trust
 RUN cargo build --release --locked
 
 FROM debian:bookworm-slim

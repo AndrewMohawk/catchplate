@@ -1,5 +1,11 @@
 {
-  "apiVersion": "serverware.productionReadinessLaunch/v1",
+  "apiVersion": "serverware.productionReadinessLaunch/v2",
+  "authorization": {
+    "deploymentAudience": "production.us-east-1:primary",
+    "deploymentIdentitySha256": "sha256:<64-lowercase-hex>",
+    "releaseSequence": 1,
+    "rollbackEpoch": 0
+  },
   "composeFile": {
     "path": "/opt/serverware/releases/<source-digest>/docker-compose.production.yml",
     "sha256": "sha256:<64-lowercase-hex>"
@@ -93,20 +99,24 @@
     "sha256": "sha256:<64-lowercase-hex>"
   },
   "python": {
-        "importRoots": [
-            {
-                "path": "/opt/serverware/releases/<source-digest>",
-                "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
-            },
-            {
-                "path": "/opt/serverware/releases/<source-digest>/runtime/python/lib/python3.12",
-                "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
-            },
-            {
-                "path": "/opt/serverware/releases/<source-digest>/vendor",
-                "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
-            }
-        ],
+    "importRoots": [
+      {
+        "path": "/opt/serverware/releases/<source-digest>",
+        "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+      },
+      {
+        "path": "/opt/serverware/releases/<source-digest>/runtime/python/lib/python3.11",
+        "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+      },
+      {
+        "path": "/opt/serverware/releases/<source-digest>/runtime/python/lib/python3.11/lib-dynload",
+        "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+      },
+      {
+        "path": "/opt/serverware/releases/<source-digest>/vendor",
+        "sha256": "sha256:<serverware-import-root-v1-tree-digest>"
+      }
+    ],
     "path": "/opt/serverware/releases/<source-digest>/runtime/python/bin/python3",
     "sha256": "sha256:<64-lowercase-hex>"
   },

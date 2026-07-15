@@ -161,6 +161,12 @@ def env_text(values: dict[str, str]) -> str:
 
 
 def main() -> None:
+    if (
+        production_release_input_preflight.REPRODUCIBILITY_API_VERSION
+        != "serverware.reproducibleBuildVerification/v3"
+    ):
+        raise AssertionError("production preflight is not using the canonical reproducibility v3 contract")
+
     with tempfile.TemporaryDirectory() as raw_tmp:
         tmp = Path(raw_tmp)
         repo = tmp / "repo"
@@ -230,7 +236,7 @@ def main() -> None:
         )
         accepted = invoke(*base_args)
         if accepted.returncode != 0:
-            raise AssertionError(f"valid inputs failed: {detail(accepted)}")
+            raise AssertionError(f"valid unpatched reproducibility v3 inputs failed: {detail(accepted)}")
         evidence = json.loads(out.read_text(encoding="utf-8"))
         if evidence.get("ok") is not True or evidence.get("source", {}).get("clean") is not True:
             raise AssertionError(f"invalid accepted evidence: {evidence}")
@@ -240,6 +246,20 @@ def main() -> None:
         serialized = out.read_text(encoding="utf-8")
         if "deploy-serverware" in serialized or str(broker) in serialized or "111122223333" in serialized:
             raise AssertionError("preflight evidence exposed sensitive release input")
+
+        legacy_reproducibility = json.loads(security["reproducibility_report"].read_text(encoding="utf-8"))
+        legacy_reproducibility["apiVersion"] = "serverware.reproducibleBuildVerification/v1"
+        signed_report(
+            tmp,
+            name="reproducible-build-verification",
+            purpose=production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
+            report=legacy_reproducibility,
+        )
+        rejected_legacy = invoke(*base_args)
+        expected_legacy_error = "not a successful serverware.reproducibleBuildVerification/v3 artifact"
+        if rejected_legacy.returncode == 0 or expected_legacy_error not in detail(rejected_legacy):
+            raise AssertionError(f"legacy reproducibility v1 evidence was accepted: {detail(rejected_legacy)}")
+        security, _ = release_security_fixture(tmp)
 
         forged_signature = json.loads(security["activation_signature"].read_text(encoding="utf-8"))
         forged_signature["artifactSha256"] = "sha256:" + "0" * 64

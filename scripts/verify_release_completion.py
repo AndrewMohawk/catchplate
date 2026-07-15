@@ -126,6 +126,36 @@ FINAL_CHALLENGE_LEDGER_MAX_ENTRIES = 4096
 FINAL_CHALLENGE_RECEIPT_API_VERSION = "serverware.finalChallengeReceipt/v1"
 FINAL_CHALLENGE_RECEIPT_MAX_AGE_SECONDS = 900
 FINAL_COMPLETION_IDENTITY_API_VERSION = "serverware.finalCompletionIdentity/v1"
+PRODUCTION_IMAGES_BUILD_API_VERSION = "serverware.productionImagesBuild/v2"
+PRODUCTION_IMAGES_PUBLISHED_API_VERSION = "serverware.productionImagesPublished/v2"
+REPRODUCIBLE_BUILD_MANIFEST_API_VERSION = "serverware.reproducibleBuildManifest/v3"
+REPRODUCIBLE_BUILD_VERIFICATION_API_VERSION = (
+    "serverware.reproducibleBuildVerification/v3"
+)
+RELEASE_PROVENANCE_RECORD_TYPE = "release.provenance.v2"
+LAUNCH_AUTHORITY_BINDING_FIELDS = (
+    "launch_authority_key_id",
+    "launch_authority_root_sha256",
+)
+SECURITY_ROLE_MAP_API_VERSION = "serverware.securityRoleMap/v1"
+SECURITY_ROLE_NAMES = (
+    "release_provenance_signer",
+    "image_signature_signer",
+    "rekor_transparency_log",
+    "external_checkpoint_log",
+    "control_plane_response_signer",
+    "policy_identity_signer",
+    "policy_activation_signer",
+    "reproducible_build_report_signer",
+    "reproducible_builder_left",
+    "reproducible_builder_right",
+    "production_host_preflight_signer",
+    "proxy_proof_collector",
+    "proxy_response_statement_signer",
+    "proxy_vendor_tee_verifier",
+    "hardware_assurance_verifier",
+    "final_challenge_authority",
+)
 FINAL_MODE_ENV_KEY = "SERVERWARE_COMPLETION_VERIFICATION_MODE"
 FINAL_HARDWARE_ASSURANCE_ENV_KEY = "SERVERWARE_HARDWARE_ASSURANCE"
 FINAL_HARDWARE_TRUST_ROOT_ENV_KEY = "SERVERWARE_HARDWARE_ASSURANCE_TRUSTED_PUBLIC_KEY"
@@ -1131,6 +1161,14 @@ def require_sha384(value: Any, label: str) -> str:
     return value
 
 
+def require_launch_authority_binding(value: Any, label: str) -> dict[str, str]:
+    require(isinstance(value, dict), f"{label} must be an object")
+    return {
+        field: require_sha256(value.get(field), f"{label} {field}")
+        for field in LAUNCH_AUTHORITY_BINDING_FIELDS
+    }
+
+
 def validate_release_identity(value: Any, label: str) -> dict[str, Any]:
     require(isinstance(value, dict), f"{label} must be an object")
     require_exact_keys(value, RELEASE_IDENTITY_FIELDS, label)
@@ -2113,6 +2151,42 @@ def transparency_record_binding(
     }
 
 
+def verified_reproducible_builder_identities(
+    value: Any,
+    label: str,
+) -> list[dict[str, str]]:
+    require(
+        isinstance(value, list) and len(value) == 2,
+        f"{label} must contain exactly two builders",
+    )
+    builders: list[dict[str, str]] = []
+    for index, item in enumerate(value):
+        require_exact_keys(item, {"builder_id", "key_id"}, f"{label}[{index}]")
+        builder_id = item.get("builder_id")
+        require(
+            isinstance(builder_id, str) and bool(builder_id),
+            f"{label}[{index}] builder_id is invalid",
+        )
+        builders.append(
+            {
+                "builder_id": builder_id,
+                "key_id": require_sha256(
+                    item.get("key_id"),
+                    f"{label}[{index}] key_id",
+                ),
+            }
+        )
+    require(
+        len({item["builder_id"] for item in builders}) == 2,
+        f"{label} builder identities must be independent",
+    )
+    require(
+        len({item["key_id"] for item in builders}) == 2,
+        f"{label} builder signing keys must be independent",
+    )
+    return builders
+
+
 def verify_release_provenance(
     summary: dict[str, Any],
     document: dict[str, Any],
@@ -2127,8 +2201,57 @@ def verify_release_provenance(
     provenance = document.get("provenance")
     require(isinstance(provenance, dict), "release provenance document is missing provenance")
     require(
+        provenance.get("version") == 2,
+        "production release provenance payload must use version 2",
+    )
+    require(
         provenance.get("source") == "serverware-digest-pinned-production-release",
         "release provenance was not generated in digest-pinned production mode",
+    )
+    launch_authority = require_launch_authority_binding(
+        provenance.get("launch_authority"),
+        "release provenance launch authority",
+    )
+    require(
+        require_launch_authority_binding(
+            (provenance.get("images") or {}).get("serverware-decision-gate"),
+            "release provenance decision-gate image",
+        )
+        == launch_authority,
+        "release provenance decision-gate launch-authority binding mismatch",
+    )
+    reproducible_build = provenance.get("reproducible_build")
+    require(
+        isinstance(reproducible_build, dict)
+        and reproducible_build.get("apiVersion")
+        == REPRODUCIBLE_BUILD_VERIFICATION_API_VERSION
+        and reproducible_build.get("kind") == "ReproducibleBuildVerification",
+        "release provenance reproducible-build binding uses an unsupported contract",
+    )
+    reproducible_build_verification_sha256 = require_sha256(
+        reproducible_build.get("verification_sha256"),
+        "release provenance reproducible-build verification digest",
+    )
+    require(
+        summary.get("reproducible_build_verification_sha256")
+        == reproducible_build_verification_sha256,
+        "release provenance summary reproducible-build digest mismatch",
+    )
+    require(
+        require_launch_authority_binding(
+            reproducible_build,
+            "release provenance reproducible-build evidence",
+        )
+        == launch_authority,
+        "release provenance reproducible-build launch-authority binding mismatch",
+    )
+    reproducible_builders = verified_reproducible_builder_identities(
+        reproducible_build.get("builders"),
+        "release provenance reproducible-build builders",
+    )
+    require(
+        all(summary.get(field) == launch_authority[field] for field in LAUNCH_AUTHORITY_BINDING_FIELDS),
+        "release provenance summary launch-authority binding mismatch",
     )
     digest = require_sha256(document.get("provenance_digest"), "release provenance digest")
     require(summary.get("provenance_digest") == digest, "release provenance summary digest mismatch")
@@ -2165,7 +2288,7 @@ def verify_release_provenance(
         transparency,
         anchor_key="anchor_response",
         inclusion_key="inclusion_proof",
-        expected_type="release.provenance.v1",
+        expected_type=RELEASE_PROVENANCE_RECORD_TYPE,
         expected_fields={
             "provenance_digest": digest,
             "signature": signature,
@@ -2175,6 +2298,10 @@ def verify_release_provenance(
                     "launcher_binary_digest"
                 ),
                 "release provenance production launcher binary digest",
+            ),
+            **launch_authority,
+            "reproducible_build_verification_sha256": (
+                reproducible_build_verification_sha256
             ),
         },
         expected_external_provider=expected_external_provider,
@@ -2192,6 +2319,39 @@ def verify_release_provenance(
         label="release provenance",
     )
     source_tree = provenance.get("source_tree") if isinstance(provenance.get("source_tree"), dict) else {}
+    provenance_images = provenance.get("images")
+    require(
+        isinstance(provenance_images, dict)
+        and set(provenance_images)
+        == {"serverware-control", "serverware-decision-gate"},
+        "release provenance must bind exactly both production image identities",
+    )
+    image_config_ids: dict[str, str] = {}
+    for service in ("serverware-control", "serverware-decision-gate"):
+        image = provenance_images.get(service)
+        require(isinstance(image, dict), f"release provenance {service} image is invalid")
+        require_sha256(
+            image.get("image_id"),
+            f"release provenance {service} registry manifest digest",
+        )
+        local_config_id = require_sha256(
+            image.get("local_build_image_id"),
+            f"release provenance {service} local config id",
+        )
+        remote_config_id = require_sha256(
+            image.get("remote_image_id"),
+            f"release provenance {service} remote config id",
+        )
+        approved_config_id = require_sha256(
+            image.get("config_id"),
+            f"release provenance {service} approved config id",
+        )
+        require(
+            hmac.compare_digest(local_config_id, remote_config_id)
+            and hmac.compare_digest(local_config_id, approved_config_id),
+            f"release provenance {service} local, remote, and approved config IDs differ",
+        )
+        image_config_ids[service] = approved_config_id
     compose_config_sha256 = require_sha256(
         provenance.get("compose_config_sha256"),
         "release provenance compose config digest",
@@ -2231,15 +2391,30 @@ def verify_release_provenance(
         "sbom_cyclonedx_sha256": require_sha256(cyclonedx.get("sha256"), "release provenance CycloneDX SBOM digest"),
         "sbom_cyclonedx_components": sbom_components,
         "production_launcher_binary_digest": production_launcher_binary_digest,
+        "launch_authority": launch_authority,
+        "image_config_ids": image_config_ids,
+        "reproducible_build_builders": reproducible_builders,
+        "reproducible_build_verification_sha256": (
+            reproducible_build_verification_sha256
+        ),
     }
 
 
 def verify_production_image_build(build: dict[str, Any], source_tree_digest: str) -> dict[str, Any]:
     assert_no_secret_fields(build)
+    require(
+        build.get("apiVersion") == PRODUCTION_IMAGES_BUILD_API_VERSION
+        and build.get("kind") == "ProductionImagesBuild",
+        f"production image build artifact must use {PRODUCTION_IMAGES_BUILD_API_VERSION}",
+    )
     require(build.get("ok") is True, "production image build artifact is not ok")
     no_shell = build.get("no_shell") if isinstance(build.get("no_shell"), dict) else {}
     require(no_shell.get("ok") is True, "production image build artifact did not pass no-shell verification")
     metadata = build.get("metadata") if isinstance(build.get("metadata"), dict) else {}
+    launch_authority = require_launch_authority_binding(
+        metadata,
+        "production image build metadata",
+    )
     build_source_tree_digest = require_sha256(metadata.get("source_tree_digest"), "production image build source tree digest")
     require(
         build_source_tree_digest == source_tree_digest,
@@ -2266,10 +2441,21 @@ def verify_production_image_build(build: dict[str, Any], source_tree_digest: str
                 image.get("launcher_binary_digest"),
                 "serverware production launcher binary digest",
             )
+            require(
+                require_launch_authority_binding(
+                    image,
+                    "serverware-decision-gate production image",
+                )
+                == launch_authority,
+                "production image launch-authority binding does not match build metadata",
+            )
         normalized.append(
             {
                 "service": service,
-                "image_id": require_sha256(image.get("image_id"), f"{service} image_id"),
+                "image_id": require_sha256(
+                    image.get("image_id"),
+                    f"{service} image config id",
+                ),
                 "dockerfile": image.get("dockerfile"),
                 "tag": image.get("tag"),
                 **({"binary_digest": binary_digest} if binary_digest else {}),
@@ -2288,6 +2474,7 @@ def verify_production_image_build(build: dict[str, Any], source_tree_digest: str
         "source_tree_digest": build_source_tree_digest,
         "images": normalized,
         "no_shell": "pass",
+        "launch_authority": launch_authority,
     }
 
 
@@ -2297,6 +2484,11 @@ def verify_published_images(
     readiness_image_refs: list[str],
 ) -> dict[str, Any]:
     assert_no_secret_fields(published)
+    require(
+        published.get("apiVersion") == PRODUCTION_IMAGES_PUBLISHED_API_VERSION
+        and published.get("kind") == "ProductionImagesPublished",
+        f"published production images artifact must use {PRODUCTION_IMAGES_PUBLISHED_API_VERSION}",
+    )
     require(published.get("ok") is True, "production images published artifact is not ok")
     build_by_service = {item["service"]: item for item in build_summary["images"]}
     remote_no_shell = published.get("remote_no_shell")
@@ -2310,6 +2502,7 @@ def verify_published_images(
     published_refs: list[str] = []
     published_digests: list[str] = []
     published_services: list[str] = []
+    config_ids: dict[str, str] = {}
     for image in images:
         require(isinstance(image, dict), "published image entry must be an object")
         service = image.get("service")
@@ -2320,7 +2513,20 @@ def verify_published_images(
             local_image_id == build_by_service[service]["image_id"],
             "published production images do not match current no-shell build",
         )
-        require_sha256(image.get("remote_image_id"), f"{service} published remote image id")
+        remote_image_id = require_sha256(
+            image.get("remote_image_id"),
+            f"{service} published remote config id",
+        )
+        config_id = require_sha256(
+            image.get("config_id"),
+            f"{service} published approved config id",
+        )
+        require(
+            hmac.compare_digest(local_image_id, remote_image_id)
+            and hmac.compare_digest(local_image_id, config_id),
+            f"published {service} local, remote, and approved config IDs must be identical",
+        )
+        config_ids[service] = config_id
         if service == "serverware-decision-gate":
             require(
                 require_sha256(image.get("binary_digest"), "published decision-gate binary digest")
@@ -2334,6 +2540,14 @@ def verify_published_images(
                 )
                 == build_by_service[service]["launcher_binary_digest"],
                 "published production launcher does not match the measured build launcher",
+            )
+            require(
+                require_launch_authority_binding(
+                    image,
+                    "published decision-gate image",
+                )
+                == build_summary["launch_authority"],
+                "published decision-gate launch-authority binding does not match the measured build",
             )
         repo_digest, digest = require_image_ref(image.get("repo_digest"), f"{service} published repo digest")
         published_refs.append(repo_digest)
@@ -2356,6 +2570,8 @@ def verify_published_images(
         "repo_digests": sorted(published_refs),
         "image_digests": sorted(published_digests),
         "source_build_file": published.get("source_build_file"),
+        "launch_authority": build_summary["launch_authority"],
+        "config_ids": config_ids,
     }
 
 
@@ -4742,6 +4958,45 @@ def require_stable_container_generation(
     )
 
 
+def verify_running_image_config_ids(
+    observed_image_config_ids: dict[str, str],
+    approved_image_config_ids: dict[str, str],
+) -> dict[str, str]:
+    require(
+        set(approved_image_config_ids)
+        == {"serverware-control", "serverware-decision-gate"},
+        "approved production image config identity set is incomplete",
+    )
+    expected_config_ids = {
+        "serverware": require_sha256(
+            approved_image_config_ids["serverware-control"],
+            "approved control image config id",
+        ),
+        "audit-anchor": require_sha256(
+            approved_image_config_ids["serverware-control"],
+            "approved audit-anchor image config id",
+        ),
+        "decision-gate-rs": require_sha256(
+            approved_image_config_ids["serverware-decision-gate"],
+            "approved decision-gate image config id",
+        ),
+    }
+    require(
+        set(observed_image_config_ids) == set(expected_config_ids),
+        "running production image config identity set is incomplete",
+    )
+    for service, expected_config_id in expected_config_ids.items():
+        observed_config_id = require_sha256(
+            observed_image_config_ids[service],
+            f"production service {service} image id",
+        )
+        require(
+            hmac.compare_digest(observed_config_id, expected_config_id),
+            f"production service {service} running image config ID does not match the approved reproduced config identity",
+        )
+    return expected_config_ids
+
+
 def verify_running_production_containers(
     *,
     env_file: Path,
@@ -4749,6 +5004,7 @@ def verify_running_production_containers(
     production_env: dict[str, str],
     project_directory: Path,
     production_image_refs: list[str],
+    approved_image_config_ids: dict[str, str],
     source_tree_digest: str,
     runtime_model: dict[str, Any],
     artifact_expectations: dict[str, dict[str, Any]],
@@ -4955,6 +5211,10 @@ def verify_running_production_containers(
         image_ids[service] = require_sha256(
             container.get("Image"), f"production service {service} image id"
         )
+    expected_config_ids = verify_running_image_config_ids(
+        image_ids,
+        approved_image_config_ids,
+    )
     raw_images = json.loads(
         measured_text(
             [
@@ -5098,6 +5358,9 @@ def verify_running_production_containers(
         "docker_daemon_after": daemon_after,
         "service_generation_before": generation_before,
         "service_generation_after": generation_after,
+        "approved_image_config_ids": {
+            service: expected_config_ids[service] for service in sorted(expected_config_ids)
+        },
         "containers": container_summaries,
     }
 
@@ -6903,19 +7166,30 @@ def consume_final_challenge_once(
 def final_completion_identity(
     hardware_assurance: dict[str, Any],
     *,
+    bootstrap_receipt: dict[str, Any],
     current_host_identity_sha256: str,
     proxy_server_statement_sha256: str,
-) -> dict[str, str]:
+    security_role_map_sha256: str,
+) -> dict[str, Any]:
+    current_host_identity = require_sha256(
+        current_host_identity_sha256,
+        "final completion current-host identity digest",
+    )
+    launch_identity = run_production_readiness.bootstrap_launch_authorization_identity(
+        bootstrap_receipt
+    )
+    require(
+        launch_identity["deployment_identity_sha256"] == current_host_identity,
+        "launch authorization deployment identity does not match the current completion host",
+    )
     return {
         "apiVersion": FINAL_COMPLETION_IDENTITY_API_VERSION,
         "release_identity_sha256": require_sha256(
             hardware_assurance.get("release_identity_sha256"),
             "final completion release identity digest",
         ),
-        "current_host_identity_sha256": require_sha256(
-            current_host_identity_sha256,
-            "final completion current-host identity digest",
-        ),
+        "current_host_identity_sha256": current_host_identity,
+        "launch_authorization": launch_identity,
         "hardware_verifier_key_id": require_sha256(
             hardware_assurance.get("trusted_verifier_key_id"),
             "final completion hardware verifier key id",
@@ -6935,6 +7209,10 @@ def final_completion_identity(
         "proxy_server_statement_sha256": require_sha256(
             proxy_server_statement_sha256,
             "final completion proxy server statement digest",
+        ),
+        "security_role_map_sha256": require_sha256(
+            security_role_map_sha256,
+            "final completion security role map digest",
         ),
     }
 
@@ -7112,16 +7390,54 @@ def verify_release_security_evidence(
         signature_path=paths["reproducible_build_signature"],
         trusted_public_key_path=paths["reproducible_build_trusted_public_key"],
         purpose=production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
-        api_version=production_release_input_preflight.REPRODUCIBILITY_API_VERSION,
+        api_version=REPRODUCIBLE_BUILD_VERIFICATION_API_VERSION,
         kind=production_release_input_preflight.REPRODUCIBILITY_KIND,
     )
     reproducibility_report = reproducibility["report"]
+    require(
+        reproducibility_report.get("apiVersion")
+        == REPRODUCIBLE_BUILD_VERIFICATION_API_VERSION
+        and reproducibility_report.get("kind")
+        == "ReproducibleBuildVerification",
+        "reproducible-build report must use "
+        + REPRODUCIBLE_BUILD_VERIFICATION_API_VERSION,
+    )
     require(reproducibility_report.get("reproducible") is True, "reproducible-build report did not pass")
     reproducibility_scope = reproducibility_report.get("scope")
     require(
         isinstance(reproducibility_scope, dict)
         and reproducibility_scope.get("independent_execution_proven") is True,
         "reproducible-build report did not prove two independent trusted builders",
+    )
+    reproducibility_inputs = reproducibility_report.get("inputs")
+    require(
+        isinstance(reproducibility_inputs, dict)
+        and set(reproducibility_inputs) == {"left", "right"},
+        "reproducible-build report must bind exactly two builder inputs",
+    )
+    builder_records: list[dict[str, str]] = []
+    for side in ("left", "right"):
+        input_record = reproducibility_inputs.get(side)
+        attestation = (
+            input_record.get("attestation")
+            if isinstance(input_record, dict)
+            and isinstance(input_record.get("attestation"), dict)
+            else {}
+        )
+        require(
+            attestation.get("signature_verified") is True
+            and attestation.get("operator_trusted") is True,
+            f"reproducible-build {side} builder was not independently signature-verified and trusted",
+        )
+        builder_records.append(
+            {
+                "builder_id": attestation.get("builder_id"),
+                "key_id": attestation.get("key_id"),
+            }
+        )
+    reproducible_builders = verified_reproducible_builder_identities(
+        builder_records,
+        "verified reproducible-build report builders",
     )
     require(
         reproducibility_report.get("source_tree_digest") == production_build["source_tree_digest"],
@@ -7159,6 +7475,14 @@ def verify_release_security_evidence(
         == production_launcher_binary_digest,
         "reproducible-build launcher binary digest does not match the production build",
     )
+    reproducible_launch_authority = require_launch_authority_binding(
+        reproduced_gate,
+        "reproducible-build decision-gate image",
+    )
+    require(
+        reproducible_launch_authority == production_build["launch_authority"],
+        "reproducible-build launch-authority binding does not match the production build",
+    )
     preflight_security = preflight.get("release_security_evidence") or {}
     require(preflight_security.get("policy_identity") == identity, "completion policy identity differs from host preflight")
     require(
@@ -7178,6 +7502,8 @@ def verify_release_security_evidence(
             "scope": reproducibility_scope,
             "sourceTreeDigest": reproducibility_report.get("source_tree_digest"),
             "productionLauncherBinaryDigest": production_launcher_binary_digest,
+            "launchAuthority": reproducible_launch_authority,
+            "builders": reproducible_builders,
             "productionBuildBound": True,
         },
         "benchmarkPolicyBound": True,
@@ -7226,6 +7552,118 @@ def verify_bootstrap_launcher_authorization(
         "signed_provenance_bound": True,
         "independent_build_bound": True,
         "content_addressed_path_bound": True,
+    }
+
+
+def verify_bootstrap_launch_authorization_bindings(
+    bootstrap_receipt: dict[str, Any],
+    *,
+    signed_provenance_digest: str,
+    signed_source_tree_digest: str,
+    release_provenance_sha256: str,
+    reproducible_build_verification_sha256: str,
+    current_host_identity_sha256: str,
+    release_artifact_launch_authority: dict[str, str],
+) -> dict[str, Any]:
+    run_production_readiness.validate_bootstrap_receipt_summary(bootstrap_receipt)
+    identity = run_production_readiness.bootstrap_launch_authorization_identity(
+        bootstrap_receipt
+    )
+    expected = {
+        "provenance_digest": require_sha256(
+            signed_provenance_digest,
+            "signed launch authorization provenance digest",
+        ),
+        "source_tree_digest": require_sha256(
+            signed_source_tree_digest,
+            "signed launch authorization source tree digest",
+        ),
+        "release_provenance_sha256": require_sha256(
+            release_provenance_sha256,
+            "measured launch authorization release provenance file digest",
+        ),
+        "reproducible_build_verification_sha256": require_sha256(
+            reproducible_build_verification_sha256,
+            "measured launch authorization reproducible-build file digest",
+        ),
+        "deployment_identity_sha256": require_sha256(
+            current_host_identity_sha256,
+            "launch authorization current-host deployment identity digest",
+        ),
+    }
+    for field, expected_value in expected.items():
+        require(
+            hmac.compare_digest(str(identity[field]), expected_value),
+            f"launch authorization {field} does not match independently verified completion evidence",
+        )
+    artifact_authority = require_launch_authority_binding(
+        release_artifact_launch_authority,
+        "release artifact launch authority",
+    )
+    require(
+        identity["authority_key_id"]
+        == artifact_authority["launch_authority_key_id"],
+        "launch authorization key ID does not match release artifact bindings",
+    )
+    require(
+        identity["authority_root_sha256"]
+        == artifact_authority["launch_authority_root_sha256"],
+        "launch authorization root digest does not match release artifact bindings",
+    )
+    return {
+        **identity,
+        "canonical_request_digest_verified": True,
+        "canonical_envelope_digest_verified": True,
+        "authority_signature_verified_at_launch": True,
+        "signed_provenance_bound": True,
+        "signed_source_tree_bound": True,
+        "measured_release_provenance_bound": True,
+        "independent_build_report_bound": True,
+        "current_host_deployment_identity_bound": True,
+        "release_artifact_authority_bound": True,
+    }
+
+
+def verify_launch_authority_key_role_separation(
+    launch_authority_key_id: str,
+    role_key_ids: dict[str, Any],
+) -> dict[str, Any]:
+    authority_key_id = require_sha256(
+        launch_authority_key_id,
+        "launch authority signing key ID",
+    )
+    require(
+        set(role_key_ids) == set(SECURITY_ROLE_NAMES),
+        "security role key map does not match the closed release/final role set",
+    )
+    verified_roles = {
+        "launch_authority_signer": authority_key_id,
+        **{
+            role: require_sha256(role_key_ids[role], f"{role} key ID")
+            for role in SECURITY_ROLE_NAMES
+        },
+    }
+    roles_by_key: dict[str, list[str]] = {}
+    for role, key_id in verified_roles.items():
+        roles_by_key.setdefault(key_id, []).append(role)
+    reused = [roles for roles in roles_by_key.values() if len(roles) > 1]
+    require(
+        not reused,
+        "security roles must use pairwise-distinct key identities; reused by "
+        + ", ".join("/".join(sorted(roles)) for roles in reused),
+    )
+    canonical_roles = {
+        role: verified_roles[role] for role in sorted(verified_roles)
+    }
+    digest_input = {
+        "apiVersion": SECURITY_ROLE_MAP_API_VERSION,
+        "roles": canonical_roles,
+    }
+    return {
+        "apiVersion": SECURITY_ROLE_MAP_API_VERSION,
+        "verified": True,
+        "roles": canonical_roles,
+        "sha256": sha256_prefixed_json(digest_input),
     }
 
 
@@ -7786,12 +8224,39 @@ def main() -> None:
     )
     provenance_summary_out["current_source_tree_digest"] = current_source_tree_digest
     provenance_summary_out["current_source_tree_bound"] = True
+    production_images_build_summary = verify_production_image_build(
+        production_images_build,
+        str(provenance_summary_out["source_tree_digest"]),
+    )
+    require(
+        production_images_build_summary["launch_authority"]
+        == provenance_summary_out["launch_authority"],
+        "production image build launch-authority binding does not match signed release provenance",
+    )
+    production_images_published_summary = verify_published_images(
+        production_images_published,
+        production_images_build_summary,
+        list(readiness_summary["production_images"]),
+    )
+    build_config_ids = {
+        item["service"]: item["image_id"]
+        for item in production_images_build_summary["images"]
+    }
+    require(
+        production_images_published_summary["config_ids"] == build_config_ids,
+        "published production config IDs do not match the measured build config IDs",
+    )
+    require(
+        provenance_summary_out["image_config_ids"] == build_config_ids,
+        "signed release provenance config IDs do not match build and publish evidence",
+    )
     running_containers = verify_running_production_containers(
         env_file=stable_paths["production_readiness_env"],
         compose_file=stable_paths["compose_file"],
         production_env=production_env,
         project_directory=paths["compose_file"].parent.resolve(),
         production_image_refs=list(readiness_summary["production_images"]),
+        approved_image_config_ids=build_config_ids,
         source_tree_digest=current_source_tree_digest,
         runtime_model=preflight_summary["production_runtime_model"],
         artifact_expectations={
@@ -7817,15 +8282,6 @@ def main() -> None:
         docker_unix_socket=args.docker_unix_socket,
         docker_daemon_id=args.docker_daemon_id,
         final_mode=args.verification_mode == "final",
-    )
-    production_images_build_summary = verify_production_image_build(
-        production_images_build,
-        str(provenance_summary_out["source_tree_digest"]),
-    )
-    production_images_published_summary = verify_published_images(
-        production_images_published,
-        production_images_build_summary,
-        list(readiness_summary["production_images"]),
     )
     image_summary_out = verify_image_signatures(
         image_summary,
@@ -7927,6 +8383,26 @@ def main() -> None:
         attested_runtime=attested_runtime,
         preflight=preflight_summary,
     )
+    require(
+        final_file_snapshots["reproducible_build_verification"].sha256
+        == provenance_summary_out["reproducible_build_verification_sha256"],
+        "release provenance does not bind the exact reproducible-build verification artifact",
+    )
+    require(
+        (release_security_summary.get("reproducible_builds") or {}).get(
+            "reportSha256"
+        )
+        == provenance_summary_out["reproducible_build_verification_sha256"],
+        "verified reproducible-build report does not match signed release provenance",
+    )
+    verified_builders = (
+        release_security_summary.get("reproducible_builds") or {}
+    ).get("builders")
+    require(
+        verified_builders
+        == provenance_summary_out["reproducible_build_builders"],
+        "signed release provenance builder identities do not match the independently verified reproducible-build report",
+    )
     if bootstrap_receipt is not None:
         launcher_authorization = verify_bootstrap_launcher_authorization(
             bootstrap_receipt,
@@ -7936,6 +8412,29 @@ def main() -> None:
             independently_reproduced_digest=(
                 release_security_summary.get("reproducible_builds") or {}
             ).get("productionLauncherBinaryDigest"),
+        )
+        launcher_authorization["launch_authorization"] = (
+            verify_bootstrap_launch_authorization_bindings(
+                bootstrap_receipt,
+                signed_provenance_digest=provenance_summary_out[
+                    "provenance_digest"
+                ],
+                signed_source_tree_digest=provenance_summary_out[
+                    "source_tree_digest"
+                ],
+                release_provenance_sha256=final_file_snapshots[
+                    "release_provenance"
+                ].sha256,
+                reproducible_build_verification_sha256=final_file_snapshots[
+                    "reproducible_build_verification"
+                ].sha256,
+                current_host_identity_sha256=current_host_summary["identity"][
+                    "identity_sha256"
+                ],
+                release_artifact_launch_authority=production_images_build_summary[
+                    "launch_authority"
+                ],
+            )
         )
         provenance_summary_out["executed_production_launcher"] = launcher_authorization
         release_security_summary["reproducible_builds"][
@@ -7997,10 +8496,69 @@ def main() -> None:
             "final verification mode did not satisfy hardware-backed final completion requirements",
         )
         require(hardware_assurance_summary is not None, "final verification mode is missing hardware assurance summary")
+        require(
+            isinstance(verified_builders, list) and len(verified_builders) == 2,
+            "final verification mode is missing both independently verified builders",
+        )
+        launch_authorization_identity = launcher_authorization[
+            "launch_authorization"
+        ]
+        security_role_map = verify_launch_authority_key_role_separation(
+            launch_authorization_identity["authority_key_id"],
+            {
+                "release_provenance_signer": provenance_summary_out[
+                    "release_signing_key_id"
+                ],
+                "image_signature_signer": image_summary_out[
+                    "image_signing_key_id"
+                ],
+                "rekor_transparency_log": production_env_binding[
+                    "rekor_trusted_public_key_id"
+                ],
+                "external_checkpoint_log": production_env_binding[
+                    "external_checkpoint_trusted_public_key_id"
+                ],
+                "control_plane_response_signer": proxy_response_summary[
+                    "control_plane_authorization_receipt"
+                ]["signing_key_id"],
+                "policy_identity_signer": production_env_binding[
+                    "policy_trusted_public_key_id"
+                ],
+                "policy_activation_signer": production_env_binding[
+                    "policy_activation_trusted_public_key_id"
+                ],
+                "reproducible_build_report_signer": production_env_binding[
+                    "reproducible_build_trusted_public_key_id"
+                ],
+                "reproducible_builder_left": verified_builders[0]["key_id"],
+                "reproducible_builder_right": verified_builders[1]["key_id"],
+                "production_host_preflight_signer": preflight_summary[
+                    "authenticity"
+                ]["key_id"],
+                "proxy_proof_collector": proxy_response_summary[
+                    "collector_signing_key_id"
+                ],
+                "proxy_response_statement_signer": proxy_response_summary[
+                    "response_signing_key_id"
+                ],
+                "proxy_vendor_tee_verifier": proxy_response_summary[
+                    "trusted_verifier_key_id"
+                ],
+                "hardware_assurance_verifier": hardware_assurance_summary[
+                    "trusted_verifier_key_id"
+                ],
+                "final_challenge_authority": production_env_binding[
+                    "final_challenge_authority_public_key_id"
+                ],
+            },
+        )
+        provenance_summary_out["security_role_map"] = security_role_map
         completion_identity = final_completion_identity(
             hardware_assurance_summary,
+            bootstrap_receipt=bootstrap_receipt,
             current_host_identity_sha256=current_host_summary["identity"]["identity_sha256"],
             proxy_server_statement_sha256=proxy_response_summary["server_statement_sha256"],
+            security_role_map_sha256=security_role_map["sha256"],
         )
         completion_identity_sha256 = sha256_prefixed_json(completion_identity)
         final_challenge_consumption = verify_final_challenge_receipt(
@@ -8024,6 +8582,11 @@ def main() -> None:
             expected_proxy_server_statement_sha256=proxy_response_summary["server_statement_sha256"],
             hardware_assurance_issued_at_unix=hardware_assurance_summary["issued_at_unix"],
         )
+        require(
+            final_challenge_consumption["authority_key_id"]
+            == security_role_map["roles"]["final_challenge_authority"],
+            "consumed final challenge authority differs from the approved security role map",
+        )
         final_challenge_consumption["completion_identity"] = completion_identity
         assurance = candidate_assurance
     else:
@@ -8041,7 +8604,7 @@ def main() -> None:
             }
 
     proof = {
-        "apiVersion": "serverware.completionProof/v4",
+        "apiVersion": "serverware.completionProof/v5",
         "kind": "ServerwareCompletionProof" if assurance["final_completion"] else "ServerwarePreEnclaveReadiness",
         "ok": True,
         "verification_passed": True,

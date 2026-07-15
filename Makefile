@@ -1,4 +1,4 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-launch-assets verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production build-production-python-runtime build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-python-runtime verify-production-launch-assets verify-launch-authorization verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PLAYWRIGHT_RUN ?= uv run --isolated --python 3.11 --with-requirements requirements.lock --with playwright==1.61.0
@@ -63,6 +63,10 @@ DECISION_GATE_BENCH_FILE ?= .tmp/decision-gate-rs-bench.json
 PRODUCTION_DEPLOY_COMMAND ?=
 PRODUCTION_SOURCE_TREE_DIGEST ?=
 PRODUCTION_RELEASE_ROOT ?=
+PRODUCTION_DEPLOYMENT_AUDIENCE ?=
+PRODUCTION_DEPLOYMENT_IDENTITY_SHA256 ?=
+PRODUCTION_RELEASE_SEQUENCE ?=
+PRODUCTION_ROLLBACK_EPOCH ?=
 PRODUCTION_STATE_DIRECTORY ?= /var/lib/serverware/production-proof
 PRODUCTION_LAUNCH_MANIFEST ?= /etc/serverware/production-release-launch.json
 PRODUCTION_SYSTEMD_UNIT_OUT ?= /etc/systemd/system/serverware-production-release-proof.service
@@ -70,8 +74,10 @@ PRODUCTION_SYSTEMD_UNIT_NAME ?= serverware-production-release-proof.service
 PRODUCTION_LAUNCHER_BUILD_DIRECTORY ?= .tmp/production-launcher-artifact
 PRODUCTION_LAUNCHER_BUILD_PATH ?= $(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)/serverware-production-launcher
 PRODUCTION_LAUNCHER_INSTALL_PATH_FILE ?= .tmp/production-launcher-install-path
+PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY ?= .tmp/production-python-runtime-artifact
 PRODUCTION_RELEASE_PYTHON ?= $(PRODUCTION_RELEASE_ROOT)/runtime/python/bin/python3
-PRODUCTION_RELEASE_PYTHON_STDLIB ?= $(PRODUCTION_RELEASE_ROOT)/runtime/python/lib/python3.12
+PRODUCTION_RELEASE_PYTHON_STDLIB ?= $(PRODUCTION_RELEASE_ROOT)/runtime/python/lib/python3.11
+PRODUCTION_RELEASE_PYTHON_LIB_DYNLOAD ?= $(PRODUCTION_RELEASE_PYTHON_STDLIB)/lib-dynload
 PRODUCTION_RELEASE_PYTHON_VENDOR ?= $(PRODUCTION_RELEASE_ROOT)/vendor
 
 up:
@@ -218,6 +224,7 @@ production-release-provenance:
 		--production-images-build "$(PRODUCTION_IMAGES_BUILD_FILE)" \
 		--production-images-published "$(PRODUCTION_IMAGES_PUBLISHED_FILE)" \
 		--production-images-env "$(PRODUCTION_IMAGES_ENV_OUT)" \
+		--reproducible-build-verification "$(REPRODUCIBLE_BUILD_VERIFICATION_OUT)" \
 		--out "$(RELEASE_PROVENANCE_FILE)" > "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 	cat "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 
@@ -313,7 +320,19 @@ production-host-preflight:
 
 deploy-production:
 	@if [ -z "$(PRODUCTION_DEPLOY_COMMAND)" ]; then echo "PRODUCTION_DEPLOY_COMMAND is required and must deploy the published digest-pinned images to the production host" >&2; exit 2; fi
-	$(PRODUCTION_DEPLOY_COMMAND)
+	@test -x "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/bin/python3" || { echo "build-production-python-runtime must produce the release runtime artifact before deployment" >&2; exit 2; }
+	@test -d "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/vendor" || { echo "production Python runtime artifact is missing vendor" >&2; exit 2; }
+	SERVERWARE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT="$(abspath $(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY))" $(PRODUCTION_DEPLOY_COMMAND)
+
+build-production-python-runtime:
+	@test -n "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" && test "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" != / || { echo "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY is unsafe" >&2; exit 2; }
+	rm -rf "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)"
+	mkdir -p "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)"
+	docker buildx build --platform linux/amd64 --target production-python-runtime-artifact --output "type=local,dest=$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" -f Dockerfile.production .
+	test -x "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/bin/python3"
+	test -d "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/lib/python3.11/lib-dynload"
+	test -f "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/lib/libpython3.11.so.1.0"
+	test -d "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/vendor"
 
 build-production-launcher:
 	mkdir -p "$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)"
@@ -329,6 +348,14 @@ generate-production-launch-manifest:
 	@test "$$(id -u)" = 0 || { echo "generate-production-launch-manifest must run as root on the production host" >&2; exit 2; }
 	@test -n "$(PRODUCTION_RELEASE_ROOT)" || { echo "PRODUCTION_RELEASE_ROOT is required" >&2; exit 2; }
 	@printf '%s' "$(PRODUCTION_SOURCE_TREE_DIGEST)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_SOURCE_TREE_DIGEST must be sha256:<64 lowercase hex>" >&2; exit 2; }
+	@printf '%s' "$(PRODUCTION_DEPLOYMENT_AUDIENCE)" | grep -Eq '^[a-z0-9][a-z0-9._:-]{0,127}$$' || { echo "PRODUCTION_DEPLOYMENT_AUDIENCE is invalid" >&2; exit 2; }
+	@printf '%s' "$(PRODUCTION_DEPLOYMENT_IDENTITY_SHA256)" | grep -Eq '^sha256:[0-9a-f]{64}$$' || { echo "PRODUCTION_DEPLOYMENT_IDENTITY_SHA256 must be sha256:<64 lowercase hex>" >&2; exit 2; }
+	@printf '%s' "$(PRODUCTION_RELEASE_SEQUENCE)" | grep -Eq '^[1-9][0-9]*$$' || { echo "PRODUCTION_RELEASE_SEQUENCE must be a positive integer" >&2; exit 2; }
+	@printf '%s' "$(PRODUCTION_ROLLBACK_EPOCH)" | grep -Eq '^(0|[1-9][0-9]*)$$' || { echo "PRODUCTION_ROLLBACK_EPOCH must be a nonnegative integer" >&2; exit 2; }
+	@test -x "$(PRODUCTION_RELEASE_PYTHON)" || { echo "production release Python executable is missing or not executable: $(PRODUCTION_RELEASE_PYTHON)" >&2; exit 2; }
+	@test -d "$(PRODUCTION_RELEASE_PYTHON_STDLIB)" || { echo "production release Python stdlib is missing: $(PRODUCTION_RELEASE_PYTHON_STDLIB)" >&2; exit 2; }
+	@test -d "$(PRODUCTION_RELEASE_PYTHON_LIB_DYNLOAD)" || { echo "production release Python lib-dynload is missing: $(PRODUCTION_RELEASE_PYTHON_LIB_DYNLOAD)" >&2; exit 2; }
+	@test -d "$(PRODUCTION_RELEASE_PYTHON_VENDOR)" || { echo "production release Python vendor root is missing: $(PRODUCTION_RELEASE_PYTHON_VENDOR)" >&2; exit 2; }
 	@set -eu; launcher_path=$$(cat "$(PRODUCTION_LAUNCHER_INSTALL_PATH_FILE)"); install -d -o root -g root -m 0700 "$(PRODUCTION_STATE_DIRECTORY)" /run/serverware; python3 scripts/generate_production_launch_manifest.py \
 		--output "$(PRODUCTION_LAUNCH_MANIFEST)" \
 		--systemd-unit-out "$(PRODUCTION_SYSTEMD_UNIT_OUT)" \
@@ -336,10 +363,15 @@ generate-production-launch-manifest:
 		--release-root "$(PRODUCTION_RELEASE_ROOT)" \
 		--state-directory "$(PRODUCTION_STATE_DIRECTORY)" \
 		--source-tree-digest "$(PRODUCTION_SOURCE_TREE_DIGEST)" \
+		--deployment-audience "$(PRODUCTION_DEPLOYMENT_AUDIENCE)" \
+		--deployment-identity-sha256 "$(PRODUCTION_DEPLOYMENT_IDENTITY_SHA256)" \
+		--release-sequence "$(PRODUCTION_RELEASE_SEQUENCE)" \
+		--rollback-epoch "$(PRODUCTION_ROLLBACK_EPOCH)" \
 		--production-env "/etc/serverware/production-readiness.env" \
 		--python "$(PRODUCTION_RELEASE_PYTHON)" \
 		--python-import-root "$(PRODUCTION_RELEASE_ROOT)" \
 		--python-import-root "$(PRODUCTION_RELEASE_PYTHON_STDLIB)" \
+		--python-import-root "$(PRODUCTION_RELEASE_PYTHON_LIB_DYNLOAD)" \
 		--python-import-root "$(PRODUCTION_RELEASE_PYTHON_VENDOR)" \
 		--preflight-script "$(PRODUCTION_RELEASE_ROOT)/scripts/production_host_preflight.py" \
 		--runner-script "$(PRODUCTION_RELEASE_ROOT)/scripts/run_production_readiness.py" \
@@ -391,6 +423,7 @@ production-release-proof:
 	$(MAKE) decision-gate-bench-evidence
 	$(MAKE) publish-production-images
 	$(MAKE) merge-production-images-env
+	$(MAKE) build-production-python-runtime
 	$(MAKE) build-production-launcher
 	$(MAKE) production-release-provenance
 	$(MAKE) sign-production-images
@@ -467,13 +500,19 @@ verify-production-policy-identity:
 verify-production-host-preflight:
 	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_production_host_preflight.py
 
-verify-production-launch-assets:
+verify-production-python-runtime:
+	python3 scripts/test_build_production_images.py
+
+verify-production-launch-assets: verify-production-python-runtime
 	python3 -I scripts/test_production_launch_assets.py
 	python3 -I scripts/test_production_launcher_adversarial.py
 	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml --bin serverware-production-launcher
 
-verify-production-release-proof:
-	$(MAKE) verify-production-launch-assets
+verify-launch-authorization:
+	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_launch_authorization.py
+	uvx --with cryptography==48.0.1 python scripts/test_launch_authority_service.py
+
+verify-production-release-proof: verify-production-launch-assets verify-launch-authorization verify-production-image-builds verify-production-release-input-preflight verify-production-host-preflight verify-production-readiness-runner verify-release-completion
 	python3 scripts/test_production_release_proof_target.py
 
 verify-credential-policy-contracts:
@@ -600,7 +639,7 @@ verify-production-images-no-shell:
 scan-production-images-no-shell:
 	python3 scripts/verify_production_images_no_shell.py
 
-verify-production-image-builds:
+verify-production-image-builds: verify-production-python-runtime
 	python3 scripts/test_production_image_builds.py
 
 generate-production-readiness-claims:

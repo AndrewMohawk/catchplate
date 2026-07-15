@@ -21,8 +21,10 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 import build_production_images
+import generate_release_provenance
 import production_host_preflight as production_host_preflight_module
 import production_release_input_preflight
+import launch_authorization
 import run_production_readiness
 import test_production_policy_identity
 import test_production_release_input_preflight
@@ -32,6 +34,8 @@ import verify_production_policy_identity
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_TREE_DIGEST = build_production_images.source_tree_digest()
 IMAGE_SIGNATURES_DIGEST = ""
+FIXTURE_LAUNCH_AUTHORITY_KEY_ID = "sha256:" + "1" * 64
+FIXTURE_LAUNCH_AUTHORITY_ROOT_SHA256 = "sha256:" + "2" * 64
 
 
 def canonical_json(value: Any) -> str:
@@ -179,7 +183,9 @@ def test_final_file_snapshots() -> None:
             )
         except ValueError as exc:
             if "must not be a symlink" not in str(exc):
-                raise AssertionError(f"symlinked final input failed for the wrong reason: {exc}") from exc
+                raise AssertionError(
+                    f"symlinked final input failed for the wrong reason: {exc}"
+                ) from exc
         else:
             raise AssertionError("final verification accepted a symlinked input")
 
@@ -295,6 +301,80 @@ def test_final_file_snapshots() -> None:
                 raise AssertionError(f"oversized final input failed for the wrong reason: {exc}") from exc
         else:
             raise AssertionError("final verification accepted an oversized input")
+
+
+def test_release_provenance_input_snapshot() -> None:
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        tmp = Path(tmp_raw)
+        input_path = tmp / "release-input.json"
+        original_bytes = b'{"identity":"original"}\n'
+        replacement_bytes = b'{"identity":"replacement"}\n'
+        input_path.write_bytes(original_bytes)
+
+        original_reader = generate_release_provenance.read_bounded_regular_file
+        read_count = 0
+
+        def swap_path_after_snapshot(
+            path: Path,
+            label: str,
+            *,
+            max_bytes: int,
+        ) -> bytes:
+            nonlocal read_count
+            read_count += 1
+            snapshot = original_reader(path, label, max_bytes=max_bytes)
+            path.write_bytes(replacement_bytes)
+            return snapshot
+
+        generate_release_provenance.read_bounded_regular_file = (
+            swap_path_after_snapshot
+        )
+        try:
+            parsed, snapshot = generate_release_provenance.load_json_snapshot(
+                input_path,
+                "release input",
+            )
+        finally:
+            generate_release_provenance.read_bounded_regular_file = original_reader
+        if (
+            read_count != 1
+            or parsed != {"identity": "original"}
+            or snapshot != original_bytes
+            or sha256_prefixed_bytes(snapshot)
+            != sha256_prefixed_bytes(original_bytes)
+            or input_path.read_bytes() != replacement_bytes
+        ):
+            raise AssertionError(
+                "release provenance parse and digest did not share one immutable byte snapshot"
+            )
+
+        input_path.write_bytes(b'{"duplicate":1,"duplicate":2}\n')
+        try:
+            generate_release_provenance.load_json_snapshot(
+                input_path,
+                "release input",
+            )
+        except ValueError as exc:
+            if "duplicate JSON object key" not in str(exc.__cause__):
+                raise AssertionError(
+                    f"duplicate release JSON failed ambiguously: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("release provenance accepted duplicate JSON keys")
+
+        target_path = tmp / "release-target.json"
+        target_path.write_bytes(original_bytes)
+        symlink_path = tmp / "release-symlink.json"
+        symlink_path.symlink_to(target_path)
+        try:
+            generate_release_provenance.load_json_snapshot(
+                symlink_path,
+                "release input",
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("release provenance accepted a symlinked input")
 
 
 def test_measured_preflight_module_replacement_race() -> None:
@@ -450,6 +530,14 @@ def reproducible_build_key_info() -> dict[str, Any]:
     return ed25519_key_info(key)
 
 
+def reproducible_builder_left_key_info() -> dict[str, Any]:
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x24" * 32))
+
+
+def reproducible_builder_right_key_info() -> dict[str, Any]:
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x25" * 32))
+
+
 def ed25519_key_info(key: Ed25519PrivateKey) -> dict[str, Any]:
     return public_key_info(key)
 
@@ -531,13 +619,22 @@ def refresh_release_provenance(summary: dict[str, Any], document: dict[str, Any]
     document["release_signing_public_key_pem"] = key_info["public_key_pem"]
     document["transparency"] = transparency_for_record(
         {
-            "type": "release.provenance.v1",
+            "type": "release.provenance.v2",
             "provenance_digest": provenance_digest,
             "signature": signature,
             "release_signing_key_id": key_info["key_id"],
             "production_launcher_binary_digest": provenance["images"][
                 "serverware-decision-gate"
             ]["launcher_binary_digest"],
+            "launch_authority_key_id": provenance["launch_authority"][
+                "launch_authority_key_id"
+            ],
+            "launch_authority_root_sha256": provenance["launch_authority"][
+                "launch_authority_root_sha256"
+            ],
+            "reproducible_build_verification_sha256": provenance[
+                "reproducible_build"
+            ]["verification_sha256"],
         }
     )
     summary["provenance_digest"] = provenance_digest
@@ -545,6 +642,10 @@ def refresh_release_provenance(summary: dict[str, Any], document: dict[str, Any]
     summary["production_launcher_binary_digest"] = provenance["images"][
         "serverware-decision-gate"
     ]["launcher_binary_digest"]
+    summary.update(provenance["launch_authority"])
+    summary["reproducible_build_verification_sha256"] = provenance[
+        "reproducible_build"
+    ]["verification_sha256"]
 
 
 def sha256_file(path: Path) -> str:
@@ -557,7 +658,12 @@ def digest(char: str) -> str:
     return "sha256:" + char * 64
 
 
-def bootstrap_receipt_fixture() -> dict[str, Any]:
+def bootstrap_receipt_fixture(
+    *,
+    deployment_identity_sha256: str = "sha256:" + "a" * 64,
+    release_sequence: int = 42,
+    rollback_epoch: int = 7,
+) -> dict[str, Any]:
     def metadata(*, mode: int = 0o100400, link_count: int = 1) -> dict[str, int]:
         return {
             "device": 1,
@@ -575,8 +681,8 @@ def bootstrap_receipt_fixture() -> dict[str, Any]:
         return {"path": path, "sha256": digest(character), "metadata": metadata()}
 
     launcher_digest = digest("3")
-    return {
-        "apiVersion": "serverware.bootstrapReceipt/v1",
+    receipt = {
+        "apiVersion": "serverware.bootstrapReceipt/v2",
         "kind": "ProductionBootstrapReceipt",
         "launchId": "1" * 64,
         "bootIdSha256": digest("2"),
@@ -620,9 +726,53 @@ def bootstrap_receipt_fixture() -> dict[str, Any]:
             "sha256": digest("e"),
         },
     }
+    authority_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("33" * 32))
+    request = {
+        "apiVersion": launch_authorization.REQUEST_API_VERSION,
+        "kind": launch_authorization.REQUEST_KIND,
+        "launcherNonce": receipt["launchId"],
+        "bootIdSha256": receipt["bootIdSha256"],
+        "launcherSha256": receipt["launcher"]["sha256"],
+        "manifestSha256": receipt["manifest"]["sha256"],
+        "releaseProvenanceSha256": receipt["inputs"]["releaseProvenance"]["sha256"],
+        "provenanceDigest": digest("0"),
+        "reproducibleBuildVerificationSha256": receipt["inputs"][
+            "reproducibleBuildVerification"
+        ]["sha256"],
+        "sourceTreeDigest": receipt["sourceTreeDigest"],
+        "deploymentAudience": "production.us-east-1:primary",
+        "deploymentIdentitySha256": deployment_identity_sha256,
+        "releaseSequence": release_sequence,
+        "rollbackEpoch": rollback_epoch,
+    }
+    envelope = launch_authorization.sign_launch_authorization(
+        request,
+        private_key=authority_key,
+        authorization_id="2" * 64,
+        issued_at_unix_seconds=100,
+        expires_at_unix_seconds=120,
+    )
+    receipt["launchAuthorization"] = {
+        "request": request,
+        "requestSha256": launch_authorization.launch_authorization_request_sha256(
+            request
+        ),
+        "envelope": envelope,
+        "authorizationSha256": sha256_prefixed_bytes(
+            launch_authorization.canonical_json_bytes(envelope)
+        ),
+        "verifiedAtUnixSeconds": 101,
+    }
+    return receipt
 
 
 def bootstrap_receipt_summary(receipt: dict[str, Any]) -> dict[str, Any]:
+    authority_public_raw = Ed25519PrivateKey.from_private_bytes(
+        bytes.fromhex("33" * 32)
+    ).public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
     return {
         "apiVersion": receipt["apiVersion"],
         "kind": receipt["kind"],
@@ -630,6 +780,13 @@ def bootstrap_receipt_summary(receipt: dict[str, Any]) -> dict[str, Any]:
         "sha256": digest("f"),
         "bootIdSha256": receipt["bootIdSha256"],
         "sourceTreeDigest": receipt["sourceTreeDigest"],
+        "launchAuthorization": receipt["launchAuthorization"],
+        "launchAuthorityKeyId": receipt["launchAuthorization"]["envelope"][
+            "statement"
+        ]["authorityKeyId"],
+        "launchAuthorityRootSha256": sha256_prefixed_bytes(
+            authority_public_raw.hex().encode("ascii") + b"\n"
+        ),
         "launcher": receipt["launcher"],
         "manifest": receipt["manifest"],
         "argv": receipt["argv"],
@@ -642,8 +799,8 @@ def bootstrap_receipt_summary(receipt: dict[str, Any]) -> dict[str, Any]:
 def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     from jsonschema import Draft202012Validator
 
-    receipt_schema = json.loads((ROOT / "schemas/bootstrap-receipt.v1.schema.json").read_text(encoding="utf-8"))
-    completion_schema = json.loads((ROOT / "schemas/completion-proof.v4.schema.json").read_text(encoding="utf-8"))
+    receipt_schema = json.loads((ROOT / "schemas/bootstrap-receipt.v2.schema.json").read_text(encoding="utf-8"))
+    completion_schema = json.loads((ROOT / "schemas/completion-proof.v5.schema.json").read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(receipt_schema)
     Draft202012Validator.check_schema(completion_schema)
     receipt = bootstrap_receipt_fixture()
@@ -652,6 +809,14 @@ def verify_release_proof_schemas() -> tuple[Any, dict[str, Any]]:
     open_receipt["launcher"]["metadata"]["unexpected"] = True
     if not list(Draft202012Validator(receipt_schema).iter_errors(open_receipt)):
         raise AssertionError("bootstrap receipt schema accepted an open nested metadata object")
+    open_authorization = clone_document(receipt)
+    open_authorization["launchAuthorization"]["request"]["unexpected"] = True
+    if not list(Draft202012Validator(receipt_schema).iter_errors(open_authorization)):
+        raise AssertionError("bootstrap receipt schema accepted an open authorization request")
+    old_receipt = clone_document(receipt)
+    old_receipt["apiVersion"] = "serverware.bootstrapReceipt/v1"
+    if not list(Draft202012Validator(receipt_schema).iter_errors(old_receipt)):
+        raise AssertionError("bootstrap receipt v2 schema accepted a v1 receipt")
     return Draft202012Validator(completion_schema), receipt
 
 
@@ -700,6 +865,169 @@ def verify_launcher_three_way_binding() -> None:
             raise AssertionError(f"launcher path mismatch failed ambiguously: {exc}") from exc
     else:
         raise AssertionError("launcher authorization accepted a non-content-addressed path")
+
+    launch_identity = verify_release_completion.verify_bootstrap_launch_authorization_bindings(
+        receipt,
+        signed_provenance_digest=digest("0"),
+        signed_source_tree_digest=receipt["sourceTreeDigest"],
+        release_provenance_sha256=receipt["launchAuthorization"]["request"][
+            "releaseProvenanceSha256"
+        ],
+        reproducible_build_verification_sha256=receipt["launchAuthorization"][
+            "request"
+        ]["reproducibleBuildVerificationSha256"],
+        current_host_identity_sha256=receipt["launchAuthorization"]["request"][
+            "deploymentIdentitySha256"
+        ],
+        release_artifact_launch_authority={
+            "launch_authority_key_id": receipt["launchAuthorityKeyId"],
+            "launch_authority_root_sha256": receipt[
+                "launchAuthorityRootSha256"
+            ],
+        },
+    )
+    if not all(
+        launch_identity.get(field) is True
+        for field in (
+            "canonical_request_digest_verified",
+            "canonical_envelope_digest_verified",
+            "authority_signature_verified_at_launch",
+            "signed_provenance_bound",
+            "signed_source_tree_bound",
+            "measured_release_provenance_bound",
+            "independent_build_report_bound",
+            "current_host_deployment_identity_bound",
+            "release_artifact_authority_bound",
+        )
+    ):
+        raise AssertionError(
+            f"completion launch authorization omitted required bindings: {launch_identity}"
+        )
+    separated_roles = {
+        role: sha256_prefixed_bytes(f"fixture-role:{role}".encode("ascii"))
+        for role in verify_release_completion.SECURITY_ROLE_NAMES
+    }
+    role_separation = (
+        verify_release_completion.verify_launch_authority_key_role_separation(
+            receipt["launchAuthorityKeyId"],
+            separated_roles,
+        )
+    )
+    if (
+        role_separation.get("verified") is not True
+        or set(role_separation.get("roles") or {})
+        != {"launch_authority_signer", *separated_roles}
+        or role_separation.get("sha256")
+        != sha256_prefixed_json(
+            {
+                "apiVersion": verify_release_completion.SECURITY_ROLE_MAP_API_VERSION,
+                "roles": role_separation["roles"],
+            }
+        )
+    ):
+        raise AssertionError(
+            f"launch authority role separation omitted verified roles: {role_separation}"
+        )
+    ordered_roles = list(verify_release_completion.SECURITY_ROLE_NAMES)
+    for index, role in enumerate(ordered_roles):
+        reused_role = dict(separated_roles)
+        reused_from = ordered_roles[index - 1]
+        reused_role[role] = reused_role[reused_from]
+        try:
+            verify_release_completion.verify_launch_authority_key_role_separation(
+                receipt["launchAuthorityKeyId"],
+                reused_role,
+            )
+        except ValueError as exc:
+            if (
+                role not in str(exc)
+                or reused_from not in str(exc)
+                or "pairwise-distinct" not in str(exc)
+            ):
+                raise AssertionError(
+                    f"security role reuse for {role} failed ambiguously: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(
+                f"security role {role} reused the {reused_from} key"
+            )
+    try:
+        verify_release_completion.verify_launch_authority_key_role_separation(
+            separated_roles[ordered_roles[0]],
+            separated_roles,
+        )
+    except ValueError as exc:
+        if (
+            "launch_authority_signer" not in str(exc)
+            or ordered_roles[0] not in str(exc)
+            or "pairwise-distinct" not in str(exc)
+        ):
+            raise AssertionError(
+                f"launch authority role reuse failed ambiguously: {exc}"
+            ) from exc
+    else:
+        raise AssertionError("launch authority reused another security role key")
+    for label, overrides in (
+        ("provenance", {"signed_provenance_digest": digest("9")}),
+        ("source", {"signed_source_tree_digest": digest("9")}),
+        ("release provenance file", {"release_provenance_sha256": digest("9")}),
+        (
+            "reproducible-build file",
+            {"reproducible_build_verification_sha256": digest("9")},
+        ),
+        ("deployment", {"current_host_identity_sha256": digest("9")}),
+        (
+            "authority key",
+            {
+                "release_artifact_launch_authority": {
+                    "launch_authority_key_id": digest("9"),
+                    "launch_authority_root_sha256": receipt[
+                        "launchAuthorityRootSha256"
+                    ],
+                }
+            },
+        ),
+        (
+            "authority root",
+            {
+                "release_artifact_launch_authority": {
+                    "launch_authority_key_id": receipt["launchAuthorityKeyId"],
+                    "launch_authority_root_sha256": digest("9"),
+                }
+            },
+        ),
+    ):
+        arguments = {
+            "signed_provenance_digest": digest("0"),
+            "signed_source_tree_digest": receipt["sourceTreeDigest"],
+            "release_provenance_sha256": receipt["launchAuthorization"]["request"][
+                "releaseProvenanceSha256"
+            ],
+            "reproducible_build_verification_sha256": receipt[
+                "launchAuthorization"
+            ]["request"]["reproducibleBuildVerificationSha256"],
+            "current_host_identity_sha256": receipt["launchAuthorization"]["request"][
+                "deploymentIdentitySha256"
+            ],
+            "release_artifact_launch_authority": {
+                "launch_authority_key_id": receipt["launchAuthorityKeyId"],
+                "launch_authority_root_sha256": receipt[
+                    "launchAuthorityRootSha256"
+                ],
+            },
+            **overrides,
+        }
+        try:
+            verify_release_completion.verify_bootstrap_launch_authorization_bindings(
+                receipt,
+                **arguments,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(
+                f"completion launch authorization accepted {label} cross-wiring"
+            )
 
 
 PINNED_EXECUTABLE_NAMES = {
@@ -786,23 +1114,23 @@ def fixture_current_host_summary(*, host_b: bool = False) -> dict[str, Any]:
 
 
 def proxy_response_key_info() -> dict[str, Any]:
-    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x05" * 32))
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x20" * 32))
 
 
 def proxy_collector_key_info() -> dict[str, Any]:
-    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x06" * 32))
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x21" * 32))
 
 
 def alternate_proxy_collector_key_info() -> dict[str, Any]:
-    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x07" * 32))
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x26" * 32))
 
 
 def proxy_vendor_verifier_key_info() -> dict[str, Any]:
-    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x04" * 32))
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x22" * 32))
 
 
 def alternate_proxy_vendor_verifier_key_info() -> dict[str, Any]:
-    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x03" * 32))
+    return ed25519_key_info(Ed25519PrivateKey.from_private_bytes(b"\x27" * 32))
 
 
 def sign_proxy_vendor_verifier_statement(
@@ -2838,32 +3166,69 @@ def production_readiness(nitro: dict[str, Any], tmp: Path) -> dict[str, Any]:
     }
 
 
-def release_provenance() -> tuple[dict[str, Any], dict[str, Any]]:
+def release_provenance(
+    reproducible_build_verification_sha256: str = digest("f"),
+) -> tuple[dict[str, Any], dict[str, Any]]:
     key_info = release_key_info()
+    launch_authority = {
+        "launch_authority_key_id": FIXTURE_LAUNCH_AUTHORITY_KEY_ID,
+        "launch_authority_root_sha256": FIXTURE_LAUNCH_AUTHORITY_ROOT_SHA256,
+    }
     provenance = {
+        "version": 2,
         "source": "serverware-digest-pinned-production-release",
         "source_tree": {"digest": SOURCE_TREE_DIGEST},
         "compose_config_sha256": digest("4"),
         "compose": {"file": "docker-compose.production.yml", "sha256": digest("4")},
         "sbom": {"cyclonedx": {"sha256": digest("5"), "components": 204}},
         "images": {
-            "serverware-control": {"image_id": digest("a")},
+            "serverware-control": {
+                "image_id": digest("6"),
+                "config_id": digest("a"),
+                "local_build_image_id": digest("a"),
+                "remote_image_id": digest("a"),
+            },
             "serverware-decision-gate": {
-                "image_id": digest("b"),
+                "image_id": digest("7"),
+                "config_id": digest("b"),
+                "local_build_image_id": digest("b"),
+                "remote_image_id": digest("b"),
                 "binary_digest": digest("9"),
                 "launcher_binary_digest": digest("e"),
+                **launch_authority,
             },
+        },
+        "launch_authority": launch_authority,
+        "reproducible_build": {
+            "apiVersion": "serverware.reproducibleBuildVerification/v3",
+            "kind": "ReproducibleBuildVerification",
+            "verification_sha256": reproducible_build_verification_sha256,
+            "builders": [
+                {
+                    "builder_id": "fixture-builder-left",
+                    "key_id": reproducible_builder_left_key_info()["key_id"],
+                },
+                {
+                    "builder_id": "fixture-builder-right",
+                    "key_id": reproducible_builder_right_key_info()["key_id"],
+                },
+            ],
+            **launch_authority,
         },
         "anchor_chain": {"ok": True, "mode": "signed-merkle-transparency-log"},
     }
     provenance_digest = sha256_prefixed_json(provenance)
     signature = "ed25519:" + b64e(key_info["key"].sign(canonical_json(provenance).encode("utf-8")))
     record = {
-        "type": "release.provenance.v1",
+        "type": "release.provenance.v2",
         "provenance_digest": provenance_digest,
         "signature": signature,
         "release_signing_key_id": key_info["key_id"],
         "production_launcher_binary_digest": digest("e"),
+        **launch_authority,
+        "reproducible_build_verification_sha256": (
+            reproducible_build_verification_sha256
+        ),
     }
     document = {
         "provenance": provenance,
@@ -2883,6 +3248,10 @@ def release_provenance() -> tuple[dict[str, Any], dict[str, Any]]:
         "release_signing_key_id": key_info["key_id"],
         "production_launcher_binary_digest": digest("e"),
         "transparency_mode": "signed-merkle-transparency-log",
+        **launch_authority,
+        "reproducible_build_verification_sha256": (
+            reproducible_build_verification_sha256
+        ),
     }
     return summary, document
 
@@ -3034,12 +3403,45 @@ def authorize_alternate_proxy_principal(tmp: Path) -> str:
     return policy_hash
 
 
+def add_reproducible_builder_fixture(tmp: Path) -> None:
+    report_path = tmp / "reproducible-build-verification.json"
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["inputs"] = {
+        "left": {
+            "attestation": {
+                "builder_id": "fixture-builder-left",
+                "key_id": reproducible_builder_left_key_info()["key_id"],
+                "signature_verified": True,
+                "operator_trusted": True,
+            }
+        },
+        "right": {
+            "attestation": {
+                "builder_id": "fixture-builder-right",
+                "key_id": reproducible_builder_right_key_info()["key_id"],
+                "signature_verified": True,
+                "operator_trusted": True,
+            }
+        },
+    }
+    test_production_release_input_preflight.signed_report(
+        tmp,
+        name="reproducible-build-verification",
+        purpose=production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
+        report=report,
+    )
+
+
 def production_images_build() -> dict[str, Any]:
     return {
-        "apiVersion": "serverware.productionImagesBuild/v1",
+        "apiVersion": "serverware.productionImagesBuild/v2",
         "kind": "ProductionImagesBuild",
         "ok": True,
-        "metadata": {"source_tree_digest": SOURCE_TREE_DIGEST},
+        "metadata": {
+            "source_tree_digest": SOURCE_TREE_DIGEST,
+            "launch_authority_key_id": FIXTURE_LAUNCH_AUTHORITY_KEY_ID,
+            "launch_authority_root_sha256": FIXTURE_LAUNCH_AUTHORITY_ROOT_SHA256,
+        },
         "no_shell": {"ok": True},
         "images": [
             {"service": "serverware-control", "dockerfile": "Dockerfile.production", "image_id": digest("a")},
@@ -3049,6 +3451,8 @@ def production_images_build() -> dict[str, Any]:
                 "image_id": digest("b"),
                 "binary_digest": digest("9"),
                 "launcher_binary_digest": digest("e"),
+                "launch_authority_key_id": FIXTURE_LAUNCH_AUTHORITY_KEY_ID,
+                "launch_authority_root_sha256": FIXTURE_LAUNCH_AUTHORITY_ROOT_SHA256,
             },
         ],
     }
@@ -3058,7 +3462,7 @@ def production_images_published() -> dict[str, Any]:
     control_ref = "registry.prod.serverware.dev/serverware/control@sha256:" + "6" * 64
     gate_ref = "registry.prod.serverware.dev/serverware/decision-gate@sha256:" + "7" * 64
     return {
-        "apiVersion": "serverware.productionImagesPublished/v1",
+        "apiVersion": "serverware.productionImagesPublished/v2",
         "kind": "ProductionImagesPublished",
         "ok": True,
         "source_build_file": ".tmp/production-images-build.json",
@@ -3066,18 +3470,22 @@ def production_images_published() -> dict[str, Any]:
             {
                 "service": "serverware-control",
                 "local_image_id": digest("a"),
+                "config_id": digest("a"),
                 "tag": "registry.prod.serverware.dev/serverware/control:production-candidate",
                 "repo_digest": control_ref,
-                "remote_image_id": digest("c"),
+                "remote_image_id": digest("a"),
             },
             {
                 "service": "serverware-decision-gate",
                 "local_image_id": digest("b"),
+                "config_id": digest("b"),
                 "tag": "registry.prod.serverware.dev/serverware/decision-gate:production-candidate",
                 "repo_digest": gate_ref,
-                "remote_image_id": digest("d"),
+                "remote_image_id": digest("b"),
                 "binary_digest": digest("9"),
                 "launcher_binary_digest": digest("e"),
+                "launch_authority_key_id": FIXTURE_LAUNCH_AUTHORITY_KEY_ID,
+                "launch_authority_root_sha256": FIXTURE_LAUNCH_AUTHORITY_ROOT_SHA256,
             },
         ],
         "remote_no_shell": {"ok": True},
@@ -3117,7 +3525,7 @@ def production_host_preflight(tmp: Path, source_tree_digest: str = SOURCE_TREE_D
         signature_path=tmp / "reproducible-build-verification.signature.json",
         trusted_public_key_path=tmp / "reproducible-build-verification.pub.pem",
         purpose=production_release_input_preflight.REPRODUCIBILITY_PURPOSE,
-        api_version=production_release_input_preflight.REPRODUCIBILITY_API_VERSION,
+        api_version=verify_release_completion.REPRODUCIBLE_BUILD_VERIFICATION_API_VERSION,
         kind=production_release_input_preflight.REPRODUCIBILITY_KIND,
     )
     return {
@@ -4642,6 +5050,43 @@ def test_live_runtime_projection_and_container_artifact_binding() -> None:
         "audit-anchor", expected, observed
     )
 
+    approved_config_ids = {
+        "serverware-control": digest("a"),
+        "serverware-decision-gate": digest("b"),
+    }
+    observed_config_ids = {
+        "serverware": digest("a"),
+        "audit-anchor": digest("a"),
+        "decision-gate-rs": digest("b"),
+    }
+    verified_config_ids = (
+        verify_release_completion.verify_running_image_config_ids(
+            observed_config_ids,
+            approved_config_ids,
+        )
+    )
+    if verified_config_ids != observed_config_ids:
+        raise AssertionError(
+            "running image config identity verification omitted an approved service"
+        )
+    for service in observed_config_ids:
+        mismatched = dict(observed_config_ids)
+        mismatched[service] = digest("c")
+        try:
+            verify_release_completion.verify_running_image_config_ids(
+                mismatched,
+                approved_config_ids,
+            )
+        except ValueError as exc:
+            if service not in str(exc) or "approved reproduced config identity" not in str(exc):
+                raise AssertionError(
+                    f"running config mismatch for {service} failed ambiguously: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(
+                f"running service {service} accepted an unapproved image config identity"
+            )
+
     mutations = {
         "root user": ("Config", "User", "0:0"),
         "arbitrary command": ("Config", "Cmd", ["/bin/sh"]),
@@ -4780,12 +5225,139 @@ def test_live_runtime_projection_and_container_artifact_binding() -> None:
         raise AssertionError("container artifact accepted multiple tar members")
 
 
+def verify_release_artifact_authority_contracts() -> None:
+    def reject(label: str, operation: Any) -> None:
+        try:
+            operation()
+        except ValueError:
+            return
+        raise AssertionError(f"completion verifier accepted {label}")
+
+    build = production_images_build()
+    build_summary = verify_release_completion.verify_production_image_build(
+        build,
+        SOURCE_TREE_DIGEST,
+    )
+    if build_summary["launch_authority"] != {
+        "launch_authority_key_id": FIXTURE_LAUNCH_AUTHORITY_KEY_ID,
+        "launch_authority_root_sha256": FIXTURE_LAUNCH_AUTHORITY_ROOT_SHA256,
+    }:
+        raise AssertionError("production image build lost its launch-authority binding")
+
+    old_build = json.loads(json.dumps(build))
+    old_build["apiVersion"] = "serverware.productionImagesBuild/v1"
+    reject(
+        "a productionImagesBuild/v1 artifact",
+        lambda: verify_release_completion.verify_production_image_build(
+            old_build,
+            SOURCE_TREE_DIGEST,
+        ),
+    )
+    mismatched_build = json.loads(json.dumps(build))
+    mismatched_build["images"][1]["launch_authority_key_id"] = digest("9")
+    reject(
+        "a cross-wired production build launch-authority key",
+        lambda: verify_release_completion.verify_production_image_build(
+            mismatched_build,
+            SOURCE_TREE_DIGEST,
+        ),
+    )
+
+    published = production_images_published()
+    readiness_refs = [item["repo_digest"] for item in published["images"]]
+    verify_release_completion.verify_published_images(
+        published,
+        build_summary,
+        readiness_refs,
+    )
+    old_published = json.loads(json.dumps(published))
+    old_published["apiVersion"] = "serverware.productionImagesPublished/v1"
+    reject(
+        "a productionImagesPublished/v1 artifact",
+        lambda: verify_release_completion.verify_published_images(
+            old_published,
+            build_summary,
+            readiness_refs,
+        ),
+    )
+    mismatched_published = json.loads(json.dumps(published))
+    mismatched_published["images"][1]["launch_authority_root_sha256"] = digest("9")
+    reject(
+        "a cross-wired published launch-authority root",
+        lambda: verify_release_completion.verify_published_images(
+            mismatched_published,
+            build_summary,
+            readiness_refs,
+        ),
+    )
+    for field in ("remote_image_id", "config_id"):
+        mismatched_config = json.loads(json.dumps(published))
+        mismatched_config["images"][0][field] = digest("c")
+        reject(
+            f"a published image with mismatched {field}",
+            lambda value=mismatched_config: verify_release_completion.verify_published_images(
+                value,
+                build_summary,
+                readiness_refs,
+            ),
+        )
+
+    provenance_summary, provenance_document = release_provenance()
+    verified_provenance = verify_release_completion.verify_release_provenance(
+        provenance_summary,
+        provenance_document,
+        "managed-prod-log",
+        external_receipt_key_info()["key_id"],
+        release_key_info()["public_key_pem"],
+        external_receipt_key_info()["public_key_pem"],
+    )
+    if verified_provenance["launch_authority"] != build_summary["launch_authority"]:
+        raise AssertionError("release provenance launch authority does not bind the production build")
+    mismatched_provenance = json.loads(json.dumps(provenance_document))
+    mismatched_provenance["provenance"]["reproducible_build"][
+        "launch_authority_key_id"
+    ] = digest("9")
+    reject(
+        "cross-wired reproducible provenance launch-authority evidence",
+        lambda: verify_release_completion.verify_release_provenance(
+            provenance_summary,
+            mismatched_provenance,
+            "managed-prod-log",
+            external_receipt_key_info()["key_id"],
+            release_key_info()["public_key_pem"],
+            external_receipt_key_info()["public_key_pem"],
+        ),
+    )
+    mismatched_provenance_config = json.loads(json.dumps(provenance_document))
+    mismatched_provenance_config["provenance"]["images"][
+        "serverware-control"
+    ]["remote_image_id"] = digest("c")
+    mismatched_provenance_summary = json.loads(json.dumps(provenance_summary))
+    refresh_release_provenance(
+        mismatched_provenance_summary,
+        mismatched_provenance_config,
+    )
+    reject(
+        "release provenance with mismatched local and remote config IDs",
+        lambda: verify_release_completion.verify_release_provenance(
+            mismatched_provenance_summary,
+            mismatched_provenance_config,
+            "managed-prod-log",
+            external_receipt_key_info()["key_id"],
+            release_key_info()["public_key_pem"],
+            external_receipt_key_info()["public_key_pem"],
+        ),
+    )
+
+
 def main() -> None:
     completion_schema_validator, receipt_schema_fixture = verify_release_proof_schemas()
     verify_launcher_three_way_binding()
+    verify_release_artifact_authority_contracts()
     verify_cosign_ecdsa_signature_compatibility()
     verify_ed25519_signature_canonicalization()
     test_final_file_snapshots()
+    test_release_provenance_input_snapshot()
     test_measured_preflight_module_replacement_race()
     test_final_production_env_binding()
     test_preflight_authenticity_and_freshness()
@@ -4800,14 +5372,23 @@ def main() -> None:
             if image["service"] == "serverware-decision-gate":
                 item["rust_binary_sha256"] = image["binary_digest"]
                 item["launcher_binary_sha256"] = image["launcher_binary_digest"]
+                item["launch_authority_key_id"] = image[
+                    "launch_authority_key_id"
+                ]
+                item["launch_authority_root_sha256"] = image[
+                    "launch_authority_root_sha256"
+                ]
             reproduced_images.append(item)
         test_production_release_input_preflight.release_security_fixture(
             tmp,
             source_tree_digest=SOURCE_TREE_DIGEST,
             images=reproduced_images,
         )
+        add_reproducible_builder_fixture(tmp)
         POLICY_DIGEST = authorize_alternate_proxy_principal(tmp)
-        provenance_summary, provenance_document = release_provenance()
+        provenance_summary, provenance_document = release_provenance(
+            sha256_file(tmp / "reproducible-build-verification.json")
+        )
         nitro = nitro_evidence(provenance_summary["provenance_digest"])
         image_summary, image_document = image_signatures(provenance_summary["provenance_digest"])
         IMAGE_SIGNATURES_DIGEST = image_summary["image_signature_bundle_digest"]
@@ -4996,6 +5577,33 @@ def main() -> None:
                 raise
         else:
             raise AssertionError("runner accepted a checksum-valid mutated persisted proof contract")
+        unknown_mode_path = tmp / "unknown-mode-completion-proof.json"
+        unknown_mode_contract = clone_document(persisted_proof)
+        unknown_mode_contract["verification_mode"] = "audit"
+        unknown_mode_contract["proof_path"] = str(unknown_mode_path)
+        unknown_mode_generation = "a" * 32
+        unknown_mode_digest_path = run_production_readiness.completion_proof_digest_path(
+            unknown_mode_path,
+            unknown_mode_generation,
+        )
+        unknown_mode_contract["integrity_metadata"] = {
+            **unknown_mode_contract["integrity_metadata"],
+            "generation": unknown_mode_generation,
+            "detached_sha256_path": str(unknown_mode_digest_path),
+        }
+        verify_release_completion.write_output(
+            unknown_mode_path,
+            unknown_mode_contract,
+        )
+        try:
+            run_production_readiness.verify_completion_output(unknown_mode_path)
+        except ValueError as exc:
+            if "verification mode must be exactly readiness or final" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "runner treated an unknown persisted proof mode as readiness"
+            )
         stale_contract_path = tmp / "stale-completion-proof.json"
         stale_contract = clone_document(persisted_proof)
         stale_contract["proof_path"] = str(stale_contract_path)
@@ -5130,7 +5738,7 @@ def main() -> None:
             raise AssertionError("a concurrently committed completion proof lost its checksum generation")
         run_production_readiness.verify_completion_output(out_path)
         completion_schema_validator.validate(proof)
-        final_schema_fixture = json.loads(json.dumps(proof))
+        final_schema_fixture = json.loads(json.dumps(persisted_proof))
         final_schema_fixture.update(
             {
                 "kind": "ServerwareCompletionProof",
@@ -5142,11 +5750,76 @@ def main() -> None:
                 "final_completion": True,
                 "hardware_proof": True,
                 "bootstrap_launcher": bootstrap_receipt_summary(receipt_schema_fixture),
+                "assurance_ceiling": {
+                    "final_completion": True,
+                    "hardware_proof": True,
+                    "hardware_evidence_verified": True,
+                },
+                "hardware_assurance_evidence": {"verified": True},
             }
         )
+        final_schema_fixture["final_challenge_consumption"] = {
+            "consumed": True,
+            "completion_identity": {
+                "apiVersion": "serverware.finalCompletionIdentity/v1",
+                "release_identity_sha256": digest("1"),
+                "current_host_identity_sha256": digest("2"),
+                "launch_authorization": (
+                    run_production_readiness.bootstrap_launch_authorization_identity(
+                        final_schema_fixture["bootstrap_launcher"]
+                    )
+                ),
+                "hardware_verifier_key_id": digest("3"),
+                "hardware_assurance_document_sha256": digest("4"),
+                "hardware_assurance_signed_statement_sha256": digest("5"),
+                "challenge_nonce_sha256": digest("6"),
+                "proxy_server_statement_sha256": digest("7"),
+                "security_role_map_sha256": digest("8"),
+            },
+        }
         completion_schema_validator.validate(final_schema_fixture)
+        final_round_trip_path = tmp / "completion-proof-final-round-trip.json"
+        final_round_trip = json.loads(json.dumps(final_schema_fixture))
+        final_round_trip["proof_path"] = str(final_round_trip_path)
+        final_generation = "f" * 32
+        final_round_trip["integrity_metadata"] = {
+            "generation": final_generation,
+            "detached_sha256_path": str(
+                verify_release_completion.completion_proof_digest_path(
+                    final_round_trip_path,
+                    final_generation,
+                )
+            ),
+            "scope": "checksum-only",
+            "independently_authenticated": False,
+            "authenticity_requires_external_signature_or_checkpoint": True,
+        }
+        verify_release_completion.write_output(
+            final_round_trip_path,
+            final_round_trip,
+        )
+        try:
+            run_production_readiness.verify_completion_output(final_round_trip_path)
+        except ValueError as exc:
+            if "requires caller-authenticated expected context" not in str(exc):
+                raise AssertionError(
+                    f"standalone final proof failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError(
+                "standalone verifier accepted a self-checksummed final-looking proof"
+            )
+        readiness_shaped_final = json.loads(json.dumps(final_schema_fixture))
+        readiness_shaped_final["final_challenge_consumption"] = {
+            "required": False,
+            "consumed": False,
+        }
+        if not list(completion_schema_validator.iter_errors(readiness_shaped_final)):
+            raise AssertionError(
+                "completion v5 schema accepted readiness-shaped final challenge evidence"
+            )
         if (
-            proof.get("apiVersion") != "serverware.completionProof/v4"
+            proof.get("apiVersion") != "serverware.completionProof/v5"
             or proof.get("kind") != "ServerwarePreEnclaveReadiness"
             or proof.get("verification_mode") != "readiness"
             or proof.get("result_scope") != "readiness-only"
@@ -5324,12 +5997,22 @@ def main() -> None:
         proxy_server_statement_sha256 = sha256_prefixed_json(
             valid_proxy_response_proof["server_statement"]
         )
+        final_bootstrap_receipt = bootstrap_receipt_summary(
+            bootstrap_receipt_fixture(
+                deployment_identity_sha256=exact_host_summary["identity"][
+                    "identity_sha256"
+                ]
+            )
+        )
+        fixture_security_role_map_sha256 = digest("d")
         final_completion_identity = verify_release_completion.final_completion_identity(
             exact_host_hardware_summary,
+            bootstrap_receipt=final_bootstrap_receipt,
             current_host_identity_sha256=exact_host_summary["identity"][
                 "identity_sha256"
             ],
             proxy_server_statement_sha256=proxy_server_statement_sha256,
+            security_role_map_sha256=fixture_security_role_map_sha256,
         )
         final_completion_identity_sha256 = sha256_prefixed_json(
             final_completion_identity
@@ -5343,9 +6026,15 @@ def main() -> None:
                 "hardware_assurance_signed_statement_sha256"
             )
             != sha256_prefixed_json(valid_hardware_assurance["statement"])
+            or final_completion_identity.get("launch_authorization")
+            != run_production_readiness.bootstrap_launch_authorization_identity(
+                final_bootstrap_receipt
+            )
+            or final_completion_identity.get("security_role_map_sha256")
+            != fixture_security_role_map_sha256
         ):
             raise AssertionError(
-                "final completion identity omitted exact hardware document or signed-statement digest"
+                "final completion identity omitted exact hardware or launch authorization identity"
             )
         for field in (
             "hardware_assurance_document_sha256",
@@ -5356,16 +6045,76 @@ def main() -> None:
             changed_identity_sha256 = sha256_prefixed_json(
                 verify_release_completion.final_completion_identity(
                     changed_hardware_summary,
+                    bootstrap_receipt=final_bootstrap_receipt,
                     current_host_identity_sha256=exact_host_summary["identity"][
                         "identity_sha256"
                     ],
                     proxy_server_statement_sha256=proxy_server_statement_sha256,
+                    security_role_map_sha256=fixture_security_role_map_sha256,
                 )
             )
             if changed_identity_sha256 == final_completion_identity_sha256:
                 raise AssertionError(
                     f"final completion identity did not bind {field}"
                 )
+        changed_launch_identity_sha256 = sha256_prefixed_json(
+            verify_release_completion.final_completion_identity(
+                exact_host_hardware_summary,
+                bootstrap_receipt=bootstrap_receipt_summary(
+                    bootstrap_receipt_fixture(
+                        deployment_identity_sha256=exact_host_summary["identity"][
+                            "identity_sha256"
+                        ],
+                        release_sequence=43,
+                    )
+                ),
+                current_host_identity_sha256=exact_host_summary["identity"][
+                    "identity_sha256"
+                ],
+                proxy_server_statement_sha256=proxy_server_statement_sha256,
+                security_role_map_sha256=fixture_security_role_map_sha256,
+            )
+        )
+        if changed_launch_identity_sha256 == final_completion_identity_sha256:
+            raise AssertionError(
+                "final completion identity did not bind launch authorization sequence"
+            )
+        changed_role_map_identity_sha256 = sha256_prefixed_json(
+            verify_release_completion.final_completion_identity(
+                exact_host_hardware_summary,
+                bootstrap_receipt=final_bootstrap_receipt,
+                current_host_identity_sha256=exact_host_summary["identity"][
+                    "identity_sha256"
+                ],
+                proxy_server_statement_sha256=proxy_server_statement_sha256,
+                security_role_map_sha256=digest("0"),
+            )
+        )
+        if changed_role_map_identity_sha256 == final_completion_identity_sha256:
+            raise AssertionError(
+                "final completion identity did not bind the canonical security role map"
+            )
+        try:
+            verify_release_completion.final_completion_identity(
+                exact_host_hardware_summary,
+                bootstrap_receipt=bootstrap_receipt_summary(
+                    bootstrap_receipt_fixture(
+                        deployment_identity_sha256=digest("0")
+                    )
+                ),
+                current_host_identity_sha256=exact_host_summary["identity"][
+                    "identity_sha256"
+                ],
+                proxy_server_statement_sha256=proxy_server_statement_sha256,
+                security_role_map_sha256=fixture_security_role_map_sha256,
+            )
+        except ValueError as exc:
+            if "does not match the current completion host" not in str(exc):
+                raise
+        else:
+            raise AssertionError(
+                "final completion identity accepted another deployment identity"
+            )
         receipt = final_challenge_receipt(
             challenge_nonce_sha256=HARDWARE_ASSURANCE_CHALLENGE_SHA256,
             completion_identity_sha256=final_completion_identity_sha256,
@@ -5787,7 +6536,9 @@ def main() -> None:
         write_production_env_files(tmp)
 
         stale_source_tree = digest("9")
-        stale_provenance_summary, stale_provenance_document = release_provenance()
+        stale_provenance_summary, stale_provenance_document = release_provenance(
+            sha256_file(tmp / "reproducible-build-verification.json")
+        )
         stale_provenance_document["provenance"]["source_tree"]["digest"] = stale_source_tree
         refresh_release_provenance(stale_provenance_summary, stale_provenance_document)
         stale_image_summary, stale_image_document = image_signatures(
@@ -5835,10 +6586,16 @@ def main() -> None:
         unauthorized_provenance_document["release_signing_public_key_pem"] = unauthorized_release_key["public_key_pem"]
         unauthorized_provenance_document["transparency"] = transparency_for_record(
             {
-                "type": "release.provenance.v1",
+                "type": "release.provenance.v2",
                 "provenance_digest": unauthorized_provenance_document["provenance_digest"],
                 "signature": unauthorized_signature,
                 "release_signing_key_id": unauthorized_release_key["key_id"],
+                "production_launcher_binary_digest": unauthorized_provenance_document[
+                    "provenance"
+                ]["images"]["serverware-decision-gate"][
+                    "launcher_binary_digest"
+                ],
+                **unauthorized_provenance_document["provenance"]["launch_authority"],
             }
         )
         unauthorized_provenance_summary["release_signing_key_id"] = unauthorized_release_key["key_id"]

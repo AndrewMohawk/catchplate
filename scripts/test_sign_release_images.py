@@ -221,14 +221,18 @@ def exercise_independent_provenance_trust() -> None:
         serialization.Encoding.DER,
         serialization.PublicFormat.SubjectPublicKeyInfo,
     )
-    provenance = {"source_tree": {"digest": "sha256:" + "a" * 64}}
+    provenance = {
+        "version": 2,
+        "source": "serverware-digest-pinned-production-release",
+        "source_tree": {"digest": "sha256:" + "a" * 64},
+    }
     provenance_digest = signer.sha256_prefixed_json(provenance)
     signature = "ed25519:" + signer.b64e(
         release_key.sign(signer.canonical_json(provenance).encode("utf-8"))
     )
     key_id = signer.sha256_prefixed_bytes(public_der)
     record = {
-        "type": "release.provenance.v1",
+        "type": "release.provenance.v2",
         "provenance_digest": provenance_digest,
         "release_signing_key_id": key_id,
         "signature": signature,
@@ -360,6 +364,17 @@ def exercise_independent_provenance_trust() -> None:
             expected_external_checkpoint_provider=external_provider,
             expected_external_checkpoint_log_id=external_log_id,
         )
+        legacy_document = json.loads(json.dumps(document))
+        legacy_document["provenance"]["version"] = 1
+        try:
+            verify(legacy_document)
+        except ValueError as exc:
+            if "must use version 2" not in str(exc):
+                raise AssertionError(
+                    f"legacy production provenance failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("production image signing accepted provenance version 1")
 
         wrong_key = Ed25519PrivateKey.generate().public_key()
         wrong_trust = tmp / "wrong.pem"

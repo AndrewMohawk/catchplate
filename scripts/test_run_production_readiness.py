@@ -12,11 +12,15 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import test_production_readiness as production_readiness_test  # noqa: E402
 import test_nitro_kms_evidence as nitro_evidence_test  # noqa: E402
+import launch_authorization  # noqa: E402
 import run_production_readiness  # noqa: E402
 
 
@@ -84,6 +88,47 @@ def detail(result: subprocess.CompletedProcess[bytes]) -> str:
     return result.stdout.decode("utf-8", errors="replace") + result.stderr.decode("utf-8", errors="replace")
 
 
+def verify_launcher_style_helper_import() -> None:
+    code = """
+import importlib.util
+import sys
+from pathlib import Path
+
+runner = Path(sys.argv[1]).resolve()
+scripts = Path(sys.argv[2]).resolve()
+root = scripts.parent
+sys.path[:] = [
+    entry
+    for entry in sys.path
+    if Path(entry or '.').resolve() != scripts
+]
+spec = importlib.util.spec_from_file_location('launcher_style_readiness', runner)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+assert module.launch_authorization.__file__ == str(scripts / 'launch_authorization.py')
+assert sys.path[:2] == [str(scripts), str(root)]
+"""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            code,
+            str(ROOT / "scripts/run_production_readiness.py"),
+            str(ROOT / "scripts"),
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(
+            "launcher-style sys.path could not import launch_authorization: "
+            + detail(result)
+        )
+
+
 def proof_policy_bundle(
     *,
     agent_id: str = "production-proof-agent",
@@ -149,9 +194,6 @@ def proof_policy_bundle(
 
 
 def verify_sealed_bootstrap_receipt_contract() -> None:
-    if not sys.platform.startswith("linux"):
-        return
-
     def metadata(*, mode: int = 0o100400, link_count: int = 1) -> dict[str, int]:
         return {
             "device": 1,
@@ -173,6 +215,7 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         }
 
     launcher_digest = "sha256:" + "3" * 64
+    release_root = "/opt/serverware/releases/fixture"
     receipt = {
         "apiVersion": run_production_readiness.BOOTSTRAP_RECEIPT_API_VERSION,
         "kind": run_production_readiness.BOOTSTRAP_RECEIPT_KIND,
@@ -188,13 +231,28 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
         "sourceTreeDigest": "sha256:" + "5" * 64,
         "productionEnv": file_record("/etc/serverware/production-readiness.env", "9"),
         "python": {
-            **file_record("/opt/serverware/releases/fixture/python/bin/python3", "a"),
+            **file_record(f"{release_root}/runtime/python/bin/python3", "a"),
             "importRoots": [
                 {
-                    "path": "/opt/serverware/releases/fixture",
+                    "path": release_root,
                     "sha256": "sha256:" + "b" * 64,
                     "metadata": metadata(mode=0o40555, link_count=2),
-                }
+                },
+                {
+                    "path": f"{release_root}/runtime/python/lib/python3.11",
+                    "sha256": "sha256:" + "c" * 64,
+                    "metadata": metadata(mode=0o40555, link_count=2),
+                },
+                {
+                    "path": f"{release_root}/runtime/python/lib/python3.11/lib-dynload",
+                    "sha256": "sha256:" + "d" * 64,
+                    "metadata": metadata(mode=0o40555, link_count=2),
+                },
+                {
+                    "path": f"{release_root}/vendor",
+                    "sha256": "sha256:" + "e" * 64,
+                    "metadata": metadata(mode=0o40555, link_count=2),
+                },
             ],
         },
         "scripts": {
@@ -218,6 +276,215 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
             "sha256": "sha256:" + "8" * 64,
         },
     }
+
+    authority_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("11" * 32))
+
+    def authority_spki(key: Ed25519PrivateKey) -> bytes:
+        return key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+
+    def authorization_for(
+        target: dict[str, object],
+        *,
+        key: Ed25519PrivateKey = authority_key,
+        issued_at: int = 100,
+        expires_at: int = 120,
+        verified_at: int = 101,
+    ) -> dict[str, object]:
+        inputs = target["inputs"]
+        assert isinstance(inputs, dict)
+        launcher = target["launcher"]
+        manifest = target["manifest"]
+        assert isinstance(launcher, dict) and isinstance(manifest, dict)
+        request = {
+            "apiVersion": launch_authorization.REQUEST_API_VERSION,
+            "kind": launch_authorization.REQUEST_KIND,
+            "launcherNonce": target["launchId"],
+            "bootIdSha256": target["bootIdSha256"],
+            "launcherSha256": launcher["sha256"],
+            "manifestSha256": manifest["sha256"],
+            "releaseProvenanceSha256": inputs["releaseProvenance"]["sha256"],
+            "provenanceDigest": "sha256:" + "0" * 64,
+            "reproducibleBuildVerificationSha256": inputs[
+                "reproducibleBuildVerification"
+            ]["sha256"],
+            "sourceTreeDigest": target["sourceTreeDigest"],
+            "deploymentAudience": "production.us-east-1:primary",
+            "deploymentIdentitySha256": "sha256:" + "a" * 64,
+            "releaseSequence": 42,
+            "rollbackEpoch": 7,
+        }
+        envelope = launch_authorization.sign_launch_authorization(
+            request,
+            private_key=key,
+            authorization_id="2" * 64,
+            issued_at_unix_seconds=issued_at,
+            expires_at_unix_seconds=expires_at,
+        )
+        return {
+            "request": request,
+            "requestSha256": launch_authorization.launch_authorization_request_sha256(
+                request
+            ),
+            "envelope": envelope,
+            "authorizationSha256": "sha256:"
+            + hashlib.sha256(
+                launch_authorization.canonical_json_bytes(envelope)
+            ).hexdigest(),
+            "verifiedAtUnixSeconds": verified_at,
+        }
+
+    receipt["launchAuthorization"] = authorization_for(receipt)
+    authority_public_spki = authority_spki(authority_key)
+    authority_public_raw = authority_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    test_authority_identity = {
+        "spki": authority_public_spki,
+        "keyId": launch_authorization.spki_key_id(authority_public_spki),
+        "rootSha256": "sha256:"
+        + hashlib.sha256(authority_public_raw.hex().encode("ascii") + b"\n").hexdigest(),
+    }
+    original_key_loader = run_production_readiness.load_launch_authority_identity
+    run_production_readiness.load_launch_authority_identity = (
+        lambda: test_authority_identity
+    )
+
+    run_production_readiness.validate_bootstrap_receipt_launch_authorization(
+        receipt,
+        verify_signature=True,
+        require_inputs=True,
+        authority_identity=test_authority_identity,
+    )
+    import_paths = [
+        str(value["path"]) for value in receipt["python"]["importRoots"]
+    ]
+    run_production_readiness._validate_receipt_python_layout(
+        str(receipt["python"]["path"]), import_paths
+    )
+    layout_mutations = {
+        "missing vendor": import_paths[:-1],
+        "reordered stdlib and lib-dynload": [
+            import_paths[0],
+            import_paths[2],
+            import_paths[1],
+            import_paths[3],
+        ],
+        "lib-dynload outside stdlib": [
+            import_paths[0],
+            import_paths[1],
+            f"{release_root}/runtime/python/lib/lib-dynload",
+            import_paths[3],
+        ],
+        "vendor outside release root": [
+            import_paths[0],
+            import_paths[1],
+            import_paths[2],
+            f"{release_root}/runtime/vendor",
+        ],
+        "non-canonical stdlib version": [
+            import_paths[0],
+            f"{release_root}/runtime/python/lib/python3.011",
+            f"{release_root}/runtime/python/lib/python3.011/lib-dynload",
+            import_paths[3],
+        ],
+    }
+    for label, paths in layout_mutations.items():
+        try:
+            run_production_readiness._validate_receipt_python_layout(
+                str(receipt["python"]["path"]), paths
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"bootstrap receipt accepted {label}")
+    try:
+        run_production_readiness._validate_receipt_python_layout(
+            f"{release_root}/bin/python3", import_paths
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("bootstrap receipt accepted Python outside the release runtime")
+    positive_skew_receipt = json.loads(json.dumps(receipt))
+    positive_skew_receipt["launchAuthorization"] = authorization_for(
+        positive_skew_receipt,
+        issued_at=105,
+        expires_at=120,
+        verified_at=100,
+    )
+    run_production_readiness.validate_bootstrap_receipt_launch_authorization(
+        positive_skew_receipt,
+        verify_signature=True,
+        require_inputs=True,
+        authority_identity=test_authority_identity,
+    )
+
+    authorization_mutations: list[tuple[str, dict[str, object]]] = []
+
+    def mutate(label: str) -> dict[str, object]:
+        value = json.loads(json.dumps(receipt))
+        authorization_mutations.append((label, value))
+        return value
+
+    mutate("request digest mismatch")["launchAuthorization"]["requestSha256"] = (
+        "sha256:" + "1" * 64
+    )
+    mutate("envelope digest mismatch")["launchAuthorization"][
+        "authorizationSha256"
+    ] = "sha256:" + "1" * 64
+    mutate("signature mismatch")["launchAuthorization"]["envelope"]["signature"] = (
+        "A" * 86
+    )
+    wrong_key = Ed25519PrivateKey.from_private_bytes(bytes.fromhex("22" * 32))
+    wrong_key_receipt = mutate("authority key mismatch")
+    wrong_key_receipt["launchAuthorization"] = authorization_for(
+        wrong_key_receipt,
+        key=wrong_key,
+    )
+    mutate("nonce mismatch")["launchAuthorization"]["request"]["launcherNonce"] = (
+        "9" * 64
+    )
+    mutate("manifest mismatch")["manifest"]["sha256"] = "sha256:" + "1" * 64
+    mutate("provenance mismatch")["launchAuthorization"]["request"][
+        "provenanceDigest"
+    ] = "sha256:" + "1" * 64
+    mutate("source mismatch")["sourceTreeDigest"] = "sha256:" + "1" * 64
+    mutate("launcher mismatch")["launcher"]["sha256"] = "sha256:" + "1" * 64
+    mutate("reproducibility mismatch")["inputs"]["reproducibleBuildVerification"][
+        "sha256"
+    ] = "sha256:" + "1" * 64
+    mutate("sequence mismatch")["launchAuthorization"]["request"][
+        "releaseSequence"
+    ] = 43
+    mutate("rollback mismatch")["launchAuthorization"]["request"][
+        "rollbackEpoch"
+    ] = 8
+    mutate("verification time before issuance")["launchAuthorization"][
+        "verifiedAtUnixSeconds"
+    ] = 94
+    mutate("verification time at expiry")["launchAuthorization"][
+        "verifiedAtUnixSeconds"
+    ] = 120
+    for label, mutated in authorization_mutations:
+        try:
+            run_production_readiness.validate_bootstrap_receipt_launch_authorization(
+                mutated,
+                verify_signature=True,
+                require_inputs=True,
+                authority_identity=test_authority_identity,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"bootstrap receipt accepted {label}")
+
+    if not sys.platform.startswith("linux"):
+        run_production_readiness.load_launch_authority_identity = original_key_loader
+        return
 
     def open_receipt(data: bytes, *, seal: bool) -> int:
         descriptor = os.memfd_create("serverware-bootstrap-receipt-test", os.MFD_ALLOW_SEALING)
@@ -281,6 +548,14 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
     open_metadata = json.loads(json.dumps(receipt))
     open_metadata["manifest"]["metadata"]["unexpected"] = 1
     mutations.append(("open nested metadata", open_metadata))
+    missing_import_root = json.loads(json.dumps(receipt))
+    missing_import_root["python"]["importRoots"].pop()
+    mutations.append(("missing Python import root", missing_import_root))
+    reordered_import_roots = json.loads(json.dumps(receipt))
+    reordered_import_roots["python"]["importRoots"][1:3] = reversed(
+        reordered_import_roots["python"]["importRoots"][1:3]
+    )
+    mutations.append(("reordered Python import roots", reordered_import_roots))
     for label, mutated in mutations:
         mutated_bytes = canonical_json(mutated).encode("ascii")
         mutated_descriptor = open_receipt(mutated_bytes, seal=True)
@@ -302,9 +577,11 @@ def verify_sealed_bootstrap_receipt_contract() -> None:
                 raise AssertionError(f"bootstrap receipt accepted {label}")
         finally:
             os.close(mutated_descriptor)
+    run_production_readiness.load_launch_authority_identity = original_key_loader
 
 
 def main() -> None:
+    verify_launcher_style_helper_import()
     for invalid_path in ("relative/path", "/", "/tmp/../etc/passwd", "/tmp//receipt", "/tmp/receipt/"):
         try:
             run_production_readiness._normalized_absolute_receipt_path(invalid_path, "test")

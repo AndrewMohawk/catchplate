@@ -145,7 +145,7 @@ def verify_release_transparency(
         transparency,
         anchor_key="anchor_response",
         inclusion_key="inclusion_proof",
-        expected_type="release.provenance.v1",
+        expected_type="release.provenance.v2",
         expected_fields={
             "provenance_digest": document.get("provenance_digest"),
             "release_signing_key_id": document.get("release_signing_key_id"),
@@ -170,6 +170,16 @@ def verify_release_provenance(
     provenance = document.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError("release provenance document is missing provenance")
+    production_source = "serverware-digest-pinned-production-release"
+    if provenance.get("source") == production_source and provenance.get("version") != 2:
+        raise ValueError("production release provenance payload must use version 2")
+    if require_transparency and (
+        provenance.get("source") != production_source
+        or provenance.get("version") != 2
+    ):
+        raise ValueError(
+            "production image signing requires digest-pinned production provenance version 2"
+        )
     expected_digest = sha256_prefixed_json(provenance)
     if document.get("provenance_digest") != expected_digest:
         raise ValueError("release provenance digest mismatch")

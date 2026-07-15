@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlencode, urlunsplit
 
 from fastapi import (
     Body,
@@ -57,6 +58,7 @@ from serverware.attestation import (
     source_tree_digest,
 )
 from serverware.config import (
+    ATOMIC_RELEASE_AUTHORIZATION_ENABLED,
     CONTROL_PLANE_TWO_PERSON_ACTIONS,
     CONTROL_PLANE_TWO_PERSON_REQUIRED,
     CONTROL_PLANE_TWO_PERSON_TTL_SECONDS,
@@ -75,6 +77,7 @@ from serverware.config import (
     DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED,
     DATA_PLANE_LEASE_RECIPIENT_VERIFY_COMMAND,
     DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN,
+    DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
     DEV_AUTHENTICATOR_ENABLED,
     DIRECT_CA_DOWNLOAD_ENABLED,
     EXPECTED_DATA_PLANE_BINARY_DIGEST,
@@ -92,10 +95,12 @@ from serverware.config import (
     PUBLIC_URL,
     RBAC_BINDINGS_PATH,
     RELEASE_CHANNEL,
+    RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS,
+    RELEASE_AUTHORIZATION_RECONCILE_LIMIT,
+    RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
     SECRET_LEASE_TTL_SECONDS,
     SETUP_ATTESTATION_CHALLENGE_TTL_SECONDS,
     WEBAUTHN_BOOTSTRAP_TOKEN,
-    validate_internal_service_auth,
 )
 from serverware import db, grants, runtime
 from serverware.auth import (
@@ -115,6 +120,7 @@ from serverware.auth import (
     validate_csrf_request,
 )
 from serverware.crypto import encrypt_credential_lease_envelope
+from serverware.control_plane_startup import validate_control_plane_startup
 from serverware.enrollment import (
     AgentEnrollmentError,
     build_agent_enrollment,
@@ -149,7 +155,6 @@ from serverware.policy_bundle import (
     PolicyBundleError,
     compile_policy_bundle,
     demo_policy_bundle,
-    enforce_policy_high_water,
     get_policy_snapshot,
     policy_public_key_hash,
     policy_public_key_pem,
@@ -709,6 +714,88 @@ class DataPlaneRateLimitConsume(BaseModel):
         return self
 
 
+class DataPlaneReleaseAuthorizationReserve(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal["serverware.releaseAuthorizationReserve/v1"] = Field(
+        alias="apiVersion"
+    )
+    attempt_id: str = Field(alias="attemptId", min_length=1, max_length=256)
+    flow_id: str = Field(alias="flowId", min_length=1, max_length=256)
+    principal_id: str = Field(alias="principalId", min_length=1, max_length=256)
+    route_id: str = Field(alias="routeId", min_length=1, max_length=256)
+    credential_ref: str | None = Field(
+        default=None, alias="credentialRef", max_length=256
+    )
+    credential_version: int = Field(alias="credentialVersion", ge=0)
+    policy_hash: str = Field(
+        alias="policyHash", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    request_digest: str = Field(
+        alias="requestDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    operation_digest: str | None = Field(
+        default=None,
+        alias="operationDigest",
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    operation_context: dict[str, Any] = Field(
+        default_factory=dict, alias="operationContext"
+    )
+    canonical_request: dict[str, Any] | None = Field(
+        default=None, alias="canonicalRequest"
+    )
+
+    @model_validator(mode="after")
+    def validate_canonical_payload_sizes(
+        self,
+    ) -> DataPlaneReleaseAuthorizationReserve:
+        for name, value in (
+            ("operationContext", self.operation_context),
+            ("canonicalRequest", self.canonical_request),
+        ):
+            if value is None:
+                continue
+            try:
+                encoded = json.dumps(
+                    value,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                    allow_nan=False,
+                ).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{name} must be canonical JSON") from exc
+            if len(encoded) > 64 * 1024:
+                raise ValueError(f"{name} exceeds 64 KiB")
+        return self
+
+
+class DataPlaneReleaseAuthorizationDispatch(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal["serverware.releaseAuthorizationDispatch/v1"] = Field(
+        alias="apiVersion"
+    )
+    attempt_id: str = Field(alias="attemptId", min_length=1, max_length=256)
+    binding_digest: str = Field(
+        alias="bindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+
+
+class DataPlaneReleaseAuthorizationComplete(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    api_version: Literal["serverware.releaseAuthorizationComplete/v1"] = Field(
+        alias="apiVersion"
+    )
+    attempt_id: str = Field(alias="attemptId", min_length=1, max_length=256)
+    binding_digest: str = Field(
+        alias="bindingDigest", pattern=r"^sha256:[0-9a-f]{64}$"
+    )
+    outcome: Literal["forwarded", "not_forwarded", "unknown"]
+
+
 class AgentEnrollmentCreate(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -838,19 +925,8 @@ class KeyReleaseVerify(BaseModel):
 
 @app.on_event("startup")
 def startup() -> None:
-    validate_internal_service_auth()
-    if RELEASE_CHANNEL.strip().lower() not in {"dev", "development", "local", "test"}:
-        try:
-            setup_receipt_trust_profile()
-        except SetupReceiptTrustConfigurationError as exc:
-            raise RuntimeError(
-                "production setup receipt trust roots are not securely configured"
-            ) from exc
-    db.init_db()
+    validate_control_plane_startup()
     _drain_setup_session_audit_outbox()
-    snapshot = get_policy_snapshot()
-    if snapshot is not None:
-        enforce_policy_high_water(snapshot)
     runtime.start_runtime_workers()
     runtime.start_audit_anchor_worker()
     runtime.start_decision_gate_ca_publisher()
@@ -9087,16 +9163,19 @@ def data_plane_audit(
                 status_code=400,
                 detail="data-plane audit event_type must start with data_plane.",
             )
-    accepted = 0
-    for item in batch.events:
-        db.record_audit_event(
-            item.event_type,
-            item.event,
-            actor_type="data-plane",
-            actor_id=DATA_PLANE_INSTANCE_ID,
-        )
-        accepted += 1
-    return {"ok": True, "accepted": accepted}
+        try:
+            db.validate_audit_event(item.event)
+        except db.AuditStoreError as exc:
+            raise HTTPException(
+                status_code=413,
+                detail="canonical data-plane audit event exceeds 2 MiB",
+            ) from exc
+    recorded = db.record_audit_event_batch(
+        [(item.event_type, item.event) for item in batch.events],
+        actor_type="data-plane",
+        actor_id=DATA_PLANE_INSTANCE_ID,
+    )
+    return {"ok": True, "accepted": len(recorded)}
 
 
 @app.post("/api/data-plane/grants/consume")
@@ -9109,6 +9188,18 @@ def data_plane_grant_consume(
     _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_GRANT_CONSUME_TOKEN
     )
+    if ATOMIC_RELEASE_AUTHORIZATION_ENABLED and RELEASE_CHANNEL.strip().lower() not in {
+        "dev",
+        "development",
+        "local",
+        "test",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "legacy grant mutation is disabled; use atomic release authorization"
+            ),
+        )
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
@@ -9210,6 +9301,18 @@ def data_plane_rate_limit_consume(
     _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN
     )
+    if ATOMIC_RELEASE_AUTHORIZATION_ENABLED and RELEASE_CHANNEL.strip().lower() not in {
+        "dev",
+        "development",
+        "local",
+        "test",
+    }:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "legacy rate-limit mutation is disabled; use atomic release authorization"
+            ),
+        )
     snapshot = get_policy_snapshot()
     if not snapshot:
         raise HTTPException(status_code=503, detail="policy bundle missing")
@@ -9357,6 +9460,626 @@ def _require_data_plane_token(
         raise HTTPException(
             status_code=401, detail="data-plane authentication required"
         )
+
+
+def _release_authorization_api_response(result: dict[str, Any]) -> dict[str, Any]:
+    quotas = [
+        {
+            "counterKey": item.get("counter_key"),
+            "constraintId": item.get("constraint_id"),
+            "operation": item.get("operation"),
+            "windowStartEpochMs": item.get("window_start_epoch_ms"),
+            "windowSeconds": item.get("window_seconds"),
+            "max": item.get("max"),
+            "count": item.get("count"),
+            "remaining": item.get("remaining"),
+            "reservationState": item.get("reservation_state"),
+        }
+        for item in result.get("quotas") or []
+    ]
+    response = {
+        "apiVersion": "serverware.releaseAuthorization/v1",
+        "ok": True,
+        "authorized": bool(result.get("authorized")),
+        "state": result.get("state"),
+        "reason": result.get("reason"),
+        "attemptId": result.get("attempt_id"),
+        "bindingDigest": result.get("binding_digest"),
+        "idempotentReplay": bool(result.get("idempotent_replay")),
+        "grantId": result.get("grant_id"),
+        "approvalRequestId": result.get("approval_request_id"),
+        "reservationExpiresAtEpochMs": result.get(
+            "reservation_expires_at_epoch_ms"
+        ),
+        "dispatchStartedAtEpochMs": result.get("dispatch_started_at_epoch_ms"),
+        "dispatchExpiresAtEpochMs": result.get("dispatch_expires_at_epoch_ms"),
+        "completionOutcome": result.get("completion_outcome"),
+        "retryAfterSeconds": int(result.get("retry_after_seconds") or 0),
+        "quotas": quotas,
+        "store": {
+            "backend": result.get("release_authorization_store_backend"),
+            "ha": bool(result.get("release_authorization_store_ha")),
+        },
+    }
+    if "approval_created" in result:
+        response.update(
+            {
+                "approvalStatus": result.get("approval_status"),
+                "approvalExpiresAt": result.get("approval_expires_at"),
+                "approvalCreated": bool(result.get("approval_created")),
+            }
+        )
+    return response
+
+
+_RELEASE_CANONICAL_TOP_LEVEL_FIELDS = {
+    "v",
+    "principal",
+    "client_ip",
+    "route_id",
+    "credential_ref",
+    "credential_version",
+    "policy_hash",
+    "request",
+    "operation",
+}
+_RELEASE_CANONICAL_REQUEST_FIELDS = {
+    "method",
+    "scheme",
+    "authority",
+    "path",
+    "query",
+    "headers",
+    "body_sha256",
+}
+_RELEASE_SENSITIVE_QUERY_KEYS = {
+    "access_token",
+    "api_key",
+    "apikey",
+    "auth",
+    "authorization",
+    "key",
+    "token",
+}
+_RELEASE_HTTP_FIELD_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9a-z]+$")
+_RELEASE_DERIVED_DISPLAY_URL_MAX_BYTES = 16 * 1024
+_RELEASE_APPROVAL_REVIEW_MAX_BYTES = 64 * 1024
+
+
+def _release_canonical_text(
+    value: Any,
+    *,
+    field: str,
+    maximum: int,
+    allow_empty: bool = False,
+) -> str:
+    if (
+        not isinstance(value, str)
+        or (not value and not allow_empty)
+        or len(value.encode("utf-8")) > maximum
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=f"canonicalRequest {field} is invalid",
+        )
+    return value
+
+
+def _release_authorization_approval_review(
+    payload: DataPlaneReleaseAuthorizationReserve,
+    route: Any,
+) -> tuple[str, str, dict[str, Any], dict[str, Any]]:
+    canonical = payload.canonical_request
+    if not isinstance(canonical, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="JIT release authorization requires canonicalRequest",
+        )
+    if set(canonical) != _RELEASE_CANONICAL_TOP_LEVEL_FIELDS or canonical.get("v") != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest does not match the v1 request shape",
+        )
+    request = canonical.get("request")
+    operation = canonical.get("operation")
+    if (
+        not isinstance(request, dict)
+        or set(request) != _RELEASE_CANONICAL_REQUEST_FIELDS
+        or not isinstance(operation, dict)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest does not match the v1 request shape",
+        )
+    client_ip = canonical.get("client_ip")
+    if client_ip is not None:
+        _release_canonical_text(client_ip, field="client_ip", maximum=256)
+
+    expected_credential_version = (
+        str(payload.credential_version) if payload.credential_version else None
+    )
+    canonical_credential_version = canonical.get("credential_version")
+    credential_version_matches = (
+        canonical_credential_version == expected_credential_version
+        if expected_credential_version is not None
+        else canonical_credential_version in {"0", "none"}
+    )
+    authoritative_bindings_match = (
+        canonical.get("principal") == payload.principal_id
+        and canonical.get("route_id") == payload.route_id
+        and canonical.get("credential_ref") == payload.credential_ref
+        and credential_version_matches
+        and canonical.get("policy_hash") == payload.policy_hash
+        and operation == payload.operation_context
+    )
+    if not authoritative_bindings_match:
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest does not match authoritative reserve fields",
+        )
+
+    method = _release_canonical_text(
+        request.get("method"), field="request.method", maximum=32
+    )
+    if method != method.upper():
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request.method must be uppercase",
+        )
+    scheme = _release_canonical_text(
+        request.get("scheme"), field="request.scheme", maximum=16
+    )
+    if scheme != scheme.lower() or scheme not in {"http", "https"}:
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request.scheme is invalid",
+        )
+    authority = _release_canonical_text(
+        request.get("authority"), field="request.authority", maximum=1024
+    )
+    if (
+        authority != authority.lower()
+        or authority != authority.strip()
+        or any(character in authority for character in "@/\\?#")
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request.authority is invalid",
+        )
+    path = _release_canonical_text(
+        request.get("path"), field="request.path", maximum=8192
+    )
+    if not path.startswith("/"):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request.path is invalid",
+        )
+    route_host = str(route.host).rstrip(".").lower()
+    if ":" in route_host and not route_host.startswith("["):
+        route_host = f"[{route_host}]"
+    route_port = int(route.port)
+    default_port = 443 if route.scheme == "https" else 80 if route.scheme == "http" else None
+    expected_authority = (
+        route_host
+        if route_port == default_port
+        else f"{route_host}:{route_port}"
+    )
+    if (
+        scheme != route.scheme
+        or authority != expected_authority
+        or method not in route.methods
+        or route.match_path(path) is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest target does not match the active route",
+        )
+    body_sha256 = request.get("body_sha256")
+    if not isinstance(body_sha256, str) or not re.fullmatch(
+        r"sha256:[0-9a-f]{64}", body_sha256
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request.body_sha256 is invalid",
+        )
+    headers = request.get("headers")
+    if not isinstance(headers, dict) or any(
+        not isinstance(name, str)
+        or not isinstance(value, str)
+        or _RELEASE_HTTP_FIELD_NAME_RE.fullmatch(name) is None
+        or len(name.encode("utf-8")) > 256
+        or len(value.encode("utf-8")) > 16 * 1024
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in name
+        )
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in value
+        )
+        for name, value in headers.items()
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request.headers is invalid",
+        )
+    if headers.get("host") != authority:
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request host does not match authority",
+        )
+    raw_query = request.get("query")
+    if not isinstance(raw_query, list):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request.query is invalid",
+        )
+    query: list[tuple[str, str]] = []
+    for item in raw_query:
+        if not isinstance(item, (list, tuple)) or len(item) != 2:
+            raise HTTPException(
+                status_code=409,
+                detail="canonicalRequest request.query is invalid",
+            )
+        key = _release_canonical_text(
+            item[0], field="request.query key", maximum=8192, allow_empty=True
+        )
+        value = _release_canonical_text(
+            item[1], field="request.query value", maximum=8192, allow_empty=True
+        )
+        query.append((key, value))
+    if query != sorted(query):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest request.query is not canonical",
+        )
+
+    try:
+        canonical_json = json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest is not canonical JSON",
+        ) from exc
+    request_digest = (
+        "sha256:" + hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
+    )
+    if not hmac.compare_digest(request_digest, payload.request_digest):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest does not hash to requestDigest",
+        )
+    if payload.operation_digest is None:
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest requires operationDigest",
+        )
+    operation_view = {
+        "principal": canonical["principal"],
+        "route_id": canonical["route_id"],
+        "credential_ref": canonical["credential_ref"],
+        "credential_version": canonical["credential_version"],
+        "policy_hash": canonical["policy_hash"],
+        "request": canonical["request"],
+        "operation": canonical["operation"],
+    }
+    operation_json = json.dumps(
+        operation_view,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    operation_digest = (
+        "sha256:" + hashlib.sha256(operation_json.encode("utf-8")).hexdigest()
+    )
+    if not hmac.compare_digest(operation_digest, payload.operation_digest):
+        raise HTTPException(
+            status_code=409,
+            detail="canonicalRequest operation view does not hash to operationDigest",
+        )
+
+    redacted_query = [
+        (
+            key,
+            "redacted"
+            if key.lower() in _RELEASE_SENSITIVE_QUERY_KEYS
+            or any(part in key.lower() for part in SENSITIVE_REVIEW_KEY_PARTS)
+            else value,
+        )
+        for key, value in query
+    ]
+    redacted_url = urlunsplit(
+        (scheme, authority, path, urlencode(redacted_query), "")
+    )
+    if len(redacted_url.encode("utf-8")) > _RELEASE_DERIVED_DISPLAY_URL_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="derived approval display URL exceeds 16 KiB",
+        )
+    redacted_display = {
+        "method": method,
+        "url": redacted_url,
+        "route_id": payload.route_id,
+        "principal": payload.principal_id,
+        "body_sha256": body_sha256,
+    }
+    redacted_json = json.dumps(
+        redacted_display,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
+    approval_payload_bytes = sum(
+        len(value.encode("utf-8"))
+        for value in (
+            payload.route_id,
+            method,
+            redacted_url,
+            payload.principal_id,
+            payload.credential_ref or "",
+            payload.policy_hash,
+            payload.request_digest,
+            payload.operation_digest,
+            canonical_json,
+            redacted_json,
+        )
+    )
+    if approval_payload_bytes > _RELEASE_APPROVAL_REVIEW_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail="canonical approval review payload exceeds 64 KiB",
+        )
+    return method, redacted_url, canonical, redacted_display
+
+
+def _release_authorization_route_claims(
+    payload: DataPlaneReleaseAuthorizationReserve,
+) -> tuple[Any, list[dict[str, Any]], bool]:
+    snapshot = get_policy_snapshot()
+    if not snapshot:
+        raise HTTPException(status_code=503, detail="policy bundle missing")
+    if not hmac.compare_digest(snapshot.hash, payload.policy_hash):
+        raise HTTPException(
+            status_code=409, detail="data-plane policy hash is not active"
+        )
+    route = _active_route_by_id(payload.route_id, snapshot=snapshot)
+    if payload.principal_id not in route.principals and "*" not in route.principals:
+        raise HTTPException(
+            status_code=409,
+            detail="data-plane principal is not assigned to active route",
+        )
+    expected_credential_ref = route.credential_ref or ""
+    if not hmac.compare_digest(payload.credential_ref or "", expected_credential_ref):
+        raise HTTPException(
+            status_code=409,
+            detail="data-plane credential reference does not match active route",
+        )
+    if expected_credential_ref:
+        credential = db.get_credential(expected_credential_ref)
+        if (
+            not credential
+            or int(credential.get("credential_version") or 0)
+            != payload.credential_version
+        ):
+            raise HTTPException(
+                status_code=409, detail="data-plane credential version is not current"
+            )
+    elif payload.credential_version != 0:
+        raise HTTPException(
+            status_code=409,
+            detail="credential-less route must use credential version zero",
+        )
+
+    operation_context = dict(payload.operation_context)
+    operation_name = operation_context.get("operation")
+    if operation_name is not None and (
+        not isinstance(operation_name, str)
+        or not operation_name
+        or len(operation_name.encode("utf-8")) > 256
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="release authorization operation must be a bounded non-empty string",
+        )
+    jit = route.jit or {}
+    require_jit_grant = jit.get("required") is True
+    if (
+        require_jit_grant
+        and (jit.get("binding") or {}).get("type") == "operationDigest"
+        and payload.operation_digest is None
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="active route requires an operation-bound JIT grant",
+        )
+
+    shared_quotas: list[dict[str, Any]] = []
+    for constraint in route.constraints:
+        if (
+            constraint.get("type") != "rateLimit"
+            or constraint.get("store", "local") != "shared"
+        ):
+            continue
+        key_policy = constraint.get("key") or {}
+        scope = key_policy.get("scope") or [
+            "principal",
+            "credential",
+            "route",
+            "operation",
+        ]
+        required_operation_fields = set(key_policy.get("operationFields") or [])
+        if "operation" in scope:
+            required_operation_fields.add("operation")
+        invalid_fields = sorted(
+            field
+            for field in required_operation_fields
+            if not isinstance(operation_context.get(field), str)
+            or not operation_context.get(field)
+            or len(str(operation_context[field]).encode("utf-8")) > 256
+        )
+        if invalid_fields:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "release authorization is missing bounded operation fields: "
+                    + ", ".join(invalid_fields)
+                ),
+            )
+        shared_quotas.append(
+            {
+                "counter_key": _rate_limit_counter_key(
+                    constraint=constraint,
+                    route_id=route.id,
+                    principal_id=payload.principal_id,
+                    credential_ref=route.credential_ref,
+                    credential_version=payload.credential_version,
+                    operation_context=operation_context,
+                ),
+                "constraint_id": str(constraint["id"]),
+                "operation": operation_name,
+                "window_seconds": int(constraint["windowSeconds"]),
+                "max_count": int(constraint["max"]),
+            }
+        )
+    return route, shared_quotas, require_jit_grant
+
+
+def _release_authorization_maintenance() -> None:
+    try:
+        db.reconcile_release_authorizations(
+            limit=RELEASE_AUTHORIZATION_RECONCILE_LIMIT,
+            actor_id=DATA_PLANE_INSTANCE_ID,
+        )
+        db.drain_release_authorization_audit_outbox(
+            RELEASE_AUTHORIZATION_RECONCILE_LIMIT
+        )
+    except Exception:
+        # The durable outbox remains authoritative when the audit sink is unavailable.
+        return
+
+
+@app.post("/api/data-plane/release-authorizations/reserve")
+def data_plane_release_authorization_reserve(
+    payload: DataPlaneReleaseAuthorizationReserve,
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+) -> dict[str, Any]:
+    _require_data_plane_token(
+        x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
+    )
+    route, shared_quotas, require_jit_grant = (
+        _release_authorization_route_claims(payload)
+    )
+    approval_review = None
+    if require_jit_grant or payload.canonical_request is not None:
+        approval_review = _release_authorization_approval_review(payload, route)
+    jit_approval_request = None
+    if require_jit_grant:
+        if approval_review is None:
+            raise HTTPException(
+                status_code=409,
+                detail="JIT release authorization requires canonicalRequest",
+            )
+        method, url, canonical_request, redacted_display = approval_review
+        jit = route.jit or {}
+        jit_approval_request = {
+            "method": method,
+            "url": url,
+            "canonical_request": canonical_request,
+            "redacted_display": redacted_display,
+            "pending_ttl_seconds": max(
+                1, min(int(jit.get("pendingTtlSeconds", 300)), 3600)
+            ),
+            "grant_ttl_seconds": max(
+                1, min(int(jit.get("ttlSeconds", 30)), 3600)
+            ),
+            "grant_max_uses": max(1, int(jit.get("maxUses", 1))),
+        }
+    _release_authorization_maintenance()
+    try:
+        result = db.reserve_release_authorization(
+            attempt_id=payload.attempt_id,
+            flow_id=payload.flow_id,
+            principal_id=payload.principal_id,
+            route_id=payload.route_id,
+            credential_id=payload.credential_ref or "",
+            credential_version=payload.credential_version,
+            policy_hash=payload.policy_hash,
+            request_digest=payload.request_digest,
+            operation_digest=payload.operation_digest,
+            operation_context=dict(payload.operation_context),
+            shared_quotas=shared_quotas,
+            require_jit_grant=require_jit_grant,
+            reservation_ttl_seconds=RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
+            jit_approval_request=jit_approval_request,
+            actor_id=DATA_PLANE_INSTANCE_ID,
+        )
+    except db.ReleaseAuthorizationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except db.ReleaseAuthorizationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    _release_authorization_maintenance()
+    return _release_authorization_api_response(result)
+
+
+@app.post("/api/data-plane/release-authorizations/dispatch")
+def data_plane_release_authorization_dispatch(
+    payload: DataPlaneReleaseAuthorizationDispatch,
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+) -> dict[str, Any]:
+    _require_data_plane_token(
+        x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
+    )
+    try:
+        result = db.dispatch_release_authorization(
+            attempt_id=payload.attempt_id,
+            binding_digest=payload.binding_digest,
+            dispatch_ttl_seconds=RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS,
+            actor_id=DATA_PLANE_INSTANCE_ID,
+        )
+    except db.ReleaseAuthorizationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except db.ReleaseAuthorizationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _release_authorization_maintenance()
+    return _release_authorization_api_response(result)
+
+
+@app.post("/api/data-plane/release-authorizations/complete")
+def data_plane_release_authorization_complete(
+    payload: DataPlaneReleaseAuthorizationComplete,
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+) -> dict[str, Any]:
+    _require_data_plane_token(
+        x_serverware_data_plane_token, DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN
+    )
+    try:
+        result = db.complete_release_authorization(
+            attempt_id=payload.attempt_id,
+            binding_digest=payload.binding_digest,
+            outcome=payload.outcome,
+            actor_id=DATA_PLANE_INSTANCE_ID,
+        )
+    except db.ReleaseAuthorizationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except db.ReleaseAuthorizationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _release_authorization_maintenance()
+    return _release_authorization_api_response(result)
 
 
 @app.get("/api/audit/verify")
@@ -11230,7 +11953,7 @@ UI_HTML = r"""
       $('setup-challenge-button').textContent = setupSession?.attestationChallengeDigest ? 'Get challenge' : 'Issue challenge';
       $('setup-hardware-button').disabled = setupSession?.phase !== 'runtime_verified' || !setupSession?.attestationChallengeDigest;
       $('setup-final-button').disabled = !['hardware_verified', 'completion_pending_audit'].includes(setupSession?.phase);
-      $('setup-attestation-challenge').value = state.setupChallenge?.setupSessionId === setupSession?.id ? state.setupChallenge.value : '';
+      $('setup-attestation-challenge').value = state.setupChallenge && state.setupChallenge.setupSessionId === setupSession?.id ? state.setupChallenge.value : '';
       $('setup-copy-challenge-button').disabled = !state.setupChallenge?.value || state.setupChallenge.setupSessionId !== setupSession?.id;
 
       setupStatusPill('setup-configuration-status', verification?.configurationReady === true, 'Configuration ready', active ? 'Evidence pending' : 'Configuration pending');

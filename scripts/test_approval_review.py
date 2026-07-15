@@ -1,15 +1,399 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
 import tempfile
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
+
+
+def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None:
+    now_ms = int(time.time() * 1000)
+    attempt_id = "attempt:exact-lifecycle"
+    binding_digest = "sha256:" + "a" * 64
+    grant_id = "grant:exact-lifecycle"
+    approval_request_id = "approval:exact-lifecycle"
+    reserved = {
+        "authorized": True,
+        "state": "reserved",
+        "reason": "reserved",
+        "attempt_id": attempt_id,
+        "binding_digest": binding_digest,
+        "idempotent_replay": False,
+        "grant_id": grant_id,
+        "approval_request_id": approval_request_id,
+        "approval_status": None,
+        "approval_expires_at": None,
+        "approval_created": None,
+        "reservation_expires_at_epoch_ms": now_ms + 60_000,
+        "dispatch_started_at_epoch_ms": None,
+        "dispatch_expires_at_epoch_ms": None,
+        "completion_outcome": None,
+        "retry_after_seconds": 0,
+        "quotas": [],
+        "store": {"backend": "postgres", "ha": True},
+    }
+    runtime.validate_reserve_release_authorization_response(
+        reserved,
+        attempt_id=attempt_id,
+        require_jit_grant=True,
+    )
+
+    def expect_rejected(call, label: str) -> None:
+        try:
+            call()
+        except runtime.ReleaseAuthorizationClientError:
+            return
+        raise AssertionError(f"Python lifecycle validator accepted {label}")
+
+    expect_rejected(
+        lambda: runtime.validate_reserve_release_authorization_response(
+            {**reserved, "binding_digest": "sha256:" + "A" * 64},
+            attempt_id=attempt_id,
+            require_jit_grant=True,
+        ),
+        "an uppercase SHA-256 binding",
+    )
+    expect_rejected(
+        lambda: runtime.validate_reserve_release_authorization_response(
+            {**reserved, "grant_id": "grant:other"},
+            attempt_id=attempt_id,
+            require_jit_grant=False,
+        ),
+        "a non-JIT reserve carrying grant identity",
+    )
+
+    dispatching = {
+        **reserved,
+        "state": "dispatching",
+        "reason": "dispatching",
+        "idempotent_replay": True,
+        "dispatch_started_at_epoch_ms": now_ms,
+        "dispatch_expires_at_epoch_ms": now_ms + 30_000,
+    }
+    runtime.validate_dispatch_release_authorization_response(
+        dispatching,
+        attempt_id=attempt_id,
+        binding_digest=binding_digest,
+        grant_id=grant_id,
+        approval_request_id=approval_request_id,
+        now_epoch_ms=now_ms,
+    )
+    for label, changes in (
+        ("an expired dispatch", {"dispatch_expires_at_epoch_ms": now_ms}),
+        ("an unauthorized dispatch", {"authorized": False}),
+        (
+            "a completed dispatch",
+            {"state": "committed", "reason": "committed", "completion_outcome": "forwarded"},
+        ),
+        ("a dispatch with the wrong grant", {"grant_id": "grant:other"}),
+    ):
+        expect_rejected(
+            lambda changes=changes: runtime.validate_dispatch_release_authorization_response(
+                {**dispatching, **changes},
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+                grant_id=grant_id,
+                approval_request_id=approval_request_id,
+                now_epoch_ms=now_ms,
+            ),
+            label,
+        )
+
+    committed = {
+        **dispatching,
+        "state": "committed",
+        "reason": "forwarded",
+        "idempotent_replay": False,
+        "completion_outcome": "forwarded",
+    }
+    runtime.validate_complete_release_authorization_response(
+        committed,
+        attempt_id=attempt_id,
+        binding_digest=binding_digest,
+        outcome="forwarded",
+        grant_id=grant_id,
+        approval_request_id=approval_request_id,
+    )
+    expect_rejected(
+        lambda: runtime.validate_complete_release_authorization_response(
+            {**committed, "authorized": False},
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            outcome="forwarded",
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+        ),
+        "an authorized/state completion contradiction",
+    )
+    replayed_forwarded = {
+        **committed,
+        "reason": "committed",
+        "idempotent_replay": True,
+    }
+    runtime.validate_complete_release_authorization_response(
+        replayed_forwarded,
+        attempt_id=attempt_id,
+        binding_digest=binding_digest,
+        outcome="unknown",
+        grant_id=grant_id,
+        approval_request_id=approval_request_id,
+    )
+    expect_rejected(
+        lambda: runtime.validate_complete_release_authorization_response(
+            {**replayed_forwarded, "idempotent_replay": False, "reason": "forwarded"},
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            outcome="unknown",
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+        ),
+        "a non-replay forwarded result for unknown completion",
+    )
+
+    with patch.dict(
+        os.environ,
+        {
+            "SERVERWARE_RELEASE_CHANNEL": "prod",
+            "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL": (
+                "http://control-plane.test/api/data-plane/release-authorizations"
+            ),
+        },
+        clear=False,
+    ):
+        expect_rejected(
+            runtime._release_authorization_base_url,
+            "a plaintext production release-authority URL",
+        )
+
+    canonical_request = {"request": {"method": "POST"}, "operation": {}}
+    request_digest = "sha256:" + hashlib.sha256(
+        canonical_json(canonical_request).encode("utf-8")
+    ).hexdigest()
+    with (
+        patch.dict(
+            os.environ,
+            {"SERVERWARE_RELEASE_CHANNEL": "prod"},
+            clear=False,
+        ),
+        patch.object(runtime, "atomic_release_authorization_enabled", return_value=True),
+        patch.object(runtime, "_release_authorization_base_url", return_value=""),
+        patch.object(runtime.db, "reserve_release_authorization") as reserve_db,
+        patch.object(runtime.db, "dispatch_release_authorization") as dispatch_db,
+        patch.object(runtime.db, "complete_release_authorization") as complete_db,
+    ):
+        fallback_calls = (
+            lambda: runtime.reserve_release_authorization(
+                attempt_id=attempt_id,
+                flow_id=attempt_id,
+                principal_id="agent:test",
+                route_id="route:test",
+                credential_ref="credential:test",
+                credential_version=1,
+                policy_hash="sha256:" + "b" * 64,
+                request_digest=request_digest,
+                operation_digest=None,
+                operation_context={},
+                canonical_request=canonical_request,
+                shared_quotas=[],
+                require_jit_grant=True,
+            ),
+            lambda: runtime.dispatch_release_authorization(
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+                grant_id=grant_id,
+                approval_request_id=approval_request_id,
+            ),
+            lambda: runtime.complete_release_authorization(
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+                outcome="forwarded",
+                grant_id=grant_id,
+                approval_request_id=approval_request_id,
+            ),
+        )
+        for action, fallback_call in zip(("reserve", "dispatch", "complete"), fallback_calls):
+            expect_rejected(
+                fallback_call,
+                f"production direct database fallback for {action}",
+            )
+        reserve_db.assert_not_called()
+        dispatch_db.assert_not_called()
+        complete_db.assert_not_called()
+
+    with patch.dict(
+        os.environ,
+        {"SERVERWARE_RELEASE_CHANNEL": "development"},
+        clear=False,
+    ):
+        runtime._require_development_release_authorization_fallback()
+
+
+def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
+    canonical_request = {
+        "v": 1,
+        "principal": "agent:demo",
+        "client_ip": "127.0.0.1",
+        "route_id": "demo.npm.publish.jit",
+        "credential_ref": "cred-demo-bearer",
+        "credential_version": "2",
+        "policy_hash": "sha256:" + "a" * 64,
+        "request": {
+            "method": "PUT",
+            "scheme": "https",
+            "authority": "registry.npmjs.org",
+            "path": "/@scope%2fpkg",
+            "query": [],
+            "headers": {"host": "registry.npmjs.org"},
+            "body_sha256": "sha256:" + "b" * 64,
+        },
+        "operation": {
+            "operation": "npm.publish",
+            "packageName": "@scope/pkg",
+            "packageVersion": "1.2.3",
+        },
+    }
+    request_digest = "sha256:" + hashlib.sha256(
+        canonical_json(canonical_request).encode("utf-8")
+    ).hexdigest()
+    approval_expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+    response = {
+        "apiVersion": "serverware.releaseAuthorization/v1",
+        "ok": True,
+        "authorized": False,
+        "state": "denied",
+        "reason": "jit_grant_unavailable",
+        "attemptId": "attempt:python-proxy",
+        "bindingDigest": "sha256:" + "c" * 64,
+        "idempotentReplay": False,
+        "grantId": None,
+        "approvalRequestId": "approval:python-proxy",
+        "approvalStatus": "pending",
+        "approvalExpiresAt": approval_expires_at,
+        "approvalCreated": True,
+        "reservationExpiresAtEpochMs": None,
+        "dispatchStartedAtEpochMs": None,
+        "dispatchExpiresAtEpochMs": None,
+        "completionOutcome": None,
+        "retryAfterSeconds": 3,
+        "quotas": [],
+        "store": {"backend": "postgres", "ha": True},
+    }
+    captured: list[dict] = []
+
+    def request_bytes(request, **_kwargs):
+        captured.append(json.loads(request.data.decode("utf-8")))
+        return SimpleNamespace(body=json.dumps(response).encode("utf-8"))
+
+    with (
+        patch.object(runtime, "atomic_release_authorization_enabled", return_value=True),
+        patch.object(
+            runtime,
+            "_release_authorization_base_url",
+            return_value="https://control-plane.test/api/data-plane/release-authorizations",
+        ),
+        patch.object(runtime, "_release_authorization_token", return_value="test-token"),
+        patch.object(runtime, "_release_authorization_ssl_context", return_value=None),
+        patch.object(runtime, "request_bytes", side_effect=request_bytes),
+    ):
+        result = runtime.reserve_release_authorization(
+            attempt_id="attempt:python-proxy",
+            flow_id="attempt:python-proxy",
+            principal_id="agent:demo",
+            route_id="demo.npm.publish.jit",
+            credential_ref="cred-demo-bearer",
+            credential_version=2,
+            policy_hash=canonical_request["policy_hash"],
+            request_digest=request_digest,
+            operation_digest="sha256:" + "d" * 64,
+            operation_context=dict(canonical_request["operation"]),
+            canonical_request=canonical_request,
+            shared_quotas=[],
+            require_jit_grant=True,
+        )
+    if len(captured) != 1:
+        raise AssertionError(f"Python reserve did not make exactly one request: {captured}")
+    payload = captured[0]
+    if payload.get("canonicalRequest") != canonical_request:
+        raise AssertionError(f"Python reserve changed the canonical request: {payload}")
+    if payload.get("requestDigest") != request_digest:
+        raise AssertionError(f"Python reserve changed the canonical digest: {payload}")
+    if payload.get("operationContext") != canonical_request["operation"]:
+        raise AssertionError(f"Python reserve changed operation context: {payload}")
+    if any(field in payload for field in ("redactedDisplay", "method", "url")):
+        raise AssertionError(f"Python reserve supplied backend-derived display fields: {payload}")
+    if (
+        result.get("approval_request_id") != "approval:python-proxy"
+        or result.get("approval_status") != "pending"
+        or result.get("approval_expires_at") != approval_expires_at
+        or result.get("approval_created") is not True
+        or result.get("retry_after_seconds") != 3
+    ):
+        raise AssertionError(f"Python reserve dropped approval retry context: {result}")
+
+    incomplete = dict(response)
+    incomplete.pop("approvalCreated")
+    try:
+        runtime._normalized_release_authorization_response(
+            incomplete,
+            attempt_id="attempt:python-proxy",
+        )
+    except runtime.ReleaseAuthorizationClientError:
+        pass
+    else:
+        raise AssertionError("Python reserve accepted an incomplete JIT approval response")
+
+    reused = dict(response)
+    reused["approvalCreated"] = False
+    normalized_reuse = runtime._normalized_release_authorization_response(
+        reused,
+        attempt_id="attempt:python-proxy",
+    )
+    if normalized_reuse.get("approval_created") is not False:
+        raise AssertionError(
+            f"Python reserve lost idempotent approval reuse state: {normalized_reuse}"
+        )
+
+    oversized = {"value": "x" * (65 * 1024)}
+    oversized_digest = "sha256:" + hashlib.sha256(
+        canonical_json(oversized).encode("utf-8")
+    ).hexdigest()
+    with (
+        patch.object(runtime, "atomic_release_authorization_enabled", return_value=True),
+        patch.object(runtime, "_release_authorization_base_url", return_value="https://control-plane.test"),
+        patch.object(runtime, "_release_authorization_http_post") as post,
+    ):
+        try:
+            runtime.reserve_release_authorization(
+                attempt_id="attempt:oversized",
+                flow_id="attempt:oversized",
+                principal_id="agent:demo",
+                route_id="demo.npm.publish.jit",
+                credential_ref="cred-demo-bearer",
+                credential_version=2,
+                policy_hash="sha256:" + "a" * 64,
+                request_digest=oversized_digest,
+                operation_digest="sha256:" + "d" * 64,
+                operation_context={},
+                canonical_request=oversized,
+                shared_quotas=[],
+                require_jit_grant=True,
+            )
+        except runtime.ReleaseAuthorizationClientError:
+            pass
+        else:
+            raise AssertionError("Python reserve accepted an oversized canonical request")
+        post.assert_not_called()
 
 
 def make_approval(db, snapshot, *, digest_suffix: str, redacted_display: dict, canonical_request: dict):
@@ -44,9 +428,14 @@ def main() -> None:
         os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
 
         from serverware import app as app_module
-        from serverware import db, policy_bundle
+        from serverware import db, policy_bundle, runtime
         from serverware.auth import AdminIdentity
 
+        exercise_python_release_lifecycle_contracts(
+            runtime,
+            policy_bundle.canonical_json,
+        )
+        exercise_python_atomic_reserve_contract(runtime, policy_bundle.canonical_json)
         db.init_db()
         snapshot = policy_bundle.write_policy_bundle(policy_bundle.demo_policy_bundle("cred-demo-bearer"))
         db.upsert_route_with_id(

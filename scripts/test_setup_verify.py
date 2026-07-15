@@ -66,7 +66,12 @@ def main() -> None:
         from serverware import app as app_module
         from serverware import db
         from serverware.auth import AdminIdentity
-        from serverware.policy_bundle import PolicyBundleError, demo_policy_bundle, write_policy_bundle
+        from serverware.policy_bundle import (
+            PolicyBundleError,
+            compile_policy_bundle,
+            demo_policy_bundle,
+            write_policy_bundle,
+        )
 
         db.init_db()
         oauth_secret = canonical_json(
@@ -148,6 +153,27 @@ def main() -> None:
                 },
             },
         }
+        invalid_composed = demo_policy_bundle(exact_credential["id"])
+        invalid_composed_route = invalid_composed["routes"][0]
+        invalid_composed_route["jit"] = {**copy.deepcopy(jit_policy), "maxUses": 2}
+        invalid_composed_route.setdefault("constraints", []).append(
+            {
+                "id": "setup-atomic-quota",
+                "type": "rateLimit",
+                "max": 2,
+                "windowSeconds": 60,
+                "store": "shared",
+                "key": {"scope": ["principal", "credential", "route"]},
+            }
+        )
+        try:
+            compile_policy_bundle(invalid_composed, validate_schema=True)
+        except PolicyBundleError:
+            pass
+        else:
+            raise AssertionError(
+                "policy admission accepted multi-use JIT composed with shared quota"
+            )
 
         def activate_policy(
             credential_id: str,

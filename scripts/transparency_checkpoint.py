@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import fcntl
 import hashlib
 import json
 import os
@@ -20,6 +21,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 
 ROOT = Path(__file__).resolve().parent.parent
+MAX_FIXTURE_LOG_LINE_BYTES = 8 * 1024 * 1024
+MAX_HTTP_RESPONSE_BYTES = 1024 * 1024
 CHECKPOINT_VERSION = "serverware.transparencyCheckpoint/v1"
 PUBLICATION_VERSION = "serverware.externalTransparencyCheckpointRequest/v1"
 RECEIPT_VERSION = "serverware.externalTransparencyReceipt/v1"
@@ -27,6 +30,13 @@ RECEIPT_VERSION = "serverware.externalTransparencyReceipt/v1"
 
 def canonical_json(value: Any) -> str:
     return json.dumps(value, separators=(",", ":"), sort_keys=True, ensure_ascii=True)
+
+
+def encode_fixture_log_line(record: dict[str, Any]) -> bytes:
+    encoded = canonical_json(record).encode("utf-8")
+    if len(encoded) + 1 > MAX_FIXTURE_LOG_LINE_BYTES:
+        raise SystemExit("external transparency fixture log line exceeds 8 MiB")
+    return encoded + b"\n"
 
 
 def sha256_prefixed_bytes(value: bytes) -> str:
@@ -281,53 +291,172 @@ def checkpoint_fixture(checkpoint: dict[str, Any]) -> dict[str, Any]:
     request = publication_request(checkpoint)
     path = log_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    existing = []
-    if path.exists():
-        existing = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    external_sequence = len(existing) + 1
-    key = load_private_key()
-    info = public_key_info(key.public_key())
-    provider = os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_PROVIDER", "managed-transparency-log-fixture")
-    receipt_body = receipt_payload(
-        provider=provider,
-        log_id=info["log_id"],
-        external_sequence=external_sequence,
-        request_digest=request["request_digest"],
-        checkpoint_digest=request["checkpoint_digest"],
-        checkpoint=checkpoint,
-    )
-    signature = sign_receipt(key, receipt_body)
-    receipt = {
-        "kind": "ed25519-signed-checkpoint",
-        "payload": receipt_body,
-        "signature": signature,
-        "public_key_pem": info["public_key_pem"],
-    }
-    record = {
-        "version": RECEIPT_VERSION,
-        "provider": provider,
-        "mode": "external-managed-transparency-log",
-        "external_sequence": external_sequence,
-        "received_at": datetime.now(timezone.utc).isoformat(),
-        "checkpoint_digest": request["checkpoint_digest"],
-        "request_digest": request["request_digest"],
-        "tree_size": checkpoint["tree_size"],
-        "tree_head_hash": checkpoint["tree_head_hash"],
-        "signed_tree_head": checkpoint["signed_tree_head"],
-        "record_digest": checkpoint["record_digest"],
-        "leaf_hash": checkpoint["leaf_hash"],
-        "source_sequence": checkpoint["sequence"],
-        "source_mode": checkpoint.get("mode"),
-        "log_id": info["log_id"],
-        "receipt": receipt,
-        "signature": signature,
-        "public_key_pem": info["public_key_pem"],
-    }
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(canonical_json(record) + "\n")
+    with path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        external_sequence = fixture_log_last_sequence_from_handle(handle) + 1
+        key = load_private_key()
+        info = public_key_info(key.public_key())
+        provider = os.getenv("SERVERWARE_EXTERNAL_TRANSPARENCY_PROVIDER", "managed-transparency-log-fixture")
+        receipt_body = receipt_payload(
+            provider=provider,
+            log_id=info["log_id"],
+            external_sequence=external_sequence,
+            request_digest=request["request_digest"],
+            checkpoint_digest=request["checkpoint_digest"],
+            checkpoint=checkpoint,
+        )
+        signature = sign_receipt(key, receipt_body)
+        receipt = {
+            "kind": "ed25519-signed-checkpoint",
+            "payload": receipt_body,
+            "signature": signature,
+            "public_key_pem": info["public_key_pem"],
+        }
+        record = {
+            "version": RECEIPT_VERSION,
+            "provider": provider,
+            "mode": "external-managed-transparency-log",
+            "external_sequence": external_sequence,
+            "received_at": datetime.now(timezone.utc).isoformat(),
+            "checkpoint_digest": request["checkpoint_digest"],
+            "request_digest": request["request_digest"],
+            "tree_size": checkpoint["tree_size"],
+            "tree_head_hash": checkpoint["tree_head_hash"],
+            "signed_tree_head": checkpoint["signed_tree_head"],
+            "record_digest": checkpoint["record_digest"],
+            "leaf_hash": checkpoint["leaf_hash"],
+            "source_sequence": checkpoint["sequence"],
+            "source_mode": checkpoint.get("mode"),
+            "log_id": info["log_id"],
+            "receipt": receipt,
+            "signature": signature,
+            "public_key_pem": info["public_key_pem"],
+        }
+        encoded = encode_fixture_log_line(record)
+        handle.seek(0, os.SEEK_END)
+        handle.write(encoded)
         handle.flush()
         os.fsync(handle.fileno())
     return normalized_response(record | {"ok": True}, checkpoint, request["request_digest"], require_verifiable_receipt=True)
+
+
+def fixture_log_last_sequence(path: Path) -> int:
+    if not path.exists() or path.stat().st_size == 0:
+        return 0
+    with path.open("rb") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        return fixture_log_last_sequence_from_handle(handle)
+
+
+def fixture_log_last_sequence_from_handle(handle: Any) -> int:
+    handle.seek(0)
+    expected_sequence = 1
+    line_number = 0
+    while True:
+        line = handle.readline(MAX_FIXTURE_LOG_LINE_BYTES + 1)
+        if not line:
+            return expected_sequence - 1
+        line_number += 1
+        if len(line) > MAX_FIXTURE_LOG_LINE_BYTES:
+            raise SystemExit("external transparency fixture log line exceeds 8 MiB")
+        if not line.endswith(b"\n"):
+            raise SystemExit("external transparency fixture log must end with a newline")
+        try:
+            record = json.loads(line[:-1].decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"external transparency fixture log record {line_number} is invalid JSON") from exc
+        validate_fixture_log_record(record, expected_sequence, line_number)
+        expected_sequence += 1
+
+
+def validate_fixture_log_record(record: Any, expected_sequence: int, line_number: int) -> None:
+    if not isinstance(record, dict):
+        raise SystemExit(f"external transparency fixture log record {line_number} must be an object")
+    required = {
+        "version",
+        "provider",
+        "mode",
+        "external_sequence",
+        "received_at",
+        "checkpoint_digest",
+        "request_digest",
+        "tree_size",
+        "tree_head_hash",
+        "signed_tree_head",
+        "record_digest",
+        "leaf_hash",
+        "source_sequence",
+        "source_mode",
+        "log_id",
+        "receipt",
+        "signature",
+        "public_key_pem",
+    }
+    missing = sorted(required - set(record))
+    if missing:
+        raise SystemExit(
+            f"external transparency fixture log record {line_number} missing fields: {', '.join(missing)}"
+        )
+    if record["version"] != RECEIPT_VERSION:
+        raise SystemExit(f"external transparency fixture log record {line_number} has an unsupported version")
+    if not isinstance(record["provider"], str) or not record["provider"]:
+        raise SystemExit(f"external transparency fixture log record {line_number} provider is invalid")
+    if record["mode"] != "external-managed-transparency-log":
+        raise SystemExit(f"external transparency fixture log record {line_number} mode is invalid")
+    sequence = record["external_sequence"]
+    if type(sequence) is not int or sequence < 1:
+        raise SystemExit(f"external transparency fixture log record {line_number} sequence is invalid")
+    if sequence != expected_sequence:
+        raise SystemExit("external transparency fixture log sequences must be contiguous and start at 1")
+    if not isinstance(record["received_at"], str) or not record["received_at"]:
+        raise SystemExit(f"external transparency fixture log record {line_number} received_at is invalid")
+    if type(record["tree_size"]) is not int or record["tree_size"] < 1:
+        raise SystemExit(f"external transparency fixture log record {line_number} tree_size is invalid")
+    if type(record["source_sequence"]) is not int or record["source_sequence"] < 1:
+        raise SystemExit(f"external transparency fixture log record {line_number} source_sequence is invalid")
+    if record["source_mode"] is not None and not isinstance(record["source_mode"], str):
+        raise SystemExit(f"external transparency fixture log record {line_number} source_mode is invalid")
+    for field in ("checkpoint_digest", "request_digest", "tree_head_hash", "record_digest", "leaf_hash", "log_id"):
+        value = record[field]
+        if not isinstance(value, str) or len(value) != 71 or not value.startswith("sha256:"):
+            raise SystemExit(f"external transparency fixture log record {line_number} {field} is invalid")
+        try:
+            int(value.removeprefix("sha256:"), 16)
+        except ValueError as exc:
+            raise SystemExit(f"external transparency fixture log record {line_number} {field} is invalid") from exc
+    signed_tree_head = record["signed_tree_head"]
+    if not isinstance(signed_tree_head, dict):
+        raise SystemExit(f"external transparency fixture log record {line_number} signed_tree_head must be an object")
+    if signed_tree_head.get("tree_size") != record["tree_size"]:
+        raise SystemExit(f"external transparency fixture log record {line_number} signed tree size does not match")
+    if signed_tree_head.get("tree_head_hash") != record["tree_head_hash"]:
+        raise SystemExit(f"external transparency fixture log record {line_number} signed tree hash does not match")
+    receipt = record["receipt"]
+    if not isinstance(receipt, dict) or receipt.get("kind") != "ed25519-signed-checkpoint":
+        raise SystemExit(f"external transparency fixture log record {line_number} receipt is invalid")
+    if record["signature"] != receipt.get("signature") or record["public_key_pem"] != receipt.get("public_key_pem"):
+        raise SystemExit(f"external transparency fixture log record {line_number} receipt metadata does not match")
+    expected_receipt_fields = {
+        "version": RECEIPT_VERSION,
+        "provider": record["provider"],
+        "log_id": record["log_id"],
+        "external_sequence": sequence,
+        "checkpoint_digest": record["checkpoint_digest"],
+        "request_digest": record["request_digest"],
+        "source_sequence": record["source_sequence"],
+        "tree_size": record["tree_size"],
+        "tree_head_hash": record["tree_head_hash"],
+        "record_digest": record["record_digest"],
+        "leaf_hash": record["leaf_hash"],
+    }
+    try:
+        verifiable = verify_ed25519_receipt(receipt, expected_receipt_fields, record["log_id"])
+    except SystemExit as exc:
+        raise SystemExit(f"external transparency fixture log record {line_number} receipt is invalid: {exc}") from exc
+    except Exception as exc:
+        raise SystemExit(f"external transparency fixture log record {line_number} receipt is invalid") from exc
+    if not verifiable:
+        raise SystemExit(f"external transparency fixture log record {line_number} receipt is not verifiable")
 
 
 def load_extra_headers() -> dict[str, str]:
@@ -368,7 +497,17 @@ def checkpoint_http(checkpoint: dict[str, Any], url: str) -> dict[str, Any]:
     timeout = float(os.getenv("SERVERWARE_TRANSPARENCY_CHECKPOINT_TIMEOUT_SECONDS", "15"))
     try:
         with urllib.request.urlopen(http_request, timeout=timeout) as handle:
-            response_body = handle.read(1024 * 1024)
+            content_length = handle.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    declared_length = int(content_length)
+                except ValueError:
+                    declared_length = None
+                if declared_length is not None and declared_length > MAX_HTTP_RESPONSE_BYTES:
+                    raise SystemExit("managed transparency log response exceeds 1 MiB")
+            response_body = handle.read(MAX_HTTP_RESPONSE_BYTES + 1)
+            if len(response_body) > MAX_HTTP_RESPONSE_BYTES:
+                raise SystemExit("managed transparency log response exceeds 1 MiB")
     except urllib.error.HTTPError as exc:
         detail = exc.read(4096).decode("utf-8", errors="replace")
         raise SystemExit(f"managed transparency log returned HTTP {exc.code}: {detail}") from exc

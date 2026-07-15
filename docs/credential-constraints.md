@@ -24,11 +24,11 @@ For each request:
 1. Principal allowlist checks run first: client IP, identity headers, and proxy bearer token.
 2. Route matching blocks unknown hosts, ports, paths, and methods.
 3. The adapter validates provider-specific credential metadata and classifies the operation.
-4. Request constraints validate operation, query, body, time windows, and current rate-limit headroom.
-5. A request- and operation-bound JIT approval is consumed if the route requires one.
-6. Stateful request constraints, currently rate limits, are committed immediately before credential use.
-7. The Rust gate obtains the route's one-credential scoped lease, checks its version, policy generation, and expiry, injects only the selected credential field, and strips Serverware-only identity headers.
-8. Immediately before the upstream send, the gate rechecks that the lease and policy snapshot are still current, synchronously submits `data_plane.credential.release_started`, and requires the control plane to acknowledge its durable hash-chain append. If audit is unavailable or rejects the event, the upstream request is not sent.
+4. Request constraints validate operation, query, body, time windows, and current rate-limit headroom without mutating state.
+5. For an actual proxy request, the release authority atomically reserves every shared rate-limit counter and the exact request- and operation-bound one-use JIT grant. If a required grant is absent, it leaves no quota reservation and creates or reuses a bounded pending approval for the exact canonical request. `/v1/decide` is preview-only and does not create approvals or reserve state.
+6. The Rust gate obtains the route's one-credential scoped lease, checks its version, policy generation, and expiry, injects only the selected credential field, and strips Serverware-only identity headers.
+7. Immediately before the upstream send, the gate rechecks that the reservation, lease, and policy snapshot are still current, advances the exact release attempt to `dispatching`, synchronously submits `data_plane.credential.release_started`, and requires the control plane to acknowledge its durable hash-chain append. If any dependency is unavailable or rejects the binding, the upstream request is not sent.
+8. Completion commits an attempt known to have been forwarded, refunds a proven `not_forwarded` attempt, and conservatively commits an unknown result after dispatch as indeterminate. Attempt, flow, and binding identifiers make these transitions idempotent and prevent a quota or grant from being consumed independently.
 9. The upstream status selects the success or error response profile. Response size and syntax are checked first; whole-body semantic constraints are then evaluated before field projection and released-header validation. No buffered bytes are released until every applicable check passes.
 10. After adapter and constraint projection, the credential-reflection guard scans the final body, content type, and released semantic headers. A match blocks the response.
 
@@ -40,7 +40,7 @@ For streaming responses, validation and projection happen incrementally. Serverw
 
 `operationPolicy`: allow or deny normalized adapter operations. Use this to block writes for one app while allowing reads, or to make a broad route safe even if SDKs choose unexpected endpoints.
 
-`rateLimit`: fixed-window credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. Examples: one tweet per provider account per day, five Slack posts per hour, ten object-store writes per hour. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas.
+`rateLimit`: fixed-window credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. Examples: one tweet per provider account per day, five Slack posts per hour, ten bounded JSON object-store writes per hour. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas.
 
 `queryDateWindow`: bounds query parameters such as `start_time`, `end_time`, or `since` to a maximum lookback. Formats supported: RFC3339, date, epoch seconds, and epoch milliseconds.
 
@@ -51,6 +51,8 @@ For streaming responses, validation and projection happen incrementally. Serverw
 `jsonBody`: enforces JSON request body shape: allowed fields, required fields, denied fields, type checks, string length, numeric bounds, enums, exact values, and array size bounds. Structural allowlisting includes empty objects and arrays, including empty containers nested in arrays, so an unknown key cannot evade the allowlist merely because it has no scalar leaf. An explicitly allowlisted container remains valid and can be constrained with `type: "array"`, `minItems`, and `maxItems`.
 
 `formBody`: applies the same allowlist, required/denied field, scalar duplicate, type, length, numeric, enum, exact-value, and safe-pattern rules to bounded `application/x-www-form-urlencoded` bodies. Bracketed keys such as `metadata[agent_request_id]` normalize to `metadata.agent_request_id`. Malformed UTF-8, malformed percent encoding, ambiguous duplicate scalar fields, and more than 256 pairs fail closed.
+
+For a credential-bearing `generic.rest` route, buffered `bodyMode: "json"` requires a matching request-phase `jsonBody` constraint with a non-empty structural `allowedFields` list, and `bodyMode: "formUrlencoded"` requires the equivalent `formBody` constraint. Credential-bearing `bodyMode: "any"` is rejected because it would let provider-recognized fields bypass typed constraints. The JSON Schema, policy compiler, Python adapter, and Rust gate enforce these rules independently. Unknown sibling fields deny the request before credential lookup or injection; Serverware does not silently strip them after the request digest or JIT approval has been computed. Credentialless routes may still use an explicit `bodyMode: "any"` for intentionally opaque forwarding.
 
 `responseDateWindow`: validates JSON responses before release. It supports nested arrays through dot paths, so `data.created_at` checks every item in a `data` array.
 
@@ -110,6 +112,8 @@ Streaming reads are intentionally excluded from that profile because a live stre
 ## Composing New Limits
 
 Constraints compose as an intersection: a request must satisfy the principal, endpoint, adapter, every request constraint, any JIT grant, and every response constraint. This supports rules such as "one post per credential and agent per day, only on weekdays, with a 280-character body" without provider-specific scripting.
+
+Shared quotas and JIT are enforced as one release decision, not as sequential best-effort counters. For example, a one-tweet-per-day route cannot consume the daily slot while discovering that its approval is missing, and a failed pre-dispatch audit cannot permanently burn either control. Quota denial reports a retry interval bounded by the policy window, while approval polling remains independently bounded to one hour.
 
 Policy files are data, not executable code. Unknown constraint types, fields, adapter operations, and extension semantics are rejected instead of ignored. A limitation that cannot be expressed by the typed constraints requires an audited adapter or constraint implementation in both enforcement runtimes, schema admission rules, and parity tests before it can be enabled. This preserves customization without allowing policy text to become an arbitrary-code escape hatch.
 

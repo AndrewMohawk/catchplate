@@ -119,6 +119,8 @@ STREAMING_RESPONSE_MODES = {
     "formUrlencodedStream",
     "csvStream",
 }
+STRUCTURED_STREAMING_MODES = STREAMING_RESPONSE_MODES - {"stream"}
+PROJECTED_RESPONSE_MODES = {"json"} | STRUCTURED_STREAMING_MODES
 BUFFERED_RESPONSE_MODES = {"any", "headersOnly", "json"}
 SUPPORTED_RESPONSE_MODES = BUFFERED_RESPONSE_MODES | STREAMING_RESPONSE_MODES
 FORBIDDEN_AGENT_CREDENTIAL_HEADERS = {
@@ -145,6 +147,7 @@ NON_FORWARDABLE_AGENT_HEADERS = FORBIDDEN_AGENT_CREDENTIAL_HEADERS | {
     "x-serverware-data-plane-token",
     "x-serverware-proof-nonce",
 }
+SERVERWARE_INTERNAL_HEADER_PREFIX = "x-serverware-"
 SAFE_RESPONSE_HEADERS = frozenset(
     {
         "cache-control",
@@ -208,6 +211,88 @@ class PolicyBundleError(ValueError):
     pass
 
 
+def _is_finite_json_number(value: Any) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
+
+
+def _validate_finite_json_numbers(value: Any) -> None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if not _is_finite_json_number(value):
+            raise ValueError("JSON number must be finite and representable")
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _validate_finite_json_numbers(item)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _validate_finite_json_numbers(item)
+
+
+def strict_json_loads(raw: str | bytes | bytearray) -> Any:
+    text = bytes(raw).decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError(f"duplicate JSON object key: {key}")
+            value[key] = item
+        return value
+
+    def finite_float(text: str) -> float:
+        value = float(text)
+        if not _is_finite_json_number(value):
+            raise ValueError("JSON number must be finite and representable")
+        return value
+
+    def finite_int(text: str) -> int:
+        value = int(text)
+        if not _is_finite_json_number(value):
+            raise ValueError("JSON number must be finite and representable")
+        return value
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"non-finite JSON constant: {value}")
+
+    return json.loads(
+        text,
+        object_pairs_hook=reject_duplicate_keys,
+        parse_float=finite_float,
+        parse_int=finite_int,
+        parse_constant=reject_constant,
+    )
+
+
+def _admit_policy_json_object(raw: Any) -> None:
+    if not isinstance(raw, dict):
+        raise PolicyBundleError("policy bundle must be an object")
+    try:
+        canonical_json(raw)
+    except (OverflowError, TypeError, ValueError) as exc:
+        raise PolicyBundleError(f"policy bundle contains an invalid JSON value: {exc}") from exc
+
+
+def normalized_credential_provider(value: Any) -> str:
+    provider = str(value or "").strip().lower()
+    aliases = {
+        "twitter": "x",
+        "x.oauth": "x",
+        "x.oauth2": "x",
+        "google.oauth": "google",
+        "google.oauth2": "google",
+    }
+    return aliases.get(provider, provider)
+
+
+def is_serverware_internal_header(value: Any) -> bool:
+    return str(value).strip().lower().startswith(SERVERWARE_INTERNAL_HEADER_PREFIX)
+
+
 def provider_account_scope_value(provider: str, provider_subject: str | None) -> str | None:
     if not provider or not provider_subject:
         return None
@@ -244,7 +329,14 @@ def credential_injection_target(injection: dict[str, Any]) -> tuple[str, str] | 
 
 
 def canonical_json(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    _validate_finite_json_numbers(value)
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    )
 
 
 def policy_hash(value: dict[str, Any]) -> str:
@@ -316,6 +408,7 @@ def policy_public_key_hash() -> str:
 
 
 def sign_policy_bundle(raw: dict[str, Any]) -> dict[str, Any]:
+    _admit_policy_json_object(raw)
     signed = copy.deepcopy(raw)
     signed.setdefault("metadata", {})
     signed["metadata"]["signingKeyId"] = policy_public_key_hash()
@@ -326,6 +419,7 @@ def sign_policy_bundle(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 def verify_policy_signature(raw: dict[str, Any]) -> None:
+    _admit_policy_json_object(raw)
     signature_value = (raw.get("metadata") or {}).get("signature")
     if not isinstance(signature_value, str) or not signature_value.startswith("ed25519:"):
         raise PolicyBundleError("policy bundle must include metadata.signature using ed25519")
@@ -337,10 +431,14 @@ def verify_policy_signature(raw: dict[str, Any]) -> None:
 
 
 def _load_schema(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text())
+    loaded = strict_json_loads(path.read_text())
+    if not isinstance(loaded, dict):
+        raise PolicyBundleError(f"JSON schema must be an object: {path}")
+    return loaded
 
 
 def validate_policy_schema(raw: dict[str, Any]) -> None:
+    _admit_policy_json_object(raw)
     try:
         from jsonschema import Draft202012Validator, ValidationError
     except Exception as exc:
@@ -535,7 +633,7 @@ def _validate_field_rule(
     for name in ("min", "max"):
         value = rule.get(name)
         if value is not None and (
-            not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value)
+            not _is_finite_json_number(value)
         ):
             raise PolicyBundleError(
                 f"route {route_id} constraint {constraint_id} field {field} {name} must be a finite number"
@@ -897,7 +995,7 @@ def _load_raw_policy(path: Path) -> dict[str, Any]:
             raise PolicyBundleError("YAML policy bundles require ruamel.yaml") from exc
         loaded = YAML(typ="safe").load(text)
     else:
-        loaded = json.loads(text)
+        loaded = strict_json_loads(text)
     if not isinstance(loaded, dict):
         raise PolicyBundleError("policy bundle must be an object")
     return loaded
@@ -1021,6 +1119,13 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                     raise PolicyBundleError(
                         f"route {route_id} queryNumericBounds {constraint_id} must define min or max"
                     )
+                for name, value in (("min", minimum), ("max", maximum)):
+                    if value is not None and (
+                        not _is_finite_json_number(value)
+                    ):
+                        raise PolicyBundleError(
+                            f"route {route_id} queryNumericBounds {constraint_id} {name} must be a finite number"
+                        )
                 if minimum is not None and maximum is not None and minimum > maximum:
                     raise PolicyBundleError(
                         f"route {route_id} queryNumericBounds {constraint_id} min must not exceed max"
@@ -1088,7 +1193,8 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                         f"route {route_id} requestTimeWindow {constraint_id} daily windows must not overlap"
                     )
         elif constraint_type in {"jsonBody", "formBody"}:
-            if not constraint.get("allowedFields"):
+            allowed_fields = constraint.get("allowedFields")
+            if not isinstance(allowed_fields, list) or not allowed_fields:
                 raise PolicyBundleError(
                     f"route {route_id} {constraint_type} {constraint_id} must define non-empty allowedFields "
                     "so unknown fields fail closed"
@@ -1227,23 +1333,89 @@ def _validate_response_field_paths(
     profile: dict[str, Any],
     profile_name: str,
 ) -> tuple[str, ...]:
+    if "allowedFields" not in profile:
+        raise PolicyBundleError(f"route {route_id} {profile_name} is missing allowedFields")
     fields = profile.get("allowedFields")
-    if (
-        not isinstance(fields, list)
-        or not fields
-        or len(fields) > 64
-        or any(
-            not isinstance(field, str)
-            or len(field) > 256
-            or RESPONSE_FIELD_PATH_RE.fullmatch(field) is None
-            for field in fields
+    if not isinstance(fields, list):
+        raise PolicyBundleError(f"route {route_id} {profile_name} allowedFields must be an array")
+    if not fields:
+        raise PolicyBundleError(f"route {route_id} {profile_name} allowedFields must not be empty")
+    if len(fields) > 64:
+        raise PolicyBundleError(
+            f"route {route_id} {profile_name} allowedFields must contain at most 64 paths"
         )
-        or len(fields) != len(set(fields))
+    if any(
+        not isinstance(field, str)
+        or len(field) > 256
+        or RESPONSE_FIELD_PATH_RE.fullmatch(field) is None
+        for field in fields
     ):
         raise PolicyBundleError(
-            f"route {route_id} {profile_name} must define 1-64 unique allowedFields using bounded dotted paths"
+            f"route {route_id} {profile_name} allowedFields must use 1-256 character bounded dotted paths"
         )
+    if len(fields) != len(set(fields)):
+        raise PolicyBundleError(f"route {route_id} {profile_name} allowedFields must be unique")
     return tuple(fields)
+
+
+def _validate_credential_response_projections(
+    route_id: str,
+    adapter_type: str,
+    response: Any,
+) -> None:
+    if not isinstance(response, dict):
+        raise PolicyBundleError(
+            f"route {route_id} credential-bearing response policy is missing"
+        )
+
+    success_mode = "json" if adapter_type == "gmail.v1" else response.get("mode")
+    if success_mode in PROJECTED_RESPONSE_MODES:
+        mode_name = "JSON" if success_mode == "json" else str(success_mode)
+        _validate_response_field_paths(
+            route_id,
+            response,
+            f"credential-bearing {mode_name} success response",
+        )
+
+    error = response.get("error")
+    if isinstance(error, dict) and error.get("mode") == "json":
+        _validate_response_field_paths(
+            route_id,
+            error,
+            "credential-bearing JSON error response",
+        )
+
+
+def _validate_credential_request_body_constraint(
+    route_id: str,
+    adapter_type: str,
+    request_mode: str,
+    credential_ref: str | None,
+    constraints: tuple[dict[str, Any], ...],
+) -> None:
+    if adapter_type != "generic.rest" or not credential_ref:
+        return
+    if request_mode == "any":
+        raise PolicyBundleError(
+            f"route {route_id} credential-bearing generic.rest routes cannot use opaque bodyMode any"
+        )
+    required_constraint = {
+        "json": "jsonBody",
+        "formUrlencoded": "formBody",
+    }.get(request_mode)
+    if required_constraint is None:
+        return
+    if any(
+        constraint.get("type") == required_constraint
+        and isinstance(constraint.get("allowedFields"), list)
+        and bool(constraint["allowedFields"])
+        for constraint in constraints
+    ):
+        return
+    raise PolicyBundleError(
+        f"route {route_id} credential-bearing generic.rest bodyMode {request_mode} requires "
+        f"a {required_constraint} constraint with non-empty allowedFields"
+    )
 
 
 def _validate_response_headers(
@@ -1293,7 +1465,7 @@ def _validate_optional_response_release_contract(
     response: dict[str, Any],
     adapter_name: str,
 ) -> None:
-    if response.get("mode") == "json":
+    if response.get("mode") in PROJECTED_RESPONSE_MODES:
         _validate_response_field_paths(route_id, response, f"{adapter_name} success response")
     if "allowedHeaders" in response:
         _validate_response_headers(route_id, response, f"{adapter_name} success response")
@@ -1446,6 +1618,7 @@ def _validate_adapter_security_invariants(
 
 
 def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False, validate_schema: bool = False) -> PolicySnapshot:
+    _admit_policy_json_object(raw)
     if validate_schema:
         validate_policy_schema(raw)
     if verify_signature:
@@ -1552,6 +1725,9 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
         adapter_config = dict(adapter.get("config") or {})
         if adapter_type not in SUPPORTED_ADAPTERS:
             raise PolicyBundleError(f"route {route_id} uses unsupported adapter {adapter_type}")
+        credential_ref = item.get("credentialRef")
+        if credential_ref and credential_ref not in credentials:
+            raise PolicyBundleError(f"route {route_id} references unknown credential {credential_ref}")
         if adapter_type != "gmail.v1":
             response_config = adapter_config.get("response")
             if not isinstance(response_config, dict):
@@ -1570,6 +1746,12 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                 raise PolicyBundleError(
                     f"route {route_id} response maxBodyBytes must be an integer between 0 and 16777216"
                 )
+            if credential_ref:
+                _validate_credential_response_projections(
+                    route_id,
+                    adapter_type,
+                    response_config,
+                )
             if adapter_type not in {"npm.registry"}:
                 _validate_optional_response_release_contract(
                     route_id, response_config, adapter_type
@@ -1581,9 +1763,12 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                 raise PolicyBundleError(
                     f"route {route_id} streaming responses cannot release upstream headers"
                 )
-        credential_ref = item.get("credentialRef")
-        if credential_ref and credential_ref not in credentials:
-            raise PolicyBundleError(f"route {route_id} references unknown credential {credential_ref}")
+        elif credential_ref:
+            _validate_credential_response_projections(
+                route_id,
+                adapter_type,
+                adapter_config.get("response"),
+            )
         request_mode = str(((adapter_config.get("request") or {}).get("bodyMode") or ""))
         response_mode = str(((adapter_config.get("response") or {}).get("mode") or ""))
         if credential_ref and response_mode in {"any", "stream"}:
@@ -1614,6 +1799,12 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                     f"route {route_id} generic.rest policy is missing explicit controls: "
                     f"request={missing_request} response={missing_response}"
                 )
+            if request_mode in STRUCTURED_STREAMING_MODES:
+                _validate_response_field_paths(
+                    route_id,
+                    request_config,
+                    f"generic.rest {request_mode} request",
+                )
             raw_allowed_headers = request_config.get("allowedHeaders")
             if not isinstance(raw_allowed_headers, list) or any(
                 not isinstance(header, str)
@@ -1631,10 +1822,16 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                     f"route {route_id} generic.rest allowedHeaders must be unique after normalization"
                 )
             allowed_header_set = set(allowed_headers)
-            forbidden_headers = sorted(FORBIDDEN_AGENT_CREDENTIAL_HEADERS.intersection(allowed_header_set))
+            forbidden_headers = sorted(
+                header
+                for header in allowed_header_set
+                if header in FORBIDDEN_AGENT_CREDENTIAL_HEADERS
+                or is_serverware_internal_header(header)
+            )
             if forbidden_headers:
                 raise PolicyBundleError(
-                    f"route {route_id} generic.rest allows credential headers supplied by the agent: {forbidden_headers}"
+                    f"route {route_id} generic.rest allows credential or internal headers "
+                    f"supplied by the agent: {forbidden_headers}"
                 )
             required_headers = _validate_generic_required_headers(
                 route_id,
@@ -1697,6 +1894,26 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             if authn.get("webauthnRequired") and not authn.get("allowedAuthenticatorClasses"):
                 raise PolicyBundleError(f"route {route_id} WebAuthn JIT policy must define allowed authenticator classes")
         constraints = _validate_constraints(route_id, item.get("constraints"))
+        shared_rate_limits = [
+            constraint
+            for constraint in constraints
+            if constraint.get("type") == "rateLimit"
+            and constraint.get("store", "local") == "shared"
+        ]
+        if jit.get("required") is True and shared_rate_limits and (
+            jit.get("maxUses") != 1 or jit.get("consumeOn") != "forwardStart"
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} composed JIT and shared quotas require "
+                "maxUses=1 and consumeOn=forwardStart"
+            )
+        _validate_credential_request_body_constraint(
+            route_id,
+            adapter_type,
+            request_mode,
+            credential_ref,
+            constraints,
+        )
         _validate_provider_account_rate_limits(
             route_id,
             constraints,
@@ -1781,6 +1998,18 @@ def get_policy_snapshot() -> PolicySnapshot | None:
     return snapshot
 
 
+def policy_uses_atomic_release_authorization(snapshot: PolicySnapshot) -> bool:
+    return any(
+        route.jit.get("required") is True
+        and any(
+            constraint.get("type") == "rateLimit"
+            and constraint.get("store", "local") == "shared"
+            for constraint in route.constraints
+        )
+        for route in snapshot.routes
+    )
+
+
 def enforce_policy_high_water(snapshot: PolicySnapshot) -> dict[str, Any]:
     metadata = snapshot.raw.get("metadata")
     if not isinstance(metadata, dict):
@@ -1851,7 +2080,6 @@ def write_policy_bundle(
     *,
     enforce_high_water: bool = False,
 ) -> PolicySnapshot:
-    ensure_data_dirs()
     signed = sign_policy_bundle(raw)
     snapshot = compile_policy_bundle(signed, verify_signature=True, validate_schema=True)
     if enforce_high_water:
@@ -1937,7 +2165,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "request": {
                             "allowedQueryKeys": ["reflectCredential"],
                             "allowedHeaders": ["accept", "content-type", "user-agent"],
-                            "bodyMode": "any",
+                            "bodyMode": "json",
                             "maxBodyBytes": 65536,
                         },
                         "response": {
@@ -1955,6 +2183,20 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         },
                     },
                 },
+                "constraints": [
+                    {
+                        "id": "demo-echo-json-body",
+                        "type": "jsonBody",
+                        "contentTypes": ["application/json"],
+                        "allowedFields": ["audit_marker"],
+                        "fields": {
+                            "audit_marker": {
+                                "type": "string",
+                                "maxLength": 256,
+                            }
+                        },
+                    }
+                ],
             },
             {
                 "id": "demo.stream",

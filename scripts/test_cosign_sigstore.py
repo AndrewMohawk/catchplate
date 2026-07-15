@@ -10,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import cosign_sigstore
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -94,11 +96,28 @@ def main() -> None:
     ):
         if cosign_sigstore.normalize_log_id(encoded_log_id) != expected_log_id:
             raise AssertionError(f"failed to normalize Rekor log ID {encoded_log_id!r}")
+    fixture_key_path = ROOT / ".tmp" / "cosign-adapter-test-ed25519.pem"
+    fixture_key_path.parent.mkdir(parents=True, exist_ok=True)
+    fixture_key = Ed25519PrivateKey.generate()
+    fixture_key_path.write_bytes(
+        fixture_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    fixture_key_id = cosign_sigstore.sha256_prefixed_bytes(
+        fixture_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
     env = os.environ.copy()
     env.update(
         {
             "SERVERWARE_COSIGN_BINARY": f"{sys.executable} scripts/cosign_fixture.py",
-            "SERVERWARE_COSIGN_KEY_ID": "sha256:" + "c" * 64,
+            "SERVERWARE_COSIGN_FIXTURE_KEY": str(fixture_key_path),
+            "SERVERWARE_COSIGN_KEY_ID": fixture_key_id,
             "SERVERWARE_COSIGN_YES": "0",
         }
     )
@@ -128,6 +147,14 @@ def main() -> None:
         raise AssertionError(f"cosign bundle did not sign the canonical statement digest: {signature_response}")
     if (signature_response.get("key_provider") or {}).get("key_id") != env["SERVERWARE_COSIGN_KEY_ID"]:
         raise AssertionError(f"signature response did not bind configured key ID: {signature_response}")
+    derived_key_env = dict(env)
+    derived_key_env.pop("SERVERWARE_COSIGN_KEY_ID")
+    derived_signature = run_adapter("sign", sign_payload, derived_key_env)
+    if (derived_signature.get("key_provider") or {}).get("key_id") != fixture_key_id:
+        raise AssertionError(f"signature response did not derive its embedded SPKI key ID: {derived_signature}")
+    mismatched_key_env = dict(env)
+    mismatched_key_env["SERVERWARE_COSIGN_KEY_ID"] = "sha256:" + "c" * 64
+    expect_failure("sign", sign_payload, mismatched_key_env, "does not match the cosign bundle public key")
     transparency = signature_response.get("transparency") or {}
     for field in ("log_id", "entry_uuid", "integrated_time", "inclusion_proof"):
         if field not in transparency:

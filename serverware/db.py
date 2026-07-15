@@ -45,6 +45,11 @@ from serverware.crypto import (
     load_master_key,
 )
 
+_AUDIT_EVENT_JSON_WRITE_MAX_BYTES = 2 * 1024 * 1024
+_AUDIT_EVENT_JSON_STORED_MAX_BYTES = 8 * 1024 * 1024
+_AUDIT_VERIFY_BATCH_TARGET_BYTES = 64 * 1024 * 1024
+_AUDIT_VERIFY_BATCH_SIZE = 32
+
 
 def utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -88,6 +93,27 @@ def _audit_hash(
     return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _validate_audit_event_json(event_json: str) -> None:
+    if len(event_json.encode("utf-8")) > _AUDIT_EVENT_JSON_WRITE_MAX_BYTES:
+        raise AuditStoreError("canonical audit event exceeds 2 MiB")
+
+
+def validate_audit_event(event: dict[str, Any]) -> None:
+    _validate_audit_event_json(dumps(event))
+
+
+def _audit_verify_batch_size(max_event_json_bytes: int) -> int:
+    if max_event_json_bytes <= 0:
+        return _AUDIT_VERIFY_BATCH_SIZE
+    return max(
+        1,
+        min(
+            _AUDIT_VERIFY_BATCH_SIZE,
+            _AUDIT_VERIFY_BATCH_TARGET_BYTES // max_event_json_bytes,
+        ),
+    )
+
+
 class AuditStoreError(RuntimeError):
     pass
 
@@ -98,6 +124,20 @@ class MetadataStoreError(RuntimeError):
 
 class RateLimitStoreError(RuntimeError):
     pass
+
+
+class ReleaseAuthorizationError(MetadataStoreError):
+    pass
+
+
+class ReleaseAuthorizationConflictError(ReleaseAuthorizationError):
+    pass
+
+
+class _ReleaseAuthorizationDenied(Exception):
+    def __init__(self, result: dict[str, Any]):
+        self.result = result
+        super().__init__(str(result.get("reason") or "release authorization denied"))
 
 
 class RBACBindingStoreError(RuntimeError):
@@ -136,6 +176,7 @@ class SetupSessionStaleRevisionError(SetupSessionError):
 
 
 _AUDIT_CHAIN_LOCK_KEY = 0x5357524155444348
+_AUDIT_MIGRATION_LOCK_KEY = 0x5357524155444D47
 _CREDENTIAL_LEASE_REPLAY_LOCK_KEY = 0x5357524C45415345
 _CREDENTIAL_LEASE_REPLAY_RETENTION_MS = 24 * 60 * 60 * 1000
 _CREDENTIAL_METADATA_MAX_BYTES = 16 * 1024
@@ -166,6 +207,16 @@ _oidc_login_source_context: contextvars.ContextVar[str | None] = contextvars.Con
     default=None,
 )
 _GRANT_ATTEMPT_ID_MAX_BYTES = 256
+_RELEASE_AUTHORIZATION_LOCK_WAIT_MS = 500
+_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES = 256
+_RELEASE_AUTHORIZATION_BINDING_MAX_BYTES = 64 * 1024
+_RELEASE_AUTHORIZATION_STATES = {
+    "reserved",
+    "dispatching",
+    "committed",
+    "cancelled",
+    "committed_indeterminate",
+}
 _RBAC_BINDINGS_MAX_BYTES = 4 * 1024 * 1024
 _VALID_RBAC_ROLES = {
     "admin",
@@ -735,6 +786,10 @@ def init_audit_store() -> None:
     with _audit_pg_connect() as conn:
         with conn.cursor() as cur:
             cur.execute(
+                "SELECT pg_advisory_xact_lock(%(lock_key)s)",
+                {"lock_key": _AUDIT_MIGRATION_LOCK_KEY},
+            )
+            cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS serverware_audit_events (
                     sequence BIGSERIAL PRIMARY KEY,
@@ -742,7 +797,9 @@ def init_audit_store() -> None:
                     event_type TEXT NOT NULL,
                     actor_type TEXT NOT NULL,
                     actor_id TEXT,
-                    event_json TEXT NOT NULL,
+                    event_json TEXT NOT NULL
+                        CONSTRAINT serverware_audit_events_event_json_size
+                        CHECK (octet_length(event_json) <= 8388608),
                     prev_event_hash TEXT,
                     event_hash TEXT NOT NULL UNIQUE,
                     created_at TEXT NOT NULL
@@ -751,6 +808,19 @@ def init_audit_store() -> None:
                     ON serverware_audit_events (created_at DESC, sequence DESC);
                 CREATE INDEX IF NOT EXISTS serverware_audit_events_type_created_at
                     ON serverware_audit_events (event_type, created_at DESC);
+                DO $$
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1
+                        FROM pg_constraint
+                        WHERE conname = 'serverware_audit_events_event_json_size'
+                          AND conrelid = 'serverware_audit_events'::regclass
+                    ) THEN
+                        ALTER TABLE serverware_audit_events
+                            ADD CONSTRAINT serverware_audit_events_event_json_size
+                            CHECK (octet_length(event_json) <= 8388608) NOT VALID;
+                    END IF;
+                END $$;
                 """
             )
 
@@ -767,6 +837,7 @@ def _append_sqlite_audit_event(
     if not conn.in_transaction:
         conn.execute("BEGIN IMMEDIATE")
     event_json = dumps(event)
+    _validate_audit_event_json(event_json)
     event_id = idempotency_key or str(uuid.uuid4())
     if idempotency_key is not None:
         existing = conn.execute(
@@ -847,6 +918,7 @@ def _append_postgres_audit_event(
 ) -> dict[str, Any]:
     event_id = idempotency_key or str(uuid.uuid4())
     event_json = dumps(event)
+    _validate_audit_event_json(event_json)
     with _audit_pg_connect() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
@@ -989,6 +1061,107 @@ def record_audit_event(
         )
 
 
+def record_audit_event_batch(
+    events: list[tuple[str, dict[str, Any]]],
+    *,
+    actor_type: str,
+    actor_id: str | None,
+) -> list[dict[str, Any]]:
+    if not events:
+        return []
+    if len(events) > 200:
+        raise AuditStoreError("audit batch exceeds 200 events")
+    prepared: list[tuple[str, dict[str, Any], str, str]] = []
+    for event_type, event in events:
+        if not isinstance(event_type, str) or not 1 <= len(event_type) <= 128:
+            raise AuditStoreError("audit event_type must contain 1-128 characters")
+        if not isinstance(event, dict):
+            raise AuditStoreError("audit event must be an object")
+        event_json = dumps(event)
+        _validate_audit_event_json(event_json)
+        prepared.append((event_type, event, event_json, str(uuid.uuid4())))
+
+    if not audit_uses_postgres():
+        with connect() as conn:
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
+            results = []
+            for event_type, event, _event_json, event_id in prepared:
+                results.append(
+                    _append_sqlite_audit_event(
+                        conn,
+                        event_type=event_type,
+                        actor_type=actor_type,
+                        actor_id=actor_id,
+                        event=event,
+                        idempotency_key=event_id,
+                    )
+                )
+            return results
+
+    results: list[dict[str, Any]] = []
+    with _audit_pg_connect() as conn:
+        with conn.transaction():
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT pg_advisory_xact_lock(%(lock_key)s)",
+                    {"lock_key": _AUDIT_CHAIN_LOCK_KEY},
+                )
+                previous = cur.execute(
+                    "SELECT event_hash FROM serverware_audit_events "
+                    "ORDER BY sequence DESC LIMIT 1"
+                ).fetchone()
+                prev_hash = previous["event_hash"] if previous else None
+                for event_type, event, event_json, event_id in prepared:
+                    created_at = iso_now()
+                    event_hash = _audit_hash(
+                        event_id=event_id,
+                        event_type=event_type,
+                        actor_type=actor_type,
+                        actor_id=actor_id,
+                        event_json=event_json,
+                        prev_event_hash=prev_hash,
+                        created_at=created_at,
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO serverware_audit_events (
+                            id, event_type, actor_type, actor_id, event_json,
+                            prev_event_hash, event_hash, created_at
+                        )
+                        VALUES (
+                            %(id)s, %(event_type)s, %(actor_type)s, %(actor_id)s,
+                            %(event_json)s, %(prev_event_hash)s, %(event_hash)s,
+                            %(created_at)s
+                        )
+                        """,
+                        {
+                            "id": event_id,
+                            "event_type": event_type,
+                            "actor_type": actor_type,
+                            "actor_id": actor_id,
+                            "event_json": event_json,
+                            "prev_event_hash": prev_hash,
+                            "event_hash": event_hash,
+                            "created_at": created_at,
+                        },
+                    )
+                    results.append(
+                        {
+                            "id": event_id,
+                            "event_type": event_type,
+                            "actor_type": actor_type,
+                            "actor_id": actor_id,
+                            "event": event,
+                            "prev_event_hash": prev_hash,
+                            "event_hash": event_hash,
+                            "created_at": created_at,
+                        }
+                    )
+                    prev_hash = event_hash
+    return results
+
+
 def connect() -> Any:
     ensure_data_dirs()
     if metadata_uses_postgres():
@@ -1005,6 +1178,22 @@ def init_db(path: Path = DB_PATH) -> None:
     grants.init_grant_store()
     init_audit_store()
     with connect() as conn:
+        if not isinstance(conn, PostgresMetadataConnection):
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS audit_events (
+                    id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    actor_type TEXT NOT NULL,
+                    actor_id TEXT,
+                    event_json TEXT NOT NULL
+                        CHECK (length(CAST(event_json AS BLOB)) <= 8388608),
+                    prev_event_hash TEXT,
+                    event_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
         conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS credentials (
@@ -1314,6 +1503,9 @@ def init_db(path: Path = DB_PATH) -> None:
                 expires_at TEXT NOT NULL,
                 consumed_at TEXT,
                 consumed_by_flow_id TEXT,
+                reserved_attempt_id TEXT,
+                reserved_at_epoch_ms BIGINT,
+                reservation_expires_at_epoch_ms BIGINT,
                 created_at TEXT NOT NULL
             );
 
@@ -1391,6 +1583,79 @@ def init_db(path: Path = DB_PATH) -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS release_authorization_attempts (
+                attempt_id TEXT PRIMARY KEY,
+                binding_digest TEXT NOT NULL,
+                binding_json TEXT NOT NULL,
+                flow_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                principal_id TEXT NOT NULL,
+                route_id TEXT NOT NULL,
+                credential_id TEXT NOT NULL,
+                credential_version BIGINT NOT NULL,
+                policy_hash TEXT NOT NULL,
+                request_digest TEXT NOT NULL,
+                operation_digest TEXT,
+                operation_context_json TEXT NOT NULL,
+                grant_id TEXT,
+                approval_request_id TEXT,
+                reservation_expires_at_epoch_ms BIGINT NOT NULL,
+                dispatch_started_at_epoch_ms BIGINT,
+                dispatch_expires_at_epoch_ms BIGINT,
+                completion_outcome TEXT,
+                completed_at_epoch_ms BIGINT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                CHECK (state IN (
+                    'reserved', 'dispatching', 'committed', 'cancelled',
+                    'committed_indeterminate'
+                ))
+            );
+
+            CREATE INDEX IF NOT EXISTS release_authorization_attempts_reap
+                ON release_authorization_attempts (
+                    state, reservation_expires_at_epoch_ms,
+                    dispatch_expires_at_epoch_ms, attempt_id
+                );
+
+            CREATE TABLE IF NOT EXISTS release_authorization_quota_reservations (
+                attempt_id TEXT NOT NULL
+                    REFERENCES release_authorization_attempts(attempt_id) ON DELETE CASCADE,
+                counter_key TEXT NOT NULL,
+                constraint_id TEXT NOT NULL,
+                operation TEXT,
+                window_start_epoch_ms BIGINT NOT NULL,
+                window_seconds INTEGER NOT NULL,
+                max_count INTEGER NOT NULL,
+                count_after INTEGER NOT NULL,
+                reservation_state TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (attempt_id, counter_key),
+                CHECK (reservation_state IN (
+                    'reserved', 'committed', 'refunded', 'refund_skipped_window'
+                ))
+            );
+
+            CREATE INDEX IF NOT EXISTS release_authorization_quota_counter
+                ON release_authorization_quota_reservations (counter_key, attempt_id);
+
+            CREATE TABLE IF NOT EXISTS release_authorization_events (
+                id TEXT PRIMARY KEY,
+                attempt_id TEXT NOT NULL
+                    REFERENCES release_authorization_attempts(attempt_id) ON DELETE CASCADE,
+                event_type TEXT NOT NULL,
+                actor_id TEXT,
+                event_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                audited_at TEXT,
+                audit_event_hash TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS release_authorization_events_pending_audit
+                ON release_authorization_events (created_at, id)
+                WHERE audited_at IS NULL;
+
             CREATE TABLE IF NOT EXISTS credential_lease_nonces (
                 recipient_key_id TEXT NOT NULL,
                 nonce_sha256 TEXT NOT NULL,
@@ -1460,6 +1725,24 @@ def init_db(path: Path = DB_PATH) -> None:
             );
             """
         )
+        if not isinstance(conn, PostgresMetadataConnection):
+            conn.executescript(
+                """
+                CREATE TRIGGER IF NOT EXISTS audit_events_event_json_size_insert
+                BEFORE INSERT ON audit_events
+                WHEN length(CAST(NEW.event_json AS BLOB)) > 8388608
+                BEGIN
+                    SELECT RAISE(ABORT, 'audit event exceeds stored size ceiling');
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS audit_events_event_json_size_update
+                BEFORE UPDATE OF event_json ON audit_events
+                WHEN length(CAST(NEW.event_json AS BLOB)) > 8388608
+                BEGIN
+                    SELECT RAISE(ABORT, 'audit event exceeds stored size ceiling');
+                END;
+                """
+            )
         _ensure_column(conn, "approval_requests", "principal_id", "TEXT")
         _ensure_column(conn, "approval_requests", "credential_id", "TEXT")
         _ensure_column(conn, "approval_requests", "credential_version", "INTEGER")
@@ -1474,6 +1757,19 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(conn, "approval_requests", "approval_authn", "TEXT")
         _ensure_column(conn, "approval_requests", "approval_challenge_id", "TEXT")
         _ensure_column(conn, "approval_requests", "pending_key", "TEXT")
+        _ensure_column(conn, "approval_grants", "reserved_attempt_id", "TEXT")
+        _ensure_column(conn, "approval_grants", "reserved_at_epoch_ms", "BIGINT")
+        _ensure_column(
+            conn,
+            "approval_grants",
+            "reservation_expires_at_epoch_ms",
+            "BIGINT",
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS approval_grants_reserved_attempt "
+            "ON approval_grants (reserved_attempt_id) "
+            "WHERE reserved_attempt_id IS NOT NULL"
+        )
         _ensure_column(
             conn,
             "control_plane_approvals",
@@ -6427,7 +6723,8 @@ def create_approval_request(
     return row_to_approval(row)
 
 
-def ensure_jit_approval_request(
+def _ensure_jit_approval_request_on_connection(
+    conn: Any,
     *,
     route_id: str,
     method: str,
@@ -6443,6 +6740,7 @@ def ensure_jit_approval_request(
     pending_ttl_seconds: int,
     grant_ttl_seconds: int,
     grant_max_uses: int,
+    now: datetime | None = None,
 ) -> dict[str, Any]:
     if not 1 <= pending_ttl_seconds <= 3600:
         raise MetadataStoreError(
@@ -6474,7 +6772,7 @@ def ensure_jit_approval_request(
         canonical_json,
         redacted_json,
     )
-    now = utcnow()
+    now = now or utcnow()
     now_s = now.isoformat()
     expires = (now + timedelta(seconds=pending_ttl_seconds)).isoformat()
     pending_key = _pending_approval_key(
@@ -6490,67 +6788,107 @@ def ensure_jit_approval_request(
         grant_ttl_seconds=grant_ttl_seconds,
         grant_max_uses=grant_max_uses,
     )
-    with connect() as conn:
-        _lock_pending_approval_creation(conn)
-        pending_count = _expire_and_count_pending_approvals(conn, now_s)
-        existing = conn.execute(
-            """
-            SELECT * FROM approval_requests
-            WHERE pending_key = ?
-              AND status = 'pending'
-              AND expires_at > ?
-            ORDER BY requested_at DESC
-            LIMIT 1
-            """,
-            (pending_key, now_s),
-        ).fetchone()
-        if existing:
-            if (
-                existing["canonical_request"] != canonical_json
-                or existing["redacted_display"] != redacted_json
-            ):
-                raise MetadataStoreError(
-                    "pending approval immutable review payload does not match existing request"
-                )
-            return row_to_approval(existing)
-        if pending_count >= _PENDING_APPROVAL_MAX_COUNT:
-            raise MetadataStoreError("pending approval count limit reached")
-
-        _ensure_policy_route_reference(conn, route_id)
-        item_id = str(uuid.uuid4())
-        conn.execute(
-            """
-            INSERT INTO approval_requests (
-                id, route_id, method, url, status, requested_at, expires_at,
-                principal_id, credential_id, credential_version, policy_hash, request_digest, operation_digest,
-                canonical_request, redacted_display, grant_ttl_seconds, grant_max_uses, pending_key
+    _lock_pending_approval_creation(conn)
+    pending_count = _expire_and_count_pending_approvals(conn, now_s)
+    existing = conn.execute(
+        """
+        SELECT * FROM approval_requests
+        WHERE pending_key = ?
+          AND status = 'pending'
+          AND expires_at > ?
+        ORDER BY requested_at DESC
+        LIMIT 1
+        """,
+        (pending_key, now_s),
+    ).fetchone()
+    if existing:
+        if (
+            existing["canonical_request"] != canonical_json
+            or existing["redacted_display"] != redacted_json
+        ):
+            raise MetadataStoreError(
+                "pending approval immutable review payload does not match existing request"
             )
-            VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                item_id,
-                route_id,
-                method,
-                url,
-                now_s,
-                expires,
-                principal_id,
-                credential_id,
-                credential_version,
-                policy_hash,
-                request_digest,
-                operation_digest,
-                canonical_json,
-                redacted_json,
-                grant_ttl_seconds,
-                grant_max_uses,
-                pending_key,
-            ),
+        approval = row_to_approval(existing)
+        approval["approval_created"] = False
+        return approval
+    if pending_count >= _PENDING_APPROVAL_MAX_COUNT:
+        raise MetadataStoreError("pending approval count limit reached")
+
+    _ensure_policy_route_reference(conn, route_id)
+    item_id = str(uuid.uuid4())
+    conn.execute(
+        """
+        INSERT INTO approval_requests (
+            id, route_id, method, url, status, requested_at, expires_at,
+            principal_id, credential_id, credential_version, policy_hash, request_digest, operation_digest,
+            canonical_request, redacted_display, grant_ttl_seconds, grant_max_uses, pending_key
         )
-        row = conn.execute(
-            "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
-        ).fetchone()
-    return row_to_approval(row)
+        VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            item_id,
+            route_id,
+            method,
+            url,
+            now_s,
+            expires,
+            principal_id,
+            credential_id,
+            credential_version,
+            policy_hash,
+            request_digest,
+            operation_digest,
+            canonical_json,
+            redacted_json,
+            grant_ttl_seconds,
+            grant_max_uses,
+            pending_key,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
+    ).fetchone()
+    approval = row_to_approval(row)
+    approval["approval_created"] = True
+    return approval
+
+
+def ensure_jit_approval_request(
+    *,
+    route_id: str,
+    method: str,
+    url: str,
+    principal_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str | None,
+    canonical_request: dict[str, Any],
+    redacted_display: dict[str, Any],
+    pending_ttl_seconds: int,
+    grant_ttl_seconds: int,
+    grant_max_uses: int,
+) -> dict[str, Any]:
+    with connect() as conn:
+        return _ensure_jit_approval_request_on_connection(
+            conn,
+            route_id=route_id,
+            method=method,
+            url=url,
+            principal_id=principal_id,
+            credential_id=credential_id,
+            credential_version=credential_version,
+            policy_hash=policy_hash,
+            request_digest=request_digest,
+            operation_digest=operation_digest,
+            canonical_request=canonical_request,
+            redacted_display=redacted_display,
+            pending_ttl_seconds=pending_ttl_seconds,
+            grant_ttl_seconds=grant_ttl_seconds,
+            grant_max_uses=grant_max_uses,
+        )
 
 
 def _ensure_policy_route_reference(conn: Any, route_id: str) -> None:
@@ -6712,6 +7050,7 @@ def approve_request(
     now_s = now.isoformat()
     approved_until = (now + timedelta(seconds=ttl_seconds)).isoformat()
     with connect() as conn:
+        _lock_pending_approval_creation(conn)
         existing = conn.execute(
             "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
         ).fetchone()
@@ -7046,6 +7385,7 @@ def consume_jit_grant_result(
                   AND valid_from <= ?
                   AND expires_at > ?
                   AND uses_remaining > 0
+                  AND reserved_attempt_id IS NULL
                 ORDER BY created_at ASC
                 LIMIT 1
                 {lock_clause}
@@ -7247,6 +7587,7 @@ def find_jit_grant_result(
               AND valid_from <= ?
               AND expires_at > ?
               AND uses_remaining > 0
+              AND reserved_attempt_id IS NULL
             ORDER BY created_at ASC
             LIMIT 1
             """,
@@ -7819,6 +8160,1307 @@ def clear_rate_limit_counters(
             )
             deleted += int(cur.rowcount or 0)
         return deleted
+
+
+def release_authorization_writer_status() -> dict[str, Any]:
+    metadata_backend = metadata_store_backend_name()
+    grant_backend = grants.backend_name()
+    if metadata_backend == "sqlite" and grant_backend == "sqlite":
+        shared_transaction = True
+        writer = "sqlite-metadata"
+    elif metadata_backend == "postgres" and grant_backend == "postgres":
+        shared_transaction = grants.can_share_transaction(METADATA_STORE_POSTGRES_DSN)
+        writer = "postgres-metadata" if shared_transaction else None
+    else:
+        shared_transaction = False
+        writer = None
+    return {
+        "metadata_backend": metadata_backend,
+        "grant_backend": grant_backend,
+        "shared_transaction": shared_transaction,
+        "writer": writer,
+    }
+
+
+def require_atomic_release_writer() -> dict[str, Any]:
+    status = release_authorization_writer_status()
+    if not status["shared_transaction"]:
+        raise ReleaseAuthorizationError(
+            "atomic release authorization requires metadata and grant stores "
+            "to use the same writer DSN and schema"
+        )
+    return status
+
+
+def _release_text(label: str, value: Any, *, maximum: int = 256) -> str:
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value.encode("utf-8")) > maximum
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        raise ReleaseAuthorizationError(
+            f"{label} must be a non-empty trimmed string of at most {maximum} bytes"
+        )
+    return value
+
+
+def _release_digest(label: str, value: Any, *, required: bool = True) -> str | None:
+    if value is None and not required:
+        return None
+    digest = _release_text(label, value, maximum=71)
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise ReleaseAuthorizationError(f"{label} must be a lowercase sha256 digest")
+    return digest
+
+
+def _release_now_epoch_ms(value: int | None = None) -> int:
+    now = int(value if value is not None else utcnow().timestamp() * 1000)
+    if now < 0:
+        raise ReleaseAuthorizationError("release authorization time is invalid")
+    return now
+
+
+def _release_timestamp_epoch_ms(value: Any) -> int:
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    else:
+        raise ReleaseAuthorizationError("grant expiry timestamp is invalid")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return int(parsed.astimezone(timezone.utc).timestamp() * 1000)
+
+
+def _begin_release_transaction(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.execute(
+            f"SET LOCAL lock_timeout = '{_RELEASE_AUTHORIZATION_LOCK_WAIT_MS}ms'"
+        )
+    elif not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def _release_lock_id(resource: str) -> int:
+    return int.from_bytes(
+        hashlib.sha256(resource.encode("utf-8")).digest()[:8],
+        byteorder="big",
+        signed=True,
+    )
+
+
+def _lock_release_resources(conn: Any, resources: list[str] | set[str]) -> None:
+    if not isinstance(conn, PostgresMetadataConnection):
+        return
+    for resource in sorted(set(resources)):
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (_release_lock_id(resource),),
+        )
+
+
+def _release_attempt_row(
+    conn: Any, attempt_id: str, *, for_update: bool = False
+) -> Any | None:
+    suffix = " FOR UPDATE" if for_update and isinstance(conn, PostgresMetadataConnection) else ""
+    return conn.execute(
+        "SELECT * FROM release_authorization_attempts WHERE attempt_id = ?" + suffix,
+        (attempt_id,),
+    ).fetchone()
+
+
+def _release_consumption_row(
+    conn: Any, attempt_id: str, *, for_update: bool = False
+) -> Any | None:
+    suffix = " FOR UPDATE" if for_update and isinstance(conn, PostgresMetadataConnection) else ""
+    return conn.execute(
+        "SELECT * FROM approval_grant_consumptions WHERE attempt_id = ?" + suffix,
+        (attempt_id,),
+    ).fetchone()
+
+
+def _release_consumption_matches_attempt(consumption: Any, attempt: Any) -> bool:
+    expected = {
+        "grant_id": attempt["grant_id"],
+        "approval_request_id": attempt["approval_request_id"],
+        "attempt_id": attempt["attempt_id"],
+        "flow_id": attempt["flow_id"],
+        "principal_id": attempt["principal_id"],
+        "route_id": attempt["route_id"],
+        "credential_id": attempt["credential_id"],
+        "credential_version": int(attempt["credential_version"]),
+        "policy_hash": attempt["policy_hash"],
+        "request_digest": attempt["request_digest"],
+        "operation_digest": attempt["operation_digest"],
+    }
+    actual = {
+        key: int(consumption[key]) if key == "credential_version" else consumption[key]
+        for key in expected
+    }
+    return actual == expected
+
+
+def _validate_release_consumption_state(conn: Any, attempt: Any) -> None:
+    consumption = _release_consumption_row(
+        conn, str(attempt["attempt_id"]), for_update=True
+    )
+    committed_with_grant = (
+        attempt["state"] in {"committed", "committed_indeterminate"}
+        and attempt["grant_id"] is not None
+    )
+    if committed_with_grant:
+        if consumption is None:
+            raise ReleaseAuthorizationError(
+                "committed release authorization is missing its grant consumption"
+            )
+        if not _release_consumption_matches_attempt(consumption, attempt):
+            raise ReleaseAuthorizationError(
+                "release authorization attempt_id collides with a mismatched "
+                "grant consumption"
+            )
+    elif consumption is not None:
+        raise ReleaseAuthorizationError(
+            "release authorization has a grant consumption in an incompatible state"
+        )
+
+
+def _release_quota_rows(conn: Any, attempt_id: str) -> list[Any]:
+    return list(
+        conn.execute(
+            "SELECT * FROM release_authorization_quota_reservations "
+            "WHERE attempt_id = ? ORDER BY counter_key ASC",
+            (attempt_id,),
+        ).fetchall()
+    )
+
+
+def _release_authorization_result(
+    conn: Any,
+    row: Any,
+    *,
+    idempotent_replay: bool,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    quotas = [
+        {
+            "counter_key": item["counter_key"],
+            "constraint_id": item["constraint_id"],
+            "operation": item["operation"],
+            "window_start_epoch_ms": int(item["window_start_epoch_ms"]),
+            "window_seconds": int(item["window_seconds"]),
+            "max": int(item["max_count"]),
+            "count": int(item["count_after"]),
+            "remaining": max(
+                int(item["max_count"]) - int(item["count_after"]), 0
+            ),
+            "reservation_state": item["reservation_state"],
+        }
+        for item in _release_quota_rows(conn, str(row["attempt_id"]))
+    ]
+    state = str(row["state"])
+    return {
+        "authorized": state in _RELEASE_AUTHORIZATION_STATES - {"cancelled"},
+        "state": state,
+        "reason": reason or state,
+        "attempt_id": str(row["attempt_id"]),
+        "binding_digest": str(row["binding_digest"]),
+        "idempotent_replay": idempotent_replay,
+        "grant_id": row["grant_id"],
+        "approval_request_id": row["approval_request_id"],
+        "reservation_expires_at_epoch_ms": int(
+            row["reservation_expires_at_epoch_ms"]
+        ),
+        "dispatch_started_at_epoch_ms": (
+            int(row["dispatch_started_at_epoch_ms"])
+            if row["dispatch_started_at_epoch_ms"] is not None
+            else None
+        ),
+        "dispatch_expires_at_epoch_ms": (
+            int(row["dispatch_expires_at_epoch_ms"])
+            if row["dispatch_expires_at_epoch_ms"] is not None
+            else None
+        ),
+        "completion_outcome": row["completion_outcome"],
+        "quotas": quotas,
+        "release_authorization_store_backend": metadata_store_backend_name(),
+        "release_authorization_store_ha": metadata_uses_postgres(),
+    }
+
+
+def _insert_release_event(
+    conn: Any,
+    *,
+    attempt_id: str,
+    state: str,
+    actor_id: str | None,
+    event: dict[str, Any],
+) -> None:
+    event_type = f"release_authorization.{state}"
+    conn.execute(
+        """
+        INSERT INTO release_authorization_events (
+            id, attempt_id, event_type, actor_id, event_json, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (
+            str(uuid.uuid4()),
+            attempt_id,
+            event_type,
+            actor_id,
+            dumps(event),
+            iso_now(),
+        ),
+    )
+
+
+def _release_denial(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    reason: str,
+    retry_after_seconds: int = 0,
+) -> _ReleaseAuthorizationDenied:
+    return _ReleaseAuthorizationDenied(
+        {
+            "authorized": False,
+            "state": "denied",
+            "reason": reason,
+            "attempt_id": attempt_id,
+            "binding_digest": binding_digest,
+            "idempotent_replay": False,
+            "retry_after_seconds": max(0, retry_after_seconds),
+            "release_authorization_store_backend": metadata_store_backend_name(),
+            "release_authorization_store_ha": metadata_uses_postgres(),
+        }
+    )
+
+
+def _prepare_release_quotas(
+    shared_quotas: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    prepared: dict[str, dict[str, Any]] = {}
+    for item in shared_quotas:
+        if not isinstance(item, dict):
+            raise ReleaseAuthorizationError("shared quota claim must be an object")
+        counter_key = _release_digest("shared quota counter_key", item.get("counter_key"))
+        assert counter_key is not None
+        constraint_id = _release_text(
+            "shared quota constraint_id", item.get("constraint_id")
+        )
+        operation = item.get("operation")
+        if operation is not None:
+            operation = _release_text("shared quota operation", operation)
+        window_seconds = item.get("window_seconds")
+        max_count = item.get("max_count")
+        if (
+            not isinstance(window_seconds, int)
+            or isinstance(window_seconds, bool)
+            or not 1 <= window_seconds <= 31_536_000
+            or not isinstance(max_count, int)
+            or isinstance(max_count, bool)
+            or not 1 <= max_count <= 1_000_000_000
+        ):
+            raise ReleaseAuthorizationError("shared quota bounds are invalid")
+        normalized = {
+            "counter_key": counter_key,
+            "constraint_id": constraint_id,
+            "operation": operation,
+            "window_seconds": window_seconds,
+            "max_count": max_count,
+        }
+        previous = prepared.get(counter_key)
+        if previous is not None and previous != normalized:
+            raise ReleaseAuthorizationError(
+                "duplicate shared quota key has conflicting policy claims"
+            )
+        prepared[counter_key] = normalized
+    return [prepared[key] for key in sorted(prepared)]
+
+
+def reserve_release_authorization(
+    *,
+    attempt_id: str,
+    flow_id: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str | None,
+    operation_context: dict[str, Any],
+    shared_quotas: list[dict[str, Any]],
+    require_jit_grant: bool,
+    reservation_ttl_seconds: int,
+    jit_approval_request: dict[str, Any] | None = None,
+    now_epoch_ms: int | None = None,
+    actor_id: str | None = None,
+) -> dict[str, Any]:
+    require_atomic_release_writer()
+    attempt_id = _release_text(
+        "release authorization attempt_id",
+        attempt_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+    )
+    flow_id = _release_text("release authorization flow_id", flow_id)
+    principal_id = _release_text("release authorization principal_id", principal_id)
+    route_id = _release_text("release authorization route_id", route_id)
+    if credential_id:
+        credential_id = _release_text(
+            "release authorization credential_id", credential_id
+        )
+    if (
+        not isinstance(credential_version, int)
+        or isinstance(credential_version, bool)
+        or credential_version < 0
+    ):
+        raise ReleaseAuthorizationError("credential_version must be non-negative")
+    policy_hash = _release_digest("release authorization policy_hash", policy_hash) or ""
+    request_digest = (
+        _release_digest("release authorization request_digest", request_digest) or ""
+    )
+    operation_digest = _release_digest(
+        "release authorization operation_digest",
+        operation_digest,
+        required=False,
+    )
+    if not isinstance(operation_context, dict):
+        raise ReleaseAuthorizationError("operation_context must be an object")
+    operation_context_json = dumps(operation_context)
+    if len(operation_context_json.encode("utf-8")) > _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES:
+        raise ReleaseAuthorizationError("operation_context exceeds 64 KiB")
+    if not isinstance(reservation_ttl_seconds, int) or not 1 <= reservation_ttl_seconds <= 300:
+        raise ReleaseAuthorizationError("reservation TTL must be between 1 and 300 seconds")
+    quotas = _prepare_release_quotas(shared_quotas)
+    binding = {
+        "attempt_id": attempt_id,
+        "flow_id": flow_id,
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "credential_id": credential_id,
+        "credential_version": credential_version,
+        "policy_hash": policy_hash,
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+        "operation_context": operation_context,
+        "require_jit_grant": bool(require_jit_grant),
+        "shared_quotas": quotas,
+    }
+    binding_json = dumps(binding)
+    if len(binding_json.encode("utf-8")) > _RELEASE_AUTHORIZATION_BINDING_MAX_BYTES:
+        raise ReleaseAuthorizationError("release authorization binding exceeds 64 KiB")
+    binding_digest = "sha256:" + hashlib.sha256(binding_json.encode("utf-8")).hexdigest()
+    if now_epoch_ms is None:
+        release_now = utcnow()
+        now_ms = int(release_now.timestamp() * 1000)
+    else:
+        now_ms = _release_now_epoch_ms(now_epoch_ms)
+        release_now = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
+    now_s = release_now.isoformat()
+
+    try:
+        with connect() as conn:
+            _begin_release_transaction(conn)
+            existing = _release_attempt_row(conn, attempt_id, for_update=True)
+            if existing is not None:
+                if not hmac.compare_digest(str(existing["binding_digest"]), binding_digest):
+                    raise ReleaseAuthorizationConflictError(
+                        "release authorization attempt_id is bound to a different request"
+                    )
+                _validate_release_consumption_state(conn, existing)
+                return _release_authorization_result(
+                    conn, existing, idempotent_replay=True
+                )
+
+            if require_jit_grant:
+                if not credential_id or credential_version < 1:
+                    raise ReleaseAuthorizationError(
+                        "JIT release authorization requires a credential binding"
+                    )
+
+            resources = {f"attempt:{attempt_id}"}
+            resources.update(f"quota:{item['counter_key']}" for item in quotas)
+            _lock_release_resources(conn, resources)
+
+            existing = _release_attempt_row(conn, attempt_id, for_update=True)
+            if existing is not None:
+                if not hmac.compare_digest(str(existing["binding_digest"]), binding_digest):
+                    raise ReleaseAuthorizationConflictError(
+                        "release authorization attempt_id is bound to a different request"
+                    )
+                _validate_release_consumption_state(conn, existing)
+                return _release_authorization_result(
+                    conn, existing, idempotent_replay=True
+                )
+            if _release_consumption_row(conn, attempt_id, for_update=True) is not None:
+                raise ReleaseAuthorizationError(
+                    "release authorization attempt_id collides with a grant "
+                    "consumption that has no durable release attempt"
+                )
+
+            reservation_expires_at_ms = now_ms + reservation_ttl_seconds * 1000
+            grant = None
+            if require_jit_grant:
+                _lock_pending_approval_creation(conn)
+                lock_suffix = ""
+                if isinstance(conn, PostgresMetadataConnection):
+                    lock_suffix = " FOR UPDATE SKIP LOCKED"
+                grant = conn.execute(
+                    """
+                    SELECT * FROM approval_grants
+                    WHERE state = 'active'
+                      AND principal_id = ?
+                      AND route_id = ?
+                      AND credential_id = ?
+                      AND credential_version = ?
+                      AND policy_hash = ?
+                      AND request_digest = ?
+                      AND COALESCE(operation_digest, '') = COALESCE(?, '')
+                      AND expires_at > ?
+                      AND uses_remaining > 0
+                      AND reserved_attempt_id IS NULL
+                    ORDER BY created_at ASC, id ASC
+                    LIMIT 1
+                    """
+                    + lock_suffix,
+                    (
+                        principal_id,
+                        route_id,
+                        credential_id,
+                        credential_version,
+                        policy_hash,
+                        request_digest,
+                        operation_digest,
+                        now_s,
+                    ),
+                ).fetchone()
+                if (
+                    grant is None
+                    or grant["state"] != "active"
+                    or int(grant["uses_remaining"]) < 1
+                    or grant["reserved_attempt_id"] is not None
+                    or _release_timestamp_epoch_ms(grant["valid_from"]) > now_ms
+                    or _release_timestamp_epoch_ms(grant["expires_at"]) <= now_ms
+                ):
+                    if jit_approval_request is not None:
+                        try:
+                            approval = _ensure_jit_approval_request_on_connection(
+                                conn,
+                                route_id=route_id,
+                                method=jit_approval_request["method"],
+                                url=jit_approval_request["url"],
+                                principal_id=principal_id,
+                                credential_id=credential_id,
+                                credential_version=credential_version,
+                                policy_hash=policy_hash,
+                                request_digest=request_digest,
+                                operation_digest=operation_digest,
+                                canonical_request=jit_approval_request[
+                                    "canonical_request"
+                                ],
+                                redacted_display=jit_approval_request[
+                                    "redacted_display"
+                                ],
+                                pending_ttl_seconds=jit_approval_request[
+                                    "pending_ttl_seconds"
+                                ],
+                                grant_ttl_seconds=jit_approval_request[
+                                    "grant_ttl_seconds"
+                                ],
+                                grant_max_uses=jit_approval_request[
+                                    "grant_max_uses"
+                                ],
+                                now=release_now,
+                            )
+                        except (KeyError, MetadataStoreError) as exc:
+                            raise ReleaseAuthorizationError(
+                                "JIT approval request could not be committed"
+                            ) from exc
+                        denial = _release_denial(
+                            attempt_id=attempt_id,
+                            binding_digest=binding_digest,
+                            reason="jit_grant_unavailable",
+                            retry_after_seconds=3,
+                        ).result
+                        denial.update(
+                            {
+                                "approval_request_id": approval["id"],
+                                "approval_status": approval["status"],
+                                "approval_expires_at": approval["expires_at"],
+                                "approval_created": bool(
+                                    approval.get("approval_created")
+                                ),
+                            }
+                        )
+                        return denial
+                    raise _release_denial(
+                        attempt_id=attempt_id,
+                        binding_digest=binding_digest,
+                        reason="jit_grant_unavailable",
+                        retry_after_seconds=1,
+                    )
+                reservation_expires_at_ms = min(
+                    reservation_expires_at_ms,
+                    _release_timestamp_epoch_ms(grant["expires_at"]),
+                )
+                if reservation_expires_at_ms <= now_ms:
+                    raise _release_denial(
+                        attempt_id=attempt_id,
+                        binding_digest=binding_digest,
+                        reason="jit_grant_expired",
+                    )
+
+            prepared_counters: list[dict[str, Any]] = []
+            for quota in quotas:
+                conn.execute(
+                    """
+                    INSERT INTO rate_limit_counters (
+                        counter_key, principal_id, route_id, credential_id,
+                        credential_version, policy_hash, constraint_id, operation,
+                        window_start_epoch_ms, window_seconds, max_count, count,
+                        created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    ON CONFLICT (counter_key) DO NOTHING
+                    """,
+                    (
+                        quota["counter_key"],
+                        principal_id,
+                        route_id,
+                        credential_id,
+                        credential_version,
+                        policy_hash,
+                        quota["constraint_id"],
+                        quota["operation"],
+                        now_ms,
+                        quota["window_seconds"],
+                        quota["max_count"],
+                        now_s,
+                        now_s,
+                    ),
+                )
+                lock_suffix = (
+                    " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+                )
+                counter = conn.execute(
+                    "SELECT * FROM rate_limit_counters WHERE counter_key = ?"
+                    + lock_suffix,
+                    (quota["counter_key"],),
+                ).fetchone()
+                if counter is None:
+                    raise ReleaseAuthorizationError(
+                        "shared quota counter could not be locked"
+                    )
+                window_start = int(counter["window_start_epoch_ms"])
+                count = int(counter["count"])
+                expired = now_ms >= (
+                    window_start + int(counter["window_seconds"]) * 1000
+                )
+                if expired:
+                    window_start = now_ms
+                    count = 0
+                if count >= quota["max_count"]:
+                    raise _release_denial(
+                        attempt_id=attempt_id,
+                        binding_digest=binding_digest,
+                        reason="shared_quota_denied",
+                        retry_after_seconds=_rate_limit_retry_after(
+                            window_start,
+                            quota["window_seconds"],
+                            now_ms,
+                        ),
+                    )
+                prepared_counters.append(
+                    {
+                        **quota,
+                        "window_start_epoch_ms": window_start,
+                        "count_after": count + 1,
+                    }
+                )
+
+            conn.execute(
+                """
+                INSERT INTO release_authorization_attempts (
+                    attempt_id, binding_digest, binding_json, flow_id, state,
+                    principal_id, route_id, credential_id, credential_version,
+                    policy_hash, request_digest, operation_digest,
+                    operation_context_json, grant_id, approval_request_id,
+                    reservation_expires_at_epoch_ms, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    attempt_id,
+                    binding_digest,
+                    binding_json,
+                    flow_id,
+                    principal_id,
+                    route_id,
+                    credential_id,
+                    credential_version,
+                    policy_hash,
+                    request_digest,
+                    operation_digest,
+                    operation_context_json,
+                    grant["id"] if grant is not None else None,
+                    grant["approval_request_id"] if grant is not None else None,
+                    reservation_expires_at_ms,
+                    now_s,
+                    now_s,
+                ),
+            )
+            if grant is not None:
+                updated = conn.execute(
+                    """
+                    UPDATE approval_grants
+                    SET reserved_attempt_id = ?, reserved_at_epoch_ms = ?,
+                        reservation_expires_at_epoch_ms = ?
+                    WHERE id = ? AND state = 'active' AND uses_remaining > 0
+                      AND reserved_attempt_id IS NULL
+                    """,
+                    (
+                        attempt_id,
+                        now_ms,
+                        reservation_expires_at_ms,
+                        grant["id"],
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise _release_denial(
+                        attempt_id=attempt_id,
+                        binding_digest=binding_digest,
+                        reason="jit_grant_unavailable",
+                        retry_after_seconds=1,
+                    )
+
+            for quota in prepared_counters:
+                conn.execute(
+                    """
+                    UPDATE rate_limit_counters
+                    SET principal_id = ?, route_id = ?, credential_id = ?,
+                        credential_version = ?, policy_hash = ?, constraint_id = ?,
+                        operation = ?, window_start_epoch_ms = ?, window_seconds = ?,
+                        max_count = ?, count = ?, updated_at = ?
+                    WHERE counter_key = ?
+                    """,
+                    (
+                        principal_id,
+                        route_id,
+                        credential_id,
+                        credential_version,
+                        policy_hash,
+                        quota["constraint_id"],
+                        quota["operation"],
+                        quota["window_start_epoch_ms"],
+                        quota["window_seconds"],
+                        quota["max_count"],
+                        quota["count_after"],
+                        now_s,
+                        quota["counter_key"],
+                    ),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO release_authorization_quota_reservations (
+                        attempt_id, counter_key, constraint_id, operation,
+                        window_start_epoch_ms, window_seconds, max_count,
+                        count_after, reservation_state, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+                    """,
+                    (
+                        attempt_id,
+                        quota["counter_key"],
+                        quota["constraint_id"],
+                        quota["operation"],
+                        quota["window_start_epoch_ms"],
+                        quota["window_seconds"],
+                        quota["max_count"],
+                        quota["count_after"],
+                        now_s,
+                        now_s,
+                    ),
+                )
+            _insert_release_event(
+                conn,
+                attempt_id=attempt_id,
+                state="reserved",
+                actor_id=actor_id,
+                event={
+                    "attempt_id": attempt_id,
+                    "binding_digest": binding_digest,
+                    "principal_id": principal_id,
+                    "route_id": route_id,
+                    "credential_id": credential_id,
+                    "credential_version": credential_version,
+                    "policy_hash": policy_hash,
+                    "request_digest": request_digest,
+                    "operation_digest": operation_digest,
+                    "grant_id": grant["id"] if grant is not None else None,
+                    "quota_counter_keys": [
+                        item["counter_key"] for item in prepared_counters
+                    ],
+                    "reservation_expires_at_epoch_ms": reservation_expires_at_ms,
+                },
+            )
+            row = _release_attempt_row(conn, attempt_id)
+            if row is None:
+                raise ReleaseAuthorizationError(
+                    "release authorization reservation disappeared"
+                )
+            return _release_authorization_result(
+                conn, row, idempotent_replay=False, reason="reserved"
+            )
+    except _ReleaseAuthorizationDenied as denied:
+        return denied.result
+    except Exception as exc:
+        if getattr(exc, "sqlstate", None) == "55P03":
+            return {
+                "authorized": False,
+                "state": "denied",
+                "reason": "release_authorization_busy",
+                "attempt_id": attempt_id,
+                "binding_digest": binding_digest,
+                "idempotent_replay": False,
+                "retry_after_seconds": 1,
+                "release_authorization_store_backend": metadata_store_backend_name(),
+                "release_authorization_store_ha": metadata_uses_postgres(),
+            }
+        raise
+
+
+def _cancel_release_attempt(
+    conn: Any,
+    row: Any,
+    *,
+    now_ms: int,
+    actor_id: str | None,
+    reason: str,
+) -> Any:
+    attempt_id = str(row["attempt_id"])
+    quotas = _release_quota_rows(conn, attempt_id)
+    _lock_release_resources(
+        conn, {f"quota:{item['counter_key']}" for item in quotas}
+    )
+    now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+    for quota in quotas:
+        if quota["reservation_state"] != "reserved":
+            continue
+        counter = conn.execute(
+            "SELECT window_start_epoch_ms, count FROM rate_limit_counters "
+            "WHERE counter_key = ?"
+            + (" FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""),
+            (quota["counter_key"],),
+        ).fetchone()
+        matching_window = (
+            counter is not None
+            and int(counter["window_start_epoch_ms"])
+            == int(quota["window_start_epoch_ms"])
+        )
+        if matching_window:
+            conn.execute(
+                "UPDATE rate_limit_counters SET count = CASE WHEN count > 0 "
+                "THEN count - 1 ELSE 0 END, updated_at = ? "
+                "WHERE counter_key = ? AND window_start_epoch_ms = ?",
+                (now_s, quota["counter_key"], quota["window_start_epoch_ms"]),
+            )
+        conn.execute(
+            "UPDATE release_authorization_quota_reservations "
+            "SET reservation_state = ?, updated_at = ? "
+            "WHERE attempt_id = ? AND counter_key = ? "
+            "AND reservation_state = 'reserved'",
+            (
+                "refunded" if matching_window else "refund_skipped_window",
+                now_s,
+                attempt_id,
+                quota["counter_key"],
+            ),
+        )
+    if row["grant_id"] is not None:
+        conn.execute(
+            """
+            UPDATE approval_grants
+            SET reserved_attempt_id = NULL, reserved_at_epoch_ms = NULL,
+                reservation_expires_at_epoch_ms = NULL
+            WHERE id = ? AND reserved_attempt_id = ?
+            """,
+            (row["grant_id"], attempt_id),
+        )
+    conn.execute(
+        """
+        UPDATE release_authorization_attempts
+        SET state = 'cancelled', completion_outcome = 'not_forwarded',
+            completed_at_epoch_ms = ?, updated_at = ?
+        WHERE attempt_id = ? AND state = 'reserved'
+        """,
+        (now_ms, now_s, attempt_id),
+    )
+    _insert_release_event(
+        conn,
+        attempt_id=attempt_id,
+        state="cancelled",
+        actor_id=actor_id,
+        event={
+            "attempt_id": attempt_id,
+            "binding_digest": row["binding_digest"],
+            "reason": reason,
+            "completed_at_epoch_ms": now_ms,
+        },
+    )
+    return _release_attempt_row(conn, attempt_id)
+
+
+def _commit_release_attempt(
+    conn: Any,
+    row: Any,
+    *,
+    now_ms: int,
+    actor_id: str | None,
+    outcome: str,
+    indeterminate: bool,
+    reason: str,
+) -> Any:
+    attempt_id = str(row["attempt_id"])
+    now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+    _validate_release_consumption_state(conn, row)
+    if row["grant_id"] is not None:
+        grant = conn.execute(
+            "SELECT * FROM approval_grants WHERE id = ?"
+            + (" FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""),
+            (row["grant_id"],),
+        ).fetchone()
+        if (
+            grant is None
+            or grant["state"] != "active"
+            or grant["reserved_attempt_id"] != attempt_id
+            or int(grant["uses_remaining"]) < 1
+        ):
+            raise ReleaseAuthorizationError(
+                "reserved JIT grant no longer matches release authorization"
+            )
+        uses_before = int(grant["uses_remaining"])
+        uses_after = uses_before - 1
+        next_state = "consumed" if uses_after == 0 else "active"
+        conn.execute(
+            """
+            UPDATE approval_grants
+            SET uses_remaining = ?, state = ?, consumed_at = ?,
+                consumed_by_flow_id = ?, reserved_attempt_id = NULL,
+                reserved_at_epoch_ms = NULL,
+                reservation_expires_at_epoch_ms = NULL
+            WHERE id = ? AND reserved_attempt_id = ?
+            """,
+            (
+                uses_after,
+                next_state,
+                now_s if next_state == "consumed" else None,
+                row["flow_id"] if next_state == "consumed" else None,
+                grant["id"],
+                attempt_id,
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO approval_grant_consumptions (
+                id, grant_id, approval_request_id, attempt_id, flow_id,
+                principal_id, route_id, credential_id, credential_version,
+                policy_hash, request_digest, operation_digest, outcome,
+                uses_remaining_before, uses_remaining_after, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'consumed', ?, ?, ?)
+            """,
+            (
+                str(uuid.uuid4()),
+                grant["id"],
+                grant["approval_request_id"],
+                attempt_id,
+                row["flow_id"],
+                row["principal_id"],
+                row["route_id"],
+                row["credential_id"],
+                row["credential_version"],
+                row["policy_hash"],
+                row["request_digest"],
+                row["operation_digest"],
+                uses_before,
+                uses_after,
+                now_s,
+            ),
+        )
+    conn.execute(
+        "UPDATE release_authorization_quota_reservations "
+        "SET reservation_state = 'committed', updated_at = ? "
+        "WHERE attempt_id = ? AND reservation_state = 'reserved'",
+        (now_s, attempt_id),
+    )
+    state = "committed_indeterminate" if indeterminate else "committed"
+    updated = conn.execute(
+        """
+        UPDATE release_authorization_attempts
+        SET state = ?, completion_outcome = ?, completed_at_epoch_ms = ?,
+            updated_at = ?
+        WHERE attempt_id = ? AND state IN ('reserved', 'dispatching')
+        """,
+        (state, outcome, now_ms, now_s, attempt_id),
+    )
+    if updated.rowcount != 1:
+        raise ReleaseAuthorizationError(
+            "release authorization commit lost its state transition"
+        )
+    _insert_release_event(
+        conn,
+        attempt_id=attempt_id,
+        state=state,
+        actor_id=actor_id,
+        event={
+            "attempt_id": attempt_id,
+            "binding_digest": row["binding_digest"],
+            "outcome": outcome,
+            "reason": reason,
+            "completed_at_epoch_ms": now_ms,
+        },
+    )
+    return _release_attempt_row(conn, attempt_id)
+
+
+def _bound_release_attempt(
+    conn: Any, attempt_id: str, binding_digest: str
+) -> Any:
+    attempt_id = _release_text(
+        "release authorization attempt_id",
+        attempt_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+    )
+    binding_digest = _release_digest(
+        "release authorization binding_digest", binding_digest
+    ) or ""
+    _lock_release_resources(conn, {f"attempt:{attempt_id}"})
+    row = _release_attempt_row(conn, attempt_id, for_update=True)
+    if row is None:
+        raise ReleaseAuthorizationError("release authorization attempt was not found")
+    if not hmac.compare_digest(str(row["binding_digest"]), binding_digest):
+        raise ReleaseAuthorizationConflictError(
+            "release authorization binding does not match the durable attempt"
+        )
+    _validate_release_consumption_state(conn, row)
+    return row
+
+
+def dispatch_release_authorization(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    dispatch_ttl_seconds: int,
+    now_epoch_ms: int | None = None,
+    actor_id: str | None = None,
+) -> dict[str, Any]:
+    require_atomic_release_writer()
+    if not isinstance(dispatch_ttl_seconds, int) or not 1 <= dispatch_ttl_seconds <= 300:
+        raise ReleaseAuthorizationError("dispatch TTL must be between 1 and 300 seconds")
+    now_ms = _release_now_epoch_ms(now_epoch_ms)
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        row = _bound_release_attempt(conn, attempt_id, binding_digest)
+        if row["state"] in {"committed", "cancelled", "committed_indeterminate"}:
+            return _release_authorization_result(conn, row, idempotent_replay=True)
+        if row["state"] == "dispatching":
+            if int(row["dispatch_expires_at_epoch_ms"] or 0) <= now_ms:
+                row = _commit_release_attempt(
+                    conn,
+                    row,
+                    now_ms=now_ms,
+                    actor_id=actor_id,
+                    outcome="unknown",
+                    indeterminate=True,
+                    reason="dispatch_ttl_expired",
+                )
+                return _release_authorization_result(
+                    conn,
+                    row,
+                    idempotent_replay=True,
+                    reason="dispatch_ttl_expired",
+                )
+            return _release_authorization_result(conn, row, idempotent_replay=True)
+        if int(row["reservation_expires_at_epoch_ms"]) <= now_ms:
+            row = _cancel_release_attempt(
+                conn,
+                row,
+                now_ms=now_ms,
+                actor_id=actor_id,
+                reason="reservation_ttl_expired",
+            )
+            return _release_authorization_result(
+                conn,
+                row,
+                idempotent_replay=False,
+                reason="reservation_ttl_expired",
+            )
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        dispatch_expires_at_ms = now_ms + dispatch_ttl_seconds * 1000
+        updated = conn.execute(
+            """
+            UPDATE release_authorization_attempts
+            SET state = 'dispatching', dispatch_started_at_epoch_ms = ?,
+                dispatch_expires_at_epoch_ms = ?, updated_at = ?
+            WHERE attempt_id = ? AND state = 'reserved'
+            """,
+            (now_ms, dispatch_expires_at_ms, now_s, attempt_id),
+        )
+        if updated.rowcount != 1:
+            raise ReleaseAuthorizationError(
+                "release authorization dispatch lost its state transition"
+            )
+        _insert_release_event(
+            conn,
+            attempt_id=attempt_id,
+            state="dispatching",
+            actor_id=actor_id,
+            event={
+                "attempt_id": attempt_id,
+                "binding_digest": binding_digest,
+                "dispatch_started_at_epoch_ms": now_ms,
+                "dispatch_expires_at_epoch_ms": dispatch_expires_at_ms,
+            },
+        )
+        row = _release_attempt_row(conn, attempt_id)
+        return _release_authorization_result(
+            conn, row, idempotent_replay=False, reason="dispatching"
+        )
+
+
+def complete_release_authorization(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    outcome: str,
+    now_epoch_ms: int | None = None,
+    actor_id: str | None = None,
+) -> dict[str, Any]:
+    require_atomic_release_writer()
+    if outcome not in {"forwarded", "not_forwarded", "unknown"}:
+        raise ReleaseAuthorizationError(
+            "release authorization outcome must be forwarded, not_forwarded, or unknown"
+        )
+    now_ms = _release_now_epoch_ms(now_epoch_ms)
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        row = _bound_release_attempt(conn, attempt_id, binding_digest)
+        if row["state"] in {"committed", "cancelled", "committed_indeterminate"}:
+            return _release_authorization_result(conn, row, idempotent_replay=True)
+        if row["state"] == "reserved" and outcome == "not_forwarded":
+            row = _cancel_release_attempt(
+                conn,
+                row,
+                now_ms=now_ms,
+                actor_id=actor_id,
+                reason="confirmed_not_forwarded_before_dispatch",
+            )
+            return _release_authorization_result(
+                conn, row, idempotent_replay=False, reason="cancelled"
+            )
+        dispatch_stale = (
+            row["state"] == "dispatching"
+            and int(row["dispatch_expires_at_epoch_ms"] or 0) <= now_ms
+        )
+        indeterminate = (
+            row["state"] != "dispatching"
+            or outcome != "forwarded"
+            or dispatch_stale
+        )
+        reason = (
+            "dispatch_ttl_expired"
+            if dispatch_stale
+            else "forward_outcome_indeterminate"
+            if indeterminate
+            else "forwarded"
+        )
+        row = _commit_release_attempt(
+            conn,
+            row,
+            now_ms=now_ms,
+            actor_id=actor_id,
+            outcome=outcome,
+            indeterminate=indeterminate,
+            reason=reason,
+        )
+        return _release_authorization_result(
+            conn, row, idempotent_replay=False, reason=reason
+        )
+
+
+def reconcile_release_authorizations(
+    *,
+    limit: int = 100,
+    now_epoch_ms: int | None = None,
+    actor_id: str | None = "release-authorization-reconciler",
+) -> dict[str, Any]:
+    require_atomic_release_writer()
+    if not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise ReleaseAuthorizationError("reconciliation limit must be between 1 and 500")
+    now_ms = _release_now_epoch_ms(now_epoch_ms)
+    with connect() as conn:
+        _begin_release_transaction(conn)
+        suffix = (
+            " FOR UPDATE SKIP LOCKED"
+            if isinstance(conn, PostgresMetadataConnection)
+            else ""
+        )
+        rows = conn.execute(
+            """
+            SELECT * FROM release_authorization_attempts
+            WHERE (state = 'reserved' AND reservation_expires_at_epoch_ms <= ?)
+               OR (state = 'dispatching' AND dispatch_expires_at_epoch_ms <= ?)
+            ORDER BY CASE WHEN state = 'dispatching' THEN dispatch_expires_at_epoch_ms
+                          ELSE reservation_expires_at_epoch_ms END ASC,
+                     attempt_id ASC
+            LIMIT ?
+            """
+            + suffix,
+            (now_ms, now_ms, limit),
+        ).fetchall()
+        cancelled = 0
+        indeterminate = 0
+        attempt_ids: list[str] = []
+        for row in rows:
+            attempt_ids.append(str(row["attempt_id"]))
+            if row["state"] == "reserved":
+                _cancel_release_attempt(
+                    conn,
+                    row,
+                    now_ms=now_ms,
+                    actor_id=actor_id,
+                    reason="reservation_ttl_expired",
+                )
+                cancelled += 1
+            else:
+                _commit_release_attempt(
+                    conn,
+                    row,
+                    now_ms=now_ms,
+                    actor_id=actor_id,
+                    outcome="unknown",
+                    indeterminate=True,
+                    reason="dispatch_ttl_expired",
+                )
+                indeterminate += 1
+    return {
+        "ok": True,
+        "processed": len(attempt_ids),
+        "cancelled": cancelled,
+        "committed_indeterminate": indeterminate,
+        "attempt_ids": attempt_ids,
+        "limit": limit,
+    }
+
+
+def _mark_release_authorization_audit_delivery(
+    kind: str, row_id: str, event_hash: str
+) -> int:
+    if kind == "grant_consumption":
+        table = "approval_grant_consumptions"
+    elif kind == "lifecycle":
+        table = "release_authorization_events"
+    else:
+        raise ReleaseAuthorizationError("unknown release authorization outbox kind")
+    with connect() as conn:
+        updated = conn.execute(
+            f"UPDATE {table} SET audited_at = ?, audit_event_hash = ? "
+            "WHERE id = ? AND audited_at IS NULL",
+            (iso_now(), event_hash, row_id),
+        )
+    return int(updated.rowcount or 0)
+
+
+def _atomic_grant_consumption_audit_event(row: Any) -> dict[str, Any]:
+    return {
+        "grant_id": row["grant_id"],
+        "approval_id": row["approval_request_id"],
+        "approval_request_id": row["approval_request_id"],
+        "flow_id": row["flow_id"],
+        "attempt_id": row["attempt_id"],
+        "principal_id": row["principal_id"],
+        "route_id": row["route_id"],
+        "credential_id": row["credential_id"],
+        "credential_version": int(row["credential_version"]),
+        "policy_hash": row["policy_hash"],
+        "request_digest": row["request_digest"],
+        "operation_digest": row["operation_digest"],
+        "consume_result": "consumed",
+        "uses_remaining_before": int(row["uses_remaining_before"]),
+        "uses_remaining_after": int(row["uses_remaining_after"]),
+        "grant_store_backend": metadata_store_backend_name(),
+        "consumption_id": row["id"],
+        "atomic_release_authorization": True,
+    }
+
+
+def drain_release_authorization_audit_outbox(limit: int = 100) -> dict[str, Any]:
+    if not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise ReleaseAuthorizationError("audit outbox limit must be between 1 and 500")
+    with connect() as conn:
+        grant_rows = list(
+            conn.execute(
+                "SELECT consumption.* FROM approval_grant_consumptions AS consumption "
+                "INNER JOIN release_authorization_attempts AS attempt "
+                "ON attempt.attempt_id = consumption.attempt_id "
+                "WHERE consumption.audited_at IS NULL "
+                "ORDER BY consumption.created_at ASC, consumption.id ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        )
+        lifecycle_rows = list(
+            conn.execute(
+                "SELECT * FROM release_authorization_events "
+                "WHERE audited_at IS NULL ORDER BY created_at ASC, id ASC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        )
+    rows = [("grant_consumption", row) for row in grant_rows] + [
+        ("lifecycle", row) for row in lifecycle_rows
+    ]
+    rows.sort(
+        key=lambda item: (
+            str(item[1]["created_at"]),
+            str(item[1]["id"]),
+            item[0],
+        )
+    )
+    rows = rows[:limit]
+    completed = 0
+    completed_by_kind = {"grant_consumption": 0, "lifecycle": 0}
+    for kind, row in rows:
+        if kind == "grant_consumption":
+            audit_event = record_audit_event(
+                "jit.grant.consumed",
+                _atomic_grant_consumption_audit_event(row),
+                actor_type="proxy",
+                actor_id=str(row["route_id"]),
+                idempotency_key=str(row["id"]),
+            )
+        else:
+            audit_event = record_audit_event(
+                str(row["event_type"]),
+                loads(row["event_json"], {}),
+                actor_type="data-plane",
+                actor_id=str(row["actor_id"] or "release-authorization"),
+                idempotency_key=str(row["id"]),
+            )
+        marked = _mark_release_authorization_audit_delivery(
+            kind, str(row["id"]), str(audit_event["event_hash"])
+        )
+        completed += marked
+        completed_by_kind[kind] += marked
+    return {
+        "ok": True,
+        "claimed": len(rows),
+        "completed": completed,
+        "pending": max(len(rows) - completed, 0),
+        "grant_consumptions_completed": completed_by_kind["grant_consumption"],
+        "lifecycle_events_completed": completed_by_kind["lifecycle"],
+    }
 
 
 def deny_request(
@@ -8670,58 +10312,83 @@ def export_audit_events_jsonl(
 
 
 def _verify_audit_rows(
-    rows: list[Any],
+    cursor: Any,
     *,
     total: int,
-    limit: int | None,
+    selected_count: int,
+    batch_size: int,
     backend: str,
     ha: bool,
 ) -> dict[str, Any]:
     previous_hash = None
+    processed = 0
     common = {
         "backend": backend,
         "ha": ha,
         "serial_append": "pg_advisory_xact_lock" if ha else "sqlite_begin_immediate",
     }
-    for index, row in enumerate(rows):
-        expected = _audit_hash(
-            event_id=row["id"],
-            event_type=row["event_type"],
-            actor_type=row["actor_type"],
-            actor_id=row["actor_id"],
-            event_json=row["event_json"],
-            prev_event_hash=row["prev_event_hash"],
-            created_at=row["created_at"],
-        )
-        if row["prev_event_hash"] != previous_hash:
-            return {
-                **common,
-                "ok": False,
-                "error": "prev_hash_mismatch",
-                "index": index,
-                "event_id": row["id"],
-                "complete": limit is None or len(rows) == total,
-                "count": len(rows),
-                "total": total,
-            }
-        if row["event_hash"] != expected:
-            return {
-                **common,
-                "ok": False,
-                "error": "event_hash_mismatch",
-                "index": index,
-                "event_id": row["id"],
-                "complete": limit is None or len(rows) == total,
-                "count": len(rows),
-                "total": total,
-            }
-        previous_hash = row["event_hash"]
+    while rows := cursor.fetchmany(batch_size):
+        for row in rows:
+            index = processed
+            processed += 1
+            if len(row["event_json"].encode("utf-8")) > _AUDIT_EVENT_JSON_STORED_MAX_BYTES:
+                return {
+                    **common,
+                    "ok": False,
+                    "error": "event_size_exceeded",
+                    "index": index,
+                    "event_id": row["id"],
+                    "complete": selected_count == total,
+                    "count": selected_count,
+                    "total": total,
+                }
+            expected = _audit_hash(
+                event_id=row["id"],
+                event_type=row["event_type"],
+                actor_type=row["actor_type"],
+                actor_id=row["actor_id"],
+                event_json=row["event_json"],
+                prev_event_hash=row["prev_event_hash"],
+                created_at=row["created_at"],
+            )
+            if row["prev_event_hash"] != previous_hash:
+                return {
+                    **common,
+                    "ok": False,
+                    "error": "prev_hash_mismatch",
+                    "index": index,
+                    "event_id": row["id"],
+                    "complete": selected_count == total,
+                    "count": selected_count,
+                    "total": total,
+                }
+            if row["event_hash"] != expected:
+                return {
+                    **common,
+                    "ok": False,
+                    "error": "event_hash_mismatch",
+                    "index": index,
+                    "event_id": row["id"],
+                    "complete": selected_count == total,
+                    "count": selected_count,
+                    "total": total,
+                }
+            previous_hash = row["event_hash"]
+    if processed != selected_count:
+        return {
+            **common,
+            "ok": False,
+            "error": "row_count_mismatch",
+            "complete": False,
+            "count": processed,
+            "total": total,
+        }
     return {
         **common,
         "ok": True,
-        "count": len(rows),
+        "count": processed,
         "total": total,
-        "complete": limit is None or len(rows) == total,
+        "complete": selected_count == total,
         "head": previous_hash,
     }
 
@@ -8731,9 +10398,41 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
         with _audit_pg_connect() as conn:
             with conn.cursor() as cur:
                 cur.execute(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                )
+                cur.execute(
                     "SELECT COUNT(*)::bigint AS count FROM serverware_audit_events"
                 )
                 total = int(cur.fetchone()["count"])
+                size_query = """
+                    SELECT COALESCE(MAX(event_json_bytes), 0)::bigint AS max_bytes
+                    FROM (
+                        SELECT octet_length(event_json) AS event_json_bytes
+                        FROM serverware_audit_events
+                        ORDER BY sequence ASC
+                """
+                size_params: dict[str, Any] = {}
+                if limit is not None:
+                    size_query += " LIMIT %(limit)s"
+                    size_params["limit"] = limit
+                size_query += ") AS selected_audit_events"
+                cur.execute(size_query, size_params)
+                max_event_json_bytes = int(cur.fetchone()["max_bytes"])
+            selected_count = total if limit is None else min(total, limit)
+            if max_event_json_bytes > _AUDIT_EVENT_JSON_STORED_MAX_BYTES:
+                return {
+                    "backend": "postgres",
+                    "ha": True,
+                    "serial_append": "pg_advisory_xact_lock",
+                    "ok": False,
+                    "error": "event_size_exceeded",
+                    "complete": False,
+                    "count": 0,
+                    "total": total,
+                    "max_event_json_bytes": max_event_json_bytes,
+                }
+            batch_size = _audit_verify_batch_size(max_event_json_bytes)
+            with conn.cursor(name="serverware_audit_verify") as cur:
                 query = """
                     SELECT id, event_type, actor_type, actor_id, event_json,
                            prev_event_hash, event_hash, created_at
@@ -8745,24 +10444,63 @@ def verify_audit_chain(limit: int | None = None) -> dict[str, Any]:
                     query += " LIMIT %(limit)s"
                     params["limit"] = limit
                 cur.execute(query, params)
-                rows = cur.fetchall()
-        return _verify_audit_rows(
-            rows, total=total, limit=limit, backend="postgres", ha=True
-        )
+                return _verify_audit_rows(
+                    cur,
+                    total=total,
+                    selected_count=selected_count,
+                    batch_size=batch_size,
+                    backend="postgres",
+                    ha=True,
+                )
 
     with connect() as conn:
+        conn.execute("BEGIN")
         total = conn.execute("SELECT COUNT(*) AS count FROM audit_events").fetchone()[
             "count"
         ]
+        size_query = """
+            SELECT COALESCE(MAX(event_json_bytes), 0) AS max_bytes
+            FROM (
+                SELECT length(CAST(event_json AS BLOB)) AS event_json_bytes
+                FROM audit_events
+                ORDER BY rowid ASC
+        """
+        size_params: tuple[Any, ...] = ()
+        if limit is not None:
+            size_query += " LIMIT ?"
+            size_params = (limit,)
+        size_query += ") AS selected_audit_events"
+        max_event_json_bytes = int(
+            conn.execute(size_query, size_params).fetchone()["max_bytes"]
+        )
+        selected_count = total if limit is None else min(total, limit)
+        if max_event_json_bytes > _AUDIT_EVENT_JSON_STORED_MAX_BYTES:
+            return {
+                "backend": "sqlite",
+                "ha": False,
+                "serial_append": "sqlite_begin_immediate",
+                "ok": False,
+                "error": "event_size_exceeded",
+                "complete": False,
+                "count": 0,
+                "total": total,
+                "max_event_json_bytes": max_event_json_bytes,
+            }
+        batch_size = _audit_verify_batch_size(max_event_json_bytes)
         query = "SELECT * FROM audit_events ORDER BY rowid ASC"
         params: tuple[Any, ...] = ()
         if limit is not None:
             query += " LIMIT ?"
             params = (limit,)
-        rows = conn.execute(query, params).fetchall()
-    return _verify_audit_rows(
-        list(rows), total=total, limit=limit, backend="sqlite", ha=False
-    )
+        cursor = conn.execute(query, params)
+        return _verify_audit_rows(
+            cursor,
+            total=total,
+            selected_count=selected_count,
+            batch_size=batch_size,
+            backend="sqlite",
+            ha=False,
+        )
 
 
 def audit_store_status() -> dict[str, Any]:
@@ -8822,6 +10560,9 @@ def metadata_store_status() -> dict[str, Any]:
         "gmail_message_cache",
         "request_logs",
         "rate_limit_counters",
+        "release_authorization_attempts",
+        "release_authorization_quota_reservations",
+        "release_authorization_events",
     ]
     counts: dict[str, int] = {}
     with connect() as conn:
@@ -8832,4 +10573,5 @@ def metadata_store_status() -> dict[str, Any]:
         "backend": backend,
         "ha": backend == "postgres",
         "tables": counts,
+        "atomic_release_writer": release_authorization_writer_status(),
     }

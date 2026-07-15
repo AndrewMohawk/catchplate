@@ -17,6 +17,7 @@ from serverware.config import (
     MITMPROXY_CONF_DIR,
     PROXY_HOST,
     PROXY_PORT,
+    RELEASE_CHANNEL,
     WEB_HOST,
     WEB_PORT,
     ensure_data_dirs,
@@ -24,11 +25,23 @@ from serverware.config import (
 from serverware.db import init_db
 
 
-def start_mitmdump() -> subprocess.Popen:
+_DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
+
+
+def _require_development_release_channel() -> None:
+    if RELEASE_CHANNEL.strip().lower() not in _DEVELOPMENT_RELEASE_CHANNELS:
+        raise RuntimeError(
+            "legacy Python mitmproxy transport is development-only; "
+            "use the Rust decision gate for non-development release channels"
+        )
+
+
+_require_development_release_channel()
+
+
+def _mitmdump_command() -> list[str]:
     addon_path = Path(__file__).with_name("mitm_addon.py")
-    env = os.environ.copy()
-    env["PYTHONPATH"] = f"/app:{env.get('PYTHONPATH', '')}"
-    cmd = [
+    return [
         "mitmdump",
         "--listen-host",
         PROXY_HOST,
@@ -37,13 +50,23 @@ def start_mitmdump() -> subprocess.Popen:
         "--set",
         f"confdir={MITMPROXY_CONF_DIR}",
         "--set",
-        "ssl_insecure=true",
+        "rawtcp=false",
+        "--set",
+        "connection_strategy=lazy",
+        "--set",
+        "ssl_insecure=false",
         "--set",
         "block_global=false",
         "-s",
         str(addon_path),
     ]
-    return subprocess.Popen(cmd, env=env)
+
+
+def start_mitmdump() -> subprocess.Popen:
+    _require_development_release_channel()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"/app:{env.get('PYTHONPATH', '')}"
+    return subprocess.Popen(_mitmdump_command(), env=env)
 
 
 def _write_owned(path: Path, data: bytes, *, mode: int) -> None:
@@ -74,6 +97,7 @@ def publish_decision_gate_ca_cert() -> None:
 
 
 def main() -> None:
+    _require_development_release_channel()
     ensure_data_dirs()
     ensure_mitm_ca_material()
     init_db()

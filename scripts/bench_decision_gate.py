@@ -99,7 +99,11 @@ def update_demo_credential(base: str, admin_token: str, secret: str, metadata: d
 
 
 def decide(base: str, payload: dict[str, Any]) -> dict[str, Any]:
-    return request_json(f"{base.rstrip('/')}/v1/decide", payload, headers=MANAGEMENT_HEADERS)
+    return request_json(
+        f"{base.rstrip('/')}/v1/decide",
+        {**payload, "preview": True},
+        headers=MANAGEMENT_HEADERS,
+    )
 
 
 def create_grant(base: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -148,6 +152,10 @@ def main() -> None:
     args = parser.parse_args()
 
     credential_version, metadata = bootstrap(args.serverware, args.admin_token)
+    credential_restore_secret = (
+        os.getenv("SERVERWARE_BENCH_CREDENTIAL_RESTORE_SECRET", "").strip()
+        or "demo-token-from-vault"
+    )
     attestation_before = measured_attestation(args.gate)
     base_payload: dict[str, Any] = {
         "clientIp": "127.0.0.1",
@@ -158,8 +166,6 @@ def main() -> None:
     }
 
     if args.self_test:
-        health = request_json(f"{args.gate.rstrip('/')}/healthz")
-        shared_jit_store = health.get("jit_grant_store") == "shared"
         for path in ("/v1/decide", "/v1/grants"):
             status, denial = request_head_only(args.gate, path)
             if status != 401 or denial.get("error") != "management_auth_required":
@@ -190,9 +196,14 @@ def main() -> None:
                 )
         echo = decide(args.gate, base_payload)
         assert_decision("echo allow", echo, "allow")
-        injection = echo.get("injection") or {}
-        if injection.get("secret_available") is not True or "demo-token-from-vault" in json.dumps(injection):
-            raise AssertionError(f"decision must prove secret lease presence without returning the secret: {echo}")
+        if (
+            echo.get("preview") is not True
+            or echo.get("allowed") is not False
+            or echo.get("authorizes_forwarding") is not False
+            or echo.get("injection") is not None
+            or (echo.get("release_authorization") or {}).get("state") != "not_reserved"
+        ):
+            raise AssertionError(f"management decision must be a non-authorizing preview: {echo}")
         proxy_auth_payload = {
             **base_payload,
             "headers": {
@@ -345,80 +356,106 @@ def main() -> None:
         if grant.get("ok") is not True:
             raise AssertionError(f"grant create failed: {grant}")
         npm_allowed = decide(args.gate, npm_publish_payload)
-        if shared_jit_store:
-            assert_decision("local grant cache is ignored when shared JIT store is enabled", npm_allowed, "jit_required")
-            if (npm_allowed.get("jit") or {}).get("grant_store") != "shared":
-                raise AssertionError(f"expected shared JIT grant store decision: {npm_allowed}")
-        else:
-            assert_decision("npm publish grant consumed", npm_allowed, "allow")
-            jit = npm_allowed.get("jit") or {}
-            if jit.get("grant_consumed") is not True or jit.get("grant_id") != "selftest-npm-publish":
-                raise AssertionError(f"grant was not consumed atomically: {npm_allowed}")
-            assert_decision("npm publish grant cannot be reused", decide(args.gate, npm_publish_payload), "jit_required")
+        assert_decision("management preview does not consume a local grant", npm_allowed, "jit_required")
+        if (npm_allowed.get("jit") or {}).get("grant_store") != "preview":
+            raise AssertionError(f"expected preview-only JIT decision: {npm_allowed}")
 
         stale_jit = decide(args.gate, npm_publish_payload)
-        if not shared_jit_store:
-            stale_grant = create_grant(
-                args.gate,
-                {
-                    "grantId": "selftest-stale-after-rotation",
-                    "approvalId": "approval-selftest-stale",
-                    "principalId": stale_jit["principal_id"],
-                    "routeId": stale_jit["route_id"],
-                    "credentialRef": stale_jit["credential_ref"],
-                    "credentialVersion": stale_jit["credential_version"],
-                    "policyHash": stale_jit["policy_hash"],
-                    "requestDigest": stale_jit["request_digest"],
-                    "operationDigest": stale_jit["operation_digest"],
-                    "maxUses": 1,
-                    "ttlSeconds": 30,
-                },
-            )
-            if stale_grant.get("ok") is not True:
-                raise AssertionError(f"stale grant setup failed: {stale_grant}")
+        stale_grant = create_grant(
+            args.gate,
+            {
+                "grantId": "selftest-stale-after-rotation",
+                "approvalId": "approval-selftest-stale",
+                "principalId": stale_jit["principal_id"],
+                "routeId": stale_jit["route_id"],
+                "credentialRef": stale_jit["credential_ref"],
+                "credentialVersion": stale_jit["credential_version"],
+                "policyHash": stale_jit["policy_hash"],
+                "requestDigest": stale_jit["request_digest"],
+                "operationDigest": stale_jit["operation_digest"],
+                "maxUses": 1,
+                "ttlSeconds": 30,
+            },
+        )
+        if stale_grant.get("ok") is not True:
+            raise AssertionError(f"stale grant setup failed: {stale_grant}")
         rotated_version = update_demo_credential(
             args.serverware,
             args.admin_token,
             f"rotated-for-rust-gate-{int(time.time())}",
             metadata,
         )
-        stale_version_payload = {
-            **base_payload,
-            "credentialVersions": {"cred-demo-bearer": credential_version},
-        }
-        # The scoped recipient-bound lease has a five-second maximum TTL, so
-        # rotation must become authoritative after that bounded cache window.
-        for _ in range(80):
-            rotated_decision = decide(args.gate, stale_version_payload)
-            if rotated_decision.get("credential_version") == rotated_version:
-                break
-            time.sleep(0.1)
-        else:
-            raise AssertionError(f"Rust gate did not observe rotated credential generation {rotated_version}")
-        if rotated_decision["action"] != "allow":
-            raise AssertionError(f"echo route should still allow after rotation: {rotated_decision}")
-        stale_npm_payload = {
-            **npm_publish_payload,
-            "credentialVersions": {"cred-demo-bearer": credential_version},
-        }
-        for _ in range(80):
-            stale_after_rotation = decide(args.gate, stale_npm_payload)
-            if stale_after_rotation.get("credential_version") == rotated_version:
-                break
-            time.sleep(0.1)
-        else:
-            raise AssertionError(
-                f"NPM route lease did not observe rotated credential generation {rotated_version}"
+        try:
+            stale_version_payload = {
+                **base_payload,
+                "credentialVersions": {"cred-demo-bearer": credential_version},
+            }
+            # The scoped recipient-bound lease has a five-second maximum TTL, so
+            # rotation must become authoritative after that bounded cache window.
+            for _ in range(80):
+                rotated_decision = decide(args.gate, stale_version_payload)
+                if rotated_decision.get("credential_version") == rotated_version:
+                    break
+                time.sleep(0.1)
+            else:
+                raise AssertionError(
+                    f"Rust gate did not observe rotated credential generation {rotated_version}"
+                )
+            if rotated_decision["action"] != "allow":
+                raise AssertionError(
+                    f"echo route should still allow after rotation: {rotated_decision}"
+                )
+            stale_npm_payload = {
+                **npm_publish_payload,
+                "credentialVersions": {"cred-demo-bearer": credential_version},
+            }
+            for _ in range(80):
+                stale_after_rotation = decide(args.gate, stale_npm_payload)
+                if stale_after_rotation.get("credential_version") == rotated_version:
+                    break
+                time.sleep(0.1)
+            else:
+                raise AssertionError(
+                    f"NPM route lease did not observe rotated credential generation {rotated_version}"
+                )
+            assert_decision(
+                "stale JIT grant cannot survive credential rotation",
+                stale_after_rotation,
+                "jit_required",
             )
-        assert_decision("stale JIT grant cannot survive credential rotation", stale_after_rotation, "jit_required")
-        credential_version = rotated_version
+        finally:
+            restored_version = update_demo_credential(
+                args.serverware,
+                args.admin_token,
+                credential_restore_secret,
+                metadata,
+            )
+            for name, payload in (
+                ("echo", base_payload),
+                ("npm", npm_publish_payload),
+            ):
+                for _ in range(80):
+                    restored_decision = decide(args.gate, payload)
+                    if restored_decision.get("credential_version") == restored_version:
+                        break
+                    time.sleep(0.1)
+                else:
+                    raise AssertionError(
+                        f"{name} route did not observe restored credential generation {restored_version}"
+                    )
+            credential_version = restored_version
 
     latencies_ms: list[float] = []
     for index in range(args.warmup + args.requests):
         start = time.perf_counter()
         decision = decide(args.gate, base_payload)
         elapsed_ms = (time.perf_counter() - start) * 1000.0
-        if decision.get("action") != "allow" or decision.get("route_id") != "demo.echo":
+        if (
+            decision.get("action") != "allow"
+            or decision.get("route_id") != "demo.echo"
+            or decision.get("preview") is not True
+            or decision.get("authorizes_forwarding") is not False
+        ):
             raise SystemExit(f"unexpected decision: {decision}")
         if index >= args.warmup:
             latencies_ms.append(elapsed_ms)
@@ -430,6 +467,7 @@ def main() -> None:
 
     result = {
         "candidate": "rust-decision-gate",
+        "mode": "preview",
         "url": f"{args.gate.rstrip('/')}/v1/decide",
         "requests": args.requests,
         "warmup": args.warmup,

@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -542,15 +543,21 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_METADATA_STORE_BACKEND": "postgres",
             "SERVERWARE_METADATA_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@metadata-store/serverware",
             "SERVERWARE_GRANT_STORE_BACKEND": "postgres",
-            "SERVERWARE_GRANT_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@grant-store/serverware",
+            "SERVERWARE_GRANT_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@metadata-store/serverware",
             "SERVERWARE_AUDIT_STORE_BACKEND": "postgres",
             "SERVERWARE_AUDIT_STORE_POSTGRES_DSN": "postgresql://serverware:serverware@audit-store/serverware",
             "SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL": "https://serverware.internal/api/data-plane/grants/consume",
             "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL": "https://serverware.internal/api/data-plane/rate-limits/consume",
+            "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL": "https://serverware.internal/api/data-plane/release-authorizations",
+            "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
+            "SERVERWARE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS": "15",
+            "SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS": "30",
+            "SERVERWARE_RELEASE_AUTHORIZATION_RECONCILE_LIMIT": "100",
             "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": "credential-lease-scope-0123456789-ABCDEF",
             "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": "audit-ingest-scope-0123456789-GHIJKLMN",
             "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": "grant-consume-scope-0123456789-OPQRST",
             "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": "rate-limit-scope-0123456789-UVWXYZ",
+            "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": "release-authorization-scope-0123456789-ZYXWVU",
             "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": "rust-management-scope-0123456789-abcdef",
             "SERVERWARE_AGENT_EGRESS_POLICY_REQUIRED": "1",
             "SERVERWARE_AGENT_EGRESS_POLICY_MODE": "kubernetes-network-policy",
@@ -628,6 +635,22 @@ def final_challenge_env() -> dict[str, str]:
 
 def run_live_probe_helpers() -> None:
     with tempfile.TemporaryDirectory() as tmp:
+        cosign_key_path = Path(tmp) / "cosign-key.pem"
+        cosign_key = Ed25519PrivateKey.generate()
+        cosign_key_path.write_bytes(
+            cosign_key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        cosign_key_path.chmod(0o600)
+        cosign_key_id = "sha256:" + hashlib.sha256(
+            cosign_key.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        ).hexdigest()
         env = os.environ.copy()
         env.update(
             {
@@ -635,10 +658,10 @@ def run_live_probe_helpers() -> None:
                 "SERVERWARE_IMAGE_SIGN_COMMAND": f"{sys.executable} scripts/cosign_sigstore.py sign",
                 "SERVERWARE_IMAGE_VERIFY_COMMAND": f"{sys.executable} scripts/cosign_sigstore.py verify",
                 "SERVERWARE_COSIGN_BINARY": f"{sys.executable} scripts/cosign_fixture.py",
-                "SERVERWARE_COSIGN_KEY_ID": "sha256:" + "e" * 64,
+                "SERVERWARE_COSIGN_KEY_ID": cosign_key_id,
                 "SERVERWARE_COSIGN_YES": "0",
                 "SERVERWARE_COSIGN_FIXTURE_LOG": str(Path(tmp) / "cosign-rekor.jsonl"),
-                "SERVERWARE_COSIGN_FIXTURE_KEY": str(Path(tmp) / "cosign-key.pem"),
+                "SERVERWARE_COSIGN_FIXTURE_KEY": str(cosign_key_path),
                 "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY": "1",
                 "SERVERWARE_TRANSPARENCY_CHECKPOINT_COMMAND": f"{sys.executable} scripts/transparency_checkpoint.py checkpoint",
                 "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE": "fixture",
@@ -650,6 +673,15 @@ def run_live_probe_helpers() -> None:
         sigstore = readiness.run_sigstore_probe(env)
         if sigstore.get("ok") is not True or not sigstore.get("transparency_log_id"):
             raise AssertionError(f"Sigstore live helper probe did not prove transparency: {sigstore}")
+        wrong_key_env = dict(env)
+        wrong_key_env["SERVERWARE_COSIGN_KEY_ID"] = "sha256:" + "e" * 64
+        try:
+            readiness.run_sigstore_probe(wrong_key_env)
+        except RuntimeError as exc:
+            if "does not match the cosign bundle public key" not in str(exc):
+                raise AssertionError(f"Sigstore key pin failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("Sigstore probe accepted a mismatched signing-key SPKI")
         pinned_rekor_env = dict(env)
         pinned_rekor_env["SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID"] = sigstore["transparency_log_id"]
         pinned_sigstore = readiness.run_sigstore_probe(pinned_rekor_env)
@@ -720,6 +752,15 @@ def run_shared_store_probe_helper() -> None:
     required_by_label = {label: set(tables) for label, _, tables in calls}
     if "rate_limit_counters" not in required_by_label.get("metadata", set()):
         raise AssertionError(f"metadata probe did not require shared quota table: {calls}")
+    release_tables = {
+        "release_authorization_attempts",
+        "release_authorization_quota_reservations",
+        "release_authorization_events",
+    }
+    if not release_tables.issubset(required_by_label.get("metadata", set())):
+        raise AssertionError(
+            f"metadata probe did not require atomic release tables: {calls}"
+        )
     if "policy_high_water" not in required_by_label.get("metadata", set()):
         raise AssertionError(f"metadata probe did not require policy rollback state: {calls}")
     if "control_plane_approvals" not in required_by_label.get("metadata", set()):
@@ -730,7 +771,49 @@ def run_shared_store_probe_helper() -> None:
         raise AssertionError(f"audit probe did not require HA audit table: {calls}")
 
 
+def assert_atomic_release_compose_gate() -> None:
+    for compose_name in ("docker-compose.yml", "docker-compose.production.yml"):
+        compose_path = ROOT / compose_name
+        compose_text = compose_path.read_text(encoding="utf-8")
+        compose_env = os.environ.copy()
+        for name in re.findall(r"\$\{([A-Z0-9_]+):\?[^}]*\}", compose_text):
+            compose_env.setdefault(name, "serverware-compose-test-value")
+        for name in re.findall(
+            r"\$\{([A-Z0-9_]+):\?[^}]*\}:[^\n]+", compose_text
+        ):
+            compose_env[name] = f"/tmp/{name.lower().replace('_', '-')}"
+        result = subprocess.run(
+            [
+                "docker",
+                "compose",
+                "-f",
+                str(compose_path),
+                "config",
+                "--format",
+                "json",
+            ],
+            cwd=ROOT,
+            env=compose_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise AssertionError(
+                f"{compose_name} did not parse: "
+                f"{result.stderr.decode(errors='replace')}"
+            )
+        model = json.loads(result.stdout)
+        for service_name in ("serverware", "decision-gate-rs"):
+            service_env = model["services"][service_name].get("environment") or {}
+            if service_env.get("SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED") != "1":
+                raise AssertionError(
+                    f"{compose_name} {service_name} does not enable atomic release authorization"
+                )
+
+
 def main() -> None:
+    assert_atomic_release_compose_gate()
     passed = run_readiness(good_env())
     if passed.get("mode") != "config":
         raise AssertionError(f"unexpected readiness mode: {passed}")
@@ -1415,13 +1498,33 @@ def main() -> None:
     insecure_transparency_env["SERVERWARE_TRANSPARENCY_ALLOW_INSECURE_HTTP"] = "1"
     expect_failure(insecure_transparency_env, "https URL")
 
-    local_quota_env = good_env()
-    local_quota_env.pop("SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL", None)
-    expect_failure(local_quota_env, "shared rate-limit consume URL")
+    no_atomic_release_url_env = good_env()
+    no_atomic_release_url_env.pop(
+        "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL", None
+    )
+    expect_failure(no_atomic_release_url_env, "atomic release authorization base URL")
 
-    local_grant_env = good_env()
-    local_grant_env.pop("SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL", None)
-    expect_failure(local_grant_env, "shared JIT grant consume URL")
+    wrong_atomic_release_url_env = good_env()
+    wrong_atomic_release_url_env[
+        "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL"
+    ] = "https://serverware.internal/api/data-plane/release-authorizations/reserve?unsafe=1"
+    expect_failure(wrong_atomic_release_url_env, "exact API path")
+
+    split_atomic_writer_env = good_env()
+    split_atomic_writer_env[
+        "SERVERWARE_GRANT_STORE_POSTGRES_DSN"
+    ] = "postgresql://serverware:serverware@grant-store/serverware"
+    expect_failure(split_atomic_writer_env, "same writer DSN and schema")
+
+    disabled_atomic_release_env = good_env()
+    disabled_atomic_release_env["SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"] = "0"
+    expect_failure(disabled_atomic_release_env, "must be enabled")
+
+    unbounded_dispatch_ttl_env = good_env()
+    unbounded_dispatch_ttl_env[
+        "SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS"
+    ] = "301"
+    expect_failure(unbounded_dispatch_ttl_env, "dispatch TTL")
 
     mutable_image_env = good_env()
     mutable_image_env["SERVERWARE_PRODUCTION_IMAGES"] = "registry.prod.acme-corp.net/serverware/control:latest"

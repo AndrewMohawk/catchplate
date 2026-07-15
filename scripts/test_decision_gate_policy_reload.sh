@@ -93,7 +93,7 @@ payload = {
 deadline = time.time() + 15
 while time.time() < deadline:
     health = request_json("/healthz")
-    if health["policy_hash"] == expected_hash:
+    if health["policy_hash"] == expected_hash and health.get("credential_generations_ready") is True:
         break
     time.sleep(0.25)
 else:
@@ -322,11 +322,11 @@ payload = {
 deadline = time.time() + 15
 while time.time() < deadline:
     health = request_json("/healthz")
-    if health["policy_hash"] == expected_hash:
+    if health["policy_hash"] == expected_hash and health.get("credential_generations_ready") is True:
         break
     time.sleep(0.25)
 else:
-    raise SystemExit("Rust gate did not hot-reload the restored policy")
+    raise SystemExit("Rust gate did not hot-reload the restored policy and reacquire its credential generation")
 
 decision = request_json("/v1/decide", payload)
 assert decision["action"] == "allow" and decision["route_id"] == "demo.echo", decision

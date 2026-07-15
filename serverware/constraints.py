@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import math
 import re
 import threading
@@ -13,7 +12,7 @@ from urllib.parse import parse_qs, parse_qsl, urlsplit
 
 from serverware import db
 from serverware.policies import PolicyDecision
-from serverware.policy_bundle import bounded_pattern_matches, canonical_json
+from serverware.policy_bundle import bounded_pattern_matches, canonical_json, strict_json_loads
 
 
 SECONDS_PER_DAY = 86_400
@@ -55,6 +54,8 @@ def evaluate_request_constraints(
     consume_rate_limits: bool,
     policy_hash: str | None = None,
     rate_limits_only: bool = False,
+    skip_shared_rate_limits: bool = False,
+    skip_rate_limits: bool = False,
 ) -> PolicyDecision:
     for constraint in route.constraints:
         constraint_type = str(constraint.get("type") or "")
@@ -63,6 +64,8 @@ def evaluate_request_constraints(
         if not _phase_includes(constraint, "request"):
             continue
         if rate_limits_only and constraint_type != "rateLimit":
+            continue
+        if skip_rate_limits and constraint_type == "rateLimit":
             continue
 
         if constraint_type == "rateLimit":
@@ -75,6 +78,7 @@ def evaluate_request_constraints(
                 policy_hash=policy_hash,
                 operation_fields=operation_fields,
                 consume=consume_rate_limits,
+                skip_shared=skip_shared_rate_limits,
             )
         elif constraint_type == "operationPolicy":
             decision = _enforce_operation_policy(constraint, operation_fields)
@@ -188,6 +192,41 @@ def _rate_key(
     return "sha256:" + hashlib.sha256(canonical_json(material).encode("utf-8")).hexdigest()
 
 
+def shared_rate_limit_claims(
+    route: Any,
+    *,
+    principal_id: str,
+    credential_ref: str | None,
+    credential_version: int,
+    operation_fields: dict[str, str],
+) -> list[dict[str, Any]]:
+    claims: list[dict[str, Any]] = []
+    for constraint in route.constraints:
+        if (
+            constraint.get("type") != "rateLimit"
+            or constraint.get("store", "local") != "shared"
+            or not _phase_includes(constraint, "request")
+        ):
+            continue
+        claims.append(
+            {
+                "counter_key": _rate_key(
+                    constraint,
+                    route=route,
+                    principal_id=principal_id,
+                    credential_ref=credential_ref,
+                    credential_version=credential_version,
+                    operation_fields=operation_fields,
+                ),
+                "constraint_id": str(constraint.get("id") or "unnamed"),
+                "operation": operation_fields.get("operation"),
+                "window_seconds": int(constraint.get("windowSeconds") or 0),
+                "max_count": int(constraint.get("max") or 0),
+            }
+        )
+    return claims
+
+
 def _enforce_rate_limit(
     constraint: dict[str, Any],
     *,
@@ -198,6 +237,7 @@ def _enforce_rate_limit(
     policy_hash: str | None,
     operation_fields: dict[str, str],
     consume: bool,
+    skip_shared: bool,
 ) -> PolicyDecision:
     maximum = int(constraint.get("max") or 0)
     window_seconds = int(constraint.get("windowSeconds") or 0)
@@ -215,6 +255,8 @@ def _enforce_rate_limit(
     )
     store = str(constraint.get("store") or "local")
     if store == "shared":
+        if skip_shared:
+            return PolicyDecision(True)
         try:
             result = db.consume_rate_limit(
                 counter_key=key,
@@ -502,6 +544,14 @@ def _enforce_query_numeric_bounds(constraint: dict[str, Any], url: str) -> Polic
                     parameter=parameter,
                     value=value,
                 )
+            if isinstance(parsed, float) and not math.isfinite(parsed):
+                return _deny(
+                    constraint,
+                    "numeric query parameter is invalid",
+                    "query_numeric_parameter_invalid",
+                    parameter=parameter,
+                    value=value,
+                )
             if minimum is not None and parsed < float(minimum):
                 return _deny(
                     constraint,
@@ -558,7 +608,7 @@ def _enforce_json_body(constraint: dict[str, Any], flow: Any) -> PolicyDecision:
         )
 
     try:
-        payload = json.loads(body.decode("utf-8"))
+        payload = strict_json_loads(body)
     except Exception:
         return _deny(constraint, "request body is not valid JSON", "json_body_invalid")
 
@@ -748,7 +798,7 @@ def _enforce_response_date_window(constraint: dict[str, Any], flow: Any) -> Poli
         raw = flow.response.raw_content
         if raw is None:
             raw = flow.response.get_content(strict=False) or b""
-        payload = json.loads(raw.decode("utf-8"))
+        payload = strict_json_loads(raw)
     except Exception:
         return _deny(constraint, "response body is not valid JSON", "response_json_invalid", statusCode=502)
 
@@ -837,7 +887,7 @@ def _enforce_response_json(constraint: dict[str, Any], flow: Any) -> PolicyDecis
         raw = flow.response.raw_content
         if raw is None:
             raw = flow.response.get_content(strict=False) or b""
-        payload = json.loads(raw.decode("utf-8"))
+        payload = strict_json_loads(raw)
     except Exception:
         return _deny(
             constraint,
@@ -974,7 +1024,11 @@ def _matches_type(value: Any, expected_type: str) -> bool:
     if expected_type == "string":
         return isinstance(value, str)
     if expected_type == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+        return (
+            isinstance(value, (int, float))
+            and not isinstance(value, bool)
+            and (not isinstance(value, float) or math.isfinite(value))
+        )
     if expected_type == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
     if expected_type == "boolean":
@@ -1042,7 +1096,11 @@ def _values_at_parts(value: Any, parts: list[str]) -> list[Any]:
 def _parse_datetime(value: Any, formats: list[str]) -> float | None:
     format_set = set(formats or ["rfc3339", "date", "epochSeconds", "epochMillis"])
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return _parse_epoch_number(float(value), format_set)
+        try:
+            numeric = float(value)
+        except (OverflowError, ValueError):
+            return None
+        return _parse_epoch_number(numeric, format_set)
     text = str(value).strip()
     if not text:
         return None
@@ -1063,6 +1121,8 @@ def _parse_datetime(value: Any, formats: list[str]) -> float | None:
 
 
 def _parse_epoch_number(value: float, formats: set[str]) -> float | None:
+    if not math.isfinite(value):
+        return None
     is_millis = abs(value) >= 10_000_000_000
     if is_millis and "epochMillis" in formats:
         return value / 1000.0

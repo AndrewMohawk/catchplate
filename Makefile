@@ -1,6 +1,8 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-credential-policy-contracts verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
+PLAYWRIGHT_RUN ?= uv run --isolated --python 3.11 --with-requirements requirements.lock --with playwright==1.61.0
+MITMPROXY_TEST_RUN ?= uv run --isolated --python 3.11 --with mitmproxy==11.0.2 --with fastapi==0.136.1 --with cbor2==5.9.0 --with jsonschema==4.23.0 --with 'psycopg[binary]==3.2.3' --with python-multipart==0.0.31 --with 'uvicorn[standard]==0.34.0'
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
 PRODUCTION_READINESS_OUT ?= .tmp/production-readiness.json
 PRODUCTION_READINESS_CONFIG_OUT ?= .tmp/production-readiness-config.json
@@ -133,6 +135,7 @@ bench-gate-rs:
 			python3 scripts/test_oauth_credentials.py --compose-contract-only
 			docker compose exec -T serverware python scripts/test_oauth_credentials.py
 			docker compose exec -T serverware python scripts/test_oauth_http_flow.py
+			$(MAKE) verify-portal-browser-oauth
 		docker compose exec -T serverware python scripts/test_credential_lease_delivery.py
 		docker compose exec -T serverware python scripts/test_control_plane_mutation_mfa.py
 		docker compose exec -T serverware python scripts/test_control_plane_two_person.py
@@ -203,7 +206,7 @@ production-release-provenance:
 		--out "$(RELEASE_PROVENANCE_FILE)" > "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 	cat "$(RELEASE_PROVENANCE_SUMMARY_FILE)"
 
-image-signatures:
+image-signatures: release-provenance
 	SERVERWARE_IMAGE_SIGNATURE_PROVIDER="$${SERVERWARE_IMAGE_SIGNATURE_PROVIDER:-sigstore-command}" \
 	SERVERWARE_IMAGE_SIGN_COMMAND="$${SERVERWARE_IMAGE_SIGN_COMMAND:-python3 scripts/cosign_sigstore.py sign}" \
 	SERVERWARE_IMAGE_VERIFY_COMMAND="$${SERVERWARE_IMAGE_VERIFY_COMMAND:-python3 scripts/cosign_sigstore.py verify}" \
@@ -299,6 +302,8 @@ deploy-production:
 
 production-release-proof:
 	$(MAKE) verify-credential-policy-contracts
+	$(MAKE) verify-control-plane-startup
+	$(MAKE) verify-portal-browser-oauth
 	$(MAKE) validate-production-policy-identity
 	$(MAKE) validate-policy-activation-evidence
 	$(MAKE) validate-reproducible-builds
@@ -386,7 +391,15 @@ verify-production-release-proof:
 
 verify-credential-policy-contracts:
 	uv run --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_credential_constraints.py
+	$(MITMPROXY_TEST_RUN) python scripts/test_credential_constraints.py --proxy-transport-only
 	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml
+
+verify-control-plane-startup:
+	uv run --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_control_plane_startup.py
+
+verify-portal-browser-oauth:
+	$(PLAYWRIGHT_RUN) python -m playwright install chromium
+	$(PLAYWRIGHT_RUN) python scripts/test_portal_browser_oauth.py
 
 verify-reproducible-builds:
 	python3 scripts/test_reproducible_builds.py
@@ -430,6 +443,7 @@ verify-oauth-credentials:
 	python3 scripts/test_oauth_credentials.py --compose-contract-only
 	docker compose exec -T serverware python scripts/test_oauth_credentials.py
 	docker compose exec -T serverware python scripts/test_oauth_http_flow.py
+	$(MAKE) verify-portal-browser-oauth
 
 verify-credential-lease-delivery:
 	docker compose up -d --build serverware
@@ -577,7 +591,11 @@ verify-decision-gate-attestation:
 	python3 scripts/verify_decision_gate_attestation.py
 
 verify-codebase-attestation:
-	python3 scripts/verify_codebase_attestation.py --admin-token "$${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}"
+	SERVERWARE_COSIGN_BINARY="$${SERVERWARE_COSIGN_BINARY:-python3 scripts/cosign_fixture.py}" \
+	python3 scripts/verify_codebase_attestation.py \
+		--admin-token "$${SERVERWARE_ADMIN_TOKEN:-dev-admin-token}" \
+		--release-signing-trusted-key "$${SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY:-.tmp/release-signing-ed25519.pem}" \
+		--image-signing-trusted-key "$${SERVERWARE_SIGSTORE_TRUSTED_PUBLIC_KEY:-.tmp/cosign-fixture-ed25519.pem}"
 
 install-ca:
 	docker compose up -d --build serverware demo-upstream

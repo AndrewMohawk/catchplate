@@ -107,28 +107,57 @@ while time.time() < deadline:
         item for item in audit_events() if item.get("actor_type") == "data-plane"
     ]
     event_types = {item.get("event_type") for item in last_events}
-    released = any(
-        item.get("event_type") == "data_plane.response.released"
-        and (item.get("event") or {}).get("body_sha256") == body_sha
+    released_event = next((
+        item
         for item in last_events
+        if item.get("event_type") == "data_plane.response.released"
+        and (item.get("event") or {}).get("body_sha256") == body_sha
+    ), None)
+    released_attempt = (released_event or {}).get("event", {}).get("attempt_id")
+    released = released_event is not None and isinstance(released_attempt, str)
+    release_correlated = released and all(
+        any(
+            item.get("event_type") == f"release_authorization.{state}"
+            and (item.get("event") or {}).get("attempt_id") == released_attempt
+            and (state != "committed" or (item.get("event") or {}).get("outcome") == "forwarded")
+            for item in last_events
+        )
+        for state in ("reserved", "dispatching", "committed")
     )
     connect_denied = any(
         item.get("event_type") == "data_plane.connect.denied"
         and (item.get("event") or {}).get("target") == unknown_authority
         for item in last_events
     )
-    response_blocked = any(
-        item.get("event_type") == "data_plane.response.blocked"
+    blocked_event = next((
+        item
+        for item in last_events
+        if item.get("event_type") == "data_plane.response.blocked"
         and ((item.get("event") or {}).get("payload") or {}).get("error") == "gmail_response_too_old"
+    ), None)
+    blocked_attempt = (blocked_event or {}).get("event", {}).get("attempt_id")
+    response_blocked = blocked_event is not None and isinstance(blocked_attempt, str)
+    blocked_release_correlated = response_blocked and any(
+        item.get("event_type") == "release_authorization.committed"
+        and (item.get("event") or {}).get("attempt_id") == blocked_attempt
+        and (item.get("event") or {}).get("outcome") == "forwarded"
         for item in last_events
     )
     required_types = {
         "data_plane.connect.established",
-        "data_plane.grant.received",
-        "data_plane.jit.grant_consumed",
+        "release_authorization.reserved",
+        "release_authorization.dispatching",
+        "release_authorization.committed",
     }
-    if required_types.issubset(event_types) and released and connect_denied and response_blocked:
-        print(json.dumps({"ok": True, "audit_events": "pass", "marker": marker}, sort_keys=True))
+    if (
+        required_types.issubset(event_types)
+        and released
+        and release_correlated
+        and connect_denied
+        and response_blocked
+        and blocked_release_correlated
+    ):
+        print(json.dumps({"ok": True, "audit_events": "pass", "attempt_id": released_attempt, "marker": marker}, sort_keys=True))
         break
     time.sleep(0.5)
 else:

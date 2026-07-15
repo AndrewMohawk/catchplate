@@ -5,6 +5,12 @@ GATE_HOST="${DECISION_GATE_HOST:-localhost}"
 GATE_PORT="${DECISION_GATE_PORT:-9090}"
 CA_FILE="${SERVERWARE_CA_OUT:-.tmp/serverware-ca.pem}"
 
+release_lifecycle_store() {
+  docker compose exec -T grant-store psql -U serverware -d serverware -Atq -c \
+    "SELECT json_build_object('attempts', COUNT(*), 'forwarded', COUNT(*) FILTER (WHERE state = 'committed' AND completion_outcome = 'forwarded'), 'terminal', COUNT(*) FILTER (WHERE state NOT IN ('reserved', 'dispatching')), 'correlated', COUNT(*) FILTER (WHERE attempt_id = flow_id)) FROM release_authorization_attempts"
+}
+RELEASE_LIFECYCLE_BEFORE="$(release_lifecycle_store)"
+
 python3 - "$GATE_HOST" "$GATE_PORT" "$CA_FILE" <<'PY'
 import hashlib
 import json
@@ -142,4 +148,14 @@ assert status == 413, (status, too_large)
 assert too_large["error"] == "request_body_too_large", too_large
 
 print(json.dumps({"ok": True, "request_streaming": "pass", "absolute_bytes": len(payload), "connect_bytes": len(connect_payload)}, sort_keys=True))
+PY
+
+python3 - "$RELEASE_LIFECYCLE_BEFORE" "$(release_lifecycle_store)" 2 <<'PY'
+import json, sys
+before, after, expected = json.loads(sys.argv[1]), json.loads(sys.argv[2]), int(sys.argv[3])
+attempts = after["attempts"] - before["attempts"]
+assert attempts >= expected, (before, after)
+assert after["forwarded"] - before["forwarded"] >= expected, (before, after)
+assert after["terminal"] - before["terminal"] == attempts, (before, after)
+assert after["correlated"] - before["correlated"] == attempts, (before, after)
 PY

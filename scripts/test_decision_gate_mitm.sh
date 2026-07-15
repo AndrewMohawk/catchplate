@@ -8,6 +8,12 @@ TMP_DIR="${TMP_DIR:-.tmp}"
 
 mkdir -p "$TMP_DIR"
 
+release_lifecycle_store() {
+  docker compose exec -T grant-store psql -U serverware -d serverware -Atq -c \
+    "SELECT json_build_object('attempts', COUNT(*), 'forwarded', COUNT(*) FILTER (WHERE state = 'committed' AND completion_outcome = 'forwarded'), 'terminal', COUNT(*) FILTER (WHERE state NOT IN ('reserved', 'dispatching')), 'correlated', COUNT(*) FILTER (WHERE attempt_id = flow_id)) FROM release_authorization_attempts"
+}
+RELEASE_LIFECYCLE_BEFORE="$(release_lifecycle_store)"
+
 curl -fsS \
   --max-time 10 \
   --proxy "http://$GATE_HOST:$GATE_PORT" \
@@ -173,4 +179,14 @@ PY
 python3 - <<'PY'
 import json
 print(json.dumps({"ok": True, "connect_mitm": "pass"}, sort_keys=True))
+PY
+
+python3 - "$RELEASE_LIFECYCLE_BEFORE" "$(release_lifecycle_store)" 4 <<'PY'
+import json, sys
+before, after, expected = json.loads(sys.argv[1]), json.loads(sys.argv[2]), int(sys.argv[3])
+attempts = after["attempts"] - before["attempts"]
+assert attempts >= expected, (before, after)
+assert after["forwarded"] - before["forwarded"] >= expected, (before, after)
+assert after["terminal"] - before["terminal"] == attempts, (before, after)
+assert after["correlated"] - before["correlated"] == attempts, (before, after)
 PY

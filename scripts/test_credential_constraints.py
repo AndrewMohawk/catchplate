@@ -1,22 +1,29 @@
 from __future__ import annotations
 
-import copy
 import base64
+import copy
 import hashlib
 import json
 import os
+import socket
+import ssl
+import subprocess
 import sys
 import tempfile
+import time
 from datetime import datetime, timedelta, timezone
+from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qsl, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+PROXY_TRANSPORT_ONLY = "--proxy-transport-only" in sys.argv
 
 tmpdir = tempfile.TemporaryDirectory()
 os.environ["SERVERWARE_DATA_DIR"] = tmpdir.name
+os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
 os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
@@ -40,9 +47,13 @@ from serverware.policy_bundle import (
     X_V2_RECENT_SEARCH_PATHS,
     CredentialPolicy,
     PolicyBundleError,
+    _load_raw_policy,
     bounded_pattern_matches,
+    canonical_json,
     compile_policy_bundle,
     demo_policy_bundle,
+    sign_policy_bundle,
+    strict_json_loads,
     validate_policy_schema,
 )
 try:
@@ -54,15 +65,21 @@ try:
         _digest,
         _inject_credential,
         _operation_digest,
+        _validated_successful_release_reserve,
         evaluate_response,
     )
     from serverware.mitm_addon import ServerwareAddon
 except ModuleNotFoundError as exc:
     if exc.name != "mitmproxy":
         raise
+    if PROXY_TRANSPORT_ONLY:
+        raise AssertionError(
+            "proxy transport assertions require mitmproxy==11.0.2"
+        ) from exc
     _inject_credential = None
     _bind_provider_account_scope = None
     _operation_digest = None
+    _validated_successful_release_reserve = None
     _canonical_forwarded_request_headers = None
     _canonical_request = None
     _credential_injection_collision = None
@@ -172,6 +189,45 @@ def assert_policy_rejected(bundle: dict, message: str, *, validate_schema: bool)
         raise AssertionError(f"{message}; validate_schema={use_schema}")
 
 
+def assert_policy_rejected_reason(
+    bundle: dict,
+    expected_reason: str,
+    *,
+    validate_schema: bool,
+) -> None:
+    try:
+        compile_policy_bundle(bundle, validate_schema=False)
+    except PolicyBundleError as exc:
+        assert str(exc) == expected_reason, str(exc)
+    else:
+        raise AssertionError(f"compiler accepted policy expected to fail with: {expected_reason}")
+    if not validate_schema:
+        return
+    try:
+        validate_policy_schema(bundle)
+    except PolicyBundleError:
+        return
+    raise AssertionError(f"policy schema accepted policy expected to fail with: {expected_reason}")
+
+
+def assert_compiler_rejected_reason(
+    bundle: dict,
+    expected_reason: str,
+    *,
+    validate_schema: bool,
+) -> None:
+    for use_schema in ((False, True) if validate_schema else (False,)):
+        try:
+            compile_policy_bundle(bundle, validate_schema=use_schema)
+        except PolicyBundleError as exc:
+            assert str(exc) == expected_reason, str(exc)
+            continue
+        raise AssertionError(
+            f"compiler accepted policy expected to fail with: {expected_reason}; "
+            f"validate_schema={use_schema}"
+        )
+
+
 def assert_injection_rejected(bundle: dict, message: str, *, validate_schema: bool) -> None:
     assert_policy_rejected(bundle, message, validate_schema=validate_schema)
     if not validate_schema:
@@ -183,15 +239,372 @@ def assert_injection_rejected(bundle: dict, message: str, *, validate_schema: bo
     raise AssertionError(f"policy schema accepted {message}")
 
 
+def _proxy_http_headers(sock: socket.socket) -> bytes:
+    received = bytearray()
+    while b"\r\n\r\n" not in received:
+        chunk = sock.recv(4096)
+        if not chunk:
+            break
+        received.extend(chunk)
+        if len(received) > 65536:
+            raise AssertionError("proxy returned oversized CONNECT response headers")
+    return bytes(received)
+
+
+def _assert_no_upstream_connection(listener: socket.socket, label: str) -> None:
+    listener.settimeout(0.5)
+    try:
+        upstream, _address = listener.accept()
+    except TimeoutError:
+        return
+    try:
+        upstream.settimeout(0.1)
+        try:
+            payload = upstream.recv(4096)
+        except TimeoutError:
+            payload = b""
+    finally:
+        upstream.close()
+    raise AssertionError(f"{label} reached the upstream TCP listener: {payload!r}")
+
+
+def _live_proxy_transport_assertions(runner_module) -> None:
+    from serverware.config import POLICY_BUNDLE_PATH
+
+    bundle = demo_policy_bundle("cred-demo-bearer")
+    echo_route = next(item for item in bundle["routes"] if item["id"] == "demo.echo")
+
+    upstream_listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    upstream_listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    upstream_listener.bind(("127.0.0.1", 0))
+    upstream_listener.listen(8)
+    upstream_port = upstream_listener.getsockname()[1]
+    echo_route["match"]["host"] = "localhost"
+    echo_route["match"]["port"] = upstream_port
+    signed_bundle = sign_policy_bundle(bundle)
+    compile_policy_bundle(signed_bundle, verify_signature=True, validate_schema=True)
+    POLICY_BUNDLE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    POLICY_BUNDLE_PATH.write_text(canonical_json(signed_bundle), encoding="utf-8")
+
+    port_reservation = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    port_reservation.bind(("127.0.0.1", 0))
+    proxy_port = port_reservation.getsockname()[1]
+    port_reservation.close()
+
+    command = runner_module._mitmdump_command()
+    command[command.index("--listen-host") + 1] = "127.0.0.1"
+    command[command.index("--listen-port") + 1] = str(proxy_port)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        item for item in (str(ROOT), env.get("PYTHONPATH", "")) if item
+    )
+    process = subprocess.Popen(
+        command,
+        cwd=ROOT,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+    def open_connect(agent: str) -> tuple[socket.socket, bytes]:
+        tunnel = socket.create_connection(("127.0.0.1", proxy_port), timeout=2)
+        tunnel.settimeout(2)
+        tunnel.sendall(
+            (
+                f"CONNECT localhost:{upstream_port} HTTP/1.1\r\n"
+                f"Host: localhost:{upstream_port}\r\n"
+                f"X-Serverware-Agent: {agent}\r\n"
+                "\r\n"
+            ).encode("ascii")
+        )
+        return tunnel, _proxy_http_headers(tunnel)
+
+    try:
+        deadline = time.monotonic() + 8
+        while True:
+            if process.poll() is not None:
+                output = process.communicate()[0]
+                raise AssertionError(f"mitmdump exited before live assertions:\n{output}")
+            try:
+                with socket.create_connection(("127.0.0.1", proxy_port), timeout=0.1):
+                    break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise AssertionError("mitmdump did not listen within 8 seconds")
+                time.sleep(0.05)
+
+        denied_tunnel, denied_headers = open_connect("not-admitted")
+        denied_tunnel.close()
+        assert denied_headers.startswith(b"HTTP/1.1 403"), denied_headers
+        _assert_no_upstream_connection(upstream_listener, "unadmitted CONNECT")
+
+        admitted_tunnel, admitted_headers = open_connect("demo-agent")
+        assert admitted_headers.startswith(b"HTTP/1.1 200"), admitted_headers
+        admitted_tunnel.sendall(b"SERVERWARE-UNKNOWN-RAW-TCP\x00\x01\x02")
+        admitted_tunnel.close()
+        _assert_no_upstream_connection(upstream_listener, "raw TCP after admitted CONNECT")
+
+        tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        tls_context.check_hostname = False
+        tls_context.verify_mode = ssl.CERT_NONE
+
+        matching_tunnel, matching_headers = open_connect("demo-agent")
+        assert matching_headers.startswith(b"HTTP/1.1 200"), matching_headers
+        matching_tls = tls_context.wrap_socket(
+            matching_tunnel,
+            server_hostname="localhost",
+        )
+        matching_tls.close()
+        _assert_no_upstream_connection(upstream_listener, "matching SNI handshake")
+
+        for server_hostname, label in (
+            ("mismatch.example.test", "mismatched SNI"),
+            (None, "absent SNI for DNS CONNECT authority"),
+        ):
+            invalid_tunnel, invalid_headers = open_connect("demo-agent")
+            assert invalid_headers.startswith(b"HTTP/1.1 200"), invalid_headers
+            try:
+                invalid_tls = tls_context.wrap_socket(
+                    invalid_tunnel,
+                    server_hostname=server_hostname,
+                )
+            except (ConnectionError, OSError, ssl.SSLError):
+                pass
+            else:
+                invalid_tls.close()
+                raise AssertionError(f"{label} completed a TLS handshake")
+            _assert_no_upstream_connection(upstream_listener, label)
+    finally:
+        upstream_listener.close()
+        if process.poll() is None:
+            process.terminate()
+        try:
+            process.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
+
+
+def run_proxy_transport_assertions() -> None:
+    if ServerwareAddon is None:
+        raise AssertionError("proxy transport assertions did not import the mitmproxy addon")
+    assert version("mitmproxy") == "11.0.2"
+
+    from mitmproxy import connection, http, tls
+    from mitmproxy.options import Options
+    from mitmproxy.proxy.context import Context
+    from serverware import mitm_addon, runner
+
+    expected_command = [
+        "mitmdump",
+        "--listen-host",
+        runner.PROXY_HOST,
+        "--listen-port",
+        str(runner.PROXY_PORT),
+        "--set",
+        f"confdir={runner.MITMPROXY_CONF_DIR}",
+        "--set",
+        "rawtcp=false",
+        "--set",
+        "connection_strategy=lazy",
+        "--set",
+        "ssl_insecure=false",
+        "--set",
+        "block_global=false",
+        "-s",
+        str(Path(runner.__file__).with_name("mitm_addon.py")),
+    ]
+    assert runner._mitmdump_command() == expected_command
+    assert "ssl_insecure=true" not in runner._mitmdump_command()
+
+    production_env = os.environ.copy()
+    production_env["SERVERWARE_RELEASE_CHANNEL"] = "production"
+    production_env["PYTHONPATH"] = os.pathsep.join(
+        item for item in (str(ROOT), production_env.get("PYTHONPATH", "")) if item
+    )
+    for module_name, expected_error in (
+        ("serverware.runner", "legacy Python mitmproxy transport is development-only"),
+        ("serverware.mitm_addon", "legacy Python mitmproxy addon is development-only"),
+    ):
+        result = subprocess.run(
+            [sys.executable, "-c", f"import {module_name}"],
+            cwd=ROOT,
+            env=production_env,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.returncode != 0, module_name
+        assert expected_error in result.stderr, result.stderr
+
+    addon = ServerwareAddon()
+    original_snapshot = mitm_addon.get_policy_snapshot
+    original_log_request = runtime.log_request
+    route_policy = SimpleNamespace(
+        scheme="https",
+        host="connect.example.test",
+        port=443,
+        principals=("agent:connect-assigned",),
+    )
+
+    def identify_principal(_client_ip, headers):
+        if headers.get("X-Serverware-Agent") == "connect-agent":
+            return SimpleNamespace(id="agent:connect-assigned")
+        return None
+
+    snapshot = SimpleNamespace(
+        routes=(route_policy,),
+        identify_principal=identify_principal,
+    )
+
+    def connect_flow(agent: str):
+        client = connection.Client(
+            peername=("127.0.0.1", 51234),
+            sockname=("127.0.0.1", 8080),
+            state=connection.ConnectionState.OPEN,
+        )
+        server = connection.Server(
+            address=("connect.example.test", 443),
+            state=connection.ConnectionState.CLOSED,
+        )
+        item = http.HTTPFlow(client, server)
+        item.request = http.Request.make(
+            "CONNECT",
+            "https://connect.example.test:443",
+            headers={"X-Serverware-Agent": agent},
+        )
+        return item
+
+    def client_hello_data(item, sni):
+        context = Context(item.client_conn, Options())
+        context.server = item.server_conn
+        return tls.ClientHelloData(context, SimpleNamespace(sni=sni))
+
+    mitm_addon.get_policy_snapshot = lambda: snapshot
+    runtime.log_request = lambda *_args, **_kwargs: None
+    try:
+        denied = connect_flow("not-admitted")
+        addon.http_connect(denied)
+        assert denied.response.status_code == 403
+        assert denied.metadata["serverware_blocked_response"] is True
+
+        admitted = connect_flow("connect-agent")
+        addon.http_connect(admitted)
+        assert admitted.response is None
+        matching = client_hello_data(admitted, "CONNECT.EXAMPLE.TEST.")
+        addon.tls_clienthello(matching)
+        assert matching.context.client.state is connection.ConnectionState.OPEN
+        assert matching.context.client.error is None
+
+        absent = connect_flow("connect-agent")
+        addon.http_connect(absent)
+        absent_data = client_hello_data(absent, None)
+        addon.tls_clienthello(absent_data)
+        assert absent_data.context.client.state is connection.ConnectionState.CLOSED
+        assert "SNI is required" in absent_data.context.client.error
+
+        mismatched = connect_flow("connect-agent")
+        addon.http_connect(mismatched)
+        mismatched_data = client_hello_data(mismatched, "other.example.test")
+        addon.tls_clienthello(mismatched_data)
+        assert mismatched_data.context.client.state is connection.ConnectionState.CLOSED
+        assert "does not match" in mismatched_data.context.client.error
+
+        wrong_authority = connect_flow("connect-agent")
+        addon.http_connect(wrong_authority)
+        wrong_authority.server_conn.address = ("connect.example.test", 444)
+        wrong_authority_data = client_hello_data(
+            wrong_authority,
+            "connect.example.test",
+        )
+        addon.tls_clienthello(wrong_authority_data)
+        assert wrong_authority_data.context.client.state is connection.ConnectionState.CLOSED
+        assert "tunnel authority does not match" in wrong_authority_data.context.client.error
+
+        unadmitted = connect_flow("not-admitted")
+        unadmitted_data = client_hello_data(unadmitted, "connect.example.test")
+        addon.tls_clienthello(unadmitted_data)
+        assert unadmitted_data.context.client.state is connection.ConnectionState.CLOSED
+        assert "without an admitted CONNECT" in unadmitted_data.context.client.error
+
+        addon.client_disconnected(admitted.client_conn)
+        disconnected_data = client_hello_data(admitted, "connect.example.test")
+        addon.tls_clienthello(disconnected_data)
+        assert disconnected_data.context.client.state is connection.ConnectionState.CLOSED
+    finally:
+        runtime.log_request = original_log_request
+        mitm_addon.get_policy_snapshot = original_snapshot
+
+    _live_proxy_transport_assertions(runner)
+    print("proxy transport assertions passed; mitmproxy=11.0.2")
+
+
 def main() -> None:
+    if PROXY_TRANSPORT_ONLY:
+        run_proxy_transport_assertions()
+        return
     db.init_db()
     validate_schema = schema_validation_available()
     demo_bundle = demo_policy_bundle("cred-demo-bearer")
+    for encoded in (
+        '{"duplicate":1,"duplicate":1}',
+        '{"number":NaN}',
+        '{"number":Infinity}',
+        '{"number":-Infinity}',
+        '{"number":1e400}',
+        '{"number":' + "1" + "0" * 400 + "}",
+    ):
+        try:
+            strict_json_loads(encoded)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"strict JSON decoder accepted invalid input: {encoded[:80]}")
+
+    for value in (float("nan"), float("inf"), float("-inf"), 10**400):
+        try:
+            canonical_json({"number": value})
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"canonical JSON accepted an invalid number: {value!r}")
+
+        invalid = copy.deepcopy(demo_bundle)
+        invalid["metadata"]["sequence"] = value
+        try:
+            sign_policy_bundle(invalid)
+        except PolicyBundleError:
+            pass
+        else:
+            raise AssertionError(f"policy signer accepted an invalid number: {value!r}")
+
+    signed_demo = sign_policy_bundle(demo_bundle)
+    compile_policy_bundle(signed_demo, verify_signature=True, validate_schema=validate_schema)
+    duplicate_signed_json = json.dumps(signed_demo, sort_keys=True).replace(
+        '"kind": "PolicyBundle"',
+        '"kind": "PolicyBundle", "kind": "PolicyBundle"',
+        1,
+    )
+    duplicate_signed_path = Path(tmpdir.name) / "duplicate-signed-policy.json"
+    duplicate_signed_path.write_text(duplicate_signed_json)
+    try:
+        _load_raw_policy(duplicate_signed_path)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("strict policy loading accepted duplicate keys in a validly signed policy")
+
     checked_in_demo = json.loads((ROOT / "policies" / "demo.policy.json").read_text())
     assert checked_in_demo == demo_bundle, "policies/demo.policy.json drifted from demo_policy_bundle()"
     demo = compile_policy_bundle(demo_bundle, validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     example_snapshot = compile_policy_bundle(examples, validate_schema=validate_schema)
+    assert list(example_snapshot.credentials["cred-gmail"].scopes) == [
+        "openid",
+        "email",
+        "https://www.googleapis.com/auth/gmail.readonly",
+    ]
     for credential_id in ("cred-gmail", "cred-x"):
         assert example_snapshot.credentials[credential_id].injection == {
             "type": "bearer",
@@ -407,14 +820,210 @@ def main() -> None:
         "compiler accepted an opaque credential-bearing response",
         validate_schema=validate_schema,
     )
-    invalid = copy.deepcopy(demo_bundle)
-    x_write = next(item for item in invalid["routes"] if item["id"] == "demo.x.tweet.one_per_day")
-    x_write["adapter"]["config"]["response"].pop("allowedFields")
-    assert_policy_rejected(
-        invalid,
-        "compiler accepted a credential-bearing JSON response without a projection",
+    explicit_opaque = copy.deepcopy(demo_bundle)
+    explicit_opaque_route = explicit_opaque["routes"][0]
+    explicit_opaque_route.pop("credentialRef")
+    explicit_opaque_route.pop("constraints", None)
+    explicit_opaque_route["adapter"]["config"]["request"]["bodyMode"] = "any"
+    explicit_opaque_response = explicit_opaque_route["adapter"]["config"]["response"]
+    explicit_opaque_response["mode"] = "any"
+    explicit_opaque_response.pop("allowedFields")
+    explicit_opaque_snapshot = compile_policy_bundle(
+        explicit_opaque,
         validate_schema=validate_schema,
     )
+    assert route(explicit_opaque_snapshot, "demo.echo").credential_ref is None
+    for projection_value, failure in (
+        (None, "is missing allowedFields"),
+        ([], "allowedFields must not be empty"),
+    ):
+        invalid = copy.deepcopy(demo_bundle)
+        generic_response = invalid["routes"][0]["adapter"]["config"]["response"]
+        if projection_value is None:
+            generic_response.pop("allowedFields")
+        else:
+            generic_response["allowedFields"] = projection_value
+        assert_policy_rejected_reason(
+            invalid,
+            f"route demo.echo credential-bearing JSON success response {failure}",
+            validate_schema=validate_schema,
+        )
+
+        invalid = copy.deepcopy(demo_bundle)
+        x_write = next(item for item in invalid["routes"] if item["id"] == "demo.x.tweet.one_per_day")
+        if projection_value is None:
+            x_write["adapter"]["config"]["response"].pop("allowedFields")
+        else:
+            x_write["adapter"]["config"]["response"]["allowedFields"] = projection_value
+        assert_policy_rejected_reason(
+            invalid,
+            f"route demo.x.tweet.one_per_day credential-bearing JSON success response {failure}",
+            validate_schema=validate_schema,
+        )
+
+    for response_mode in (
+        "jsonlStream",
+        "jsonArrayStream",
+        "jsonSseStream",
+        "jsonNestedStream",
+        "formUrlencodedStream",
+        "csvStream",
+    ):
+        for projection_value, failure in (
+            (None, "is missing allowedFields"),
+            ([], "allowedFields must not be empty"),
+        ):
+            invalid = copy.deepcopy(demo_bundle)
+            response = invalid["routes"][0]["adapter"]["config"]["response"]
+            response["mode"] = response_mode
+            if projection_value is None:
+                response.pop("allowedFields")
+            else:
+                response["allowedFields"] = projection_value
+            assert_policy_rejected_reason(
+                invalid,
+                f"route demo.echo credential-bearing {response_mode} success response {failure}",
+                validate_schema=validate_schema,
+            )
+    for projection_value, failure in (
+        (None, "is missing allowedFields"),
+        ([], "allowedFields must not be empty"),
+    ):
+        invalid = copy.deepcopy(demo_bundle)
+        error_response = {
+            "mode": "json",
+            "maxBodyBytes": 4096,
+            "allowedFields": ["error", "code"],
+            "allowedHeaders": [],
+            "onInvalid": "block",
+        }
+        invalid["routes"][0]["adapter"]["config"]["response"]["error"] = error_response
+        if projection_value is None:
+            error_response.pop("allowedFields")
+        else:
+            error_response["allowedFields"] = projection_value
+        assert_policy_rejected_reason(
+            invalid,
+            f"route demo.echo credential-bearing JSON error response {failure}",
+            validate_schema=validate_schema,
+        )
+
+    missing_json_body_policy = copy.deepcopy(demo_bundle)
+    missing_json_route = missing_json_body_policy["routes"][0]
+    missing_json_route["adapter"]["config"]["request"]["bodyMode"] = "json"
+    missing_json_route.pop("constraints", None)
+    assert_compiler_rejected_reason(
+        missing_json_body_policy,
+        "route demo.echo credential-bearing generic.rest bodyMode json requires "
+        "a jsonBody constraint with non-empty allowedFields",
+        validate_schema=validate_schema,
+    )
+
+    wrong_json_body_policy = copy.deepcopy(missing_json_body_policy)
+    wrong_json_body_policy["routes"][0]["constraints"] = [
+        {
+            "id": "wrong-form-body-policy",
+            "type": "formBody",
+            "allowedFields": ["safe"],
+        }
+    ]
+    assert_compiler_rejected_reason(
+        wrong_json_body_policy,
+        "route demo.echo credential-bearing generic.rest bodyMode json requires "
+        "a jsonBody constraint with non-empty allowedFields",
+        validate_schema=validate_schema,
+    )
+
+    credential_json_bundle = copy.deepcopy(missing_json_body_policy)
+    credential_json_bundle["routes"][0]["constraints"] = [
+        {
+            "id": "echo-json-body",
+            "type": "jsonBody",
+            "contentTypes": ["application/json"],
+            "allowedFields": ["safe", "nested.value"],
+        }
+    ]
+    credential_json_snapshot = compile_policy_bundle(
+        credential_json_bundle,
+        validate_schema=validate_schema,
+    )
+    opaque_credential_body = copy.deepcopy(demo_bundle)
+    opaque_credential_body["routes"][0]["adapter"]["config"]["request"]["bodyMode"] = "any"
+    assert_compiler_rejected_reason(
+        opaque_credential_body,
+        "route demo.echo credential-bearing generic.rest routes cannot use opaque bodyMode any",
+        validate_schema=validate_schema,
+    )
+    empty_json_allowlist = copy.deepcopy(credential_json_bundle)
+    empty_json_allowlist["routes"][0]["constraints"][0]["allowedFields"] = []
+    assert_policy_rejected(
+        empty_json_allowlist,
+        "compiler accepted a credential-bearing JSON body policy with an empty allowlist",
+        validate_schema=validate_schema,
+    )
+
+    missing_form_body_policy = copy.deepcopy(examples)
+    missing_form_route = next(
+        item
+        for item in missing_form_body_policy["routes"]
+        if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+    )
+    missing_form_route["constraints"] = [
+        constraint
+        for constraint in missing_form_route["constraints"]
+        if constraint["type"] != "formBody"
+    ]
+    assert_compiler_rejected_reason(
+        missing_form_body_policy,
+        "route example.stripe.payment_intent.tokenized_jit credential-bearing generic.rest "
+        "bodyMode formUrlencoded requires a formBody constraint with non-empty allowedFields",
+        validate_schema=validate_schema,
+    )
+
+    for request_mode in (
+        "jsonlStream",
+        "jsonArrayStream",
+        "jsonSseStream",
+        "jsonNestedStream",
+        "formUrlencodedStream",
+        "csvStream",
+    ):
+        valid_stream_request = copy.deepcopy(demo_bundle)
+        valid_stream_route = valid_stream_request["routes"][0]
+        valid_stream_route.pop("credentialRef")
+        stream_request = valid_stream_route["adapter"]["config"]["request"]
+        stream_request["bodyMode"] = request_mode
+        stream_request["allowedFields"] = ["safe", "nested.value"]
+        compile_policy_bundle(valid_stream_request, validate_schema=validate_schema)
+
+        missing_stream_fields = copy.deepcopy(valid_stream_request)
+        missing_stream_fields["routes"][0]["adapter"]["config"]["request"].pop("allowedFields")
+        assert_policy_rejected(
+            missing_stream_fields,
+            f"compiler accepted {request_mode} request without allowedFields",
+            validate_schema=validate_schema,
+        )
+
+    invalid_stream_fields = (
+        ([], "empty"),
+        (["safe", "safe"], "duplicate"),
+        (["safe.*"], "non-dotted-path"),
+        (["a" * 257], "overlong"),
+        ([f"field{index}" for index in range(65)], "oversized"),
+    )
+    for allowed_fields, description in invalid_stream_fields:
+        invalid_stream_request = copy.deepcopy(demo_bundle)
+        invalid_stream_route = invalid_stream_request["routes"][0]
+        invalid_stream_route.pop("credentialRef")
+        request = invalid_stream_route["adapter"]["config"]["request"]
+        request["bodyMode"] = "jsonlStream"
+        request["allowedFields"] = allowed_fields
+        assert_policy_rejected(
+            invalid_stream_request,
+            f"compiler accepted {description} structured stream request allowedFields",
+            validate_schema=validate_schema,
+        )
+
     invalid = copy.deepcopy(demo_bundle)
     invalid["routes"][0]["adapter"]["config"]["request"]["bodyMode"] = "stream"
     assert_policy_rejected(
@@ -585,6 +1194,22 @@ def main() -> None:
     numeric_constraint.pop("min", None)
     numeric_constraint.pop("max", None)
     assert_policy_rejected(invalid, "compiler accepted a no-op numeric bound", validate_schema=validate_schema)
+    for bound in ("min", "max"):
+        for value in (float("nan"), float("inf"), float("-inf"), 10**400):
+            invalid = copy.deepcopy(demo_bundle)
+            numeric_constraint = next(
+                constraint
+                for constraint in next(
+                    item for item in invalid["routes"] if item["id"] == numeric_route_raw["id"]
+                )["constraints"]
+                if constraint["type"] == "queryNumericBounds"
+            )
+            numeric_constraint[bound] = value
+            assert_policy_rejected(
+                invalid,
+                f"compiler accepted invalid query numeric {bound}: {value!r}",
+                validate_schema=validate_schema,
+            )
     invalid = copy.deepcopy(demo_bundle)
     numeric_constraint = next(
         constraint
@@ -769,21 +1394,249 @@ def main() -> None:
     assert_denied(generic_adapter.validate_request(generic_request, generic_route, {}), "request_header_not_allowed")
     generic_with_body = flow("GET", "https://api.stripe.com/v1/customers", {"unexpected": True})
     assert_denied(generic_adapter.validate_request(generic_with_body, generic_route, {}), "request_body_too_large")
-    unprojected_route = SimpleNamespace(
-        credential_ref="cred-generic",
-        adapter_config={
-            "response": {"mode": "json", "maxBodyBytes": 4096, "allowedHeaders": []}
+
+    credential_json_route = route(credential_json_snapshot, "demo.echo")
+    credential_json_adapter = get_adapter(credential_json_route.adapter_type)
+    credential_json_bypass = flow(
+        "POST",
+        "https://demo-upstream:8443/echo",
+        {
+            "safe": "expected",
+            "admin": True,
+            "callback_url": "https://attacker.example",
         },
     )
-    unprojected = flow(
-        "GET",
-        "https://api.example.test/data",
-        response={"id": "safe", "provider_internal_secret": "must-not-release"},
+    original_json_body = credential_json_bypass.request.raw_content
+    assert credential_json_adapter.validate_request(
+        credential_json_bypass,
+        credential_json_route,
+        {},
+    ).allowed
+    assert_denied(
+        request_decision(credential_json_route, credential_json_bypass, "echo"),
+        "json_body_field_not_allowed",
+    )
+    assert credential_json_bypass.request.raw_content == original_json_body
+    assert credential_json_adapter.rewrite_request(
+        credential_json_bypass,
+        credential_json_route,
+        {},
+    ).allowed
+    assert credential_json_bypass.request.raw_content == original_json_body
+
+    for invalid_json_body in (
+        b'{"safe":"first","safe":"second"}',
+        b'{"nested":{"value":1,"value":2}}',
+        b'{"safe":NaN}',
+        b'{"safe":Infinity}',
+        b'{"safe":-Infinity}',
+        b'{"safe":1e400}',
+    ):
+        invalid_json_request = flow(
+            "POST",
+            "https://demo-upstream:8443/echo",
+            {"safe": "placeholder"},
+        )
+        invalid_json_request.request.raw_content = invalid_json_body
+        assert_denied(
+            request_decision(credential_json_route, invalid_json_request, "echo"),
+            "json_body_invalid",
+        )
+
+    for stale_constraints in (
+        (),
+        ({"type": "jsonBody", "allowedFields": []},),
+        (
+            {
+                "type": "jsonBody",
+                "phase": "response",
+                "allowedFields": ["safe"],
+            },
+        ),
+    ):
+        stale_json_route = SimpleNamespace(
+            credential_ref=credential_json_route.credential_ref,
+            adapter_config=credential_json_route.adapter_config,
+            constraints=stale_constraints,
+        )
+        stale_json_decision = credential_json_adapter.validate_request(
+            credential_json_bypass,
+            stale_json_route,
+            {},
+        )
+        assert_denied(stale_json_decision, "credential_request_body_policy_missing")
+        assert stale_json_decision.status_code == 500
+        assert stale_json_decision.payload["requiredConstraint"] == "jsonBody"
+
+    stale_opaque_route = SimpleNamespace(
+        credential_ref=credential_json_route.credential_ref,
+        adapter_config={
+            **credential_json_route.adapter_config,
+            "request": {
+                **credential_json_route.adapter_config["request"],
+                "bodyMode": "any",
+            },
+        },
+        constraints=(),
     )
     assert_denied(
-        generic_adapter.validate_response(unprojected, unprojected_route, {}),
-        "response_allowed_fields_missing",
+        credential_json_adapter.validate_request(
+            credential_json_bypass,
+            stale_opaque_route,
+            {},
+        ),
+        "credential_opaque_request_body_denied",
     )
+
+    credentialless_json_bundle = copy.deepcopy(missing_json_body_policy)
+    credentialless_json_bundle["routes"][0].pop("credentialRef")
+    credentialless_json_snapshot = compile_policy_bundle(
+        credentialless_json_bundle,
+        validate_schema=validate_schema,
+    )
+    credentialless_json_route = route(credentialless_json_snapshot, "demo.echo")
+    credentialless_json_request = flow(
+        "POST",
+        "https://demo-upstream:8443/echo",
+        {"safe": "expected", "unrestricted_public_field": True},
+    )
+    credentialless_json_body = credentialless_json_request.request.raw_content
+    assert credential_json_adapter.validate_request(
+        credentialless_json_request,
+        credentialless_json_route,
+        {},
+    ).allowed
+    assert credential_json_adapter.rewrite_request(
+        credentialless_json_request,
+        credentialless_json_route,
+        {},
+    ).allowed
+    assert credentialless_json_request.request.raw_content == credentialless_json_body
+
+    explicit_any_route = route(explicit_opaque_snapshot, "demo.echo")
+    explicit_any_request = flow(
+        "POST",
+        "https://demo-upstream:8443/echo",
+        {"explicitly": "opaque", "admin": True},
+    )
+    explicit_any_body = explicit_any_request.request.raw_content
+    assert generic_adapter.validate_request(explicit_any_request, explicit_any_route, {}).allowed
+    assert generic_adapter.rewrite_request(explicit_any_request, explicit_any_route, {}).allowed
+    assert explicit_any_request.request.raw_content == explicit_any_body
+
+    slack_route = route(example_snapshot, "example.slack.chat_post.hourly")
+    slack_request = flow(
+        "POST",
+        "https://slack.com/api/chat.postMessage",
+        {"channel": "C123", "text": "bounded message"},
+    )
+    slack_body = slack_request.request.raw_content
+    assert generic_adapter.validate_request(slack_request, slack_route, {}).allowed
+    assert generic_adapter.rewrite_request(slack_request, slack_route, {}).allowed
+    assert slack_request.request.raw_content == slack_body
+
+    for stream_fields, expected_error in (
+        (None, "streaming_redaction_request_allowed_fields_missing"),
+        (["safe", "safe"], "streaming_redaction_request_allowed_fields_invalid"),
+    ):
+        stream_request_config = {
+            "allowedHeaders": ["content-type"],
+            "allowedQueryKeys": [],
+            "bodyMode": "jsonlStream",
+            "maxBodyBytes": 4096,
+        }
+        if stream_fields is not None:
+            stream_request_config["allowedFields"] = stream_fields
+        stale_stream_route = SimpleNamespace(
+            credential_ref=None,
+            adapter_config={"request": stream_request_config},
+            constraints=(),
+        )
+        stale_stream_request = flow(
+            "POST",
+            "https://api.example.test/events",
+            {"safe": "value"},
+        )
+        assert_denied(
+            generic_adapter.validate_request(stale_stream_request, stale_stream_route, {}),
+            expected_error,
+        )
+
+    for projection in (None, []):
+        response_config = {"mode": "json", "maxBodyBytes": 4096, "allowedHeaders": []}
+        if projection is not None:
+            response_config["allowedFields"] = projection
+        unprojected_route = SimpleNamespace(
+            credential_ref="cred-generic",
+            adapter_config={"response": response_config},
+        )
+        unprojected = flow(
+            "GET",
+            "https://api.example.test/data",
+            response={"id": "safe", "provider_internal_secret": "must-not-release"},
+        )
+        decision = generic_adapter.validate_response(unprojected, unprojected_route, {})
+        assert_denied(decision, "credential_response_projection_required")
+        assert decision.status_code == 502
+        assert decision.reason == "credential-bearing response requires a non-empty allowedFields projection"
+        assert decision.payload == {
+            "error": "credential_response_projection_required",
+            "adapter": "generic.rest",
+            "mode": "json",
+        }
+
+    source_with_siblings = {
+        "data": {"id": "safe", "provider_internal_secret": "nested-secret"},
+        "provider_internal_secret": "top-level-secret",
+    }
+    assert generic_adapter._redact_json(source_with_siblings, []) == {}
+    assert generic_adapter._redact_json([source_with_siblings], []) == []
+    projected_route = SimpleNamespace(
+        credential_ref="cred-generic",
+        adapter_config={
+            "response": {
+                "mode": "json",
+                "maxBodyBytes": 4096,
+                "allowedFields": ["data.id"],
+                "allowedHeaders": [],
+            }
+        },
+    )
+    projected = flow(
+        "GET",
+        "https://api.example.test/data",
+        response=source_with_siblings,
+    )
+    assert generic_adapter.validate_response(projected, projected_route, {}).allowed
+    assert json.loads(projected.response.get_text()) == {"data": {"id": "safe"}}
+
+    explicit_opaque_route = SimpleNamespace(
+        credential_ref=None,
+        adapter_config={
+            "response": {"mode": "any", "maxBodyBytes": 4096, "allowedHeaders": []}
+        },
+    )
+    explicit_opaque_response = flow(
+        "GET",
+        "https://public.example.test/data",
+        response=source_with_siblings,
+    )
+    original_opaque_body = explicit_opaque_response.response.raw_content
+    assert generic_adapter.validate_response(
+        explicit_opaque_response,
+        explicit_opaque_route,
+        {},
+    ).allowed
+    assert explicit_opaque_response.response.raw_content == original_opaque_body
+
+    x_projection_route = route(demo, "demo.x.tweet.one_per_day")
+    x_projection = flow(
+        "POST",
+        "https://demo-upstream:8443/2/tweets",
+        response=source_with_siblings,
+    )
+    assert get_adapter("x.v2").validate_response(x_projection, x_projection_route, {}).allowed
+    assert json.loads(x_projection.response.get_text()) == {"data": {"id": "safe"}}
 
     object_store_route = route(example_snapshot, "example.object_store.small_puts")
     object_store_response = flow(
@@ -856,6 +1709,23 @@ def main() -> None:
         evaluate_response_constraints(high_score, response_items_route),
         "response_json_field_max",
     )
+    for invalid_response_body in (
+        b'{"data":[{"status":"ready","status":"done","score":0.8}]}',
+        b'{"data":[{"status":"ready","score":NaN}]}',
+        b'{"data":[{"status":"ready","score":Infinity}]}',
+        b'{"data":[{"status":"ready","score":-Infinity}]}',
+        b'{"data":[{"status":"ready","score":1e400}]}',
+    ):
+        invalid_result = flow(
+            "GET",
+            "https://api.example.test/results",
+            response={"data": []},
+        )
+        invalid_result.response.raw_content = invalid_response_body
+        assert_denied(
+            evaluate_response_constraints(invalid_result, response_items_route),
+            "response_json_invalid",
+        )
     missing_results = flow("GET", "https://api.example.test/results", response={"meta": {}})
     assert_denied(
         evaluate_response_constraints(missing_results, response_items_route),
@@ -892,6 +1762,37 @@ def main() -> None:
         "metadata.agent_request_id": "req-123",
     }, stripe_operation
     assert request_decision(stripe_route, stripe_request, "stripe.payment_intents.create").allowed
+
+    stale_stripe_route = SimpleNamespace(
+        credential_ref=stripe_route.credential_ref,
+        adapter_config=stripe_route.adapter_config,
+        constraints=(),
+    )
+    stale_stripe_decision = stripe_adapter.validate_request(
+        stripe_request,
+        stale_stripe_route,
+        {},
+    )
+    assert_denied(stale_stripe_decision, "credential_request_body_policy_missing")
+    assert stale_stripe_decision.status_code == 500
+    assert stale_stripe_decision.payload["requiredConstraint"] == "formBody"
+
+    sibling_form_field = copy.deepcopy(stripe_request)
+    sibling_form_field.request.raw_content += (
+        b"&transfer_data%5Bdestination%5D=acct_attacker"
+    )
+    original_form_body = sibling_form_field.request.raw_content
+    assert stripe_adapter.validate_request(sibling_form_field, stripe_route, {}).allowed
+    assert_denied(
+        request_decision(
+            stripe_route,
+            sibling_form_field,
+            "stripe.payment_intents.create",
+        ),
+        "form_body_field_not_allowed",
+    )
+    assert stripe_adapter.rewrite_request(sibling_form_field, stripe_route, {}).allowed
+    assert sibling_form_field.request.raw_content == original_form_body
 
     if _canonical_forwarded_request_headers is not None:
         stripe_credential = example_snapshot.credentials[stripe_route.credential_ref]
@@ -1062,6 +1963,466 @@ def main() -> None:
     assert npm_fields["packageVersion"] == "1.2.3", npm_fields
     assert npm_fields["tarballIntegrity"].startswith("sha512-"), npm_fields
     assert npm_adapter.validate_request(npm_request, npm_route, {"package": "@scope%2fexample"}).allowed
+
+    valid_npm_json = npm_request.request.raw_content.decode("utf-8")
+    invalid_npm_publish_bodies = (
+        valid_npm_json.replace(
+            '"name": "@scope/example"',
+            '"name": "@scope/example", "name": "@scope/attacker"',
+            1,
+        ).encode("utf-8"),
+        (valid_npm_json[:-1] + ', "nonFinite": NaN}').encode("utf-8"),
+        (valid_npm_json[:-1] + ', "overflow": 1e400}').encode("utf-8"),
+    )
+    for invalid_body in invalid_npm_publish_bodies:
+        invalid_publish = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
+        invalid_publish.request.raw_content = invalid_body
+        assert_denied(
+            npm_adapter.validate_request(
+                invalid_publish,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            ),
+            "npm_publish_invalid_json",
+        )
+        try:
+            npm_adapter.operation_fields(
+                invalid_publish,
+                npm_route,
+                {"package": "@scope%2fexample"},
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("npm JIT operation fields accepted an invalid publish body")
+
+    invalid_metadata = flow("POST", "https://registry.npmjs.org/-/npm/v1/user")
+    invalid_metadata.request.raw_content = b'{"email":"owner@example.test","email":"attacker@example.test"}'
+    assert_denied(
+        npm_adapter.validate_request(invalid_metadata, npm_route, {}),
+        "npm_write_invalid_json",
+    )
+
+    invalid_revision = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
+    invalid_revision.request.raw_content = b'{"_rev":"1-safe","_rev":"2-attacker"}'
+    credential_accesses: list[str] = []
+    upstream_contacts: list[str] = []
+    invalid_revision_decision = npm_adapter.validate_request(
+        invalid_revision,
+        npm_route,
+        {"package": "@scope%2fexample"},
+    )
+    if invalid_revision_decision.allowed:
+        credential_accesses.append("cred-npm")
+        upstream_contacts.append(invalid_revision.request.pretty_url)
+    assert_denied(invalid_revision_decision, "npm_publish_invalid_json")
+    assert credential_accesses == []
+    assert upstream_contacts == []
+
+    if ServerwareAddon is not None:
+        from serverware import policy_engine
+
+        original_get_policy_snapshot = policy_engine.get_policy_snapshot
+        original_get_credential = runtime.get_credential
+        original_get_credential_version = runtime.get_credential_version
+        original_atomic_mode = runtime.atomic_release_authorization_enabled
+        original_reserve = runtime.reserve_release_authorization
+        original_dispatch = runtime.dispatch_release_authorization
+        credential_reads: list[str | None] = []
+        authorization_calls: list[str] = []
+
+        def reject_credential_read(credential_id: str | None):
+            credential_reads.append(credential_id)
+            raise AssertionError("invalid npm body reached credential access")
+
+        policy_engine.get_policy_snapshot = lambda: example_snapshot
+        runtime.get_credential = reject_credential_read
+        runtime.get_credential_version = reject_credential_read
+        runtime.atomic_release_authorization_enabled = lambda: True
+        runtime.reserve_release_authorization = lambda **_kwargs: authorization_calls.append("reserve")
+        runtime.dispatch_release_authorization = lambda **_kwargs: authorization_calls.append("dispatch")
+        try:
+            blocked_npm = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
+            blocked_npm.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_npm.request.raw_content = invalid_npm_publish_bodies[0]
+            ServerwareAddon().request(blocked_npm)
+            assert credential_reads == [], credential_reads
+            assert authorization_calls == [], authorization_calls
+            assert blocked_npm.metadata.get("serverware_blocked_response") is True
+            assert blocked_npm.response.status_code == 403
+            assert json.loads(blocked_npm.response.raw_content)["error"] == "npm_publish_invalid_json"
+        finally:
+            runtime.dispatch_release_authorization = original_dispatch
+            runtime.reserve_release_authorization = original_reserve
+            runtime.atomic_release_authorization_enabled = original_atomic_mode
+            runtime.get_credential_version = original_get_credential_version
+            runtime.get_credential = original_get_credential
+            policy_engine.get_policy_snapshot = original_get_policy_snapshot
+
+        missing_lifecycle = flow("POST", "https://demo-upstream:8443/echo")
+        runtime.atomic_release_authorization_enabled = lambda: True
+        try:
+            assert_denied(
+                policy_engine.dispatch_release_authorization(missing_lifecycle),
+                "release_authorization_lifecycle_missing",
+            )
+            runtime.atomic_release_authorization_enabled = lambda: False
+            assert policy_engine.dispatch_release_authorization(missing_lifecycle).allowed
+        finally:
+            runtime.atomic_release_authorization_enabled = original_atomic_mode
+
+        successful_reserve = {
+            "authorized": True,
+            "state": "reserved",
+            "reason": "reserved",
+            "attempt_id": "attempt:successful-reserve",
+            "binding_digest": "sha256:" + "9" * 64,
+            "idempotent_replay": False,
+            "grant_id": "grant:successful-reserve",
+            "approval_request_id": "approval:successful-reserve",
+            "approval_status": None,
+            "approval_expires_at": None,
+            "approval_created": None,
+            "reservation_expires_at_epoch_ms": 123456,
+            "dispatch_started_at_epoch_ms": None,
+            "dispatch_expires_at_epoch_ms": None,
+            "completion_outcome": None,
+            "retry_after_seconds": 0,
+        }
+        validated_jit_reserve = _validated_successful_release_reserve(
+            successful_reserve,
+            attempt_id="attempt:successful-reserve",
+            jit_required=True,
+        )
+        assert validated_jit_reserve == {
+            "binding_digest": "sha256:" + "9" * 64,
+            "reservation_expires_at_epoch_ms": 123456,
+            "grant_id": "grant:successful-reserve",
+            "approval_request_id": "approval:successful-reserve",
+        }
+        for field, invalid_value in (
+            ("grant_id", None),
+            ("grant_id", ""),
+            ("grant_id", " grant:whitespace"),
+            ("grant_id", "g" * 257),
+            ("grant_id", "grant:invalid\nidentity"),
+            ("approval_request_id", None),
+            ("approval_request_id", ""),
+            ("approval_request_id", "approval:whitespace "),
+            ("approval_request_id", "a" * 257),
+            ("approval_request_id", "approval:invalid\nidentity"),
+        ):
+            invalid_identity = {**successful_reserve, field: invalid_value}
+            assert (
+                _validated_successful_release_reserve(
+                    invalid_identity,
+                    attempt_id="attempt:successful-reserve",
+                    jit_required=True,
+                )
+                is None
+            ), (field, invalid_value)
+        for field, invalid_value in (
+            ("state", "dispatching"),
+            ("reason", "authorized"),
+            ("reservation_expires_at_epoch_ms", None),
+            ("dispatch_started_at_epoch_ms", 123),
+            ("completion_outcome", "forwarded"),
+            ("retry_after_seconds", 1),
+            ("approval_status", "pending"),
+        ):
+            invalid_lifecycle = {**successful_reserve, field: invalid_value}
+            assert (
+                _validated_successful_release_reserve(
+                    invalid_lifecycle,
+                    attempt_id="attempt:successful-reserve",
+                    jit_required=True,
+                )
+                is None
+            ), (field, invalid_value)
+        non_jit_reserve = {
+            **successful_reserve,
+            "grant_id": None,
+            "approval_request_id": None,
+        }
+        assert _validated_successful_release_reserve(
+            non_jit_reserve,
+            attempt_id="attempt:successful-reserve",
+            jit_required=False,
+        ) is not None
+        for unexpected_identity in (
+            {"grant_id": "grant:unexpected"},
+            {"approval_request_id": "approval:unexpected"},
+        ):
+            assert (
+                _validated_successful_release_reserve(
+                    {**non_jit_reserve, **unexpected_identity},
+                    attempt_id="attempt:successful-reserve",
+                    jit_required=False,
+                )
+                is None
+            )
+
+        lifecycle_metadata = flow("POST", "https://demo-upstream:8443/echo")
+        stored_lifecycle = policy_engine._store_release_lifecycle(
+            lifecycle_metadata,
+            attempt_id="attempt:successful-reserve",
+            binding_digest="sha256:" + "9" * 64,
+            state="reserved",
+            grant_id="grant:successful-reserve",
+            approval_request_id="approval:successful-reserve",
+            reservation_expires_at_epoch_ms=123456,
+        )
+        assert stored_lifecycle["grant_id"] == "grant:successful-reserve"
+        assert (
+            stored_lifecycle["approval_request_id"]
+            == "approval:successful-reserve"
+        )
+        assert (
+            lifecycle_metadata.metadata["serverware_release_grant_id"]
+            == "grant:successful-reserve"
+        )
+        assert (
+            lifecycle_metadata.metadata["serverware_release_approval_request_id"]
+            == "approval:successful-reserve"
+        )
+
+        original_atomic_snapshot = policy_engine.get_policy_snapshot
+        original_atomic_get_version = runtime.get_credential_version
+        original_atomic_get_credential = runtime.get_credential
+        original_atomic_reserve = runtime.reserve_release_authorization
+        original_atomic_complete = runtime.complete_release_authorization
+        invalid_reserve_credential_reads: list[str | None] = []
+        invalid_reserve_completions: list[str] = []
+
+        def invalid_successful_reserve(**kwargs):
+            return {
+                **successful_reserve,
+                "attempt_id": kwargs["attempt_id"],
+                "grant_id": None,
+            }
+
+        def reject_invalid_reserve_credential_read(credential_id):
+            invalid_reserve_credential_reads.append(credential_id)
+            raise AssertionError("invalid atomic reserve reached credential access")
+
+        def cancel_invalid_successful_reserve(**kwargs):
+            invalid_reserve_completions.append(kwargs["outcome"])
+            return {
+                "authorized": False,
+                "state": "cancelled",
+                "attempt_id": kwargs["attempt_id"],
+                "binding_digest": kwargs["binding_digest"],
+                "completion_outcome": kwargs["outcome"],
+            }
+
+        policy_engine.get_policy_snapshot = lambda: example_snapshot
+        runtime.atomic_release_authorization_enabled = lambda: True
+        runtime.get_credential_version = lambda _credential_id: 1
+        runtime.get_credential = reject_invalid_reserve_credential_read
+        runtime.reserve_release_authorization = invalid_successful_reserve
+        runtime.complete_release_authorization = cancel_invalid_successful_reserve
+        try:
+            invalid_success = copy.deepcopy(npm_request)
+            invalid_success.request.headers["X-Serverware-Agent"] = "example-agent"
+            invalid_success_decision = policy_engine.evaluate_request(
+                invalid_success
+            ).decision
+            assert_denied(
+                invalid_success_decision,
+                "release_authorization_reserve_invalid",
+            )
+            assert invalid_reserve_credential_reads == []
+            assert invalid_reserve_completions == ["not_forwarded"]
+            assert invalid_success.metadata["serverware_release_state"] == "cancelled"
+        finally:
+            runtime.complete_release_authorization = original_atomic_complete
+            runtime.reserve_release_authorization = original_atomic_reserve
+            runtime.get_credential = original_atomic_get_credential
+            runtime.get_credential_version = original_atomic_get_version
+            runtime.atomic_release_authorization_enabled = original_atomic_mode
+            policy_engine.get_policy_snapshot = original_atomic_snapshot
+
+        from serverware import mitm_addon
+
+        addon = ServerwareAddon()
+        original_connect_snapshot = mitm_addon.get_policy_snapshot
+        original_connect_log = runtime.log_request
+        connect_routes = (
+            SimpleNamespace(
+                scheme="https",
+                host="connect.example.test",
+                port=443,
+                principals=("agent:connect-assigned",),
+            ),
+            SimpleNamespace(
+                scheme="http",
+                host="connect.example.test",
+                port=443,
+                principals=("agent:http-only",),
+            ),
+        )
+        identified_inputs: list[tuple[str | None, object]] = []
+
+        def connect_flow():
+            item = flow("CONNECT", "https://connect.example.test:443")
+            item.request.host = "CONNECT.EXAMPLE.TEST."
+            item.request.port = 443
+            item.request.headers = {
+                "Proxy-Authorization": "Basic must-not-enter-audit",
+                "X-Serverware-Agent": "connect-agent",
+            }
+            item.client_conn.peername = ("10.42.0.9", 51234)
+            return item
+
+        def connect_snapshot(principal):
+            def identify(client_ip, headers):
+                identified_inputs.append((client_ip, headers))
+                return principal
+
+            return SimpleNamespace(
+                routes=connect_routes,
+                identify_principal=identify,
+            )
+
+        connect_logs: list[tuple[tuple, dict]] = []
+        runtime.log_request = lambda *args, **kwargs: connect_logs.append((args, kwargs))
+        try:
+            unknown_principal = connect_flow()
+            mitm_addon.get_policy_snapshot = lambda: connect_snapshot(None)
+            addon.http_connect(unknown_principal)
+            assert unknown_principal.response.status_code == 403
+            assert unknown_principal.metadata["serverware_blocked_response"] is True
+            assert json.loads(unknown_principal.response.raw_content)["error"] == "unknown_connect_denied"
+
+            unassigned_principal = connect_flow()
+            mitm_addon.get_policy_snapshot = lambda: connect_snapshot(
+                SimpleNamespace(id="agent:connect-unassigned")
+            )
+            addon.http_connect(unassigned_principal)
+            assert unassigned_principal.response.status_code == 403
+            assert unassigned_principal.metadata["serverware_blocked_response"] is True
+
+            snapshot_failure = connect_flow()
+            mitm_addon.get_policy_snapshot = lambda: (_ for _ in ()).throw(
+                RuntimeError("forced CONNECT snapshot failure")
+            )
+            addon.http_connect(snapshot_failure)
+            assert snapshot_failure.response.status_code == 503
+            assert json.loads(snapshot_failure.response.raw_content) == {
+                "error": "connect_hook_failed_closed"
+            }
+
+            log_failure = connect_flow()
+            mitm_addon.get_policy_snapshot = lambda: connect_snapshot(None)
+            runtime.log_request = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("forced CONNECT audit failure")
+            )
+            addon.http_connect(log_failure)
+            assert log_failure.response.status_code == 503
+            assert log_failure.metadata["serverware_blocked_response"] is True
+            assert json.loads(log_failure.response.raw_content) == {
+                "error": "connect_hook_failed_closed"
+            }
+
+            assigned = connect_flow()
+            assigned_principal = SimpleNamespace(id="agent:connect-assigned")
+            mitm_addon.get_policy_snapshot = lambda: connect_snapshot(assigned_principal)
+            runtime.log_request = lambda *args, **kwargs: connect_logs.append((args, kwargs))
+            addon.http_connect(assigned)
+            assert getattr(assigned, "response", None) is None
+            assert assigned.metadata.get("serverware_blocked_response") is not True
+            assert identified_inputs[-1] == ("10.42.0.9", assigned.request.headers)
+            assert "must-not-enter-audit" not in repr(connect_logs)
+        finally:
+            runtime.log_request = original_connect_log
+            mitm_addon.get_policy_snapshot = original_connect_snapshot
+
+        original_addon_evaluate_request = mitm_addon.evaluate_request
+        original_addon_dispatch = mitm_addon.dispatch_release_authorization
+        original_complete = runtime.complete_release_authorization
+        completion_outcomes: list[str] = []
+        dispatch_calls: list[str] = []
+
+        def complete_failed_hook(**kwargs):
+            completion_outcomes.append(kwargs["outcome"])
+            expected_state = {
+                "not_forwarded": "cancelled",
+                "unknown": "committed_indeterminate",
+            }[kwargs["outcome"]]
+            return {
+                "authorized": expected_state != "cancelled",
+                "state": expected_state,
+                "attempt_id": kwargs["attempt_id"],
+                "binding_digest": kwargs["binding_digest"],
+                "completion_outcome": kwargs["outcome"],
+            }
+
+        def install_lifecycle(item, *, dispatch_attempted: bool = False):
+            item.metadata["serverware_release_authorization"] = {
+                "attempt_id": "attempt:addon-failure",
+                "flow_id": "attempt:addon-failure",
+                "binding_digest": "sha256:" + "8" * 64,
+                "state": "reserved",
+                "dispatch_attempted": dispatch_attempted,
+            }
+
+        def fail_after_reserve(item):
+            install_lifecycle(item)
+            raise RuntimeError("request evaluation failed after reserve")
+
+        def allow_with_reservation(item):
+            install_lifecycle(item)
+            return SimpleNamespace(decision=policy_engine.PolicyDecision(True))
+
+        def fail_during_dispatch(item):
+            dispatch_calls.append("dispatch")
+            item.metadata["serverware_release_authorization"]["dispatch_attempted"] = True
+            raise RuntimeError("dispatch transport failed unexpectedly")
+
+        runtime.complete_release_authorization = complete_failed_hook
+        try:
+            mitm_addon.evaluate_request = fail_after_reserve
+            mitm_addon.dispatch_release_authorization = lambda _item: dispatch_calls.append(
+                "unexpected_dispatch"
+            )
+            reserved_failure = flow("POST", "https://demo-upstream:8443/echo")
+            addon.request(reserved_failure)
+            assert reserved_failure.response is not None
+            assert reserved_failure.response.status_code == 503
+            assert reserved_failure.metadata["serverware_blocked_response"] is True
+            assert json.loads(reserved_failure.response.raw_content) == {
+                "error": "request_hook_failed_closed"
+            }
+            assert dispatch_calls == [], dispatch_calls
+            assert completion_outcomes == ["not_forwarded"], completion_outcomes
+            assert reserved_failure.metadata["serverware_release_state"] == "cancelled"
+
+            mitm_addon.evaluate_request = allow_with_reservation
+            mitm_addon.dispatch_release_authorization = fail_during_dispatch
+            dispatch_failure = flow("POST", "https://demo-upstream:8443/echo")
+            addon.request(dispatch_failure)
+            assert dispatch_failure.response is not None
+            assert dispatch_failure.response.status_code == 503
+            assert dispatch_failure.metadata["serverware_blocked_response"] is True
+            assert completion_outcomes == ["not_forwarded", "unknown"], completion_outcomes
+            assert dispatch_failure.metadata["serverware_release_state"] == "committed_indeterminate"
+
+            mitm_addon.evaluate_request = lambda _item: (_ for _ in ()).throw(
+                AssertionError("streamed request reached policy evaluation")
+            )
+            streamed = flow("POST", "https://demo-upstream:8443/echo")
+            streamed.request.stream = True
+            addon.requestheaders(streamed)
+            addon.request(streamed)
+            assert streamed.response.status_code == 503
+            assert json.loads(streamed.response.raw_content) == {
+                "error": "request_streaming_unsupported"
+            }
+        finally:
+            runtime.complete_release_authorization = original_complete
+            mitm_addon.dispatch_release_authorization = original_addon_dispatch
+            mitm_addon.evaluate_request = original_addon_evaluate_request
+
     npm_extra_version = copy.deepcopy(npm_document)
     npm_extra_version["versions"]["9.9.9"] = {"name": "@scope/example", "version": "9.9.9"}
     assert_denied(
@@ -1263,12 +2624,49 @@ def main() -> None:
     )
     assert_denied(request_decision(search_route, huge_page, "search.read"), "query_numeric_max_exceeded")
 
+    for non_finite in ("NaN", "Infinity", "-Infinity", "1e400"):
+        non_finite_query = flow(
+            "GET",
+            "https://demo-upstream:8443/2/tweets/search/recent"
+            f"?query=serverware&start_time={iso_days_ago(1)}&max_results={non_finite}",
+        )
+        assert_denied(
+            request_decision(search_route, non_finite_query, "search.read"),
+            "query_numeric_parameter_invalid",
+        )
+        non_finite_date_query = flow(
+            "GET",
+            "https://demo-upstream:8443/2/tweets/search/recent"
+            f"?query=serverware&start_time={non_finite}&max_results=10",
+        )
+        assert_denied(
+            request_decision(search_route, non_finite_date_query, "search.read"),
+            "query_date_parameter_invalid",
+        )
+
     old_response = flow(
         "GET",
         "https://demo-upstream:8443/2/tweets/search/recent?query=serverware",
         response={"data": [{"id": "1", "text": "old", "created_at": iso_days_ago(10)}]},
     )
     assert_denied(evaluate_response_constraints(old_response, search_route), "response_date_window_exceeded")
+    for invalid_date_body in (
+        b'{"data":[{"created_at":"first","created_at":"second"}]}',
+        b'{"data":[{"created_at":NaN}]}',
+        b'{"data":[{"created_at":Infinity}]}',
+        b'{"data":[{"created_at":-Infinity}]}',
+        b'{"data":[{"created_at":1e400}]}',
+    ):
+        invalid_date_response = flow(
+            "GET",
+            "https://demo-upstream:8443/2/tweets/search/recent?query=serverware",
+            response={"data": []},
+        )
+        invalid_date_response.response.raw_content = invalid_date_body
+        assert_denied(
+            evaluate_response_constraints(invalid_date_response, search_route),
+            "response_json_invalid",
+        )
     empty_response = flow(
         "GET",
         "https://demo-upstream:8443/2/tweets/search/recent?query=serverware",
@@ -1295,6 +2693,36 @@ def main() -> None:
     assert evaluate_response_constraints(gmail_detail, gmail_route).allowed
 
     gmail_adapter = get_adapter(gmail_route.adapter_type)
+    for projection in (None, []):
+        unprojected_gmail_route = copy.deepcopy(gmail_route)
+        response_config = unprojected_gmail_route.adapter_config["response"]
+        if projection is None:
+            response_config.pop("allowedFields")
+        else:
+            response_config["allowedFields"] = projection
+        unprojected_gmail = flow(
+            "GET",
+            "https://demo-upstream:8443/gmail/v1/users/me/messages/recent",
+            response={
+                "id": "recent",
+                "internalDate": str(epoch_ms_days_ago(1)),
+                "provider_internal_secret": "must-not-release",
+            },
+        )
+        decision = gmail_adapter.validate_response(
+            unprojected_gmail,
+            unprojected_gmail_route,
+            {"user": "me", "message_id": "recent"},
+        )
+        assert_denied(decision, "credential_response_projection_required")
+        assert decision.status_code == 502
+        assert decision.reason == "credential-bearing response requires a non-empty allowedFields projection"
+        assert decision.payload == {
+            "error": "credential_response_projection_required",
+            "adapter": "gmail.v1",
+            "mode": "json",
+        }
+
     gmail_unproven = flow(
         "GET",
         "https://demo-upstream:8443/gmail/v1/users/me/messages",
@@ -1323,7 +2751,9 @@ def main() -> None:
         response={
             "id": "recent",
             "internalDate": str(epoch_ms_days_ago(1)),
+            "provider_internal_secret": "top-level-secret",
             "payload": {
+                "body": {"data": "nested-secret"},
                 "headers": [
                     {"name": "From", "value": "sender@example.test"},
                     {"name": "Subject", "value": "allowed"},
@@ -1337,8 +2767,13 @@ def main() -> None:
     )
     gmail_detail_params = {"user": "me", "message_id": "recent"}
     assert gmail_adapter.validate_response(gmail_headers, gmail_route, gmail_detail_params).allowed
-    released_headers = json.loads(gmail_headers.response.get_text())["payload"]["headers"]
+    released_gmail = json.loads(gmail_headers.response.get_text())
+    released_headers = released_gmail["payload"]["headers"]
     assert [item["name"] for item in released_headers] == ["From", "Subject"], released_headers
+    assert "provider_internal_secret" not in released_gmail
+    assert "body" not in released_gmail["payload"]
+    assert "top-level-secret" not in gmail_headers.response.get_text()
+    assert "nested-secret" not in gmail_headers.response.get_text()
     assert set(name.lower() for name in gmail_headers.response.headers) == {
         "content-type",
         "content-length",
@@ -1459,6 +2894,75 @@ def main() -> None:
         original_log_request = runtime.log_request
         runtime.log_request = lambda *args, **kwargs: audit_calls.append((args, kwargs))
         try:
+            from serverware import mitm_addon
+
+            lifecycle_order: list[str] = []
+            lifecycle_response = guarded_response(
+                "prototype-lifecycle-secret",
+                {"ok": True},
+            )
+            lifecycle_response.metadata.update(
+                {
+                    "serverware_release_authorization": {
+                        "attempt_id": "attempt:response-completion",
+                        "flow_id": "attempt:response-completion",
+                        "binding_digest": "sha256:" + "7" * 64,
+                        "state": "dispatching",
+                        "dispatch_attempted": True,
+                    },
+                    "serverware_release_attempt_id": "attempt:response-completion",
+                    "serverware_release_binding_digest": "sha256:" + "7" * 64,
+                    "serverware_release_state": "dispatching",
+                }
+            )
+            original_complete_release = runtime.complete_release_authorization
+            original_addon_evaluate_response = mitm_addon.evaluate_response
+
+            def complete_forwarded(**kwargs):
+                lifecycle_order.append("complete:forwarded")
+                return {
+                    "authorized": True,
+                    "state": "committed",
+                    "attempt_id": kwargs["attempt_id"],
+                    "binding_digest": kwargs["binding_digest"],
+                    "completion_outcome": kwargs["outcome"],
+                }
+
+            def observe_response_policy(item):
+                lifecycle_order.append("response_policy")
+                return original_addon_evaluate_response(item)
+
+            runtime.complete_release_authorization = complete_forwarded
+            mitm_addon.evaluate_response = observe_response_policy
+            try:
+                ServerwareAddon().response(lifecycle_response)
+            finally:
+                mitm_addon.evaluate_response = original_addon_evaluate_response
+                runtime.complete_release_authorization = original_complete_release
+            assert lifecycle_order == ["complete:forwarded", "response_policy"], lifecycle_order
+            assert lifecycle_response.metadata["serverware_release_state"] == "committed"
+
+            evaluator_secret = "prototype-evaluator-failure-secret-6bf4"
+            evaluator_failure = guarded_response(
+                evaluator_secret,
+                {"echo": evaluator_secret},
+            )
+            original_evaluator_response = evaluator_failure.response
+            mitm_addon.evaluate_response = lambda _item: (_ for _ in ()).throw(
+                RuntimeError("forced response evaluator failure")
+            )
+            try:
+                ServerwareAddon().response(evaluator_failure)
+            finally:
+                mitm_addon.evaluate_response = original_addon_evaluate_response
+            assert evaluator_failure.response is not original_evaluator_response
+            assert evaluator_failure.metadata["serverware_blocked_response"] is True
+            assert evaluator_failure.response.status_code == 503
+            assert json.loads(evaluator_failure.response.get_text()) == {
+                "error": "response_hook_failed_closed"
+            }
+            assert evaluator_secret not in evaluator_failure.response.get_text()
+
             escaped_secret = 'prototype-"credential /? value'
             reflected = guarded_response(escaped_secret, {"echo": escaped_secret})
             reflected_decision = evaluate_response(reflected)

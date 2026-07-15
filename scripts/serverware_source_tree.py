@@ -43,7 +43,7 @@ SOURCE_NAMES = {
     "Procfile",
     "requirements.txt",
 }
-SOURCE_ROOTS = {"data-plane", "schemas", "scripts", "security", "serverware"}
+SOURCE_ROOTS = {"data-plane", "policies", "schemas", "scripts", "security", "serverware"}
 EXCLUDED_PARTS = (
     ".git",
     ".mypy_cache",
@@ -228,5 +228,8 @@ def source_tree_summary(root: Path = ROOT) -> dict[str, Any]:
         "files": files,
         "digest": sha256_prefixed_bytes(canonical_json(_manifest(files)).encode("utf-8")),
         "exclusions": list(EXCLUDED_PARTS),
-        "selection": "all tracked entries plus relevant untracked source/build/config inputs; relevant filesystem inputs without Git",
+        "selection": (
+            "all tracked entries plus every untracked file under production COPY roots and relevant "
+            "root-level source/build/config inputs; equivalent filesystem inputs without Git"
+        ),
     }

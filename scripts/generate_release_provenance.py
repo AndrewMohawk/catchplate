@@ -11,6 +11,7 @@ import shlex
 import ssl
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import urllib.parse
@@ -24,7 +25,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 import serverware_source_tree
 from serverware.http_client import request_bytes
@@ -38,6 +39,25 @@ LOCK_REQUIREMENT_RE = re.compile(
     r"==(?P<version>[A-Za-z0-9][A-Za-z0-9._+!-]{0,127})\s+\\$"
 )
 LOCK_HASH_RE = re.compile(r"^--hash=(?P<digest>sha256:[0-9a-f]{64})(?:\s+(?P<continued>\\))?$")
+
+
+def atomic_write_json(path: Path, value: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_raw = tempfile.mkstemp(
+        prefix=f".{path.name}.",
+        suffix=".tmp",
+        dir=path.parent,
+    )
+    temporary = Path(temporary_raw)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 MAX_PYTHON_MANIFEST_BYTES = 8 * 1024 * 1024
 
 
@@ -68,6 +88,7 @@ def request_json(
     headers: dict[str, str] | None = None,
     payload: Any | None = None,
     ca_bundle: Path | None = None,
+    timeout: float = 10,
 ) -> dict[str, Any]:
     data = None if payload is None else canonical_json(payload).encode("utf-8")
     req = urllib.request.Request(url, data=data, method=method, headers=headers or {})
@@ -75,7 +96,7 @@ def request_json(
         req.add_header("Content-Type", "application/json")
     context = ssl.create_default_context(cafile=str(ca_bundle)) if ca_bundle else None
     return json.loads(
-        request_bytes(req, timeout=10, max_bytes=8 * 1024 * 1024, context=context).body
+        request_bytes(req, timeout=timeout, max_bytes=8 * 1024 * 1024, context=context).body
     )
 
 
@@ -111,10 +132,26 @@ def validate_production_anchor(url: str, token: str) -> None:
         raise ValueError("production release anchor token must be at least 32 characters")
 
 
-def load_release_key(path: Path) -> Ed25519PrivateKey:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def load_release_key(
+    path: Path,
+    *,
+    allow_create: bool = True,
+    require_owner_only: bool = False,
+) -> Ed25519PrivateKey:
+    if require_owner_only:
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("production release signing key must be an existing regular non-symlink file")
+        if path.stat().st_mode & 0o077:
+            raise ValueError("production release signing key must not be accessible by group or other users")
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        return serialization.load_pem_private_key(path.read_bytes(), password=None)
+        key = serialization.load_pem_private_key(path.read_bytes(), password=None)
+        if not isinstance(key, Ed25519PrivateKey):
+            raise ValueError("release signing key must be Ed25519")
+        return key
+    if not allow_create:
+        raise ValueError("production release signing key does not exist")
     key = Ed25519PrivateKey.generate()
     path.write_bytes(
         key.private_bytes(
@@ -125,6 +162,40 @@ def load_release_key(path: Path) -> Ed25519PrivateKey:
     )
     os.chmod(path, 0o600)
     return key
+
+
+def load_release_public_key(path: Path) -> Ed25519PublicKey:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("trusted release public key must be an existing regular non-symlink file")
+    if path.stat().st_size > 65536:
+        raise ValueError("trusted release public key exceeds 65536 bytes")
+    key = serialization.load_pem_public_key(path.read_bytes())
+    if not isinstance(key, Ed25519PublicKey):
+        raise ValueError("trusted release public key must be Ed25519")
+    return key
+
+
+def public_key_id(key: Ed25519PublicKey) -> str:
+    return sha256_prefixed_bytes(
+        key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+
+
+def load_production_release_key(private_path: Path, trusted_public_path: Path) -> Ed25519PrivateKey:
+    private_key = load_release_key(
+        private_path,
+        allow_create=False,
+        require_owner_only=True,
+    )
+    trusted_public_key = load_release_public_key(trusted_public_path)
+    if public_key_id(private_key.public_key()) != public_key_id(trusted_public_key):
+        raise ValueError(
+            "production release signing key does not match the independently trusted public key"
+        )
+    return private_key
 
 
 def public_key_info(key: Ed25519PrivateKey) -> dict[str, str]:
@@ -641,7 +712,11 @@ def main() -> None:
     parser.add_argument("--production-images-env", default=".tmp/production-images.env")
     parser.add_argument("--out", default=".tmp/release-provenance.json")
     parser.add_argument("--sbom-out", default=".tmp/sbom.cdx.json")
-    parser.add_argument("--key", default=".tmp/release-signing-ed25519.pem")
+    parser.add_argument("--key", default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY", ""))
+    parser.add_argument(
+        "--trusted-public-key",
+        default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
+    )
     parser.add_argument("--container-out", default="/data/release-provenance.json")
     args = parser.parse_args()
 
@@ -656,6 +731,18 @@ def main() -> None:
         args.anchor = args.anchor or loaded_env.get("SERVERWARE_RELEASE_ANCHOR_BASE", "")
         args.anchor_token = args.anchor_token or loaded_env.get("SERVERWARE_AUDIT_ANCHOR_TOKEN", "")
         args.anchor_ca_bundle = args.anchor_ca_bundle or loaded_env.get("SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE", "")
+        args.key = args.key or loaded_env.get("SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY", "")
+        args.trusted_public_key = args.trusted_public_key or loaded_env.get(
+            "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""
+        )
+        if not args.key:
+            raise ValueError(
+                "production release provenance requires SERVERWARE_RELEASE_PROVENANCE_SIGNING_KEY or --key"
+            )
+        if not args.trusted_public_key:
+            raise ValueError(
+                "production release provenance requires SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY or --trusted-public-key"
+            )
         validate_production_anchor(args.anchor, args.anchor_token)
         images = production_image_inventory(
             build_path=path_from_arg(args.production_images_build),
@@ -700,8 +787,16 @@ def main() -> None:
     if not args.production:
         control_attestation = request_json(f"{args.base.rstrip('/')}/attestation?nonce={nonce}-control")
         gate_attestation = request_json(f"{args.gate.rstrip('/')}/attestation?nonce={nonce}-gate")
-        audit_verify = request_json(f"{args.base.rstrip('/')}/api/audit/verify", headers=admin_headers)
-        anchor_verify = request_json(f"{args.anchor.rstrip('/')}/anchors/verify", headers=anchor_headers)
+        audit_verify = request_json(
+            f"{args.base.rstrip('/')}/api/audit/verify",
+            headers=admin_headers,
+            timeout=60,
+        )
+        anchor_verify = request_json(
+            f"{args.anchor.rstrip('/')}/anchors/verify",
+            headers=anchor_headers,
+            timeout=60,
+        )
     py_sbom, python_manifest = python_dependency_inventory(production=args.production)
     cargo_sbom = rust_sbom()
     cyclonedx = cyclonedx_sbom(
@@ -775,7 +870,13 @@ def main() -> None:
     }
     provenance_digest = sha256_prefixed_json(provenance)
 
-    key = load_release_key(ROOT / args.key)
+    if args.production:
+        key = load_production_release_key(
+            path_from_arg(args.key),
+            path_from_arg(args.trusted_public_key),
+        )
+    else:
+        key = load_release_key(path_from_arg(args.key or ".tmp/release-signing-ed25519.pem"))
     key_info = public_key_info(key)
     signature = "ed25519:" + b64e(key.sign(canonical_json(provenance).encode("utf-8")))
     document = {
@@ -788,8 +889,8 @@ def main() -> None:
 
     out_path = ROOT / args.out
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if not args.production:
+        atomic_write_json(out_path, document)
         write_container_file("serverware", args.container_out, out_path.read_bytes())
         published_control = request_json(f"{args.base.rstrip('/')}/attestation?nonce={nonce}-published-control")
         published_gate = request_json(f"{args.gate.rstrip('/')}/attestation?nonce={nonce}-published-gate")
@@ -828,11 +929,13 @@ def main() -> None:
         headers=anchor_headers,
         payload={"records": [record]},
         ca_bundle=anchor_ca_bundle,
+        timeout=60,
     )
     anchors = request_json(
         f"{args.anchor.rstrip('/')}/anchors?limit=100",
         headers=anchor_headers,
         ca_bundle=anchor_ca_bundle,
+        timeout=60,
     )
     anchored = any((item.get("record") or {}).get("provenance_digest") == provenance_digest for item in anchors.get("items", []))
     if not anchored:
@@ -843,6 +946,7 @@ def main() -> None:
         f"{args.anchor.rstrip('/')}/anchors/inclusion/{sequence}",
         headers=anchor_headers,
         ca_bundle=anchor_ca_bundle,
+        timeout=60,
     )
     if inclusion.get("verified") is not True:
         raise RuntimeError(f"release provenance inclusion proof did not verify: {inclusion}")
@@ -862,7 +966,7 @@ def main() -> None:
         "anchor_response": anchor_response,
         "inclusion_proof": inclusion,
     }
-    out_path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    atomic_write_json(out_path, document)
     if not args.production:
         write_container_file("serverware", args.container_out, out_path.read_bytes())
 

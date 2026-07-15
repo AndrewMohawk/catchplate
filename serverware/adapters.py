@@ -12,7 +12,12 @@ from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 from serverware import runtime
 from serverware.policies import PolicyDecision
-from serverware.policy_bundle import X_V2_RECENT_SEARCH_PATHS, bounded_pattern_matches
+from serverware.policy_bundle import (
+    X_V2_RECENT_SEARCH_PATHS,
+    bounded_pattern_matches,
+    is_serverware_internal_header,
+    strict_json_loads,
+)
 
 
 OLDER_THAN_RE = re.compile(r"\bolder_than:(\d+)([dmy])\b", re.IGNORECASE)
@@ -39,6 +44,12 @@ _STREAMING_RESPONSE_MODES = {
     "formUrlencodedStream",
     "csvStream",
 }
+_STRUCTURED_STREAMING_MODES = _STREAMING_RESPONSE_MODES - {"stream"}
+_PROJECTED_RESPONSE_MODES = {"json"} | _STRUCTURED_STREAMING_MODES
+_BUFFERED_REQUEST_CONSTRAINTS = {
+    "json": "jsonBody",
+    "formUrlencoded": "formBody",
+}
 _SAFE_RESPONSE_HEADERS = {
     "cache-control",
     "content-language",
@@ -57,6 +68,7 @@ _RESPONSE_CONTENT_TYPES = {
     "csvStream": "text/csv",
 }
 _MEDIA_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
+_RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
 
 
 class ApiAdapter:
@@ -120,7 +132,7 @@ class ApiAdapter:
                 )
         for raw_name in getattr(flow.request, "headers", {}):
             name = str(raw_name).strip().lower()
-            if name in _GENERIC_NON_FORWARDED_HEADERS:
+            if name in _GENERIC_NON_FORWARDED_HEADERS or is_serverware_internal_header(name):
                 continue
             if name not in allowed_headers:
                 return PolicyDecision(
@@ -158,6 +170,13 @@ class ApiAdapter:
             )
 
         body_mode = request_cfg.get("bodyMode")
+        if body_mode in _STRUCTURED_STREAMING_MODES:
+            projection_error = self._request_projection_error(request_cfg, str(body_mode))
+            if projection_error is not None:
+                return projection_error
+        body_policy_error = self._credential_request_body_policy_error(route, body_mode)
+        if body_policy_error is not None:
+            return body_policy_error
         if body_mode == "none" and body:
             return PolicyDecision(
                 allowed=False,
@@ -216,15 +235,14 @@ class ApiAdapter:
 
     def rewrite_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
         request_cfg = route.adapter_config.get("request") or {}
-        if request_cfg.get("bodyMode") in {"jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"}:
-            allowed_fields = self._allowed_field_paths(request_cfg)
-            if not allowed_fields:
-                return PolicyDecision(
-                    allowed=False,
-                    status_code=500,
-                    reason="streaming redaction request policy missing allowedFields",
-                    payload={"error": "streaming_redaction_request_allowed_fields_missing"},
+        if request_cfg.get("bodyMode") in _STRUCTURED_STREAMING_MODES:
+            projection_error = self._request_projection_error(
+                request_cfg,
+                str(request_cfg.get("bodyMode")),
             )
+            if projection_error is not None:
+                return projection_error
+            allowed_fields = self._allowed_field_paths(request_cfg)
             try:
                 if request_cfg.get("bodyMode") == "jsonArrayStream":
                     flow.request.content = self._redact_json_array(flow.request.raw_content or b"", allowed_fields)
@@ -246,6 +264,87 @@ class ApiAdapter:
                     payload={"error": "streaming_redaction_request_invalid", "detail": str(exc)},
                 )
         return PolicyDecision(allowed=True)
+
+    def _credential_request_body_policy_error(
+        self,
+        route: Any,
+        body_mode: Any,
+    ) -> PolicyDecision | None:
+        if not getattr(route, "credential_ref", None):
+            return None
+        if body_mode == "any":
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason="credential-bearing generic requests cannot use opaque bodyMode any",
+                payload={
+                    "error": "credential_opaque_request_body_denied",
+                    "adapter": self.id,
+                    "bodyMode": body_mode,
+                },
+            )
+        required_constraint = _BUFFERED_REQUEST_CONSTRAINTS.get(str(body_mode))
+        if required_constraint is None:
+            return None
+        constraints = getattr(route, "constraints", ()) or ()
+        if any(
+            isinstance(constraint, dict)
+            and constraint.get("type") == required_constraint
+            and (constraint.get("phase") or "request") == "request"
+            and isinstance(constraint.get("allowedFields"), list)
+            and bool(constraint["allowedFields"])
+            for constraint in constraints
+        ):
+            return None
+        return PolicyDecision(
+            allowed=False,
+            status_code=500,
+            reason=(
+                f"credential-bearing generic request bodyMode {body_mode} requires "
+                f"a {required_constraint} constraint with non-empty allowedFields"
+            ),
+            payload={
+                "error": "credential_request_body_policy_missing",
+                "adapter": self.id,
+                "bodyMode": body_mode,
+                "requiredConstraint": required_constraint,
+            },
+        )
+
+    def _request_projection_error(
+        self,
+        request_cfg: dict[str, Any],
+        mode: str,
+    ) -> PolicyDecision | None:
+        fields = request_cfg.get("allowedFields")
+        if fields is None or fields == []:
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason="streaming redaction request policy missing allowedFields",
+                payload={"error": "streaming_redaction_request_allowed_fields_missing"},
+            )
+        if (
+            not isinstance(fields, list)
+            or len(fields) > 64
+            or any(
+                not isinstance(field, str)
+                or len(field) > 256
+                or _RESPONSE_FIELD_PATH_RE.fullmatch(field) is None
+                for field in fields
+            )
+            or len(fields) != len(set(fields))
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason="streaming redaction request policy allowedFields is invalid",
+                payload={
+                    "error": "streaming_redaction_request_allowed_fields_invalid",
+                    "mode": mode,
+                },
+            )
+        return None
 
     def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
         if not flow.response:
@@ -289,22 +388,16 @@ class ApiAdapter:
             flow.response.content = b""
             self._normalize_response_headers(flow, response_cfg, mode)
             return PolicyDecision(allowed=True)
-        allowed_fields = self._allowed_field_paths(response_cfg)
-        if mode == "json" and not allowed_fields:
-            return PolicyDecision(
-                allowed=False,
-                status_code=502,
-                reason="JSON response projection policy is missing",
-                payload={"error": "response_allowed_fields_missing"},
+        if mode in _PROJECTED_RESPONSE_MODES:
+            projection_error = self._response_projection_error(
+                response_cfg,
+                mode,
+                credential_bearing=bool(getattr(route, "credential_ref", None)),
             )
+            if projection_error is not None:
+                return projection_error
+        allowed_fields = self._allowed_field_paths(response_cfg)
         if mode in {"jsonlStream", "jsonArrayStream", "jsonSseStream", "jsonNestedStream", "formUrlencodedStream", "csvStream"}:
-            if not allowed_fields:
-                return PolicyDecision(
-                    allowed=False,
-                    status_code=502,
-                    reason="streaming redaction response policy missing allowedFields",
-                    payload={"error": "streaming_redaction_response_allowed_fields_missing"},
-                )
             try:
                 if mode == "jsonArrayStream":
                     flow.response.content = self._redact_json_array(flow.response.raw_content or b"", allowed_fields)
@@ -444,9 +537,65 @@ class ApiAdapter:
         ]
         return [path for path in paths if path]
 
+    def _response_projection_error(
+        self,
+        response_cfg: dict[str, Any],
+        mode: str,
+        *,
+        credential_bearing: bool,
+    ) -> PolicyDecision | None:
+        fields = response_cfg.get("allowedFields")
+        if fields is None or fields == []:
+            if credential_bearing:
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=502,
+                    reason="credential-bearing response requires a non-empty allowedFields projection",
+                    payload={
+                        "error": "credential_response_projection_required",
+                        "adapter": self.id,
+                        "mode": mode,
+                    },
+                )
+            if mode == "json":
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=502,
+                    reason="JSON response projection policy is missing",
+                    payload={"error": "response_allowed_fields_missing"},
+                )
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="streaming redaction response policy missing allowedFields",
+                payload={"error": "streaming_redaction_response_allowed_fields_missing"},
+            )
+        if (
+            not isinstance(fields, list)
+            or len(fields) > 64
+            or any(
+                not isinstance(field, str)
+                or len(field) > 256
+                or _RESPONSE_FIELD_PATH_RE.fullmatch(field) is None
+                for field in fields
+            )
+            or len(fields) != len(set(fields))
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="response projection policy allowedFields is invalid",
+                payload={"error": "response_allowed_fields_invalid", "mode": mode},
+            )
+        return None
+
     def _redact_json(self, source: Any, paths: list[tuple[str, ...]]) -> Any:
         if not paths:
-            return source
+            if isinstance(source, list):
+                return []
+            if isinstance(source, dict):
+                return {}
+            return None
         if isinstance(source, list):
             return [self._redact_json(item, paths) for item in source]
         if not isinstance(source, dict):
@@ -739,6 +888,13 @@ class GmailV1Adapter(ApiAdapter):
         if not 200 <= int(flow.response.status_code) < 300:
             return super().validate_response(flow, route, params)
         response_cfg = route.adapter_config.get("response") or {}
+        projection_error = self._response_projection_error(
+            response_cfg,
+            "json",
+            credential_bearing=bool(getattr(route, "credential_ref", None)),
+        )
+        if projection_error is not None:
+            return projection_error
         max_body = response_cfg.get("maxBodyBytes")
         if max_body is None or len(flow.response.raw_content or b"") > int(max_body):
             return PolicyDecision(
@@ -808,7 +964,7 @@ class GmailV1Adapter(ApiAdapter):
         ]
         allowed_fields = [field for field in allowed_fields if field]
         if not allowed_fields:
-            flow.response.set_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+            flow.response.set_text("{}")
             return
 
         def copy_path(source: dict[str, Any], target: dict[str, Any], path: tuple[str, ...]) -> None:
@@ -1152,13 +1308,20 @@ class NpmRegistryAdapter(ApiAdapter):
 
     @staticmethod
     def _json_body(flow: Any) -> dict[str, Any] | None:
-        try:
-            body = json.loads((flow.request.raw_content or b"").decode("utf-8"))
-        except Exception:
+        raw = flow.request.raw_content or b""
+        if not raw:
             return None
-        return body if isinstance(body, dict) else None
+        body = strict_json_loads(raw)
+        if not isinstance(body, dict):
+            raise ValueError("npm write body must be a JSON object")
+        return body
 
-    def _operation_name(self, flow: Any, params: dict[str, str]) -> str:
+    def _operation_name(
+        self,
+        flow: Any,
+        params: dict[str, str],
+        body: dict[str, Any] | None = None,
+    ) -> str:
         method = flow.request.method.upper()
         path = self._registry_path(flow)
         if method in {"GET", "HEAD"}:
@@ -1181,7 +1344,6 @@ class NpmRegistryAdapter(ApiAdapter):
             )
         ):
             return "metadataWrite"
-        body = self._json_body(flow)
         if method == "PUT" and isinstance(body, dict) and body.get("_rev"):
             return "metadataWrite"
         if method in {"PUT", "POST"}:
@@ -1189,14 +1351,22 @@ class NpmRegistryAdapter(ApiAdapter):
         return "metadataWrite"
 
     def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
-        operation = self._operation_name(flow, params)
+        body = self._json_body(flow) if flow.request.method.upper() not in {"GET", "HEAD"} else None
+        operation = self._operation_name(flow, params, body)
+        return self._operation_fields(operation, body, params)
+
+    def _operation_fields(
+        self,
+        operation: str,
+        body: dict[str, Any] | None,
+        params: dict[str, str],
+    ) -> dict[str, str]:
         fields: dict[str, str] = {
             "operation": f"npm.{operation}",
         }
         package = params.get("package")
         if package:
             fields["packageName"] = unquote(package)
-        body = self._json_body(flow) or {}
         if isinstance(body, dict):
             if body.get("name"):
                 fields["packageName"] = str(body["name"])
@@ -1236,11 +1406,11 @@ class NpmRegistryAdapter(ApiAdapter):
                 fields["tarballIntegrity"] = str(integrity)
         return fields
 
-    def _validate_publish_document(self, flow: Any, params: dict[str, str]) -> PolicyDecision:
-        try:
-            body = json.loads((flow.request.raw_content or b"").decode("utf-8"))
-        except Exception:
-            body = None
+    def _validate_publish_document(
+        self,
+        body: dict[str, Any] | None,
+        params: dict[str, str],
+    ) -> PolicyDecision:
         if not isinstance(body, dict):
             return PolicyDecision(
                 allowed=False,
@@ -1305,7 +1475,19 @@ class NpmRegistryAdapter(ApiAdapter):
         return PolicyDecision(allowed=True)
 
     def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
-        operation = self._operation_name(flow, params)
+        method = flow.request.method.upper()
+        try:
+            body = self._json_body(flow) if method not in {"GET", "HEAD"} else None
+        except (UnicodeError, ValueError, RecursionError):
+            operation = self._operation_name(flow, params)
+            error = "npm_publish_invalid_json" if operation == "publish" else "npm_write_invalid_json"
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason=f"npm {operation} body must be a strict JSON object",
+                payload={"error": error, "operation": operation},
+            )
+        operation = self._operation_name(flow, params, body)
         allowed_operations = set(route.adapter_config.get("operations") or [])
         if operation not in allowed_operations:
             return PolicyDecision(
@@ -1315,10 +1497,10 @@ class NpmRegistryAdapter(ApiAdapter):
                 payload={"error": "npm_operation_not_allowed", "operation": operation},
             )
         if operation == "publish":
-            document_decision = self._validate_publish_document(flow, params)
+            document_decision = self._validate_publish_document(body, params)
             if not document_decision.allowed:
                 return document_decision
-            fields = self.operation_fields(flow, route, params)
+            fields = self._operation_fields(operation, body, params)
             missing = [
                 field
                 for field in ("packageName", "packageVersion", "tarballIntegrity")

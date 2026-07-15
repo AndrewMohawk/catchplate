@@ -1,23 +1,29 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import hmac
 import json
 import os
 import queue
+import re
 import ssl
 import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
 
 from serverware import db
 from serverware.ca_material import ensure_mitm_ca_material
 from serverware.config import (
+    ATOMIC_RELEASE_AUTHORIZATION_ENABLED,
     AUDIT_ANCHOR_INTERVAL_SECONDS,
     AUDIT_ANCHOR_CA_BUNDLE,
     AUDIT_ANCHOR_TIMEOUT_SECONDS,
@@ -26,16 +32,21 @@ from serverware.config import (
     AUDIT_QUEUE_MAX,
     DATA_PLANE_AUDIT_TOKEN,
     DATA_PLANE_GID,
+    DATA_PLANE_INSTANCE_ID,
+    DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
     DATA_PLANE_UID,
     DATA_DIR,
     DECISION_GATE_CA_CERT_PATH,
     DECISION_GATE_CA_KEY_PATH,
     DECISION_GATE_BASE,
     DECISION_GATE_TIMEOUT_SECONDS,
+    RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS,
+    RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
     SECRET_LEASE_TTL_SECONDS,
 )
-from serverware.http_client import HttpClientError, request_bytes
+from serverware.http_client import HttpClientError, http_error_body, request_bytes
 from serverware.key_release import KeyReleaseError, ensure_material_released
+from serverware.policy_bundle import canonical_json, strict_json_loads
 
 
 @dataclass(frozen=True)
@@ -47,6 +58,53 @@ class LogEvent:
     status_code: int | None
     reason: str | None
     event: dict[str, Any] | None = None
+
+
+class ReleaseAuthorizationClientError(RuntimeError):
+    pass
+
+
+_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_MAX_BYTES = 64 * 1024
+_RELEASE_AUTHORIZATION_ID_MAX_BYTES = 256
+_RELEASE_AUTHORIZATION_RETRY_MAX_SECONDS = 31_536_000
+_DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
+_SHA256_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+_UINT64_MAX = (1 << 64) - 1
+_RELEASE_AUTHORIZATION_RESPONSE_FIELDS = {
+    "apiVersion",
+    "ok",
+    "authorized",
+    "state",
+    "reason",
+    "attemptId",
+    "bindingDigest",
+    "idempotentReplay",
+    "grantId",
+    "approvalRequestId",
+    "approvalStatus",
+    "approvalExpiresAt",
+    "approvalCreated",
+    "reservationExpiresAtEpochMs",
+    "dispatchStartedAtEpochMs",
+    "dispatchExpiresAtEpochMs",
+    "completionOutcome",
+    "retryAfterSeconds",
+    "quotas",
+    "store",
+}
+_RELEASE_AUTHORIZATION_REQUIRED_RESPONSE_FIELDS = {
+    "apiVersion",
+    "ok",
+    "authorized",
+    "state",
+    "reason",
+    "attemptId",
+    "bindingDigest",
+    "idempotentReplay",
+    "retryAfterSeconds",
+    "quotas",
+    "store",
+}
 
 
 _log_queue: queue.Queue[LogEvent] = queue.Queue(maxsize=AUDIT_QUEUE_MAX)
@@ -404,6 +462,895 @@ def flush_audit_queue(timeout_seconds: float = 5.0) -> bool:
             return True
         time.sleep(0.01)
     return _log_queue.unfinished_tasks == 0
+
+
+def atomic_release_authorization_enabled() -> bool:
+    configured = os.getenv("SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED")
+    if configured is None:
+        return ATOMIC_RELEASE_AUTHORIZATION_ENABLED
+    return configured == "1"
+
+
+def get_credential_version(credential_id: str | None) -> int | None:
+    if not credential_id:
+        return 0
+    credential = db.get_credential(credential_id)
+    if not credential:
+        return None
+    version = credential.get("credential_version")
+    if not isinstance(version, int) or isinstance(version, bool) or version < 1:
+        return None
+    return version
+
+
+def _explicit_development_release_channel() -> bool:
+    configured = os.getenv("SERVERWARE_RELEASE_CHANNEL")
+    return (
+        configured is not None
+        and configured.strip().lower() in _DEVELOPMENT_RELEASE_CHANNELS
+    )
+
+
+def _release_authorization_base_url() -> str:
+    value = os.getenv(
+        "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL", ""
+    ).strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise ReleaseAuthorizationClientError(
+            "release authorization base URL is invalid"
+        ) from exc
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or port is None and parsed.netloc.endswith(":")
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path != "/api/data-plane/release-authorizations"
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization base URL must use HTTP(S) and the exact API path "
+            "without embedded credentials, query, or fragment"
+        )
+    if not _explicit_development_release_channel() and parsed.scheme.lower() != "https":
+        raise ReleaseAuthorizationClientError(
+            "production release authorization base URL must use HTTPS"
+        )
+    return value
+
+
+def _release_authorization_token() -> str:
+    return os.getenv(
+        "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+        DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN,
+    ).strip()
+
+
+def _release_authorization_ssl_context(base_url: str) -> ssl.SSLContext | None:
+    if not base_url.lower().startswith("https://"):
+        return None
+    ca_bundle = os.getenv("SERVERWARE_CONTROL_PLANE_CA_BUNDLE", "").strip()
+    return ssl.create_default_context(cafile=ca_bundle or None)
+
+
+def _release_u64(value: Any, *, field: str, optional: bool = True) -> int | None:
+    if value is None and optional:
+        return None
+    if (
+        not isinstance(value, int)
+        or isinstance(value, bool)
+        or not 0 <= value <= _UINT64_MAX
+    ):
+        raise ReleaseAuthorizationClientError(
+            f"release authorization response {field} is invalid"
+        )
+    return value
+
+
+def _valid_release_authorization_identity(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+        and len(value.encode("utf-8")) <= _RELEASE_AUTHORIZATION_ID_MAX_BYTES
+        and all(character.isprintable() for character in value)
+    )
+
+
+def _normalized_release_authorization_response(
+    body: Any,
+    *,
+    attempt_id: str,
+) -> dict[str, Any]:
+    if not isinstance(body, dict):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response must be an object"
+        )
+    unknown_fields = set(body) - _RELEASE_AUTHORIZATION_RESPONSE_FIELDS
+    missing_fields = _RELEASE_AUTHORIZATION_REQUIRED_RESPONSE_FIELDS - set(body)
+    if unknown_fields or missing_fields:
+        raise ReleaseAuthorizationClientError(
+            "release authorization response fields are invalid"
+        )
+    if body.get("apiVersion") != "serverware.releaseAuthorization/v1":
+        raise ReleaseAuthorizationClientError(
+            "release authorization response version is invalid"
+        )
+    if body.get("ok") is not True or body.get("attemptId") != attempt_id:
+        raise ReleaseAuthorizationClientError(
+            "release authorization response binding is invalid"
+        )
+    authorized = body.get("authorized")
+    state = body.get("state")
+    reason = body.get("reason")
+    if not isinstance(authorized, bool):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response authorized flag is invalid"
+        )
+    if not isinstance(state, str) or not state:
+        raise ReleaseAuthorizationClientError(
+            "release authorization response state is invalid"
+        )
+    if not isinstance(reason, str) or not reason:
+        raise ReleaseAuthorizationClientError(
+            "release authorization response reason is invalid"
+        )
+    binding_digest = body.get("bindingDigest")
+    if (
+        not isinstance(binding_digest, str)
+        or _SHA256_DIGEST_RE.fullmatch(binding_digest) is None
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response binding digest is invalid"
+        )
+    idempotent_replay = body.get("idempotentReplay")
+    if not isinstance(idempotent_replay, bool):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response replay flag is invalid"
+        )
+    retry_after_seconds = _release_u64(
+        body.get("retryAfterSeconds"),
+        field="retry interval",
+        optional=False,
+    )
+    if (
+        retry_after_seconds is None
+        or retry_after_seconds > _RELEASE_AUTHORIZATION_RETRY_MAX_SECONDS
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response retry interval is invalid"
+        )
+
+    grant_id = body.get("grantId")
+    approval_request_id = body.get("approvalRequestId")
+    approval_status = body.get("approvalStatus")
+    approval_expires_at = body.get("approvalExpiresAt")
+    approval_created = body.get("approvalCreated")
+    for identity, field in (
+        (grant_id, "grant identity"),
+        (approval_request_id, "approval request identity"),
+    ):
+        if identity is not None and not _valid_release_authorization_identity(identity):
+            raise ReleaseAuthorizationClientError(
+                f"release authorization response {field} is invalid"
+            )
+    if approval_status is not None and not isinstance(approval_status, str):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response approval status is invalid"
+        )
+    if approval_expires_at is not None and not isinstance(approval_expires_at, str):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response approval expiry is invalid"
+        )
+    if approval_created is not None and not isinstance(approval_created, bool):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response approval creation flag is invalid"
+        )
+
+    reservation_expires_at_epoch_ms = _release_u64(
+        body.get("reservationExpiresAtEpochMs"),
+        field="reservation expiry",
+    )
+    dispatch_started_at_epoch_ms = _release_u64(
+        body.get("dispatchStartedAtEpochMs"),
+        field="dispatch start",
+    )
+    dispatch_expires_at_epoch_ms = _release_u64(
+        body.get("dispatchExpiresAtEpochMs"),
+        field="dispatch expiry",
+    )
+    completion_outcome = body.get("completionOutcome")
+    if completion_outcome is not None and not isinstance(completion_outcome, str):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response completion outcome is invalid"
+        )
+
+    quotas = body.get("quotas")
+    store = body.get("store")
+    if not isinstance(quotas, list) or any(not isinstance(item, dict) for item in quotas):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response quotas are invalid"
+        )
+    if (
+        not isinstance(store, dict)
+        or set(store) - {"backend", "ha"}
+        or not isinstance(store.get("ha"), bool)
+        or (
+            store.get("backend") is not None
+            and not isinstance(store.get("backend"), str)
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response store is invalid"
+        )
+
+    if state == "denied" and reason in {"jit_grant_unavailable", "jit_grant_expired"}:
+        try:
+            expires_at = datetime.fromisoformat(
+                str(approval_expires_at).replace("Z", "+00:00")
+            )
+        except (TypeError, ValueError):
+            expires_at = None
+        if (
+            authorized
+            or not isinstance(approval_request_id, str)
+            or not approval_request_id
+            or approval_request_id != approval_request_id.strip()
+            or any(not character.isprintable() for character in approval_request_id)
+            or len(approval_request_id.encode("utf-8")) > 256
+            or approval_status != "pending"
+            or not isinstance(approval_created, bool)
+            or not isinstance(approval_expires_at, str)
+            or not approval_expires_at
+            or len(approval_expires_at.encode("utf-8")) > 128
+            or expires_at is None
+            or expires_at.tzinfo is None
+            or expires_at <= datetime.now(timezone.utc)
+            or retry_after_seconds < 1
+        ):
+            raise ReleaseAuthorizationClientError(
+                "release authorization JIT approval response is incomplete"
+            )
+    return {
+        "authorized": authorized,
+        "state": state,
+        "reason": reason,
+        "attempt_id": body.get("attemptId"),
+        "binding_digest": binding_digest,
+        "idempotent_replay": idempotent_replay,
+        "grant_id": grant_id,
+        "approval_request_id": approval_request_id,
+        "approval_status": approval_status,
+        "approval_expires_at": approval_expires_at,
+        "approval_created": approval_created,
+        "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
+        "dispatch_started_at_epoch_ms": dispatch_started_at_epoch_ms,
+        "dispatch_expires_at_epoch_ms": dispatch_expires_at_epoch_ms,
+        "completion_outcome": completion_outcome,
+        "retry_after_seconds": retry_after_seconds,
+        "quotas": quotas,
+        "store": store,
+    }
+
+
+def _validate_release_authorization_binding(
+    response: dict[str, Any],
+    *,
+    attempt_id: str,
+    binding_digest: str | None = None,
+) -> None:
+    actual_binding_digest = response.get("binding_digest")
+    retry_after_seconds = response.get("retry_after_seconds")
+    if response.get("attempt_id") != attempt_id:
+        raise ReleaseAuthorizationClientError(
+            "release authorization response attempt ID mismatch"
+        )
+    if (
+        not isinstance(actual_binding_digest, str)
+        or _SHA256_DIGEST_RE.fullmatch(actual_binding_digest) is None
+        or (
+            binding_digest is not None
+            and not hmac.compare_digest(actual_binding_digest, binding_digest)
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response binding digest is invalid"
+        )
+    if (
+        not isinstance(retry_after_seconds, int)
+        or isinstance(retry_after_seconds, bool)
+        or not 0 <= retry_after_seconds <= _RELEASE_AUTHORIZATION_RETRY_MAX_SECONDS
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response retry interval is invalid"
+        )
+
+
+def _release_authorization_grant_identities_match(
+    response: dict[str, Any],
+    *,
+    grant_id: str | None,
+    approval_request_id: str | None,
+) -> bool:
+    return (
+        response.get("grant_id") == grant_id
+        and response.get("approval_request_id") == approval_request_id
+    )
+
+
+def validate_reserve_release_authorization_response(
+    response: dict[str, Any],
+    *,
+    attempt_id: str,
+    require_jit_grant: bool,
+) -> dict[str, Any]:
+    _validate_release_authorization_binding(response, attempt_id=attempt_id)
+    authorized = response.get("authorized")
+    state = response.get("state")
+    reason = response.get("reason")
+    grant_id = response.get("grant_id")
+    approval_request_id = response.get("approval_request_id")
+    if authorized is True:
+        exact = (
+            state == "reserved"
+            and reason == "reserved"
+            and response.get("completion_outcome") is None
+            and _release_u64(
+                response.get("reservation_expires_at_epoch_ms"),
+                field="reservation expiry",
+                optional=False,
+            )
+            is not None
+            and response.get("dispatch_started_at_epoch_ms") is None
+            and response.get("dispatch_expires_at_epoch_ms") is None
+            and response.get("retry_after_seconds") == 0
+            and response.get("approval_status") is None
+            and response.get("approval_expires_at") is None
+            and response.get("approval_created") is None
+        )
+        if require_jit_grant:
+            exact = exact and _valid_release_authorization_identity(
+                grant_id
+            ) and _valid_release_authorization_identity(approval_request_id)
+        else:
+            exact = exact and grant_id is None and approval_request_id is None
+    else:
+        jit_denial = reason in {"jit_grant_unavailable", "jit_grant_expired"}
+        exact = (
+            authorized is False
+            and state == "denied"
+            and reason
+            in {
+                "jit_grant_unavailable",
+                "jit_grant_expired",
+                "shared_quota_denied",
+                "release_authorization_busy",
+            }
+            and (require_jit_grant or not jit_denial)
+            and response.get("idempotent_replay") is False
+            and grant_id is None
+            and response.get("completion_outcome") is None
+            and response.get("reservation_expires_at_epoch_ms") is None
+            and response.get("dispatch_started_at_epoch_ms") is None
+            and response.get("dispatch_expires_at_epoch_ms") is None
+        )
+        if jit_denial:
+            exact = exact and (
+                _valid_release_authorization_identity(approval_request_id)
+                and response.get("approval_status") == "pending"
+                and isinstance(response.get("approval_created"), bool)
+                and isinstance(response.get("approval_expires_at"), str)
+                and 1 <= response.get("retry_after_seconds", 0) <= 3600
+            )
+        else:
+            exact = exact and (
+                approval_request_id is None
+                and response.get("approval_status") is None
+                and response.get("approval_expires_at") is None
+                and response.get("approval_created") is None
+            )
+    if not exact:
+        raise ReleaseAuthorizationClientError(
+            f"release authorization reserve returned invalid lifecycle state {state}"
+        )
+    return response
+
+
+def validate_dispatch_release_authorization_response(
+    response: dict[str, Any],
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    grant_id: str | None,
+    approval_request_id: str | None,
+    now_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    _validate_release_authorization_binding(
+        response,
+        attempt_id=attempt_id,
+        binding_digest=binding_digest,
+    )
+    now_ms = int(time.time() * 1000) if now_epoch_ms is None else now_epoch_ms
+    dispatch_started_at = response.get("dispatch_started_at_epoch_ms")
+    dispatch_expires_at = response.get("dispatch_expires_at_epoch_ms")
+    exact = (
+        response.get("authorized") is True
+        and response.get("state") == "dispatching"
+        and response.get("reason") == "dispatching"
+        and response.get("completion_outcome") is None
+        and _release_u64(
+            response.get("reservation_expires_at_epoch_ms"),
+            field="reservation expiry",
+            optional=False,
+        )
+        is not None
+        and isinstance(dispatch_started_at, int)
+        and not isinstance(dispatch_started_at, bool)
+        and 0 <= dispatch_started_at <= _UINT64_MAX
+        and isinstance(dispatch_expires_at, int)
+        and not isinstance(dispatch_expires_at, bool)
+        and dispatch_started_at < dispatch_expires_at <= _UINT64_MAX
+        and dispatch_expires_at > now_ms
+        and response.get("retry_after_seconds") == 0
+        and response.get("approval_status") is None
+        and response.get("approval_expires_at") is None
+        and response.get("approval_created") is None
+        and _release_authorization_grant_identities_match(
+            response,
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+        )
+    )
+    if not exact:
+        raise ReleaseAuthorizationClientError(
+            "release authorization dispatch did not return exact live dispatching state"
+        )
+    return response
+
+
+def validate_complete_release_authorization_response(
+    response: dict[str, Any],
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    outcome: str,
+    grant_id: str | None,
+    approval_request_id: str | None,
+) -> dict[str, Any]:
+    _validate_release_authorization_binding(
+        response,
+        attempt_id=attempt_id,
+        binding_digest=binding_digest,
+    )
+    state = response.get("state")
+    completion_outcome = response.get("completion_outcome")
+    replay = response.get("idempotent_replay") is True
+    reason = response.get("reason")
+    if outcome == "forwarded":
+        exact = (
+            response.get("authorized") is True
+            and state == "committed"
+            and completion_outcome == "forwarded"
+            and reason in ({"forwarded", "committed"} if replay else {"forwarded"})
+        )
+    elif outcome == "not_forwarded":
+        exact = (
+            response.get("authorized") is False
+            and state == "cancelled"
+            and completion_outcome == "not_forwarded"
+            and reason == "cancelled"
+        )
+    elif outcome == "unknown":
+        exact = (
+            response.get("authorized") is True
+            and state == "committed_indeterminate"
+            and completion_outcome == "unknown"
+            and reason
+            in (
+                {"committed_indeterminate"}
+                if replay
+                else {"forward_outcome_indeterminate", "dispatch_ttl_expired"}
+            )
+        ) or (
+            replay
+            and (
+                (
+                    response.get("authorized") is True
+                    and state == "committed"
+                    and completion_outcome == "forwarded"
+                    and reason == "committed"
+                )
+                or (
+                    response.get("authorized") is False
+                    and state == "cancelled"
+                    and completion_outcome == "not_forwarded"
+                    and reason == "cancelled"
+                )
+            )
+        )
+    else:
+        exact = False
+    dispatch_started_at = response.get("dispatch_started_at_epoch_ms")
+    dispatch_expires_at = response.get("dispatch_expires_at_epoch_ms")
+    exact = exact and (
+        _release_u64(
+            response.get("reservation_expires_at_epoch_ms"),
+            field="reservation expiry",
+            optional=False,
+        )
+        is not None
+        and (
+            (dispatch_started_at is None and dispatch_expires_at is None)
+            or (
+                isinstance(dispatch_started_at, int)
+                and not isinstance(dispatch_started_at, bool)
+                and isinstance(dispatch_expires_at, int)
+                and not isinstance(dispatch_expires_at, bool)
+                and 0 <= dispatch_started_at < dispatch_expires_at <= _UINT64_MAX
+            )
+        )
+        and response.get("retry_after_seconds") == 0
+        and response.get("approval_status") is None
+        and response.get("approval_expires_at") is None
+        and response.get("approval_created") is None
+        and _release_authorization_grant_identities_match(
+            response,
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+        )
+    )
+    if not exact:
+        raise ReleaseAuthorizationClientError(
+            "release authorization completion returned invalid state "
+            f"{state} outcome {completion_outcome!r} for {outcome}"
+        )
+    return response
+
+
+def _normalized_direct_release_authorization_response(
+    result: Any,
+) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        raise ReleaseAuthorizationClientError(
+            "release authorization direct response must be an object"
+        )
+    normalized = dict(result)
+    normalized.setdefault("idempotent_replay", False)
+    normalized.setdefault("grant_id", None)
+    normalized.setdefault("approval_request_id", None)
+    normalized.setdefault("approval_status", None)
+    normalized.setdefault("approval_expires_at", None)
+    normalized.setdefault("approval_created", None)
+    normalized.setdefault("reservation_expires_at_epoch_ms", None)
+    normalized.setdefault("dispatch_started_at_epoch_ms", None)
+    normalized.setdefault("dispatch_expires_at_epoch_ms", None)
+    normalized.setdefault("completion_outcome", None)
+    normalized.setdefault("retry_after_seconds", 0)
+    normalized.setdefault("quotas", [])
+    normalized.setdefault(
+        "store",
+        {
+            "backend": normalized.get("release_authorization_store_backend"),
+            "ha": bool(normalized.get("release_authorization_store_ha")),
+        },
+    )
+    return normalized
+
+
+def _bounded_release_canonical_request(
+    canonical_request: dict[str, Any],
+    *,
+    request_digest: str,
+) -> dict[str, Any]:
+    if not isinstance(canonical_request, dict):
+        raise ReleaseAuthorizationClientError(
+            "release authorization canonical request must be an object"
+        )
+    try:
+        encoded = canonical_json(canonical_request).encode("utf-8")
+    except (TypeError, ValueError) as exc:
+        raise ReleaseAuthorizationClientError(
+            "release authorization canonical request is invalid"
+        ) from exc
+    if len(encoded) > _RELEASE_AUTHORIZATION_CANONICAL_REQUEST_MAX_BYTES:
+        raise ReleaseAuthorizationClientError(
+            "release authorization canonical request exceeds 64 KiB"
+        )
+    actual_digest = "sha256:" + hashlib.sha256(encoded).hexdigest()
+    if not isinstance(request_digest, str) or not hmac.compare_digest(
+        request_digest, actual_digest
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization canonical request digest does not match"
+        )
+    bounded = strict_json_loads(encoded)
+    if not isinstance(bounded, dict):
+        raise ReleaseAuthorizationClientError(
+            "release authorization canonical request must be an object"
+        )
+    return bounded
+
+
+def _release_authorization_http_post(
+    action: str,
+    payload: dict[str, Any],
+    *,
+    require_jit_grant: bool = False,
+    grant_id: str | None = None,
+    approval_request_id: str | None = None,
+) -> dict[str, Any]:
+    base_url = _release_authorization_base_url()
+    token = _release_authorization_token()
+    if not base_url or not token:
+        raise ReleaseAuthorizationClientError(
+            "release authorization control-plane client is not configured"
+        )
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+        allow_nan=False,
+    ).encode("utf-8")
+    context = _release_authorization_ssl_context(base_url)
+    last_error: BaseException | None = None
+    for retry in range(2):
+        request = urllib.request.Request(
+            f"{base_url}/{action}",
+            data=encoded,
+            headers={
+                "Content-Type": "application/json",
+                "X-Serverware-Data-Plane-Token": token,
+            },
+            method="POST",
+        )
+        try:
+            response = request_bytes(
+                request,
+                timeout=DECISION_GATE_TIMEOUT_SECONDS,
+                max_bytes=256 * 1024,
+                context=context,
+            )
+            body = strict_json_loads(response.body)
+            normalized = _normalized_release_authorization_response(
+                body,
+                attempt_id=str(payload["attemptId"]),
+            )
+            if action == "reserve":
+                return validate_reserve_release_authorization_response(
+                    normalized,
+                    attempt_id=str(payload["attemptId"]),
+                    require_jit_grant=require_jit_grant,
+                )
+            if action == "dispatch":
+                return validate_dispatch_release_authorization_response(
+                    normalized,
+                    attempt_id=str(payload["attemptId"]),
+                    binding_digest=str(payload["bindingDigest"]),
+                    grant_id=grant_id,
+                    approval_request_id=approval_request_id,
+                )
+            if action == "complete":
+                return validate_complete_release_authorization_response(
+                    normalized,
+                    attempt_id=str(payload["attemptId"]),
+                    binding_digest=str(payload["bindingDigest"]),
+                    outcome=str(payload["outcome"]),
+                    grant_id=grant_id,
+                    approval_request_id=approval_request_id,
+                )
+            raise ReleaseAuthorizationClientError(
+                f"release authorization action is invalid: {action}"
+            )
+        except urllib.error.HTTPError as exc:
+            try:
+                error_body = strict_json_loads(
+                    http_error_body(exc, max_bytes=64 * 1024)
+                )
+                detail = error_body.get("detail") if isinstance(error_body, dict) else None
+            except Exception:
+                detail = None
+            last_error = ReleaseAuthorizationClientError(
+                str(detail or f"release authorization HTTP {exc.code}")
+            )
+            if exc.code != 503 or retry:
+                break
+        except (
+            HttpClientError,
+            urllib.error.URLError,
+            TimeoutError,
+            OSError,
+            json.JSONDecodeError,
+            ValueError,
+        ) as exc:
+            last_error = exc
+            if retry:
+                break
+        time.sleep(0.05)
+    raise ReleaseAuthorizationClientError(
+        f"release authorization {action} is uncertain: {last_error}"
+    ) from last_error
+
+
+def _require_development_release_authorization_fallback() -> None:
+    if not _explicit_development_release_channel():
+        raise ReleaseAuthorizationClientError(
+            "direct release authorization database fallback requires an explicit "
+            "development release channel"
+        )
+
+
+def reserve_release_authorization(
+    *,
+    attempt_id: str,
+    flow_id: str,
+    principal_id: str,
+    route_id: str,
+    credential_ref: str | None,
+    credential_version: int,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str | None,
+    operation_context: dict[str, Any],
+    canonical_request: dict[str, Any],
+    shared_quotas: list[dict[str, Any]],
+    require_jit_grant: bool,
+) -> dict[str, Any]:
+    if not atomic_release_authorization_enabled():
+        raise ReleaseAuthorizationClientError(
+            "atomic release authorization is disabled"
+        )
+    bounded_canonical_request = _bounded_release_canonical_request(
+        canonical_request,
+        request_digest=request_digest,
+    )
+    if _release_authorization_base_url():
+        return _release_authorization_http_post(
+            "reserve",
+            {
+                "apiVersion": "serverware.releaseAuthorizationReserve/v1",
+                "attemptId": attempt_id,
+                "flowId": flow_id,
+                "principalId": principal_id,
+                "routeId": route_id,
+                "credentialRef": credential_ref,
+                "credentialVersion": credential_version,
+                "policyHash": policy_hash,
+                "requestDigest": request_digest,
+                "operationDigest": operation_digest,
+                "operationContext": operation_context,
+                "canonicalRequest": bounded_canonical_request,
+            },
+            require_jit_grant=require_jit_grant,
+        )
+    _require_development_release_authorization_fallback()
+    if require_jit_grant:
+        raise ReleaseAuthorizationClientError(
+            "JIT release authorization requires the control-plane release authority"
+        )
+    try:
+        result = _normalized_direct_release_authorization_response(
+            db.reserve_release_authorization(
+                attempt_id=attempt_id,
+                flow_id=flow_id,
+                principal_id=principal_id,
+                route_id=route_id,
+                credential_id=credential_ref or "",
+                credential_version=credential_version,
+                policy_hash=policy_hash,
+                request_digest=request_digest,
+                operation_digest=operation_digest,
+                operation_context=operation_context,
+                shared_quotas=shared_quotas,
+                require_jit_grant=require_jit_grant,
+                reservation_ttl_seconds=RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
+                actor_id=DATA_PLANE_INSTANCE_ID or "serverware-python-mitm",
+            )
+        )
+        return validate_reserve_release_authorization_response(
+            result,
+            attempt_id=attempt_id,
+            require_jit_grant=require_jit_grant,
+        )
+    except Exception as exc:
+        raise ReleaseAuthorizationClientError(
+            f"release authorization reserve is uncertain: {exc}"
+        ) from exc
+
+
+def dispatch_release_authorization(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    grant_id: str | None = None,
+    approval_request_id: str | None = None,
+) -> dict[str, Any]:
+    if _release_authorization_base_url():
+        return _release_authorization_http_post(
+            "dispatch",
+            {
+                "apiVersion": "serverware.releaseAuthorizationDispatch/v1",
+                "attemptId": attempt_id,
+                "bindingDigest": binding_digest,
+            },
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+        )
+    _require_development_release_authorization_fallback()
+    try:
+        result = _normalized_direct_release_authorization_response(
+            db.dispatch_release_authorization(
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+                dispatch_ttl_seconds=RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS,
+                actor_id=DATA_PLANE_INSTANCE_ID or "serverware-python-mitm",
+            )
+        )
+        return validate_dispatch_release_authorization_response(
+            result,
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+        )
+    except Exception as exc:
+        raise ReleaseAuthorizationClientError(
+            f"release authorization dispatch is uncertain: {exc}"
+        ) from exc
+
+
+def complete_release_authorization(
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    outcome: str,
+    grant_id: str | None = None,
+    approval_request_id: str | None = None,
+) -> dict[str, Any]:
+    if outcome not in {"forwarded", "not_forwarded", "unknown"}:
+        raise ReleaseAuthorizationClientError(
+            "release authorization completion outcome is invalid"
+        )
+    if _release_authorization_base_url():
+        return _release_authorization_http_post(
+            "complete",
+            {
+                "apiVersion": "serverware.releaseAuthorizationComplete/v1",
+                "attemptId": attempt_id,
+                "bindingDigest": binding_digest,
+                "outcome": outcome,
+            },
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+        )
+    _require_development_release_authorization_fallback()
+    try:
+        result = _normalized_direct_release_authorization_response(
+            db.complete_release_authorization(
+                attempt_id=attempt_id,
+                binding_digest=binding_digest,
+                outcome=outcome,
+                actor_id=DATA_PLANE_INSTANCE_ID or "serverware-python-mitm",
+            )
+        )
+        return validate_complete_release_authorization_response(
+            result,
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            outcome=outcome,
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+        )
+    except Exception as exc:
+        raise ReleaseAuthorizationClientError(
+            f"release authorization completion is uncertain: {exc}"
+        ) from exc
 
 
 def invalidate_secret_leases(credential_id: str | None = None) -> None:

@@ -7,10 +7,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import sign_release_images as signer  # noqa: E402
+import verify_release_completion as release_verifier  # noqa: E402
 
 
 def exercise_external_verify_contract() -> None:
@@ -129,6 +133,10 @@ def exercise_env_file_preload() -> None:
         "SERVERWARE_COSIGN_KEY_ID",
         "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID",
         "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY",
+        "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY",
+        "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER",
+        "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID",
     }
     original = {key: os.environ.get(key) for key in managed_keys}
     with tempfile.TemporaryDirectory() as tmp_raw:
@@ -144,6 +152,10 @@ def exercise_env_file_preload() -> None:
                     "SERVERWARE_COSIGN_KEY_ID=sha256:" + "1" * 64,
                     "SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID=sha256:" + "2" * 64,
                     "SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1",
+                    "SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY=/etc/serverware/release-trust/release-provenance.pem",
+                    "SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY=/etc/serverware/release-trust/external-checkpoint.pem",
+                    "SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER=managed-release-log",
+                    "SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID=sha256:" + "3" * 64,
                 ]
             )
             + "\n",
@@ -162,12 +174,258 @@ def exercise_env_file_preload() -> None:
                 raise AssertionError("env preload did not load the production cosign binary")
             if os.environ.get("SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY") != "1":
                 raise AssertionError("env preload did not load the transparency requirement")
+            if os.environ.get("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY") != "/etc/serverware/release-trust/release-provenance.pem":
+                raise AssertionError("env preload did not load the release provenance trust root")
+            if os.environ.get("SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY") != "/etc/serverware/release-trust/external-checkpoint.pem":
+                raise AssertionError("env preload did not load the external checkpoint trust root")
+            if os.environ.get("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER") != "managed-release-log":
+                raise AssertionError("env preload did not load the external checkpoint provider")
         finally:
             for key, value in original.items():
                 if value is None:
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = value
+
+
+def exercise_stale_provenance_rejection() -> None:
+    digest = "sha256:" + "a" * 64
+    original = signer.serverware_source_tree.source_tree_digest
+    signer.serverware_source_tree.source_tree_digest = lambda _root: digest  # type: ignore[assignment]
+    try:
+        if signer.verify_current_source_tree({"source_tree": {"digest": digest}}) != digest:
+            raise AssertionError("current source tree binding was not returned")
+        try:
+            signer.verify_current_source_tree(
+                {"source_tree": {"digest": "sha256:" + "b" * 64}}
+            )
+        except ValueError as exc:
+            if "source tree is stale" not in str(exc):
+                raise AssertionError(
+                    f"stale provenance failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("image signing accepted stale release provenance")
+    finally:
+        signer.serverware_source_tree.source_tree_digest = original  # type: ignore[assignment]
+
+
+def exercise_independent_provenance_trust() -> None:
+    release_key = Ed25519PrivateKey.generate()
+    public_key = release_key.public_key()
+    public_pem = public_key.public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    public_der = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    provenance = {"source_tree": {"digest": "sha256:" + "a" * 64}}
+    provenance_digest = signer.sha256_prefixed_json(provenance)
+    signature = "ed25519:" + signer.b64e(
+        release_key.sign(signer.canonical_json(provenance).encode("utf-8"))
+    )
+    key_id = signer.sha256_prefixed_bytes(public_der)
+    record = {
+        "type": "release.provenance.v1",
+        "provenance_digest": provenance_digest,
+        "release_signing_key_id": key_id,
+        "signature": signature,
+    }
+    record_digest = signer.sha256_prefixed_json(record)
+    anchor_key = Ed25519PrivateKey.generate()
+    anchor_public_pem = anchor_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    anchor_key_id = release_verifier.release_public_key_id(anchor_public_pem)
+    external_key = Ed25519PrivateKey.generate()
+    external_public_pem = external_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("ascii")
+    external_log_id = release_verifier.release_public_key_id(external_public_pem)
+    external_provider = "managed-release-log-test"
+    item = {
+        "anchor_id": "anchor-test",
+        "sequence": 7,
+        "received_at": "2026-07-15T00:00:00+00:00",
+        "record": record,
+        "record_digest": record_digest,
+    }
+    leaf_hash = release_verifier.transparency_leaf_hash(item)
+    tree_head_hash = leaf_hash
+    signed_tree_head_payload = {
+        "version": "serverware.transparencyLog/v1",
+        "created_at": "2026-07-15T00:00:01+00:00",
+        "log_id": anchor_key_id,
+        "tree_head_hash": tree_head_hash,
+        "tree_size": 1,
+    }
+    signed_tree_head = {
+        **signed_tree_head_payload,
+        "public_key_pem": anchor_public_pem,
+        "signature": "ed25519:"
+        + signer.b64e(
+            anchor_key.sign(signer.canonical_json(signed_tree_head_payload).encode("utf-8"))
+        ),
+    }
+    checkpoint_payload = {
+        "provider": external_provider,
+        "log_id": external_log_id,
+        "record_digest": record_digest,
+        "leaf_hash": leaf_hash,
+        "tree_head_hash": tree_head_hash,
+        "tree_size": 1,
+    }
+    checkpoint = {
+        "ok": True,
+        "provider": external_provider,
+        "log_id": external_log_id,
+        "receipt": {
+            "kind": "ed25519-signed-checkpoint",
+            "payload": checkpoint_payload,
+            "public_key_pem": external_public_pem,
+            "signature": "ed25519:"
+            + signer.b64e(
+                external_key.sign(signer.canonical_json(checkpoint_payload).encode("utf-8"))
+            ),
+        },
+    }
+    item.update(
+        {
+            "leaf_hash": leaf_hash,
+            "signed_tree_head": signed_tree_head,
+            "external_checkpoint": checkpoint,
+        }
+    )
+    document = {
+        "provenance": provenance,
+        "provenance_digest": provenance_digest,
+        "release_signing_key_id": key_id,
+        "release_signing_public_key_pem": public_pem,
+        "signature": signature,
+        "transparency": {
+            "anchor_response": {
+                "ok": True,
+                "anchors": [
+                    {
+                        "record_digest": record_digest,
+                        "leaf_hash": leaf_hash,
+                        "tree_head_hash": tree_head_hash,
+                        "tree_size": 1,
+                        "signed_tree_head": signed_tree_head,
+                        "external_checkpoint": checkpoint,
+                    }
+                ],
+            },
+            "record": record,
+            "inclusion_proof": {
+                "ok": True,
+                "verified": True,
+                "record_digest": record_digest,
+                "sequence": 7,
+                "item": item,
+                "leaf_hash": leaf_hash,
+                "tree_size": 1,
+                "tree_head_hash": tree_head_hash,
+                "proof": [],
+                "signed_tree_head": signed_tree_head,
+            },
+        },
+    }
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        tmp = Path(tmp_raw)
+        trusted = tmp / "trusted.pem"
+        trusted.write_text(public_pem, encoding="ascii")
+        external_trusted = tmp / "external-trusted.pem"
+        external_trusted.write_text(external_public_pem, encoding="ascii")
+
+        def verify(candidate: dict[str, object], *, release_trust: Path = trusted) -> None:
+            signer.verify_release_provenance(
+                candidate,
+                trusted_public_key_path=release_trust,
+                require_transparency=True,
+                external_checkpoint_trusted_key_path=external_trusted,
+                expected_external_checkpoint_provider=external_provider,
+                expected_external_checkpoint_log_id=external_log_id,
+            )
+
+        signer.verify_release_provenance(
+            document,
+            trusted_public_key_path=trusted,
+            require_transparency=True,
+            external_checkpoint_trusted_key_path=external_trusted,
+            expected_external_checkpoint_provider=external_provider,
+            expected_external_checkpoint_log_id=external_log_id,
+        )
+
+        wrong_key = Ed25519PrivateKey.generate().public_key()
+        wrong_trust = tmp / "wrong.pem"
+        wrong_trust.write_bytes(
+            wrong_key.public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        try:
+            verify(document, release_trust=wrong_trust)
+        except ValueError as exc:
+            if "independent trust root" not in str(exc):
+                raise AssertionError(f"wrong provenance trust root failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("production image signing accepted an untrusted provenance signer")
+
+        without_transparency = dict(document)
+        without_transparency.pop("transparency")
+        try:
+            verify(without_transparency)
+        except ValueError as exc:
+            if "transparency evidence" not in str(exc):
+                raise AssertionError(f"missing provenance transparency failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("production image signing accepted unanchored provenance")
+
+        forged_flags = json.loads(json.dumps(document))
+        forged_flags["transparency"] = {
+            "anchor_response": {"ok": True},
+            "record": record,
+            "inclusion_proof": {"ok": True, "verified": True},
+        }
+        try:
+            verify(forged_flags)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("production image signing trusted unauthenticated transparency flags")
+
+        forged_checkpoint = json.loads(json.dumps(document))
+        forged_checkpoint["transparency"]["inclusion_proof"]["item"]["external_checkpoint"]["receipt"][
+            "signature"
+        ] = "ed25519:" + signer.b64e(b"0" * 64)
+        forged_checkpoint["transparency"]["anchor_response"]["anchors"][0]["external_checkpoint"] = (
+            forged_checkpoint["transparency"]["inclusion_proof"]["item"]["external_checkpoint"]
+        )
+        try:
+            verify(forged_checkpoint)
+        except ValueError as exc:
+            if "signature verification failed" not in str(exc):
+                raise AssertionError(f"forged checkpoint failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("production image signing accepted a forged checkpoint receipt")
+
+        tampered_proof = json.loads(json.dumps(document))
+        tampered_proof["transparency"]["inclusion_proof"]["proof"] = [
+            {"side": "left", "hash": "sha256:" + "0" * 64}
+        ]
+        try:
+            verify(tampered_proof)
+        except ValueError as exc:
+            if "Merkle inclusion proof" not in str(exc):
+                raise AssertionError(f"tampered Merkle proof failed for the wrong reason: {exc}") from exc
+        else:
+            raise AssertionError("production image signing accepted a tampered Merkle inclusion proof")
 
 
 def main() -> None:
@@ -187,6 +445,18 @@ def main() -> None:
             raise AssertionError(f"mutable ref failed for the wrong reason: {exc}") from exc
     else:
         raise AssertionError("mutable production image ref was accepted")
+
+    production_metadata = signer.cosign_compatible_statement_metadata(production=True)
+    if "keyless" in production_metadata.lower():
+        raise AssertionError(
+            f"production image-signature metadata still recommends keyless signing: {production_metadata}"
+        )
+    if "pinned KMS/HSM key" not in production_metadata:
+        raise AssertionError(
+            f"production image-signature metadata omits the supported pinned key path: {production_metadata}"
+        )
+    if signer.cosign_compatible_statement_metadata(production=False) != "in-toto Statement v1 per image":
+        raise AssertionError("development image-signature metadata contains a production signing recommendation")
 
     signer.validate_production_sigstore_configuration(
         production_refs=True,
@@ -285,6 +555,8 @@ def main() -> None:
             raise AssertionError("production image signing accepted an env fragment with extra keys")
     exercise_external_verify_contract()
     exercise_env_file_preload()
+    exercise_stale_provenance_rejection()
+    exercise_independent_provenance_trust()
     print(json.dumps({"ok": True, "sign_release_images": "pass"}, sort_keys=True))
 
 

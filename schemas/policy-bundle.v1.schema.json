@@ -526,7 +526,39 @@
               }
             }
           }
-        }
+        },
+        "allOf": [
+          {
+            "if": {
+              "required": ["jit", "constraints"],
+              "properties": {
+                "jit": {
+                  "required": ["required"],
+                  "properties": {"required": {"const": true}}
+                },
+                "constraints": {
+                  "contains": {
+                    "required": ["type", "store"],
+                    "properties": {
+                      "type": {"const": "rateLimit"},
+                      "store": {"const": "shared"}
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "jit": {
+                  "properties": {
+                    "maxUses": {"const": 1},
+                    "consumeOn": {"const": "forwardStart"}
+                  }
+                }
+              }
+            }
+          }
+        ]
       }
     }
   }

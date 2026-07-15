@@ -22,8 +22,9 @@ sys.path.insert(0, str(ROOT))
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+import serverware_source_tree
 from serverware.http_client import request_bytes
 
 FIXTURE_COMMAND_MARKERS = ("fixture", "cosign_fixture.py", "sigstore_fixture.py")
@@ -109,7 +110,62 @@ def public_key_info(key: Ed25519PrivateKey) -> dict[str, str]:
     return {"pem": pem, "spki_sha256": sha256_prefixed_bytes(der)}
 
 
-def verify_release_provenance(document: dict[str, Any]) -> None:
+def load_trusted_release_key(path: Path) -> tuple[Ed25519PublicKey, str]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("release provenance trust root must be an existing regular non-symlink file")
+    if path.stat().st_size > 65536:
+        raise ValueError("release provenance trust root exceeds 65536 bytes")
+    try:
+        key = serialization.load_pem_public_key(path.read_bytes())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("release provenance trust root is not a valid PEM public key") from exc
+    if not isinstance(key, Ed25519PublicKey):
+        raise ValueError("release provenance trust root must be an Ed25519 public key")
+    der = key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return key, sha256_prefixed_bytes(der)
+
+
+def verify_release_transparency(
+    document: dict[str, Any],
+    *,
+    expected_provider: str,
+    expected_log_id: str,
+    trusted_external_public_key_pem: str,
+) -> None:
+    import verify_release_completion
+
+    transparency = document.get("transparency")
+    if not isinstance(transparency, dict):
+        raise ValueError("production release provenance is missing transparency evidence")
+    verify_release_completion.transparency_record_binding(
+        transparency,
+        anchor_key="anchor_response",
+        inclusion_key="inclusion_proof",
+        expected_type="release.provenance.v1",
+        expected_fields={
+            "provenance_digest": document.get("provenance_digest"),
+            "release_signing_key_id": document.get("release_signing_key_id"),
+            "signature": document.get("signature"),
+        },
+        expected_external_provider=expected_provider,
+        expected_external_log_id=expected_log_id,
+        trusted_external_public_key_pem=trusted_external_public_key_pem,
+        label="production release provenance",
+    )
+
+
+def verify_release_provenance(
+    document: dict[str, Any],
+    *,
+    trusted_public_key_path: Path | None = None,
+    require_transparency: bool = False,
+    external_checkpoint_trusted_key_path: Path | None = None,
+    expected_external_checkpoint_provider: str = "",
+    expected_external_checkpoint_log_id: str = "",
+) -> None:
     provenance = document.get("provenance")
     if not isinstance(provenance, dict):
         raise ValueError("release provenance document is missing provenance")
@@ -122,11 +178,59 @@ def verify_release_provenance(document: dict[str, Any]) -> None:
         raise ValueError("release provenance is missing ed25519 signature")
     if not isinstance(public_key_pem, str):
         raise ValueError("release provenance is missing release signing public key")
-    public_key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
     try:
-        public_key.verify(b64d(signature.split(":", 1)[1]), canonical_json(provenance).encode("utf-8"))
+        public_key = serialization.load_pem_public_key(public_key_pem.encode("ascii"))
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise ValueError("release provenance contains an invalid public key") from exc
+    if not isinstance(public_key, Ed25519PublicKey):
+        raise ValueError("release provenance public key must be Ed25519")
+    embedded_der = public_key.public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    embedded_key_id = sha256_prefixed_bytes(embedded_der)
+    if document.get("release_signing_key_id") != embedded_key_id:
+        raise ValueError("release provenance signing key ID does not match its embedded public key")
+    verification_key = public_key
+    if trusted_public_key_path is not None:
+        verification_key, trusted_key_id = load_trusted_release_key(trusted_public_key_path)
+        if trusted_key_id != embedded_key_id:
+            raise ValueError("release provenance signer does not match the independent trust root")
+    try:
+        verification_key.verify(b64d(signature.split(":", 1)[1]), canonical_json(provenance).encode("utf-8"))
     except InvalidSignature as exc:
         raise ValueError("release provenance signature verification failed") from exc
+    if require_transparency:
+        if external_checkpoint_trusted_key_path is None:
+            raise ValueError("production image signing requires an external checkpoint trust root")
+        external_key, external_key_id = load_trusted_release_key(external_checkpoint_trusted_key_path)
+        if not expected_external_checkpoint_provider:
+            raise ValueError("production image signing requires the expected external checkpoint provider")
+        if expected_external_checkpoint_log_id != external_key_id:
+            raise ValueError("external checkpoint log ID does not match its independent trust root")
+        external_public_key_pem = external_key.public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        ).decode("ascii")
+        verify_release_transparency(
+            document,
+            expected_provider=expected_external_checkpoint_provider,
+            expected_log_id=expected_external_checkpoint_log_id,
+            trusted_external_public_key_pem=external_public_key_pem,
+        )
+
+
+def verify_current_source_tree(provenance: dict[str, Any], *, root: Path = ROOT) -> str:
+    source_tree = provenance.get("source_tree")
+    if not isinstance(source_tree, dict):
+        raise ValueError("release provenance is missing source tree identity")
+    recorded = source_tree.get("digest")
+    current = serverware_source_tree.source_tree_digest(root)
+    if recorded != current:
+        raise ValueError(
+            f"release provenance source tree is stale: recorded={recorded} current={current}"
+        )
+    return current
 
 
 def signature_payload(bundle: dict[str, Any]) -> dict[str, Any]:
@@ -139,6 +243,15 @@ def signature_payload(bundle: dict[str, Any]) -> dict[str, Any]:
     copied.pop("image_signature_bundle_digest", None)
     copied.pop("bundle_signature", None)
     return copied
+
+
+def cosign_compatible_statement_metadata(*, production: bool) -> str:
+    if production:
+        return (
+            "in-toto Statement v1 per image; production release channels require cosign/Sigstore "
+            "with the configured pinned KMS/HSM key"
+        )
+    return "in-toto Statement v1 per image"
 
 
 def sign_value(key: Ed25519PrivateKey, value: Any) -> str:
@@ -396,6 +509,24 @@ def main() -> None:
     parser.add_argument("--signature-provider", default=os.getenv("SERVERWARE_IMAGE_SIGNATURE_PROVIDER", "dev-ed25519"))
     parser.add_argument("--image-sign-command", default=os.getenv("SERVERWARE_IMAGE_SIGN_COMMAND", ""))
     parser.add_argument("--image-verify-command", default=os.getenv("SERVERWARE_IMAGE_VERIFY_COMMAND", ""))
+    parser.add_argument(
+        "--release-signing-trusted-key",
+        default=os.getenv("SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY", ""),
+        help="Independent Ed25519 public trust root required before production image signing.",
+    )
+    parser.add_argument(
+        "--external-checkpoint-trusted-key",
+        default=os.getenv("SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY", ""),
+        help="Independent Ed25519 trust root for production transparency checkpoints.",
+    )
+    parser.add_argument(
+        "--external-checkpoint-provider",
+        default=os.getenv("SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER", ""),
+    )
+    parser.add_argument(
+        "--external-checkpoint-log-id",
+        default=os.getenv("SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID", ""),
+    )
     parser.add_argument("--production-image", action="append", default=[], help="Digest-pinned production image ref to sign instead of Compose image inventory.")
     parser.add_argument("--production-images-env", default="", help="Strict env fragment containing SERVERWARE_PRODUCTION_IMAGES refs to sign.")
     parser.add_argument(
@@ -405,11 +536,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    provenance_path = ROOT / args.provenance
-    document = json.loads(provenance_path.read_text(encoding="utf-8"))
-    verify_release_provenance(document)
-    provenance = document["provenance"]
-    provenance_digest = document["provenance_digest"]
     env_production_refs = image_refs_from_env()
     if args.production_images_env:
         if args.production_image or env_production_refs:
@@ -417,6 +543,32 @@ def main() -> None:
         production_refs = image_refs_from_env_file(ROOT / args.production_images_env)
     else:
         production_refs = args.production_image or env_production_refs
+    trusted_release_key = Path(args.release_signing_trusted_key) if args.release_signing_trusted_key else None
+    if trusted_release_key is not None and not trusted_release_key.is_absolute():
+        trusted_release_key = ROOT / trusted_release_key
+    external_checkpoint_trusted_key = (
+        Path(args.external_checkpoint_trusted_key) if args.external_checkpoint_trusted_key else None
+    )
+    if external_checkpoint_trusted_key is not None and not external_checkpoint_trusted_key.is_absolute():
+        external_checkpoint_trusted_key = ROOT / external_checkpoint_trusted_key
+    if production_refs and trusted_release_key is None:
+        raise ValueError(
+            "production image signing requires SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY "
+            "or --release-signing-trusted-key"
+        )
+    provenance_path = ROOT / args.provenance
+    document = json.loads(provenance_path.read_text(encoding="utf-8"))
+    verify_release_provenance(
+        document,
+        trusted_public_key_path=trusted_release_key,
+        require_transparency=bool(production_refs),
+        external_checkpoint_trusted_key_path=external_checkpoint_trusted_key,
+        expected_external_checkpoint_provider=args.external_checkpoint_provider,
+        expected_external_checkpoint_log_id=args.external_checkpoint_log_id,
+    )
+    provenance = document["provenance"]
+    verify_current_source_tree(provenance)
+    provenance_digest = document["provenance_digest"]
     images = production_image_inventory(production_refs) if production_refs else provenance.get("images") or {}
     if not images:
         raise ValueError("release provenance contains no image inventory")
@@ -505,7 +657,7 @@ def main() -> None:
             "mode": "sigstore-command-image-signing" if signature_provider == "sigstore-command" else "serverware-dev-ed25519-image-signing",
             "signatureProvider": signature_provider,
             "sigstoreTransparencyRequired": bool(args.require_sigstore_transparency),
-            "cosignCompatibleStatement": "in-toto Statement v1 per image; production release channels should use cosign/Sigstore keyless or KMS signing",
+            "cosignCompatibleStatement": cosign_compatible_statement_metadata(production=bool(production_refs)),
         },
         "images": image_entries,
     }

@@ -235,8 +235,15 @@ def main() -> None:
     hot_path = manifest.get("hot_path") or {}
     if hot_path.get("sqlite_calls") != 0 or hot_path.get("filesystem_calls") != 0:
         raise ValueError("decision gate hot path must report zero SQLite/filesystem calls")
-    if manifest.get("jit_grant_store") != "shared" or health.get("jit_grant_store") != "shared":
-        raise ValueError("decision gate must attest the shared JIT grant store")
+    if (
+        manifest.get("jit_grant_store") != "atomic_release_authorization"
+        or health.get("jit_grant_store") != "atomic_release_authorization"
+        or manifest.get("release_authorization_mode") != "reserve_dispatch_complete"
+    ):
+        raise ValueError("decision gate must attest the atomic reserve/dispatch/complete release authority")
+    release_authorization = health.get("release_authorization") or {}
+    if release_authorization.get("enabled") is not True or release_authorization.get("mode") != "reserve_dispatch_complete":
+        raise ValueError("decision gate health must report the atomic release authorization lifecycle")
 
     print(
         json.dumps(

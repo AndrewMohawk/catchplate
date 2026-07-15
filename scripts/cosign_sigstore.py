@@ -14,6 +14,8 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from cryptography.hazmat.primitives import serialization
+
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -191,13 +193,36 @@ def transparency_from_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def key_provider() -> dict[str, Any]:
+def bundle_public_key_id(bundle: dict[str, Any]) -> str | None:
+    verification = bundle.get("verificationMaterial") or bundle.get("verification_material") or {}
+    if not isinstance(verification, dict):
+        return None
+    value = verification.get("publicKey") or verification.get("public_key")
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        public_key = serialization.load_pem_public_key(value.encode("ascii"))
+        der = public_key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    except (TypeError, ValueError, UnicodeEncodeError) as exc:
+        raise SystemExit("cosign bundle contains an invalid PEM public key") from exc
+    return sha256_prefixed_bytes(der)
+
+
+def key_provider(bundle: dict[str, Any]) -> dict[str, Any]:
     key_ref = os.getenv("SERVERWARE_COSIGN_KEY", "").strip()
     cert_identity = os.getenv("SERVERWARE_COSIGN_CERT_IDENTITY", "").strip()
     cert_issuer = os.getenv("SERVERWARE_COSIGN_CERT_OIDC_ISSUER", "").strip()
     explicit_key_id = os.getenv("SERVERWARE_COSIGN_KEY_ID", "").strip()
+    embedded_key_id = bundle_public_key_id(bundle)
     if explicit_key_id:
         key_id = explicit_key_id
+        if embedded_key_id and embedded_key_id != key_id:
+            raise SystemExit("SERVERWARE_COSIGN_KEY_ID does not match the cosign bundle public key")
+    elif embedded_key_id:
+        key_id = embedded_key_id
     elif key_ref:
         key_id = sha256_prefixed_bytes(key_ref.encode("utf-8"))
     elif cert_identity or cert_issuer:
@@ -261,7 +286,7 @@ def sign() -> None:
             "provider": "cosign",
             "statement_digest": request["statement_digest"],
             "signature": signature,
-            "key_provider": key_provider(),
+            "key_provider": key_provider(bundle),
             "transparency": transparency,
             "bundle": bundle,
         }
@@ -280,6 +305,9 @@ def verify() -> None:
     bundle = signature_response.get("bundle")
     if not isinstance(bundle, dict):
         raise SystemExit("signature response missing cosign bundle")
+    verified_key_provider = key_provider(bundle)
+    if (signature_response.get("key_provider") or {}).get("key_id") != verified_key_provider["key_id"]:
+        raise SystemExit("signature response key provider does not match the cosign bundle public key")
     transparency = transparency_from_bundle(bundle)
     tmp_root = ROOT / ".tmp"
     tmp_root.mkdir(parents=True, exist_ok=True)
@@ -315,7 +343,7 @@ def verify() -> None:
                 "statement_digest": request["statement_digest"],
                 "verified_transparency": True,
                 "transparency": transparency,
-                "key_provider": signature_response.get("key_provider"),
+                "key_provider": verified_key_provider,
             }
         )
     )

@@ -33,6 +33,7 @@ MAX_EVENTS = 256
 MAX_QUERY_FIELDS = 24
 _PKCE_RE = re.compile(r"^[A-Za-z0-9_-]{43}$")
 _STATE_RE = re.compile(r"^[A-Za-z0-9_-]{43,128}$")
+_DNS_LABEL_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 
 
 @dataclass
@@ -95,12 +96,24 @@ class OAuthProviderSimulator:
         ),
     }
     _EXPANDED_SCOPE = {"google": "profile", "x": "follows.read"}
-    _OUTCOMES = frozenset({"success", "denial", "scope_expansion", "malformed_identity"})
+    _OUTCOMES = frozenset(
+        {"success", "denial", "scope_expansion", "malformed_identity"}
+    )
 
-    def __init__(self, work_dir: Path, *, host: str = "127.0.0.1", port: int = 0) -> None:
+    def __init__(
+        self,
+        work_dir: Path,
+        *,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        redirect_base_url: str = "https://serverware.test",
+    ) -> None:
         self.work_dir = Path(work_dir)
         self.host = host
         self.port = port
+        self.redirect_base_url, self.redirect_hostname = self._validated_redirect_base(
+            redirect_base_url
+        )
         self._lock = threading.RLock()
         self._server: _BoundedThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -121,7 +134,9 @@ class OAuthProviderSimulator:
             "google": collections.Counter(),
             "x": collections.Counter(),
         }
-        self._events: collections.deque[dict[str, Any]] = collections.deque(maxlen=MAX_EVENTS)
+        self._events: collections.deque[dict[str, Any]] = collections.deque(
+            maxlen=MAX_EVENTS
+        )
         self.ca_cert_path = self.work_dir / "oauth-simulator-ca.pem"
         self.server_cert_path = self.work_dir / "oauth-simulator-server.pem"
         self.server_key_path = self.work_dir / "oauth-simulator-server-key.pem"
@@ -169,7 +184,9 @@ class OAuthProviderSimulator:
                 },
                 "events": [dict(event) for event in self._events],
                 "active": {
-                    "authorizationCodes": sum(not item.used for item in self._codes.values()),
+                    "authorizationCodes": sum(
+                        not item.used for item in self._codes.values()
+                    ),
                     "grants": sum(item.active for item in self._grants.values()),
                 },
                 "bounds": {
@@ -184,9 +201,13 @@ class OAuthProviderSimulator:
     def assert_no_token_values(self, value: bytes | str) -> None:
         encoded = value.encode("utf-8") if isinstance(value, str) else value
         with self._lock:
-            leaked = any(token.encode("ascii") in encoded for token in self._token_values)
+            leaked = any(
+                token.encode("ascii") in encoded for token in self._token_values
+            )
         if leaked:
-            raise AssertionError("OAuth token material appeared in an observable payload")
+            raise AssertionError(
+                "OAuth token material appeared in an observable payload"
+            )
 
     def start(self) -> OAuthProviderSimulator:
         if self._server is not None:
@@ -212,10 +233,14 @@ class OAuthProviderSimulator:
         server = _BoundedThreadingHTTPServer((self.host, self.port), Handler)
         tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         tls_context.minimum_version = ssl.TLSVersion.TLSv1_2
-        tls_context.load_cert_chain(str(self.server_cert_path), str(self.server_key_path))
+        tls_context.load_cert_chain(
+            str(self.server_cert_path), str(self.server_key_path)
+        )
         server.socket = tls_context.wrap_socket(server.socket, server_side=True)
         self._server = server
-        self._thread = threading.Thread(target=server.serve_forever, name="oauth-provider-simulator", daemon=True)
+        self._thread = threading.Thread(
+            target=server.serve_forever, name="oauth-provider-simulator", daemon=True
+        )
         self._thread.start()
         return self
 
@@ -247,10 +272,77 @@ class OAuthProviderSimulator:
             raise ValueError(f"unsupported OAuth simulator provider: {provider}")
         return normalized
 
+    @staticmethod
+    def _validated_redirect_base(value: str) -> tuple[str, str]:
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or len(value) > 2048
+            or any(
+                ord(character) < 0x21 or ord(character) == 0x7F for character in value
+            )
+        ):
+            raise ValueError(
+                "OAuth simulator redirect base must be a bounded HTTPS origin"
+            )
+        try:
+            parsed = urllib.parse.urlsplit(value)
+            port = parsed.port
+        except ValueError as exc:
+            raise ValueError(
+                "OAuth simulator redirect base has an invalid authority"
+            ) from exc
+        if (
+            parsed.scheme.lower() != "https"
+            or not parsed.netloc
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("OAuth simulator redirect base must be an HTTPS origin")
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError("OAuth simulator redirect base port is invalid")
+
+        raw_hostname = parsed.hostname
+        try:
+            address = ipaddress.ip_address(raw_hostname)
+        except ValueError:
+            if raw_hostname.endswith("."):
+                raise ValueError(
+                    "OAuth simulator redirect hostname must not have a trailing dot"
+                )
+            try:
+                hostname = raw_hostname.encode("idna").decode("ascii").lower()
+            except UnicodeError as exc:
+                raise ValueError(
+                    "OAuth simulator redirect hostname is invalid"
+                ) from exc
+            if (
+                len(hostname) > 253
+                or not hostname
+                or any(
+                    _DNS_LABEL_RE.fullmatch(label) is None
+                    for label in hostname.split(".")
+                )
+            ):
+                raise ValueError("OAuth simulator redirect hostname is invalid")
+            authority_host = hostname
+        else:
+            hostname = address.compressed
+            authority_host = f"[{hostname}]" if address.version == 6 else hostname
+        authority = authority_host if port is None else f"{authority_host}:{port}"
+        return f"https://{authority}", hostname
+
     def _write_test_pki(self) -> None:
         now = dt.datetime.now(dt.timezone.utc)
         ca_key = ec.generate_private_key(ec.SECP256R1())
-        ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Serverware OAuth Test CA")])
+        ca_name = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "Serverware OAuth Test CA")]
+        )
         ca_cert = (
             x509.CertificateBuilder()
             .subject_name(ca_name)
@@ -277,7 +369,31 @@ class OAuthProviderSimulator:
             .sign(ca_key, hashes.SHA256())
         )
         server_key = ec.generate_private_key(ec.SECP256R1())
-        server_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
+        server_name = x509.Name(
+            [x509.NameAttribute(NameOID.COMMON_NAME, "serverware.test")]
+        )
+        dns_names = {"localhost", "serverware.test"}
+        ip_addresses = {ipaddress.ip_address("127.0.0.1")}
+        for hostname in (self.host, self.redirect_hostname):
+            try:
+                ip_addresses.add(ipaddress.ip_address(hostname))
+            except ValueError:
+                try:
+                    encoded_hostname = hostname.encode("idna").decode("ascii").lower()
+                except UnicodeError as exc:
+                    raise ValueError("OAuth simulator TLS hostname is invalid") from exc
+                if len(encoded_hostname) > 253 or any(
+                    _DNS_LABEL_RE.fullmatch(label) is None
+                    for label in encoded_hostname.split(".")
+                ):
+                    raise ValueError("OAuth simulator TLS hostname is invalid")
+                dns_names.add(encoded_hostname)
+        subject_alternative_names: list[x509.GeneralName] = [
+            x509.DNSName(name) for name in sorted(dns_names)
+        ]
+        subject_alternative_names.extend(
+            x509.IPAddress(address) for address in sorted(ip_addresses, key=str)
+        )
         server_cert = (
             x509.CertificateBuilder()
             .subject_name(server_name)
@@ -286,14 +402,16 @@ class OAuthProviderSimulator:
             .serial_number(1002)
             .not_valid_before(now - dt.timedelta(days=1))
             .not_valid_after(now + dt.timedelta(days=7))
-            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
             .add_extension(
-                x509.SubjectAlternativeName(
-                    [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
-                ),
+                x509.BasicConstraints(ca=False, path_length=None), critical=True
+            )
+            .add_extension(
+                x509.SubjectAlternativeName(subject_alternative_names),
                 critical=False,
             )
-            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .add_extension(
+                x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False
+            )
             .add_extension(
                 x509.KeyUsage(
                     digital_signature=True,
@@ -311,7 +429,9 @@ class OAuthProviderSimulator:
             .sign(ca_key, hashes.SHA256())
         )
         self.ca_cert_path.write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
-        self.server_cert_path.write_bytes(server_cert.public_bytes(serialization.Encoding.PEM))
+        self.server_cert_path.write_bytes(
+            server_cert.public_bytes(serialization.Encoding.PEM)
+        )
         self.server_key_path.write_bytes(
             server_key.private_bytes(
                 serialization.Encoding.PEM,
@@ -325,7 +445,9 @@ class OAuthProviderSimulator:
 
     def _request_headers_are_bounded(self, handler: BaseHTTPRequestHandler) -> bool:
         request_line_size = len(handler.raw_requestline)
-        header_size = sum(len(name) + len(value) + 4 for name, value in handler.headers.items())
+        header_size = sum(
+            len(name) + len(value) + 4 for name, value in handler.headers.items()
+        )
         if request_line_size > MAX_REQUEST_LINE_BYTES or header_size > MAX_HEADER_BYTES:
             self._send_json(handler, 431, {"error": "request_too_large"})
             return False
@@ -371,11 +493,16 @@ class OAuthProviderSimulator:
         else:
             self._revoke(handler, provider, form)
 
-    def _read_form(self, handler: BaseHTTPRequestHandler) -> dict[str, list[str]] | None:
+    def _read_form(
+        self, handler: BaseHTTPRequestHandler
+    ) -> dict[str, list[str]] | None:
         if handler.headers.get("Transfer-Encoding"):
             self._send_json(handler, 400, {"error": "invalid_request"})
             return None
-        if handler.headers.get_content_type().lower() != "application/x-www-form-urlencoded":
+        if (
+            handler.headers.get_content_type().lower()
+            != "application/x-www-form-urlencoded"
+        ):
             self._send_json(handler, 415, {"error": "invalid_content_type"})
             return None
         raw_length = handler.headers.get("Content-Length")
@@ -410,7 +537,9 @@ class OAuthProviderSimulator:
             return None
         return values[0]
 
-    def _authorize(self, handler: BaseHTTPRequestHandler, provider: str, query: str) -> None:
+    def _authorize(
+        self, handler: BaseHTTPRequestHandler, provider: str, query: str
+    ) -> None:
         if len(query.encode("ascii", "ignore")) > MAX_REQUEST_LINE_BYTES:
             self._send_json(handler, 413, {"error": "request_too_large"})
             return
@@ -434,7 +563,9 @@ class OAuthProviderSimulator:
             "code_challenge_method",
         }
         google_fields = {"access_type", "prompt", "include_granted_scopes"}
-        if set(params) != common_fields | (google_fields if provider == "google" else set()):
+        if set(params) != common_fields | (
+            google_fields if provider == "google" else set()
+        ):
             self._record(provider, "authorization_rejected", reason="invalid_request")
             self._send_json(handler, 400, {"error": "invalid_request"})
             return
@@ -477,7 +608,11 @@ class OAuthProviderSimulator:
             self._send_json(handler, 400, {"error": "invalid_scope"})
             return
         with self._lock:
-            outcome = self._outcomes[provider].popleft() if self._outcomes[provider] else "success"
+            outcome = (
+                self._outcomes[provider].popleft()
+                if self._outcomes[provider]
+                else "success"
+            )
             self._counts[provider]["authorization_requests"] += 1
             self._record_locked(
                 provider,
@@ -489,7 +624,11 @@ class OAuthProviderSimulator:
                 self._counts[provider]["authorization_denials"] += 1
                 location = self._callback_location(
                     redirect_uri,
-                    {"error": "access_denied", "error_description": "Access denied by test provider", "state": state},
+                    {
+                        "error": "access_denied",
+                        "error_description": "Access denied by test provider",
+                        "state": state,
+                    },
                 )
                 self._send_redirect(handler, location)
                 return
@@ -503,13 +642,26 @@ class OAuthProviderSimulator:
                 outcome=outcome,
             )
             self._counts[provider]["authorization_codes_issued"] += 1
-            self._record_locked(provider, "authorization_code_issued", requested_scopes=list(scopes))
-        self._send_redirect(handler, self._callback_location(redirect_uri, {"code": code, "state": state}))
+            self._record_locked(
+                provider, "authorization_code_issued", requested_scopes=list(scopes)
+            )
+        self._send_redirect(
+            handler,
+            self._callback_location(redirect_uri, {"code": code, "state": state}),
+        )
 
-    def _token(self, handler: BaseHTTPRequestHandler, provider: str, form: dict[str, list[str]]) -> None:
+    def _token(
+        self, handler: BaseHTTPRequestHandler, provider: str, form: dict[str, list[str]]
+    ) -> None:
         grant_type = self._one(form, "grant_type")
         if grant_type == "authorization_code":
-            fields = {"grant_type", "code", "redirect_uri", "client_id", "code_verifier"}
+            fields = {
+                "grant_type",
+                "code",
+                "redirect_uri",
+                "client_id",
+                "code_verifier",
+            }
             if provider == "google":
                 fields.add("client_secret")
         elif grant_type == "refresh_token":
@@ -559,7 +711,9 @@ class OAuthProviderSimulator:
             redirect_uri != code.redirect_uri
             or not verifier
             or _PKCE_RE.fullmatch(verifier) is None
-            or not hmac.compare_digest(self._pkce_challenge(verifier), code.code_challenge)
+            or not hmac.compare_digest(
+                self._pkce_challenge(verifier), code.code_challenge
+            )
             or client_id != self._CLIENTS[provider][0]
         ):
             return None
@@ -570,7 +724,9 @@ class OAuthProviderSimulator:
                 scopes = (*scopes, expanded)
         self._grant_counter += 1
         grant_id = f"grant-{provider}-{self._grant_counter:06d}"
-        self._grants[grant_id] = _Grant(provider=provider, scopes=scopes, outcome=code.outcome)
+        self._grants[grant_id] = _Grant(
+            provider=provider, scopes=scopes, outcome=code.outcome
+        )
         self._counts[provider]["authorization_code_exchanges"] += 1
         self._record_locked(
             provider,
@@ -578,7 +734,9 @@ class OAuthProviderSimulator:
             pkce="S256",
             granted_scopes=list(scopes),
         )
-        return self._issue_tokens_locked(provider, grant_id, scopes, grant_type="authorization_code")
+        return self._issue_tokens_locked(
+            provider, grant_id, scopes, grant_type="authorization_code"
+        )
 
     def _exchange_refresh_token_locked(
         self,
@@ -594,8 +752,12 @@ class OAuthProviderSimulator:
             return None
         reference.active = False
         self._counts[provider]["refresh_exchanges"] += 1
-        self._record_locked(provider, "refresh_token_rotated", granted_scopes=list(grant.scopes))
-        return self._issue_tokens_locked(provider, reference.grant_id, grant.scopes, grant_type="refresh_token")
+        self._record_locked(
+            provider, "refresh_token_rotated", granted_scopes=list(grant.scopes)
+        )
+        return self._issue_tokens_locked(
+            provider, reference.grant_id, grant.scopes, grant_type="refresh_token"
+        )
 
     def _issue_tokens_locked(
         self,
@@ -607,12 +769,19 @@ class OAuthProviderSimulator:
     ) -> dict[str, Any]:
         self._token_counter += 1
         access_token = f"oauth-sim-access-{provider}-{self._token_counter:06d}-material"
-        refresh_token = f"oauth-sim-refresh-{provider}-{self._token_counter:06d}-material"
+        refresh_token = (
+            f"oauth-sim-refresh-{provider}-{self._token_counter:06d}-material"
+        )
         self._token_values.update({access_token, refresh_token})
         self._access_tokens[access_token] = _TokenReference(grant_id)
         self._refresh_tokens[refresh_token] = _TokenReference(grant_id)
         self._counts[provider]["token_responses"] += 1
-        self._record_locked(provider, "tokens_issued", grant_type=grant_type, granted_scopes=list(scopes))
+        self._record_locked(
+            provider,
+            "tokens_issued",
+            grant_type=grant_type,
+            granted_scopes=list(scopes),
+        )
         return {
             "access_token": access_token,
             "refresh_token": refresh_token,
@@ -630,7 +799,9 @@ class OAuthProviderSimulator:
         token = authorization.removeprefix("Bearer ").strip()
         with self._lock:
             reference = self._access_tokens.get(token)
-            grant = self._grants.get(reference.grant_id) if reference is not None else None
+            grant = (
+                self._grants.get(reference.grant_id) if reference is not None else None
+            )
             valid = bool(
                 reference
                 and reference.active
@@ -640,14 +811,20 @@ class OAuthProviderSimulator:
             )
             if not valid:
                 self._counts[provider]["identity_rejections"] += 1
-                self._record_locked(provider, "identity_rejected", reason="invalid_token")
+                self._record_locked(
+                    provider, "identity_rejected", reason="invalid_token"
+                )
                 payload = None
             else:
                 self._counts[provider]["identity_requests"] += 1
                 malformed = grant.outcome == "malformed_identity"
                 self._record_locked(provider, "identity_returned", malformed=malformed)
                 if malformed:
-                    payload = {"sub": 7} if provider == "google" else {"data": {"id": "x-subject-001"}}
+                    payload = (
+                        {"sub": 7}
+                        if provider == "google"
+                        else {"data": {"id": "x-subject-001"}}
+                    )
                 elif provider == "google":
                     payload = {
                         "sub": "google-subject-001",
@@ -668,7 +845,9 @@ class OAuthProviderSimulator:
             return
         self._send_json(handler, 200, payload)
 
-    def _revoke(self, handler: BaseHTTPRequestHandler, provider: str, form: dict[str, list[str]]) -> None:
+    def _revoke(
+        self, handler: BaseHTTPRequestHandler, provider: str, form: dict[str, list[str]]
+    ) -> None:
         if set(form) != {"token", "token_type_hint"}:
             self._send_json(handler, 400, {"error": "invalid_request"})
             return
@@ -682,12 +861,18 @@ class OAuthProviderSimulator:
             self._send_json(handler, 400, {"error": "invalid_request"})
             return
         with self._lock:
-            references = self._refresh_tokens if hint == "refresh_token" else self._access_tokens
+            references = (
+                self._refresh_tokens if hint == "refresh_token" else self._access_tokens
+            )
             reference = references.get(token)
-            grant = self._grants.get(reference.grant_id) if reference is not None else None
+            grant = (
+                self._grants.get(reference.grant_id) if reference is not None else None
+            )
             if reference is None or grant is None or grant.provider != provider:
                 self._counts[provider]["revocation_rejections"] += 1
-                self._record_locked(provider, "revocation_rejected", reason="invalid_token")
+                self._record_locked(
+                    provider, "revocation_rejected", reason="invalid_token"
+                )
                 valid = False
             else:
                 if provider == "google":
@@ -719,14 +904,18 @@ class OAuthProviderSimulator:
     ) -> bool:
         expected_id, expected_secret = self._CLIENTS[provider]
         if provider == "google":
-            return hmac.compare_digest(self._one(form, "client_id") or "", expected_id) and hmac.compare_digest(
+            return hmac.compare_digest(
+                self._one(form, "client_id") or "", expected_id
+            ) and hmac.compare_digest(
                 self._one(form, "client_secret") or "", expected_secret
             )
         authorization = handler.headers.get("Authorization", "")
         if not authorization.startswith("Basic ") or len(authorization) > 1024:
             return False
         try:
-            decoded = base64.b64decode(authorization.removeprefix("Basic "), validate=True).decode("utf-8")
+            decoded = base64.b64decode(
+                authorization.removeprefix("Basic "), validate=True
+            ).decode("utf-8")
         except (ValueError, UnicodeDecodeError):
             return False
         expected = f"{expected_id}:{expected_secret}"
@@ -736,11 +925,15 @@ class OAuthProviderSimulator:
         return client_id is None or hmac.compare_digest(client_id, expected_id)
 
     def _redirect_uri(self, provider: str) -> str:
-        return f"https://serverware.test/api/oauth/callback/{provider}"
+        return f"{self.redirect_base_url}/api/oauth/callback/{provider}"
 
     @staticmethod
     def _pkce_challenge(verifier: str) -> str:
-        return base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest()).decode("ascii").rstrip("=")
+        return (
+            base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("ascii")).digest())
+            .decode("ascii")
+            .rstrip("=")
+        )
 
     @staticmethod
     def _callback_location(redirect_uri: str, params: dict[str, str]) -> str:
@@ -775,8 +968,12 @@ class OAuthProviderSimulator:
         handler.send_header("Connection", "close")
         handler.end_headers()
 
-    def _send_json(self, handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
-        body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    def _send_json(
+        self, handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]
+    ) -> None:
+        body = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("utf-8")
         if len(body) > MAX_RESPONSE_BYTES:
             status = 500
             body = b'{"error":"response_too_large"}'
@@ -792,16 +989,32 @@ class OAuthProviderSimulator:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run the bounded local HTTPS OAuth provider simulator")
+    parser = argparse.ArgumentParser(
+        description="Run the bounded local HTTPS OAuth provider simulator"
+    )
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--port", type=int, default=0)
+    parser.add_argument("--redirect-base-url", default="https://serverware.test")
     args = parser.parse_args()
     temporary = tempfile.TemporaryDirectory() if args.work_dir is None else None
     work_dir = args.work_dir or Path(temporary.name)
-    simulator = OAuthProviderSimulator(work_dir, port=args.port)
+    simulator = OAuthProviderSimulator(
+        work_dir,
+        port=args.port,
+        redirect_base_url=args.redirect_base_url,
+    )
     try:
         simulator.start()
-        print(json.dumps({"baseUrl": simulator.base_url, "caCert": str(simulator.ca_cert_path)}, sort_keys=True))
+        print(
+            json.dumps(
+                {
+                    "baseUrl": simulator.base_url,
+                    "caCert": str(simulator.ca_cert_path),
+                    "redirectBaseUrl": simulator.redirect_base_url,
+                },
+                sort_keys=True,
+            )
+        )
         threading.Event().wait()
     except KeyboardInterrupt:
         pass

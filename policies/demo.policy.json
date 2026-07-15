@@ -95,7 +95,7 @@
             "allowedQueryKeys": [
               "reflectCredential"
             ],
-            "bodyMode": "any",
+            "bodyMode": "json",
             "maxBodyBytes": 65536
           },
           "response": {
@@ -115,6 +115,24 @@
         "type": "generic.rest"
       },
       "credentialRef": "cred-demo-bearer",
+      "constraints": [
+        {
+          "allowedFields": [
+            "audit_marker"
+          ],
+          "contentTypes": [
+            "application/json"
+          ],
+          "fields": {
+            "audit_marker": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          "id": "demo-echo-json-body",
+          "type": "jsonBody"
+        }
+      ],
       "id": "demo.echo",
       "match": {
         "host": "demo-upstream",

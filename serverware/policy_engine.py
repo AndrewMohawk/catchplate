@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Any
@@ -13,7 +14,11 @@ from mitmproxy import http
 
 from serverware import db, runtime
 from serverware.adapters import get_adapter
-from serverware.constraints import evaluate_request_constraints, evaluate_response_constraints
+from serverware.constraints import (
+    evaluate_request_constraints,
+    evaluate_response_constraints,
+    shared_rate_limit_claims,
+)
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     CredentialPolicy,
@@ -24,6 +29,8 @@ from serverware.policy_bundle import (
     canonical_json,
     credential_injection_target,
     get_policy_snapshot,
+    is_serverware_internal_header,
+    normalized_credential_provider,
     provider_account_scope_value,
     request_url_parts,
 )
@@ -51,6 +58,8 @@ SERVERWARE_SERVICE_AUTH_HEADERS = {
 }
 RESPONSE_PROOF_NONCE_HEADER = "x-serverware-proof-nonce"
 _RESPONSE_CREDENTIAL_GUARD_ATTR = "_serverware_response_credential_guard"
+_RELEASE_AUTHORIZATION_ID_MAX_BYTES = 256
+_UINT64_MAX = (1 << 64) - 1
 
 
 @dataclass
@@ -63,6 +72,9 @@ class RequestEvaluation:
     params: dict[str, str] | None = None
     request_digest: str | None = None
     operation_digest: str | None = None
+    attempt_id: str | None = None
+    binding_digest: str | None = None
+    release_state: str | None = None
 
 
 class _ResponseCredentialGuard:
@@ -132,15 +144,52 @@ def _take_response_credential_guard(flow: http.HTTPFlow) -> _ResponseCredentialG
     return guard if isinstance(guard, _ResponseCredentialGuard) else None
 
 
-def redact_url(url: str) -> str:
+def redact_url(
+    url: str,
+    *,
+    sensitive_query_keys: tuple[str, ...] = (),
+) -> str:
     parts = urlsplit(url)
+    sensitive_keys = SENSITIVE_QUERY_KEYS | {
+        key.lower() for key in sensitive_query_keys if isinstance(key, str) and key
+    }
     query = []
     for key, value in parse_qsl(parts.query, keep_blank_values=True):
-        if key.lower() in SENSITIVE_QUERY_KEYS:
+        if key.lower() in sensitive_keys:
             query.append((key, "redacted"))
         else:
             query.append((key, value))
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
+def _credential_sensitive_query_keys(
+    credential_policy: CredentialPolicy | None,
+) -> tuple[str, ...]:
+    if credential_policy is None:
+        return ()
+    target = credential_injection_target(credential_policy.injection)
+    if target is None or target[0] != "query":
+        return ()
+    return (target[1],)
+
+
+def _audit_url(flow: http.HTTPFlow) -> str:
+    query_keys = flow.metadata.get("serverware_sensitive_query_keys")
+    sensitive_query_keys = (
+        tuple(key for key in query_keys if isinstance(key, str) and key)
+        if isinstance(query_keys, (list, tuple))
+        else ()
+    )
+    preserved = flow.metadata.get("serverware_audit_url")
+    if isinstance(preserved, str) and preserved:
+        return redact_url(
+            preserved,
+            sensitive_query_keys=sensitive_query_keys,
+        )
+    return redact_url(
+        flow.request.pretty_url,
+        sensitive_query_keys=sensitive_query_keys,
+    )
 
 
 def _client_ip(flow: http.HTTPFlow) -> str | None:
@@ -211,6 +260,7 @@ def _canonical_forwarded_request_headers(
         and name != credential_header
         and name not in {"host", "content-length", "x-serverware-agent"}
         and name not in SERVERWARE_SERVICE_AUTH_HEADERS
+        and not is_serverware_internal_header(name)
         and name != RESPONSE_PROOF_NONCE_HEADER
     }
     forwarded["host"] = _canonical_authority(flow.request.pretty_url)
@@ -367,6 +417,9 @@ def _audit_context(
     credential_version: int,
     request_digest: str | None,
     operation_digest: str | None,
+    attempt_id: str | None = None,
+    binding_digest: str | None = None,
+    release_state: str | None = None,
 ) -> dict[str, Any]:
     return {
         "principal_id": principal.id,
@@ -375,6 +428,9 @@ def _audit_context(
         "credential_version": credential_version,
         "request_digest": request_digest,
         "operation_digest": operation_digest,
+        "attempt_id": attempt_id,
+        "binding_digest": binding_digest,
+        "release_state": release_state,
         "route_adapter": route.adapter_type,
     }
 
@@ -385,6 +441,154 @@ def _strip_identity_headers(flow: http.HTTPFlow, principal: PrincipalPolicy) -> 
             del flow.request.headers[name]
     if "Proxy-Authorization" in flow.request.headers:
         del flow.request.headers["Proxy-Authorization"]
+    for name in list(flow.request.headers):
+        if is_serverware_internal_header(name):
+            del flow.request.headers[name]
+
+
+def _canonical_oauth_scopes(raw_scopes: Any, *, field_name: str) -> frozenset[str]:
+    if not isinstance(raw_scopes, list) or not raw_scopes:
+        raise ValueError(f"{field_name} must be a non-empty array")
+    scopes: list[str] = []
+    for scope in raw_scopes:
+        if (
+            not isinstance(scope, str)
+            or not scope
+            or scope != scope.strip()
+            or any(character.isspace() for character in scope)
+        ):
+            raise ValueError(f"{field_name} contains an invalid scope")
+        scopes.append(scope)
+    if len(scopes) > 30 or any(len(scope) > 200 for scope in scopes):
+        raise ValueError(f"{field_name} is too large")
+    if len(scopes) != len(set(scopes)):
+        raise ValueError(f"{field_name} contains duplicate scopes")
+    return frozenset(scopes)
+
+
+def _credential_metadata_scopes(metadata: dict[str, Any]) -> frozenset[str]:
+    raw_scopes = metadata.get("scopes")
+    if raw_scopes is None:
+        raw_scopes = metadata.get("scope")
+    if raw_scopes is None:
+        return frozenset()
+    if isinstance(raw_scopes, str):
+        scopes = [item for item in raw_scopes.split() if item]
+    elif isinstance(raw_scopes, list) and all(
+        isinstance(item, str) and item for item in raw_scopes
+    ):
+        scopes = raw_scopes
+    else:
+        raise ValueError("credential scope metadata is invalid")
+    if len(scopes) != len(set(scopes)):
+        raise ValueError("credential scope metadata contains duplicates")
+    return frozenset(scopes)
+
+
+def _credential_policy_binding_decision(
+    credential_policy: CredentialPolicy,
+    credential: dict[str, Any],
+) -> PolicyDecision | None:
+    metadata = credential.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        return PolicyDecision(
+            False,
+            "credential metadata is invalid",
+            503,
+            {"error": "credential_policy_binding_invalid"},
+        )
+
+    policy_provider = normalized_credential_provider(credential_policy.provider)
+    stored_provider = normalized_credential_provider(
+        metadata.get("provider_id") or metadata.get("provider")
+    )
+    if policy_provider not in {"", "generic"} and stored_provider != policy_provider:
+        return PolicyDecision(
+            False,
+            "stored credential provider does not match the active signed policy",
+            409,
+            {"error": "credential_policy_binding_mismatch", "binding": "provider"},
+        )
+    if credential_policy.provider_subject is not None and credential.get("kind") != "oauth2":
+        return PolicyDecision(
+            False,
+            "signed provider account binding requires a verified OAuth credential",
+            409,
+            {"error": "credential_policy_binding_mismatch", "binding": "providerSubject"},
+        )
+
+    if credential.get("kind") == "oauth2":
+        try:
+            verified_provider, stored_subject = db.validate_managed_oauth_identity(metadata)
+        except db.ManagedOAuthCredentialError as exc:
+            return PolicyDecision(
+                False,
+                str(exc),
+                409,
+                {"error": "credential_policy_binding_mismatch", "binding": "providerSubject"},
+            )
+        if normalized_credential_provider(verified_provider) != policy_provider:
+            return PolicyDecision(
+                False,
+                "verified OAuth provider does not match the active signed policy",
+                409,
+                {"error": "credential_policy_binding_mismatch", "binding": "provider"},
+            )
+        policy_subject = credential_policy.provider_subject
+        if (
+            not isinstance(policy_subject, str)
+            or not policy_subject
+            or stored_subject != policy_subject
+        ):
+            return PolicyDecision(
+                False,
+                "stored OAuth account does not match the active signed policy",
+                409,
+                {"error": "credential_policy_binding_mismatch", "binding": "providerSubject"},
+            )
+        try:
+            stored_scopes = _canonical_oauth_scopes(
+                metadata.get("scopes"),
+                field_name="OAuth credential metadata scopes",
+            )
+            policy_scopes = _canonical_oauth_scopes(
+                list(credential_policy.scopes),
+                field_name="signed policy OAuth scopes",
+            )
+        except ValueError as exc:
+            return PolicyDecision(
+                False,
+                str(exc),
+                503,
+                {"error": "credential_policy_binding_invalid", "binding": "scope"},
+            )
+        if stored_scopes != policy_scopes:
+            return PolicyDecision(
+                False,
+                "stored OAuth scopes do not exactly match the active signed policy",
+                409,
+                {"error": "credential_policy_binding_mismatch", "binding": "scope"},
+            )
+        return None
+
+    policy_scopes = frozenset(str(item) for item in credential_policy.scopes)
+    try:
+        stored_scopes = _credential_metadata_scopes(metadata)
+    except ValueError as exc:
+        return PolicyDecision(
+            False,
+            str(exc),
+            503,
+            {"error": "credential_policy_binding_invalid", "binding": "scope"},
+        )
+    if not stored_scopes.issubset(policy_scopes):
+        return PolicyDecision(
+            False,
+            "stored credential scopes exceed the active signed policy",
+            409,
+            {"error": "credential_policy_binding_mismatch", "binding": "scope"},
+        )
+    return None
 
 
 def _secret_for_injection(secret: str, injection: dict[str, Any]) -> str:
@@ -438,7 +642,7 @@ def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy,
         elif injection_type == "query":
             name = injection.get("name", "access_token")
             flow.request.query[name] = secret
-            reason = f"injected query parameter {name}"
+            reason = "injected query credential"
         elif injection_type == "cookie":
             name = injection.get("name", "serverware_token")
             current = flow.request.headers.get("Cookie", "")
@@ -476,96 +680,319 @@ def _inject_credential(flow: http.HTTPFlow, credential_policy: CredentialPolicy,
             guard.clear()
 
 
+def _release_lifecycle(flow: http.HTTPFlow) -> dict[str, Any] | None:
+    lifecycle = flow.metadata.get("serverware_release_authorization")
+    return lifecycle if isinstance(lifecycle, dict) else None
+
+
+def _valid_release_authorization_identity(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+        and len(value.encode("utf-8")) <= _RELEASE_AUTHORIZATION_ID_MAX_BYTES
+        and all(character.isprintable() for character in value)
+    )
+
+
+def _validated_successful_release_reserve(
+    reserved: dict[str, Any],
+    *,
+    attempt_id: str,
+    jit_required: bool,
+) -> dict[str, str | int | None] | None:
+    binding_digest = reserved.get("binding_digest")
+    reservation_expires_at_epoch_ms = reserved.get(
+        "reservation_expires_at_epoch_ms"
+    )
+    grant_id = reserved.get("grant_id")
+    approval_request_id = reserved.get("approval_request_id")
+    exact_lifecycle = (
+        reserved.get("authorized") is True
+        and reserved.get("state") == "reserved"
+        and reserved.get("reason") == "reserved"
+        and reserved.get("attempt_id") == attempt_id
+        and isinstance(binding_digest, str)
+        and re.fullmatch(r"sha256:[0-9a-f]{64}", binding_digest) is not None
+        and reserved.get("completion_outcome") is None
+        and isinstance(reservation_expires_at_epoch_ms, int)
+        and not isinstance(reservation_expires_at_epoch_ms, bool)
+        and 0 <= reservation_expires_at_epoch_ms <= _UINT64_MAX
+        and reserved.get("dispatch_started_at_epoch_ms") is None
+        and reserved.get("dispatch_expires_at_epoch_ms") is None
+        and reserved.get("retry_after_seconds") == 0
+        and not isinstance(reserved.get("retry_after_seconds"), bool)
+        and reserved.get("approval_status") is None
+        and reserved.get("approval_expires_at") is None
+        and reserved.get("approval_created") is None
+    )
+    if not exact_lifecycle:
+        return None
+    if jit_required:
+        if not (
+            _valid_release_authorization_identity(grant_id)
+            and _valid_release_authorization_identity(approval_request_id)
+        ):
+            return None
+    elif grant_id is not None or approval_request_id is not None:
+        return None
+    return {
+        "binding_digest": binding_digest,
+        "reservation_expires_at_epoch_ms": reservation_expires_at_epoch_ms,
+        "grant_id": grant_id,
+        "approval_request_id": approval_request_id,
+    }
+
+
+def _store_release_lifecycle(
+    flow: http.HTTPFlow,
+    *,
+    attempt_id: str,
+    binding_digest: str,
+    state: str,
+    grant_id: str | None = None,
+    approval_request_id: str | None = None,
+    reservation_expires_at_epoch_ms: int | None = None,
+) -> dict[str, Any]:
+    lifecycle = {
+        "attempt_id": attempt_id,
+        "flow_id": attempt_id,
+        "binding_digest": binding_digest,
+        "state": state,
+        "dispatch_attempted": False,
+    }
+    if grant_id is not None:
+        lifecycle["grant_id"] = grant_id
+        flow.metadata["serverware_release_grant_id"] = grant_id
+    if approval_request_id is not None:
+        lifecycle["approval_request_id"] = approval_request_id
+        flow.metadata["serverware_release_approval_request_id"] = approval_request_id
+    if reservation_expires_at_epoch_ms is not None:
+        lifecycle["reservation_expires_at_epoch_ms"] = reservation_expires_at_epoch_ms
+    flow.metadata["serverware_release_authorization"] = lifecycle
+    flow.metadata["serverware_release_attempt_id"] = attempt_id
+    flow.metadata["serverware_release_binding_digest"] = binding_digest
+    flow.metadata["serverware_release_state"] = state
+    return lifecycle
+
+
+def _set_release_state(
+    flow: http.HTTPFlow,
+    lifecycle: dict[str, Any],
+    state: str,
+    *,
+    outcome: str | None = None,
+) -> None:
+    lifecycle["state"] = state
+    if outcome is not None:
+        lifecycle["completion_outcome"] = outcome
+    flow.metadata["serverware_release_state"] = state
+    if outcome is not None:
+        flow.metadata["serverware_release_completion_outcome"] = outcome
+
+
+def complete_release_authorization(
+    flow: http.HTTPFlow,
+    outcome: str,
+) -> PolicyDecision:
+    lifecycle = _release_lifecycle(flow)
+    if lifecycle is None:
+        return PolicyDecision(True)
+    state = str(lifecycle.get("state") or "")
+    terminal_states = {"cancelled", "committed", "committed_indeterminate"}
+    if state in terminal_states:
+        if lifecycle.get("completion_outcome") in {None, outcome}:
+            return PolicyDecision(True)
+        return PolicyDecision(
+            False,
+            "release authorization already completed with a different outcome",
+            503,
+            {"error": "release_authorization_completion_conflict"},
+        )
+    if state not in {"reserved", "dispatching"}:
+        return PolicyDecision(
+            False,
+            "release authorization lifecycle is invalid",
+            503,
+            {"error": "release_authorization_lifecycle_invalid"},
+        )
+    try:
+        result = runtime.complete_release_authorization(
+            attempt_id=str(lifecycle["attempt_id"]),
+            binding_digest=str(lifecycle["binding_digest"]),
+            outcome=outcome,
+            grant_id=lifecycle.get("grant_id"),
+            approval_request_id=lifecycle.get("approval_request_id"),
+        )
+    except runtime.ReleaseAuthorizationClientError:
+        return PolicyDecision(
+            False,
+            "release authorization completion is uncertain",
+            503,
+            {"error": "release_authorization_completion_uncertain"},
+        )
+    try:
+        runtime.validate_complete_release_authorization_response(
+            result,
+            attempt_id=str(lifecycle["attempt_id"]),
+            binding_digest=str(lifecycle["binding_digest"]),
+            outcome=outcome,
+            grant_id=lifecycle.get("grant_id"),
+            approval_request_id=lifecycle.get("approval_request_id"),
+        )
+    except runtime.ReleaseAuthorizationClientError:
+        return PolicyDecision(
+            False,
+            "release authorization completion state is invalid",
+            503,
+            {"error": "release_authorization_completion_invalid"},
+        )
+    _set_release_state(
+        flow,
+        lifecycle,
+        str(result["state"]),
+        outcome=str(result["completion_outcome"]),
+    )
+    return PolicyDecision(True)
+
+
+def dispatch_release_authorization(flow: http.HTTPFlow) -> PolicyDecision:
+    lifecycle = _release_lifecycle(flow)
+    if lifecycle is None:
+        if runtime.atomic_release_authorization_enabled():
+            return PolicyDecision(
+                False,
+                "release authorization lifecycle is missing",
+                503,
+                {"error": "release_authorization_lifecycle_missing"},
+            )
+        return PolicyDecision(True)
+    if lifecycle.get("state") != "reserved":
+        return PolicyDecision(
+            False,
+            "release authorization is not reserved",
+            503,
+            {"error": "release_authorization_not_reserved"},
+        )
+    reservation_expires_at = lifecycle.get("reservation_expires_at_epoch_ms")
+    if (
+        not isinstance(reservation_expires_at, int)
+        or isinstance(reservation_expires_at, bool)
+        or reservation_expires_at <= int(time.time() * 1000)
+    ):
+        cancellation = complete_release_authorization(flow, "not_forwarded")
+        if not cancellation.allowed:
+            return cancellation
+        return PolicyDecision(
+            False,
+            "release authorization reservation is expired",
+            503,
+            {"error": "release_authorization_reservation_expired"},
+        )
+    lifecycle["dispatch_attempted"] = True
+    try:
+        result = runtime.dispatch_release_authorization(
+            attempt_id=str(lifecycle["attempt_id"]),
+            binding_digest=str(lifecycle["binding_digest"]),
+            grant_id=lifecycle.get("grant_id"),
+            approval_request_id=lifecycle.get("approval_request_id"),
+        )
+    except runtime.ReleaseAuthorizationClientError:
+        complete_release_authorization(flow, "unknown")
+        return PolicyDecision(
+            False,
+            "release authorization dispatch is uncertain",
+            503,
+            {"error": "release_authorization_dispatch_uncertain"},
+        )
+    try:
+        runtime.validate_dispatch_release_authorization_response(
+            result,
+            attempt_id=str(lifecycle["attempt_id"]),
+            binding_digest=str(lifecycle["binding_digest"]),
+            grant_id=lifecycle.get("grant_id"),
+            approval_request_id=lifecycle.get("approval_request_id"),
+        )
+    except runtime.ReleaseAuthorizationClientError:
+        complete_release_authorization(flow, "unknown")
+        return PolicyDecision(
+            False,
+            "release authorization dispatch state is invalid",
+            503,
+            {"error": "release_authorization_dispatch_invalid"},
+        )
+    _set_release_state(flow, lifecycle, "dispatching")
+    return PolicyDecision(True)
+
+
+def complete_release_authorization_for_error(flow: http.HTTPFlow) -> PolicyDecision:
+    lifecycle = _release_lifecycle(flow)
+    if lifecycle is None:
+        return PolicyDecision(True)
+    if lifecycle.get("state") in {"cancelled", "committed", "committed_indeterminate"}:
+        return PolicyDecision(True)
+    outcome = (
+        "unknown"
+        if lifecycle.get("dispatch_attempted") or lifecycle.get("state") == "dispatching"
+        else "not_forwarded"
+    )
+    return complete_release_authorization(flow, outcome)
+
+
 def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     runtime.prune_expired_caches()
     snapshot = get_policy_snapshot()
     safe_url = redact_url(flow.request.pretty_url)
+    flow.metadata["serverware_audit_url"] = safe_url
     if not snapshot:
-        runtime.log_request(None, flow.request.method, safe_url, "blocked", 503, "policy bundle missing")
-        return RequestEvaluation(PolicyDecision(False, "policy bundle missing", 503, {"error": "policy_bundle_missing"}))
+        decision = PolicyDecision(False, "policy bundle missing", 503, {"error": "policy_bundle_missing"})
+        runtime.log_request(None, flow.request.method, safe_url, "blocked", 503, decision.reason)
+        return RequestEvaluation(decision)
 
     principal = snapshot.identify_principal(_client_ip(flow), flow.request.headers)
     if not principal:
-        runtime.log_request(None, flow.request.method, safe_url, "blocked", 403, "client principal denied")
-        return RequestEvaluation(PolicyDecision(False, "client principal denied", 403, {"error": "client_principal_denied"}), snapshot=snapshot)
+        decision = PolicyDecision(False, "client principal denied", 403, {"error": "client_principal_denied"})
+        runtime.log_request(None, flow.request.method, safe_url, "blocked", 403, decision.reason)
+        return RequestEvaluation(decision, snapshot=snapshot)
 
     scheme, host, port, path = request_url_parts(flow.request.pretty_url)
     match = snapshot.match_route(scheme, host, port, flow.request.method, path, principal.id)
     if not match:
-        runtime.log_request(None, flow.request.method, safe_url, "blocked", 403, "unknown route denied")
-        return RequestEvaluation(
-            PolicyDecision(False, "unknown route denied", 403, {"error": "unknown_route_denied"}),
-            snapshot=snapshot,
-            principal=principal,
-        )
+        decision = PolicyDecision(False, "unknown route denied", 403, {"error": "unknown_route_denied"})
+        runtime.log_request(None, flow.request.method, safe_url, "blocked", 403, decision.reason)
+        return RequestEvaluation(decision, snapshot=snapshot, principal=principal)
 
     route = match.route
     params = match.params
     adapter = get_adapter(route.adapter_type)
     credential_policy = snapshot.credentials.get(route.credential_ref or "")
-    credential = runtime.get_credential(route.credential_ref) if route.credential_ref else None
-    if route.credential_ref and (not credential_policy or not credential):
-        runtime.log_request(route.id, flow.request.method, safe_url, "blocked", 500, "credential missing")
-        return RequestEvaluation(
-            PolicyDecision(False, "credential missing", 500, {"error": "credential_missing"}),
-            snapshot=snapshot,
-            principal=principal,
-            route=route,
-            params=params,
-        )
-
-    credential_version_int = int((credential or {}).get("credential_version") or 0)
-    credential_version = str(credential_version_int or (credential or {}).get("updated_at") or "none")
-    flow.metadata["serverware_route_id"] = route.id
-    flow.metadata["serverware_policy_hash"] = snapshot.hash
-    flow.metadata["serverware_principal_id"] = principal.id
-    flow.metadata["serverware_credential_id"] = route.credential_ref
-    flow.metadata["serverware_credential_version"] = credential_version_int
+    sensitive_query_keys = _credential_sensitive_query_keys(credential_policy)
+    safe_url = redact_url(
+        flow.request.pretty_url,
+        sensitive_query_keys=sensitive_query_keys,
+    )
+    flow.metadata.update(
+        {
+            "serverware_audit_url": safe_url,
+            "serverware_sensitive_query_keys": sensitive_query_keys,
+            "serverware_route_id": route.id,
+            "serverware_policy_hash": snapshot.hash,
+            "serverware_principal_id": principal.id,
+            "serverware_credential_id": route.credential_ref,
+            "serverware_credential_version": 0,
+        }
+    )
     pre_policy_audit_context = _audit_context(
         snapshot=snapshot,
         principal=principal,
         route=route,
         credential_id=route.credential_ref,
-        credential_version=credential_version_int,
+        credential_version=0,
         request_digest=None,
         operation_digest=None,
     )
 
-    credential_decision = adapter.validate_credential(route, credential)
-    if not credential_decision.allowed:
-        runtime.log_request(
-            route.id,
-            flow.request.method,
-            safe_url,
-            "blocked",
-            credential_decision.status_code,
-            credential_decision.reason,
-            pre_policy_audit_context,
-        )
-        return RequestEvaluation(credential_decision, snapshot, principal, route, credential_policy, params)
-
-    collision_decision = _credential_injection_collision(flow, credential_policy)
-    if collision_decision is not None:
-        runtime.log_request(
-            route.id,
-            flow.request.method,
-            safe_url,
-            "blocked",
-            collision_decision.status_code,
-            collision_decision.reason,
-            pre_policy_audit_context,
-        )
-        return RequestEvaluation(collision_decision, snapshot, principal, route, credential_policy, params)
-
-    try:
-        forwarded_headers = _canonical_forwarded_request_headers(flow, credential_policy)
-    except ValueError as exc:
-        decision = PolicyDecision(
-            False,
-            "invalid forwarding headers",
-            400,
-            {"error": "invalid_forwarding_headers", "detail": str(exc)},
-        )
+    def pre_reserve_denial(decision: PolicyDecision) -> RequestEvaluation:
         runtime.log_request(
             route.id,
             flow.request.method,
@@ -575,38 +1002,82 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             decision.reason,
             pre_policy_audit_context,
         )
-        return RequestEvaluation(decision, snapshot, principal, route, credential_policy, params)
+        return RequestEvaluation(
+            decision,
+            snapshot=snapshot,
+            principal=principal,
+            route=route,
+            credential_policy=credential_policy,
+            params=params,
+        )
 
+    if route.credential_ref and credential_policy is None:
+        return pre_reserve_denial(
+            PolicyDecision(False, "credential policy missing", 500, {"error": "credential_missing"})
+        )
+    collision_decision = _credential_injection_collision(flow, credential_policy)
+    if collision_decision is not None:
+        return pre_reserve_denial(collision_decision)
+    try:
+        forwarded_headers = _canonical_forwarded_request_headers(flow, credential_policy)
+    except ValueError as exc:
+        return pre_reserve_denial(
+            PolicyDecision(
+                False,
+                "invalid forwarding headers",
+                400,
+                {"error": "invalid_forwarding_headers", "detail": str(exc)},
+            )
+        )
     decision = adapter.validate_request(flow, route, params)
     if not decision.allowed:
-        runtime.log_request(route.id, flow.request.method, safe_url, "blocked", decision.status_code, decision.reason, pre_policy_audit_context)
-        return RequestEvaluation(decision, snapshot, principal, route, credential_policy, params)
-
-    operation_fields = adapter.operation_fields(flow, route, params)
+        return pre_reserve_denial(decision)
+    try:
+        operation_fields = adapter.operation_fields(flow, route, params)
+    except (TypeError, ValueError):
+        return pre_reserve_denial(
+            PolicyDecision(
+                False,
+                "request operation classification failed",
+                403,
+                {"error": "request_operation_invalid"},
+            )
+        )
     provider_account_decision = _bind_provider_account_scope(
         route,
         credential_policy,
         operation_fields,
     )
     if provider_account_decision is not None:
-        runtime.log_request(
-            route.id,
-            flow.request.method,
-            safe_url,
-            "blocked",
-            provider_account_decision.status_code,
-            provider_account_decision.reason,
-            pre_policy_audit_context,
-        )
-        return RequestEvaluation(
-            provider_account_decision,
-            snapshot,
-            principal,
-            route,
-            credential_policy,
-            params,
-        )
+        return pre_reserve_denial(provider_account_decision)
     constraint_decision = evaluate_request_constraints(
+        flow,
+        route,
+        principal_id=principal.id,
+        credential_ref=route.credential_ref,
+        credential_version=0,
+        operation_fields=operation_fields,
+        consume_rate_limits=False,
+        policy_hash=snapshot.hash,
+        skip_rate_limits=True,
+    )
+    if not constraint_decision.allowed:
+        return pre_reserve_denial(constraint_decision)
+
+    try:
+        credential_version_value = runtime.get_credential_version(route.credential_ref)
+    except Exception:
+        credential_version_value = None
+    if credential_version_value is None:
+        return pre_reserve_denial(
+            PolicyDecision(False, "credential missing", 500, {"error": "credential_missing"})
+        )
+    credential_version_int = int(credential_version_value)
+    credential_version = str(credential_version_int) if credential_version_int else "none"
+    flow.metadata["serverware_credential_version"] = credential_version_int
+
+    atomic_mode = runtime.atomic_release_authorization_enabled()
+    rate_preview = evaluate_request_constraints(
         flow,
         route,
         principal_id=principal.id,
@@ -615,18 +1086,11 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
         operation_fields=operation_fields,
         consume_rate_limits=False,
         policy_hash=snapshot.hash,
+        rate_limits_only=True,
+        skip_shared_rate_limits=atomic_mode,
     )
-    if not constraint_decision.allowed:
-        runtime.log_request(
-            route.id,
-            flow.request.method,
-            safe_url,
-            "blocked",
-            constraint_decision.status_code,
-            constraint_decision.reason,
-            pre_policy_audit_context,
-        )
-        return RequestEvaluation(constraint_decision, snapshot, principal, route, credential_policy, params)
+    if not rate_preview.allowed:
+        return pre_reserve_denial(rate_preview)
 
     canonical_request = _canonical_request(
         flow,
@@ -639,91 +1103,359 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     )
     request_digest = _digest(canonical_request)
     operation_digest = _operation_digest(canonical_request)
-    audit_context = _audit_context(
-        snapshot=snapshot,
-        principal=principal,
-        route=route,
-        credential_id=route.credential_ref,
-        credential_version=credential_version_int,
-        request_digest=request_digest,
-        operation_digest=operation_digest,
-    )
-
     jit = route.jit or {}
-    if jit.get("required"):
+    jit_required = bool(jit.get("required"))
+    attempt_id: str | None = None
+    binding_digest: str | None = None
+    release_state: str | None = None
+    lifecycle: dict[str, Any] | None = None
+
+    def audit_context() -> dict[str, Any]:
+        return _audit_context(
+            snapshot=snapshot,
+            principal=principal,
+            route=route,
+            credential_id=route.credential_ref,
+            credential_version=credential_version_int,
+            request_digest=request_digest,
+            operation_digest=operation_digest,
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            release_state=(lifecycle or {}).get("state", release_state),
+        )
+
+    def evaluation(decision: PolicyDecision) -> RequestEvaluation:
+        return RequestEvaluation(
+            decision,
+            snapshot=snapshot,
+            principal=principal,
+            route=route,
+            credential_policy=credential_policy,
+            params=params,
+            request_digest=request_digest,
+            operation_digest=operation_digest,
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            release_state=(lifecycle or {}).get("state", release_state),
+        )
+
+    def block_after_reserve(decision: PolicyDecision) -> RequestEvaluation:
+        nonlocal release_state
+        if lifecycle is not None and lifecycle.get("state") == "reserved":
+            cancellation = complete_release_authorization(flow, "not_forwarded")
+            release_state = str(lifecycle.get("state") or release_state)
+            if not cancellation.allowed:
+                decision = cancellation
+        runtime.log_request(
+            route.id,
+            flow.request.method,
+            safe_url,
+            "blocked",
+            decision.status_code,
+            decision.reason,
+            audit_context(),
+        )
+        return evaluation(decision)
+
+    if atomic_mode:
+        attempt_id = str(uuid.uuid4())
         try:
-            consumed = db.consume_jit_grant(
+            reserved = runtime.reserve_release_authorization(
+                attempt_id=attempt_id,
+                flow_id=attempt_id,
                 principal_id=principal.id,
                 route_id=route.id,
-                credential_id=route.credential_ref or "",
+                credential_ref=route.credential_ref,
                 credential_version=credential_version_int,
                 policy_hash=snapshot.hash,
                 request_digest=request_digest,
                 operation_digest=operation_digest,
-                flow_id=str(uuid.uuid4()),
+                operation_context=dict(operation_fields),
+                canonical_request=canonical_request,
+                shared_quotas=shared_rate_limit_claims(
+                    route,
+                    principal_id=principal.id,
+                    credential_ref=route.credential_ref,
+                    credential_version=credential_version_int,
+                    operation_fields=operation_fields,
+                ),
+                require_jit_grant=jit_required,
             )
-        except Exception as exc:
+        except runtime.ReleaseAuthorizationClientError:
+            decision = PolicyDecision(
+                False,
+                "release authorization reserve is uncertain",
+                503,
+                {"error": "release_authorization_reserve_uncertain"},
+            )
             runtime.log_request(
                 route.id,
                 flow.request.method,
                 safe_url,
                 "blocked",
-                503,
-                "jit grant store unavailable",
-                {**audit_context, "error": str(exc)},
+                decision.status_code,
+                decision.reason,
+                audit_context(),
             )
-            return RequestEvaluation(
+            return evaluation(decision)
+        try:
+            runtime.validate_reserve_release_authorization_response(
+                reserved,
+                attempt_id=attempt_id,
+                require_jit_grant=jit_required,
+            )
+        except runtime.ReleaseAuthorizationClientError:
+            binding_digest = str(reserved.get("binding_digest") or "")
+            release_state = str(reserved.get("state") or "")
+            if (
+                release_state == "reserved"
+                and reserved.get("attempt_id") == attempt_id
+                and re.fullmatch(r"sha256:[0-9a-f]{64}", binding_digest)
+                is not None
+            ):
+                lifecycle = _store_release_lifecycle(
+                    flow,
+                    attempt_id=attempt_id,
+                    binding_digest=binding_digest,
+                    state="reserved",
+                    grant_id=(
+                        reserved.get("grant_id")
+                        if _valid_release_authorization_identity(
+                            reserved.get("grant_id")
+                        )
+                        else None
+                    ),
+                    approval_request_id=(
+                        reserved.get("approval_request_id")
+                        if _valid_release_authorization_identity(
+                            reserved.get("approval_request_id")
+                        )
+                        else None
+                    ),
+                    reservation_expires_at_epoch_ms=(
+                        reserved.get("reservation_expires_at_epoch_ms")
+                        if isinstance(
+                            reserved.get("reservation_expires_at_epoch_ms"), int
+                        )
+                        and not isinstance(
+                            reserved.get("reservation_expires_at_epoch_ms"), bool
+                        )
+                        else None
+                    ),
+                )
+            return block_after_reserve(
                 PolicyDecision(
                     False,
-                    "jit grant store unavailable",
+                    "release authorization reserve state is invalid",
                     503,
-                    {"error": "jit_grant_store_unavailable"},
-                ),
-                snapshot,
-                principal,
-                route,
+                    {"error": "release_authorization_reserve_invalid"},
+                )
+            )
+        binding_digest = str(reserved.get("binding_digest") or "")
+        release_state = str(reserved.get("state") or "")
+        if release_state == "denied":
+            reason = str(reserved.get("reason") or "release_authorization_denied")
+            if jit_required and reason in {"jit_grant_unavailable", "jit_grant_expired"}:
+                approval_id = reserved.get("approval_request_id")
+                approval_status = reserved.get("approval_status")
+                approval_expires_at = reserved.get("approval_expires_at")
+                approval_created = reserved.get("approval_created")
+                retry_after_seconds = reserved.get("retry_after_seconds")
+                if (
+                    not isinstance(approval_id, str)
+                    or not approval_id
+                    or approval_status != "pending"
+                    or not isinstance(approval_created, bool)
+                    or not isinstance(approval_expires_at, str)
+                    or not approval_expires_at
+                    or not isinstance(retry_after_seconds, int)
+                    or isinstance(retry_after_seconds, bool)
+                    or retry_after_seconds < 1
+                ):
+                    return block_after_reserve(
+                        PolicyDecision(
+                            False,
+                            "jit approval response is invalid",
+                            503,
+                            {"error": "jit_approval_response_invalid"},
+                        )
+                    )
+                return block_after_reserve(
+                    PolicyDecision(
+                        False,
+                        "jit approval required",
+                        428,
+                        {
+                            "error": "serverware_approval_required",
+                            "approval_id": approval_id,
+                            "approval_status": approval_status,
+                            "approval_created": approval_created,
+                            "request_digest": request_digest,
+                            "operation_digest": operation_digest,
+                            "route_id": route.id,
+                            "principal": principal.id,
+                            "expires_at": approval_expires_at,
+                            "retry_after_seconds": retry_after_seconds,
+                        },
+                    )
+                )
+            if reason == "shared_quota_denied":
+                return block_after_reserve(
+                    PolicyDecision(
+                        False,
+                        "credential use rate limit exceeded",
+                        429,
+                        {
+                            "error": "credential_rate_limit_exceeded",
+                            "retry_after_seconds": int(reserved.get("retry_after_seconds") or 1),
+                            "store": "shared",
+                        },
+                    )
+                )
+            return block_after_reserve(
+                PolicyDecision(
+                    False,
+                    "release authorization denied",
+                    503,
+                    {"error": "release_authorization_denied", "reason": reason},
+                )
+            )
+        validated_reserve = _validated_successful_release_reserve(
+            reserved,
+            attempt_id=attempt_id,
+            jit_required=jit_required,
+        )
+        if validated_reserve is None:
+            if (
+                release_state == "reserved"
+                and reserved.get("attempt_id") == attempt_id
+                and re.fullmatch(r"sha256:[0-9a-f]{64}", binding_digest)
+                is not None
+            ):
+                lifecycle = _store_release_lifecycle(
+                    flow,
+                    attempt_id=attempt_id,
+                    binding_digest=binding_digest,
+                    state="reserved",
+                )
+            return block_after_reserve(
+                PolicyDecision(
+                    False,
+                    "release authorization reserve state is invalid",
+                    503,
+                    {"error": "release_authorization_reserve_invalid"},
+                )
+            )
+        binding_digest = str(validated_reserve["binding_digest"])
+        lifecycle = _store_release_lifecycle(
+            flow,
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            state="reserved",
+            grant_id=validated_reserve["grant_id"],
+            approval_request_id=validated_reserve["approval_request_id"],
+            reservation_expires_at_epoch_ms=validated_reserve[
+                "reservation_expires_at_epoch_ms"
+            ],
+        )
+
+    try:
+        credential = runtime.get_credential(route.credential_ref) if route.credential_ref else None
+    except Exception:
+        return block_after_reserve(
+            PolicyDecision(False, "credential unavailable", 503, {"error": "credential_unavailable"})
+        )
+    try:
+        loaded_credential_version = int((credential or {}).get("credential_version") or 0)
+    except (AttributeError, TypeError, ValueError):
+        loaded_credential_version = -1
+    if route.credential_ref and loaded_credential_version != credential_version_int:
+        return block_after_reserve(
+            PolicyDecision(
+                False,
+                "credential changed during authorization",
+                409,
+                {"error": "credential_version_changed"},
+            )
+        )
+    try:
+        credential_decision = adapter.validate_credential(route, credential)
+    except Exception:
+        return block_after_reserve(
+            PolicyDecision(
+                False,
+                "credential validation failed",
+                500,
+                {"error": "credential_validation_failed"},
+            )
+        )
+    if not credential_decision.allowed:
+        return block_after_reserve(credential_decision)
+    if credential_policy is not None and credential is not None:
+        try:
+            binding_decision = _credential_policy_binding_decision(
                 credential_policy,
-                params,
-                request_digest,
-                operation_digest,
+                credential,
             )
-        if not consumed:
-            pending_ttl = int(jit.get("pendingTtlSeconds", 300))
-            grant_ttl = int(jit.get("ttlSeconds", 30))
-            max_uses = int(jit.get("maxUses", 1))
-            approval = db.ensure_jit_approval_request(
-                route_id=route.id,
-                method=flow.request.method,
-                url=safe_url,
-                principal_id=principal.id,
-                credential_id=route.credential_ref or "",
-                credential_version=credential_version_int,
-                policy_hash=snapshot.hash,
-                request_digest=request_digest,
-                operation_digest=operation_digest,
-                canonical_request=canonical_request,
-                redacted_display={
-                    "method": flow.request.method,
-                    "url": safe_url,
-                    "route_id": route.id,
-                    "principal": principal.id,
-                    "operation": operation_fields,
-                    "body_sha256": canonical_request["request"]["body_sha256"],
-                },
-                pending_ttl_seconds=pending_ttl,
-                grant_ttl_seconds=grant_ttl,
-                grant_max_uses=max_uses,
+        except Exception:
+            return block_after_reserve(
+                PolicyDecision(
+                    False,
+                    "credential policy binding validation failed",
+                    500,
+                    {"error": "credential_policy_binding_invalid"},
+                )
             )
-            runtime.log_request(
-                route.id,
-                flow.request.method,
-                safe_url,
-                "blocked",
-                428,
-                "jit approval required",
-                {**audit_context, "approval_id": approval["id"]},
+        if binding_decision is not None:
+            return block_after_reserve(binding_decision)
+
+    grant_lookup = {
+        "principal_id": principal.id,
+        "route_id": route.id,
+        "credential_id": route.credential_ref or "",
+        "credential_version": credential_version_int,
+        "policy_hash": snapshot.hash,
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+    }
+    grant_preview: dict[str, Any] = {}
+    if jit_required and not atomic_mode:
+        try:
+            grant_preview = db.find_jit_grant_result(**grant_lookup)
+        except Exception:
+            return block_after_reserve(
+                PolicyDecision(False, "jit grant store unavailable", 503, {"error": "jit_grant_store_unavailable"})
             )
-            return RequestEvaluation(
+        if not grant_preview.get("available"):
+            try:
+                approval = db.ensure_jit_approval_request(
+                    route_id=route.id,
+                    method=flow.request.method,
+                    url=safe_url,
+                    principal_id=principal.id,
+                    credential_id=route.credential_ref or "",
+                    credential_version=credential_version_int,
+                    policy_hash=snapshot.hash,
+                    request_digest=request_digest,
+                    operation_digest=operation_digest,
+                    canonical_request=canonical_request,
+                    redacted_display={
+                        "method": flow.request.method,
+                        "url": safe_url,
+                        "route_id": route.id,
+                        "principal": principal.id,
+                        "operation": operation_fields,
+                        "body_sha256": canonical_request["request"]["body_sha256"],
+                    },
+                    pending_ttl_seconds=int(jit.get("pendingTtlSeconds", 300)),
+                    grant_ttl_seconds=int(jit.get("ttlSeconds", 30)),
+                    grant_max_uses=int(jit.get("maxUses", 1)),
+                )
+            except Exception:
+                return block_after_reserve(
+                    PolicyDecision(False, "jit approval store unavailable", 503, {"error": "jit_approval_store_unavailable"})
+                )
+            return block_after_reserve(
                 PolicyDecision(
                     False,
                     "jit approval required",
@@ -738,89 +1470,106 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                         "expires_at": approval["expires_at"],
                         "retry_after_seconds": 3,
                     },
-                ),
-                snapshot,
-                principal,
-                route,
-                credential_policy,
-                params,
-                request_digest,
-                operation_digest,
+                )
             )
 
-        # A grant is only authorization to retry. Re-run policy after consuming it.
-        decision = adapter.validate_request(flow, route, params)
-        if not decision.allowed:
-            runtime.log_request(route.id, flow.request.method, safe_url, "blocked", decision.status_code, decision.reason, audit_context)
-            return RequestEvaluation(decision, snapshot, principal, route, credential_policy, params, request_digest, operation_digest)
-
-    rate_limit_decision = evaluate_request_constraints(
-        flow,
-        route,
-        principal_id=principal.id,
-        credential_ref=route.credential_ref,
-        credential_version=credential_version_int,
-        operation_fields=operation_fields,
-        consume_rate_limits=True,
-        policy_hash=snapshot.hash,
-        rate_limits_only=True,
-    )
-    if not rate_limit_decision.allowed:
-        runtime.log_request(
-            route.id,
-            flow.request.method,
-            safe_url,
-            "blocked",
-            rate_limit_decision.status_code,
-            rate_limit_decision.reason,
-            audit_context,
+    try:
+        rate_limit_decision = evaluate_request_constraints(
+            flow,
+            route,
+            principal_id=principal.id,
+            credential_ref=route.credential_ref,
+            credential_version=credential_version_int,
+            operation_fields=operation_fields,
+            consume_rate_limits=True,
+            policy_hash=snapshot.hash,
+            rate_limits_only=True,
+            skip_shared_rate_limits=atomic_mode,
         )
-        return RequestEvaluation(rate_limit_decision, snapshot, principal, route, credential_policy, params, request_digest, operation_digest)
+    except Exception:
+        return block_after_reserve(
+            PolicyDecision(
+                False,
+                "request rate-limit validation failed",
+                503,
+                {"error": "rate_limit_validation_failed"},
+            )
+        )
+    if not rate_limit_decision.allowed:
+        return block_after_reserve(rate_limit_decision)
 
-    decision = adapter.rewrite_request(flow, route, params)
+    if jit_required and not atomic_mode:
+        try:
+            grant_commit = db.consume_jit_grant_result(
+                **grant_lookup,
+                flow_id=str(uuid.uuid4()),
+            )
+        except Exception:
+            return block_after_reserve(
+                PolicyDecision(False, "jit grant store unavailable", 503, {"error": "jit_grant_store_unavailable"})
+            )
+        if not grant_commit.get("consumed"):
+            return block_after_reserve(
+                PolicyDecision(
+                    False,
+                    "approved JIT grant changed before final consumption",
+                    409,
+                    {
+                        "error": "jit_grant_commit_race",
+                        "reason": grant_commit.get("reason"),
+                        "approval_id": grant_preview.get("approval_id"),
+                    },
+                )
+            )
+
+    try:
+        decision = adapter.rewrite_request(flow, route, params)
+    except Exception:
+        return block_after_reserve(
+            PolicyDecision(False, "request rewrite failed", 500, {"error": "request_rewrite_failed"})
+        )
     if not decision.allowed:
-        runtime.log_request(route.id, flow.request.method, safe_url, "blocked", decision.status_code, decision.reason, audit_context)
-        return RequestEvaluation(decision, snapshot, principal, route, credential_policy, params, request_digest, operation_digest)
+        return block_after_reserve(decision)
 
     injection_reason = "no credential configured"
     if credential_policy and credential:
         try:
             injection_reason = _inject_credential(flow, credential_policy, credential)
-        except ValueError as exc:
-            runtime.log_request(route.id, flow.request.method, safe_url, "blocked", 500, str(exc), audit_context)
-            return RequestEvaluation(
-                PolicyDecision(False, str(exc), 500, {"error": "credential_injection_failed"}),
-                snapshot,
-                principal,
-                route,
-                credential_policy,
-                params,
-                request_digest,
-                operation_digest,
+        except (KeyError, TypeError, ValueError):
+            return block_after_reserve(
+                PolicyDecision(False, "credential injection failed", 500, {"error": "credential_injection_failed"})
             )
 
-    _strip_identity_headers(flow, principal)
-    flow.metadata["serverware_route_id"] = route.id
-    flow.metadata["serverware_policy_hash"] = snapshot.hash
-    flow.metadata["serverware_principal_id"] = principal.id
-    flow.metadata["serverware_credential_id"] = route.credential_ref
-    flow.metadata["serverware_credential_version"] = credential_version_int
-    flow.metadata["serverware_request_digest"] = request_digest
-    flow.metadata["serverware_operation_digest"] = operation_digest
-    flow.metadata["serverware_operation"] = dict(operation_fields)
-    flow.metadata["serverware_route"] = route
-    flow.metadata["serverware_params"] = params
-    runtime.log_request(route.id, flow.request.method, safe_url, "allowed", None, injection_reason, audit_context)
-    return RequestEvaluation(
-        PolicyDecision(True),
-        snapshot,
-        principal,
-        route,
-        credential_policy,
-        params,
-        request_digest,
-        operation_digest,
-    )
+    try:
+        _strip_identity_headers(flow, principal)
+        flow.metadata.update(
+            {
+                "serverware_route_id": route.id,
+                "serverware_policy_hash": snapshot.hash,
+                "serverware_principal_id": principal.id,
+                "serverware_credential_id": route.credential_ref,
+                "serverware_credential_version": credential_version_int,
+                "serverware_request_digest": request_digest,
+                "serverware_operation_digest": operation_digest,
+                "serverware_operation": dict(operation_fields),
+                "serverware_route": route,
+                "serverware_params": params,
+            }
+        )
+        runtime.log_request(
+            route.id,
+            flow.request.method,
+            safe_url,
+            "allowed",
+            None,
+            injection_reason,
+            audit_context(),
+        )
+    except Exception:
+        return block_after_reserve(
+            PolicyDecision(False, "request preparation failed", 503, {"error": "request_preparation_failed"})
+        )
+    return evaluation(PolicyDecision(True))
 
 
 def evaluate_response(flow: http.HTTPFlow) -> PolicyDecision:
@@ -842,7 +1591,7 @@ def _evaluate_response(
     if not route:
         if flow.metadata.get("serverware_blocked_response") is True:
             return PolicyDecision(True)
-        safe_url = redact_url(flow.request.pretty_url)
+        safe_url = _audit_url(flow)
         runtime.log_request(
             route_id,
             flow.request.method,
@@ -865,6 +1614,12 @@ def _evaluate_response(
         "credential_version": flow.metadata.get("serverware_credential_version"),
         "request_digest": flow.metadata.get("serverware_request_digest"),
         "operation_digest": flow.metadata.get("serverware_operation_digest"),
+        "attempt_id": flow.metadata.get("serverware_release_attempt_id"),
+        "binding_digest": flow.metadata.get("serverware_release_binding_digest"),
+        "release_state": flow.metadata.get("serverware_release_state"),
+        "completion_outcome": flow.metadata.get(
+            "serverware_release_completion_outcome"
+        ),
         "route_adapter": getattr(route, "adapter_type", None),
     }
     if status_code is not None and 200 <= status_code < 300:
@@ -873,7 +1628,7 @@ def _evaluate_response(
             runtime.log_request(
                 route_id,
                 flow.request.method,
-                redact_url(flow.request.pretty_url),
+                _audit_url(flow),
                 "blocked",
                 semantic_decision.status_code,
                 semantic_decision.reason,
@@ -886,7 +1641,7 @@ def _evaluate_response(
         runtime.log_request(
             route_id,
             flow.request.method,
-            redact_url(flow.request.pretty_url),
+            _audit_url(flow),
             "blocked",
             decision.status_code,
             decision.reason,
@@ -906,7 +1661,7 @@ def _evaluate_response(
         runtime.log_request(
             route_id,
             flow.request.method,
-            redact_url(flow.request.pretty_url),
+            _audit_url(flow),
             "blocked",
             constraint_decision.status_code,
             constraint_decision.reason,
@@ -917,7 +1672,7 @@ def _evaluate_response(
         runtime.log_request(
             route_id,
             flow.request.method,
-            redact_url(flow.request.pretty_url),
+            _audit_url(flow),
             "blocked",
             502,
             "response credential reflection denied",
@@ -929,5 +1684,13 @@ def _evaluate_response(
             502,
             {"error": "response_credential_reflection"},
         )
-    runtime.log_request(route_id, flow.request.method, redact_url(flow.request.pretty_url), "response", status_code, None, audit_context)
+    runtime.log_request(
+        route_id,
+        flow.request.method,
+        _audit_url(flow),
+        "response",
+        status_code,
+        None,
+        audit_context,
+    )
     return decision

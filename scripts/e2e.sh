@@ -141,7 +141,10 @@ python3 - "$TMP_DIR/expired-credential-lease.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 payload = data.get("payload") if isinstance(data.get("payload"), dict) else data
-assert payload["error"] == "credential_lease_missing", data
+assert payload["error"] in {
+    "credential_lease_missing",
+    "release_authorization_unavailable",
+}, data
 PY
 
 recovered_lease=0

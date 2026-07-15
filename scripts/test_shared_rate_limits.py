@@ -7,6 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,7 +28,11 @@ for name in (
     os.environ.pop(name, None)
 
 from serverware import db
-from serverware.constraints import evaluate_request_constraints, reset_local_constraint_state
+from serverware.constraints import (
+    evaluate_request_constraints,
+    reset_local_constraint_state,
+    shared_rate_limit_claims,
+)
 
 try:
     from fastapi import HTTPException
@@ -49,7 +54,12 @@ class Request:
     raw_content = json.dumps({"text": "ship it"}).encode("utf-8")
 
 
-def decision_for(route: SimpleNamespace, *, consume: bool):
+def decision_for(
+    route: SimpleNamespace,
+    *,
+    consume: bool,
+    skip_shared_rate_limits: bool = False,
+):
     return evaluate_request_constraints(
         SimpleNamespace(request=Request()),
         route,
@@ -60,6 +70,7 @@ def decision_for(route: SimpleNamespace, *, consume: bool):
         consume_rate_limits=consume,
         policy_hash="sha256:" + "b" * 64,
         rate_limits_only=True,
+        skip_shared_rate_limits=skip_shared_rate_limits,
     )
 
 
@@ -134,6 +145,14 @@ def main() -> None:
             credential_version=7,
             operation_context=operation_context,
         )
+        claims = shared_rate_limit_claims(
+            api_route,
+            principal_id="agent:quota-test",
+            credential_ref=api_route.credential_ref,
+            credential_version=7,
+            operation_fields=operation_context,
+        )
+        assert len(claims) == 1 and claims[0]["counter_key"] == counter_key, claims
         payload = DataPlaneRateLimitConsume.model_validate(
             {
                 "counterKey": counter_key,
@@ -197,6 +216,22 @@ def main() -> None:
     assert not denied.allowed, denied
     assert denied.payload["error"] == "credential_rate_limit_exceeded", denied.payload
     assert denied.payload["store"] == "shared", denied.payload
+
+    with patch.object(
+        db,
+        "consume_rate_limit",
+        side_effect=AssertionError("atomic mode called the legacy shared quota endpoint"),
+    ):
+        assert decision_for(
+            route,
+            consume=False,
+            skip_shared_rate_limits=True,
+        ).allowed
+        assert decision_for(
+            route,
+            consume=True,
+            skip_shared_rate_limits=True,
+        ).allowed
 
     print(f"shared rate-limit tests passed; endpoint_checked={endpoint_checked}")
 

@@ -38,6 +38,8 @@ def main() -> None:
         raise AssertionError("production release proof does not default KMS materials to the production /etc path")
     required_order = [
         "verify-credential-policy-contracts",
+        "verify-control-plane-startup",
+        "verify-portal-browser-oauth",
         "validate-production-policy-identity",
         "validate-policy-activation-evidence",
         "validate-reproducible-builds",
@@ -80,6 +82,21 @@ def main() -> None:
     ):
         if required not in policy_contract_body:
             raise AssertionError(f"credential policy verification omits {required}")
+
+    startup_body = target_body(makefile, "verify-control-plane-startup")
+    if "scripts/test_control_plane_startup.py" not in startup_body:
+        raise AssertionError("control-plane startup verification omits the shared preflight test")
+
+    browser_body = target_body(makefile, "verify-portal-browser-oauth")
+    for required in (
+        "python -m playwright install chromium",
+        "scripts/test_portal_browser_oauth.py",
+    ):
+        if required not in browser_body:
+            raise AssertionError(f"portal browser OAuth verification omits {required}")
+    for target in ("bench-gate-rs", "verify-oauth-credentials"):
+        if "$(MAKE) verify-portal-browser-oauth" not in target_body(makefile, target):
+            raise AssertionError(f"{target} omits the portal browser OAuth proof")
 
     input_preflight_body = target_body(makefile, "production-release-input-preflight")
     for required in (

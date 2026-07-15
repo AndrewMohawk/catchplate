@@ -2,11 +2,11 @@
 
 # Portal OAuth And Agent Guide
 
-This guide covers the operator path for connecting OAuth-backed services in the Serverware portal and the agent path for using those credentials without ever receiving them.
+This guide covers the operator path for connecting OAuth-backed services in the Serverware portal and the agent path for using those credentials without direct credential delivery. Serverware still handles plaintext transiently in its trusted injection path; current development Docker does not prove enclave-only custody or complete zeroization of every HTTP allocation.
 
 [Private deployment screenshot omitted from public source.]
 
-The screenshots in this guide are rendered from the Docker portal. The desktop view above shows a selected cancelled fixture run, its revision and current-assignee label, pending configuration/runtime/hardware statuses, the handoff field, and the assignment actions beside the credential controls. Seeded provider records and callback fixtures exercise UI and policy bindings but are not evidence of a live provider login or completed Setup run. The SVG diagrams remain architecture references, not screenshots.
+The screenshots in this guide are rendered from the real portal UI. The desktop view above shows a selected cancelled fixture run, its revision and current-assignee label, pending configuration/runtime/hardware statuses, the handoff field, and the assignment actions beside the credential controls. The OAuth and policy screenshots below come from the deterministic HTTPS browser journey in `scripts/test_portal_browser_oauth.py`; that journey exercises real portal redirects and callback handling against a bounded local provider simulator. It is not evidence of a live Google/X tenant or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
 
 ## Authenticate The Operator
 
@@ -22,7 +22,7 @@ Serverware currently has first-class portal OAuth setup for Google and X/Twitter
 
 [Private deployment screenshot omitted from public source.]
 
-The provider screenshot uses seeded fixture credential records to show connected, identity-verified, reconnect-required, and disconnect controls while the provider selector itself is intentionally unconfigured. It proves the rendered credential lifecycle states, not a configured OAuth client or live Google login. A configured installation enables the connection control after the client settings below pass validation.
+The provider screenshot is captured after Chromium follows the portal's Google authorization redirect, returns through the real callback endpoint, verifies `operator@example.test` through the local HTTPS simulator, creates the encrypted OAuth credential, and makes it selectable for the Gmail 30-day template. The simulator validates the exact redirect URI, client authentication, PKCE, one-use code, scopes, and identity lookup. This proves the browser/portal contract without claiming live Google consent or production identity evidence.
 
 Google:
 
@@ -117,7 +117,15 @@ Production policy should be published as a signed `PolicyBundle`, not as ad hoc 
 
 [Private deployment screenshot omitted from public source.]
 
-The screenshot shows the Gmail template, principal and credential selectors, and the pre-preview staged-candidate controls. The empty preview area is intentional: previewing must populate the signed candidate, diff, hash, and dry-run results before staging becomes available, and it still does not activate the assignment.
+The screenshot is captured after the deterministic browser journey connects both Google and X accounts and drives signed preview, two required dry-runs, staging, and explicit activation. It shows the X seven-day search assignment and callback-derived credential metadata; the test independently reads the active policy API and requires both the Gmail 30-day and X seven-day routes to reference the exact created credential IDs, provider subjects, scope sets, and X OAuth app ID.
+
+Run the browser proof independently with:
+
+```bash
+make verify-portal-browser-oauth
+```
+
+The target installs the pinned Chromium revision through Playwright, trusts only the simulator certificate's SPKI, checks desktop and mobile overflow, confirms OAuth state-cookie cleanup, and scans browser/API/disk evidence for simulator token values. Use `--screenshots-dir docs/images` with the underlying script only when intentionally refreshing these canonical screenshots.
 
 The canonical, schema-valid examples live in [credential-limits.examples.json](../policies/credential-limits.examples.json). Extract one without copying a potentially stale fragment:
 
@@ -157,7 +165,7 @@ Each accepted activation persists a policy high-water record containing the poli
 
 ## Review JIT Approvals
 
-When an agent hits a route that requires human approval, Serverware returns `428 serverware_approval_required` and stores a pending approval. The agent does not receive a grant token or credential. It waits and retries the same request after approval.
+When an agent's first real proxied request hits a route that requires human approval, the release authority validates its full canonical request, leaves no quota or grant reservation behind, atomically creates or reuses the exact pending approval, and returns `428 serverware_approval_required`. The non-mutating `/v1/decide` preview never creates approvals. The agent does not receive a grant token or credential; it waits and retries the identical request after approval.
 
 In the portal **Approvals** table, open **Review** before approving. The review panel is populated from `GET /api/approvals/{id}/review` and shows:
 
@@ -170,7 +178,7 @@ In the portal **Approvals** table, open **Review** before approving. The review 
 
 Opening review now issues a short-lived, one-use server-side receipt bound to the approver and SHA-256 digest of that exact redacted review document. WebAuthn options include the receipt ID, review digest, and receipt expiry in the signed challenge. The approval transaction requires and atomically consumes the same live receipt while creating the grant, so a direct API caller cannot approve without first retrieving the matching review and cannot replay a reviewed document after approval. Opening review is itself audited.
 
-The portal keeps **Approve** disabled until the matching review has been opened. If the active policy changed after the approval request was created, the review shows `policy_hash_not_current`, the portal keeps approval disabled, and the approval API returns `409` so the agent must issue a new request under the current policy. Approval still runs through the configured WebAuthn/YubiKey policy, creates a server-side one-use grant, and authorizes only the identical retry through the proxy. Denial can include an operator reason through the API, and denial records are searchable in audit.
+The portal keeps **Approve** disabled until the matching review has been opened. If the active policy changed after the approval request was created, the review shows `policy_hash_not_current`, the portal keeps approval disabled, and the approval API returns `409` so the agent must issue a new request under the current policy. Approval still runs through the configured WebAuthn/YubiKey policy and creates a server-side one-use grant. The identical retry atomically reserves that grant together with every shared quota, advances the exact attempt to `dispatching` immediately before upstream contact, and commits or refunds it according to the bounded completion state. Denial can include an operator reason through the API, and denial records are searchable in audit.
 
 [Private deployment screenshot omitted from public source.]
 
@@ -301,7 +309,7 @@ For a safe, buffered `GET` or `HEAD`, `serverware-proof-client` can send a fresh
 
 ## Current Local Evidence
 
-The latest local Compose benchmark artifact, `.tmp/decision-gate-rs-bench.json`, binds the measured Rust executable `sha256:3ca63d68b5061a8b3e8af530bb197fff6ce4f1da77784c196fb74a5c786cd312`. It records p50 `0.460 ms`, p95 `0.628 ms`, p99 `0.772 ms`, mean `0.477 ms`, and maximum `1.025 ms` across 1,000 calls after 100 warmups to the authenticated `/v1/decide` management endpoint. This is decision-engine latency, not CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
+The current local Docker measurement binds the Rust executable `sha256:4f1106194ab5ba384de4e0d8cade596032061be4f39f3d458a4ca7694fe703e4`. After 100 warmups and 1000 authenticated decisions over the Compose network, it measured p50 `0.450 ms`, p95 `0.605 ms`, p99 `0.865 ms`, mean `0.467 ms`, and max `2.365 ms`. The benchmark covers the authenticated, non-mutating `/v1/decide` management endpoint; it does not measure release-authority calls, CONNECT, TLS interception, full proxy, streaming, provider, or production-host latency.
 
 The local provenance and image-signature records are explicitly development fixtures, and no current hardware-bound production image/quote set exists for this checkout. They cannot be combined with this benchmark as production release evidence; rebuild every source-, image-, binary-, signature-, benchmark-, and quote-bound artifact from one exact checkout on the target host.
 

@@ -58,6 +58,9 @@ METADATA_TABLES = (
     "gmail_message_cache",
     "request_logs",
     "rate_limit_counters",
+    "release_authorization_attempts",
+    "release_authorization_quota_reservations",
+    "release_authorization_events",
     "policy_high_water",
 )
 GRANT_TABLES = ("approval_grants", "approval_grant_consumptions")
@@ -77,6 +80,7 @@ INTERNAL_SERVICE_TOKEN_NAMES = (
     "SERVERWARE_DATA_PLANE_AUDIT_TOKEN",
     "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
     "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
+    "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
     "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN",
 )
 MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
@@ -2018,17 +2022,71 @@ def check_shared_stores(env: dict[str, str], failures: list[str]) -> None:
     add(failures, bool(env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip()), "metadata Postgres DSN must be configured")
     add(failures, env.get("SERVERWARE_GRANT_STORE_BACKEND") == "postgres", "grant store must be postgres")
     add(failures, bool(env.get("SERVERWARE_GRANT_STORE_POSTGRES_DSN", "").strip()), "grant Postgres DSN must be configured")
+    metadata_dsn = env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip()
+    grant_dsn = env.get("SERVERWARE_GRANT_STORE_POSTGRES_DSN", "").strip()
+    add(
+        failures,
+        bool(metadata_dsn) and hmac.compare_digest(metadata_dsn, grant_dsn),
+        "atomic release authorization requires metadata and grant stores on the same writer DSN and schema",
+    )
     add(failures, env.get("SERVERWARE_AUDIT_STORE_BACKEND") == "postgres", "audit store must be postgres")
     add(failures, bool(env.get("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", "").strip()), "audit Postgres DSN must be configured")
     add(
         failures,
-        bool(env.get("SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL", "").strip()),
-        "shared JIT grant consume URL must be configured",
+        env_bool(env, "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED"),
+        "atomic release authorization must be enabled",
+    )
+    release_authorization_url = env.get(
+        "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL", ""
+    ).strip()
+    add(
+        failures,
+        bool(release_authorization_url),
+        "atomic release authorization base URL must be configured",
+    )
+    if release_authorization_url:
+        parsed = urllib.parse.urlparse(release_authorization_url)
+        add(
+            failures,
+            parsed.scheme == "https" and bool(parsed.netloc),
+            "atomic release authorization base URL must use https",
+        )
+        add(
+            failures,
+            parsed.path.rstrip("/")
+            == "/api/data-plane/release-authorizations"
+            and not parsed.username
+            and not parsed.password
+            and not parsed.query
+            and not parsed.fragment,
+            "atomic release authorization base URL must use the exact API path without embedded credentials, query, or fragment",
+        )
+    try:
+        reservation_ttl = int(
+            env.get("SERVERWARE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS", "")
+        )
+        dispatch_ttl = int(
+            env.get("SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS", "")
+        )
+        reconcile_limit = int(
+            env.get("SERVERWARE_RELEASE_AUTHORIZATION_RECONCILE_LIMIT", "")
+        )
+    except ValueError:
+        reservation_ttl = dispatch_ttl = reconcile_limit = 0
+    add(
+        failures,
+        1 <= reservation_ttl <= 300,
+        "release authorization reservation TTL must be between 1 and 300 seconds",
     )
     add(
         failures,
-        bool(env.get("SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL", "").strip()),
-        "shared rate-limit consume URL must be configured",
+        1 <= dispatch_ttl <= 300,
+        "release authorization dispatch TTL must be between 1 and 300 seconds",
+    )
+    add(
+        failures,
+        1 <= reconcile_limit <= 500,
+        "release authorization reconcile limit must be between 1 and 500",
     )
 
 
@@ -2328,6 +2386,14 @@ def postgres_table_probe(label: str, dsn: str, required_tables: tuple[str, ...])
 
 
 def run_shared_store_probe(env: dict[str, str]) -> dict[str, Any]:
+    metadata_dsn = env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip()
+    grant_dsn = env.get("SERVERWARE_GRANT_STORE_POSTGRES_DSN", "").strip()
+    if not metadata_dsn or not grant_dsn or not hmac.compare_digest(
+        metadata_dsn, grant_dsn
+    ):
+        raise RuntimeError(
+            "metadata and grant Postgres DSNs must identify the same writer and schema"
+        )
     stores = {
         "metadata": (
             env.get("SERVERWARE_METADATA_STORE_POSTGRES_DSN", "").strip(),

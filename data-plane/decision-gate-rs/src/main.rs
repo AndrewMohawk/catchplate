@@ -16,7 +16,9 @@ use ring_rand::SecureRandom;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
-use serde::de::{self, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
+use serde::de::{
+    self, DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor,
+};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256, Sha512};
@@ -44,6 +46,7 @@ use zeroize::{Zeroize, Zeroizing};
 
 const MAX_CREDENTIAL_LEASE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CONTROL_PLANE_ATTESTATION_BYTES: u64 = 64 * 1024;
+const MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_HEADER_COUNT: usize = 128;
 const MAX_BUFFERED_REQUEST_BODY_BYTES: u64 = 16 * 1024 * 1024;
@@ -52,6 +55,7 @@ const MAX_BUFFERED_RESPONSE_BODY_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_INJECTED_CREDENTIAL_BYTES: usize = 64 * 1024;
 const MAX_NPM_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_LOCAL_RATE_COUNTERS: usize = 65_536;
+const MAX_RATE_LIMIT_WINDOW_SECONDS: u64 = 31_536_000;
 const POLICY_TRUST_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const POLICY_TRUST_MAX_AGE: Duration = Duration::from_secs(90);
 const CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -70,9 +74,123 @@ const DEFAULT_REQUEST_BODY_DEADLINE_MS: u64 = 120_000;
 const DEFAULT_RESPONSE_WRITE_DEADLINE_MS: u64 = 120_000;
 const SOCKET_IO_SLICE: Duration = Duration::from_secs(1);
 const RESPONSE_PROOF_EXPORTER_LABEL: &[u8] = b"EXPORTER-Serverware-Proxy-Response-v1";
+const SERVERWARE_INTERNAL_HEADER_PREFIX: &str = "x-serverware-";
 const RESPONSE_PROOF_NONCE_HEADER: &str = "x-serverware-proof-nonce";
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
 const SUPPORTED_ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
+
+struct DuplicateRejectingJsonValue(Value);
+
+struct DuplicateRejectingJsonValueVisitor;
+
+impl<'de> Deserialize<'de> for DuplicateRejectingJsonValue {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(DuplicateRejectingJsonValueVisitor)
+    }
+}
+
+impl<'de> Visitor<'de> for DuplicateRejectingJsonValueVisitor {
+    type Value = DuplicateRejectingJsonValue;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON value without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> Result<Self::Value, E> {
+        Ok(DuplicateRejectingJsonValue(Value::Bool(value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E> {
+        Ok(DuplicateRejectingJsonValue(Value::Number(value.into())))
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E> {
+        Ok(DuplicateRejectingJsonValue(Value::Number(value.into())))
+    }
+
+    fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        let number = serde_json::Number::from_f64(value)
+            .ok_or_else(|| E::custom("JSON number must be finite"))?;
+        Ok(DuplicateRejectingJsonValue(Value::Number(number)))
+    }
+
+    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E> {
+        Ok(DuplicateRejectingJsonValue(Value::String(
+            value.to_string(),
+        )))
+    }
+
+    fn visit_string<E>(self, value: String) -> Result<Self::Value, E> {
+        Ok(DuplicateRejectingJsonValue(Value::String(value)))
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(DuplicateRejectingJsonValue(Value::Null))
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(DuplicateRejectingJsonValue(Value::Null))
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        DuplicateRejectingJsonValue::deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut sequence: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut values = Vec::new();
+        while let Some(value) = sequence.next_element::<DuplicateRejectingJsonValue>()? {
+            values.push(value.0);
+        }
+        Ok(DuplicateRejectingJsonValue(Value::Array(values)))
+    }
+
+    fn visit_map<A>(self, mut object: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut values = Map::new();
+        while let Some(key) = object.next_key::<String>()? {
+            if values.contains_key(&key) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key {key:?}"
+                )));
+            }
+            let value = object.next_value::<DuplicateRejectingJsonValue>()?;
+            values.insert(key, value.0);
+        }
+        Ok(DuplicateRejectingJsonValue(Value::Object(values)))
+    }
+}
+
+fn strict_json_value_from_slice(input: &[u8]) -> Result<Value, serde_json::Error> {
+    let mut deserializer = serde_json::Deserializer::from_slice(input);
+    let value = DuplicateRejectingJsonValue::deserialize(&mut deserializer)?.0;
+    deserializer.end()?;
+    Ok(value)
+}
+
+fn strict_json_value_from_str(input: &str) -> Result<Value, serde_json::Error> {
+    strict_json_value_from_slice(input.as_bytes())
+}
+
+fn strict_json_from_slice<T>(input: &[u8]) -> Result<T, serde_json::Error>
+where
+    T: DeserializeOwned,
+{
+    serde_json::from_value(strict_json_value_from_slice(input)?)
+}
 
 #[derive(Clone)]
 struct Snapshot {
@@ -212,6 +330,7 @@ struct ResponsePolicy {
     adapter_type: String,
     response_config: Value,
     has_response_constraints: bool,
+    credential_bearing: bool,
 }
 
 #[derive(Clone)]
@@ -267,6 +386,7 @@ struct GateState {
     gmail_proof_cache_max: usize,
     constraint_rate_counters: Mutex<HashMap<String, ConstraintRateCounter>>,
     credential_leases: Mutex<HashMap<CredentialLeaseScope, SecretLease>>,
+    credential_generations: Mutex<HashMap<CredentialLeaseScope, CredentialLeaseGeneration>>,
     credential_lease_flights:
         Mutex<HashMap<CredentialLeaseGenerationKey, Arc<CredentialLeaseFlight>>>,
     credential_lease_url: Option<String>,
@@ -289,6 +409,9 @@ struct GateState {
     grant_consume_token: Option<String>,
     rate_limit_consume_url: Option<String>,
     rate_limit_consume_token: Option<String>,
+    atomic_release_authorization_enabled: bool,
+    release_authorization_base_url: Option<String>,
+    release_authorization_token: Option<String>,
     management_token: Option<String>,
     audit_queue: Mutex<VecDeque<AuditEvent>>,
     audit_reserved: AtomicU64,
@@ -1013,6 +1136,78 @@ struct PendingApproval {
     expires_at: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct ReleaseAuthorizationStore {
+    backend: Option<String>,
+    ha: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct ReleaseAuthorizationQuota {
+    counter_key: Option<String>,
+    constraint_id: Option<String>,
+    operation: Option<String>,
+    window_start_epoch_ms: Option<u64>,
+    window_seconds: Option<u64>,
+    max: Option<u64>,
+    count: Option<u64>,
+    remaining: Option<u64>,
+    reservation_state: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[allow(dead_code)]
+struct ReleaseAuthorizationResponse {
+    api_version: String,
+    ok: bool,
+    authorized: bool,
+    state: String,
+    reason: String,
+    attempt_id: String,
+    binding_digest: String,
+    idempotent_replay: bool,
+    grant_id: Option<String>,
+    approval_request_id: Option<String>,
+    approval_status: Option<String>,
+    approval_expires_at: Option<String>,
+    approval_created: Option<bool>,
+    reservation_expires_at_epoch_ms: Option<u64>,
+    dispatch_started_at_epoch_ms: Option<u64>,
+    dispatch_expires_at_epoch_ms: Option<u64>,
+    completion_outcome: Option<String>,
+    retry_after_seconds: u64,
+    quotas: Vec<ReleaseAuthorizationQuota>,
+    store: ReleaseAuthorizationStore,
+}
+
+#[derive(Clone, Debug)]
+struct ReleaseAuthorizationReservation {
+    attempt_id: String,
+    binding_digest: String,
+    grant_id: Option<String>,
+    approval_request_id: Option<String>,
+    reservation_expires_at_epoch_ms: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReleaseAuthorizationStage {
+    Reserved,
+    DispatchUncertain,
+    Dispatching,
+    Completed,
+}
+
+struct ReleaseAuthorizationGuard<'a> {
+    state: &'a GateState,
+    reservation: ReleaseAuthorizationReservation,
+    stage: ReleaseAuthorizationStage,
+}
+
 fn default_grant_uses() -> u64 {
     1
 }
@@ -1720,7 +1915,7 @@ fn fetch_attested_policy_trust_root(
         }
         thread::sleep(Duration::from_millis(250));
     };
-    let attestation: Value = serde_json::from_slice(&attestation_bytes)
+    let attestation = strict_json_value_from_slice(&attestation_bytes)
         .map_err(|err| format!("parse control-plane attestation: {err}"))?;
     if attestation.get("nonce").and_then(Value::as_str) != Some(nonce.as_str()) {
         return Err("control-plane attestation nonce mismatch".to_string());
@@ -1984,6 +2179,11 @@ fn validate_response_field_allowlist(
         .and_then(Value::as_array)
         .filter(|fields| !fields.is_empty())
         .ok_or_else(|| format!("{label} allowedFields must be a non-empty array"))?;
+    if fields.len() > 64 {
+        return Err(format!(
+            "{label} allowedFields must contain at most 64 paths"
+        ));
+    }
     let mut seen = HashSet::new();
     for field in fields {
         let path = field
@@ -2005,6 +2205,87 @@ fn validate_response_field_allowlist(
         }
     }
     Ok(())
+}
+
+fn validate_request_field_allowlist(
+    profile: &Map<String, Value>,
+    label: &str,
+) -> Result<(), String> {
+    let fields = profile
+        .get("allowedFields")
+        .and_then(Value::as_array)
+        .filter(|fields| !fields.is_empty())
+        .ok_or_else(|| format!("{label} allowedFields must be a non-empty array"))?;
+    if fields.len() > 64 {
+        return Err(format!(
+            "{label} allowedFields must contain at most 64 paths"
+        ));
+    }
+    let mut seen = HashSet::new();
+    for field in fields {
+        let path = field
+            .as_str()
+            .ok_or_else(|| format!("{label} allowedFields must contain only strings"))?;
+        if !valid_response_json_path(path) || !seen.insert(path) {
+            return Err(format!(
+                "{label} request field path {path:?} is invalid or duplicated"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn required_generic_body_constraint(body_mode: &str) -> Option<&'static str> {
+    match body_mode {
+        "json" => Some("jsonBody"),
+        "formUrlencoded" => Some("formBody"),
+        _ => None,
+    }
+}
+
+fn has_request_body_allowlist_constraint(constraints: &[Value], constraint_type: &str) -> bool {
+    constraints.iter().any(|constraint| {
+        constraint.get("type").and_then(Value::as_str) == Some(constraint_type)
+            && constraint_phase_includes(constraint, "request")
+            && constraint
+                .get("allowedFields")
+                .and_then(Value::as_array)
+                .is_some_and(|fields| !fields.is_empty() && fields.iter().all(Value::is_string))
+    })
+}
+
+fn validate_runtime_credential_body_policy(route: &Route) -> Result<(), Value> {
+    if route.adapter_type != "generic.rest"
+        || route.credential_ref.as_deref().is_none_or(str::is_empty)
+    {
+        return Ok(());
+    }
+    let body_mode = route
+        .adapter_config
+        .get("request")
+        .and_then(Value::as_object)
+        .and_then(|request| request.get("bodyMode"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if body_mode == "any" {
+        return Err(json!({
+            "error":"credential_opaque_request_body_denied",
+            "bodyMode":body_mode,
+            "status_code":500,
+        }));
+    }
+    let Some(constraint_type) = required_generic_body_constraint(body_mode) else {
+        return Ok(());
+    };
+    if has_request_body_allowlist_constraint(&route.constraints, constraint_type) {
+        return Ok(());
+    }
+    Err(json!({
+        "error":"credential_request_body_constraint_required",
+        "bodyMode":body_mode,
+        "constraintType":constraint_type,
+        "status_code":500,
+    }))
 }
 
 fn valid_response_json_path(path: &str) -> bool {
@@ -2303,6 +2584,11 @@ fn credential_injection_target(injection: &Value) -> Result<CredentialInjectionT
             {
                 return Err("credential injection header is invalid".to_string());
             }
+            if is_serverware_internal_header(name) {
+                return Err(format!(
+                    "credential injection header {name} is reserved for Serverware internals"
+                ));
+            }
         }
         CredentialInjectionTarget::Query(name) => {
             if name.is_empty()
@@ -2355,17 +2641,8 @@ fn validate_managed_oauth_injection(
 
 fn is_non_forwardable_agent_header(name: &str) -> bool {
     is_standard_hop_by_hop_header(name)
-        || is_serverware_service_auth_header(name)
-        || matches!(
-            name,
-            "authorization"
-                | "cookie"
-                | "content-length"
-                | "host"
-                | "x-serverware-agent"
-                | ENROLLMENT_SESSION_HEADER
-                | RESPONSE_PROOF_NONCE_HEADER
-        )
+        || is_serverware_internal_header(name)
+        || matches!(name, "authorization" | "cookie" | "content-length" | "host")
 }
 
 fn validate_generic_required_header_policy(
@@ -2483,7 +2760,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         "tarballIntegrity",
         "operation",
     ];
-    const REQUIRED_JIT_BINDING_FIELDS: [&str; 9] = [
+    const REQUIRED_JIT_BINDING_FIELDS: [&str; 11] = [
         "principal",
         "routeId",
         "credentialRef",
@@ -2492,6 +2769,8 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         "method",
         "authority",
         "path",
+        "query",
+        "selectedHeaders",
         "bodySha256",
     ];
 
@@ -2647,6 +2926,13 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(|adapter| adapter.get("config"))
             .and_then(Value::as_object)
             .ok_or_else(|| format!("route {route_id} adapter config missing"))?;
+        let constraints: &[Value] = match route.get("constraints") {
+            Some(Value::Array(constraints)) => constraints,
+            None => &[],
+            Some(_) => {
+                return Err(format!("route {route_id} constraints must be an array"));
+            }
+        };
         let credential_bound = route
             .get("credentialRef")
             .and_then(Value::as_str)
@@ -2661,6 +2947,36 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(Value::as_object)
             .and_then(|response| response.get("mode"))
             .and_then(Value::as_str);
+        if adapter_type == "generic.rest" && credential_bound {
+            if let Some(body_mode) = request_mode {
+                if body_mode == "any" {
+                    return Err(format!(
+                        "route {route_id} credential-bearing generic.rest routes cannot use opaque bodyMode any"
+                    ));
+                }
+                if let Some(constraint_type) = required_generic_body_constraint(body_mode) {
+                    if !has_request_body_allowlist_constraint(constraints, constraint_type) {
+                        return Err(format!(
+                            "route {route_id} credential-bearing generic.rest bodyMode {body_mode} requires a {constraint_type} constraint with non-empty allowedFields"
+                        ));
+                    }
+                }
+            }
+        }
+        if credential_bound
+            && response_mode_requires_projection(adapter_config.get("response"), adapter_type)
+        {
+            let response = adapter_config
+                .get("response")
+                .and_then(Value::as_object)
+                .ok_or_else(|| {
+                    format!("route {route_id} credential-bearing response policy missing")
+                })?;
+            validate_response_field_allowlist(
+                response,
+                &format!("route {route_id} credential-bearing success response"),
+            )?;
+        }
         let has_mutating_method = route
             .get("match")
             .and_then(Value::as_object)
@@ -2988,9 +3304,10 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 if matches!(
                     normalized.as_str(),
                     "authorization" | "cookie" | "proxy-authorization"
-                ) {
+                ) || is_serverware_internal_header(&normalized)
+                {
                     return Err(format!(
-                        "route {route_id} generic.rest allows credential header {normalized} supplied by the agent"
+                        "route {route_id} generic.rest allows credential or internal header {normalized} supplied by the agent"
                     ));
                 }
             }
@@ -3054,6 +3371,12 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     "route {route_id} generic.rest bodyMode {body_mode} is unsupported"
                 ));
             }
+            if json_stream_redacts_body(body_mode) {
+                validate_request_field_allowlist(
+                    request,
+                    &format!("route {route_id} generic.rest structured streaming request"),
+                )?;
+            }
             if let Some(operation) = request.get("operation") {
                 let operation = operation.as_object().ok_or_else(|| {
                     format!("route {route_id} generic.rest request.operation must be an object")
@@ -3092,13 +3415,6 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             }
         }
 
-        let constraints: &[Value] = match route.get("constraints") {
-            Some(Value::Array(constraints)) => constraints,
-            None => &[],
-            Some(_) => {
-                return Err(format!("route {route_id} constraints must be an array"));
-            }
-        };
         if adapter_type == "x.v2" {
             if route
                 .get("credentialRef")
@@ -3856,6 +4172,20 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         let jit = jit_value
             .as_object()
             .ok_or_else(|| format!("route {route_id} JIT policy must be an object"))?;
+        for key in jit.keys() {
+            if !matches!(
+                key.as_str(),
+                "required"
+                    | "mode"
+                    | "ttlSeconds"
+                    | "maxUses"
+                    | "consumeOn"
+                    | "binding"
+                    | "approvers"
+            ) {
+                return Err(format!("route {route_id} JIT field {key} is not supported"));
+            }
+        }
         jit.get("required")
             .and_then(Value::as_bool)
             .ok_or_else(|| format!("route {route_id} JIT required must be a boolean"))?;
@@ -3866,6 +4196,24 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         if mode != "perOperation" {
             return Err(format!(
                 "route {route_id} JIT mode {mode} is not supported by the Rust runtime"
+            ));
+        }
+        let ttl_seconds = jit
+            .get("ttlSeconds")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("route {route_id} JIT ttlSeconds must be an integer"))?;
+        if !(1..=3600).contains(&ttl_seconds) {
+            return Err(format!(
+                "route {route_id} JIT ttlSeconds must be between 1 and 3600"
+            ));
+        }
+        let max_uses = jit
+            .get("maxUses")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| format!("route {route_id} JIT maxUses must be an integer"))?;
+        if max_uses == 0 {
+            return Err(format!(
+                "route {route_id} JIT maxUses must be a positive integer"
             ));
         }
         let consume_on = jit
@@ -3881,6 +4229,14 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .get("binding")
             .and_then(Value::as_object)
             .ok_or_else(|| format!("route {route_id} JIT binding missing"))?;
+        if binding
+            .keys()
+            .any(|key| !matches!(key.as_str(), "type" | "fields"))
+        {
+            return Err(format!(
+                "route {route_id} JIT binding contains unsupported fields"
+            ));
+        }
         let binding_type = binding
             .get("type")
             .and_then(Value::as_str)
@@ -3919,10 +4275,20 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 ));
             }
         }
-        let quorum = jit
+        let approvers = jit
             .get("approvers")
             .and_then(Value::as_object)
-            .and_then(|approvers| approvers.get("quorum"))
+            .ok_or_else(|| format!("route {route_id} JIT approvers must be an object"))?;
+        if approvers
+            .keys()
+            .any(|key| !matches!(key.as_str(), "quorum" | "users" | "authn"))
+        {
+            return Err(format!(
+                "route {route_id} JIT approvers contain unsupported fields"
+            ));
+        }
+        let quorum = approvers
+            .get("quorum")
             .and_then(Value::as_u64)
             .ok_or_else(|| format!("route {route_id} JIT approver quorum missing"))?;
         if quorum != 1 {
@@ -3930,6 +4296,74 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 "route {route_id} JIT approver quorum must be 1, got {quorum}"
             ));
         }
+        let users = approvers
+            .get("users")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("route {route_id} JIT approver users must be an array"))?;
+        if users.is_empty() || users.iter().any(|user| !user.is_string()) {
+            return Err(format!(
+                "route {route_id} JIT policy must define allowed approver users"
+            ));
+        }
+        let authn = approvers
+            .get("authn")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("route {route_id} JIT approver authn must be an object"))?;
+        if authn.keys().any(|key| {
+            !matches!(
+                key.as_str(),
+                "webauthnRequired"
+                    | "userVerification"
+                    | "allowedAuthenticatorClasses"
+                    | "requireHardwareAttestation"
+            )
+        }) {
+            return Err(format!(
+                "route {route_id} JIT approver authn contains unsupported fields"
+            ));
+        }
+        let webauthn_required = authn
+            .get("webauthnRequired")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                format!("route {route_id} JIT authn webauthnRequired must be a boolean")
+            })?;
+        let user_verification = authn
+            .get("userVerification")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("route {route_id} JIT authn userVerification missing"))?;
+        if !matches!(user_verification, "required" | "preferred" | "discouraged") {
+            return Err(format!(
+                "route {route_id} JIT authn userVerification is invalid"
+            ));
+        }
+        let authenticator_classes = authn
+            .get("allowedAuthenticatorClasses")
+            .and_then(Value::as_array)
+            .ok_or_else(|| {
+                format!("route {route_id} JIT authn allowedAuthenticatorClasses must be an array")
+            })?;
+        if authenticator_classes.iter().any(|class| {
+            !matches!(
+                class.as_str(),
+                Some("yubikey" | "hardware" | "platform" | "dev" | "unknown")
+            )
+        }) {
+            return Err(format!(
+                "route {route_id} JIT authn allowedAuthenticatorClasses is invalid"
+            ));
+        }
+        if webauthn_required && authenticator_classes.is_empty() {
+            return Err(format!(
+                "route {route_id} WebAuthn JIT policy must define allowed authenticator classes"
+            ));
+        }
+        authn
+            .get("requireHardwareAttestation")
+            .and_then(Value::as_bool)
+            .ok_or_else(|| {
+                format!("route {route_id} JIT authn requireHardwareAttestation must be a boolean")
+            })?;
     }
 
     Ok(())
@@ -4045,8 +4479,8 @@ fn load_snapshot(
     running_binary_digest: &str,
 ) -> Result<Snapshot, String> {
     let text = fs::read_to_string(path).map_err(|err| format!("read policy bundle: {err}"))?;
-    let raw: Value =
-        serde_json::from_str(&text).map_err(|err| format!("parse policy bundle: {err}"))?;
+    let raw =
+        strict_json_value_from_str(&text).map_err(|err| format!("parse policy bundle: {err}"))?;
     if raw.get("apiVersion").and_then(Value::as_str) != Some("serverware.policy/v1") {
         return Err("apiVersion must be serverware.policy/v1".to_string());
     }
@@ -4402,8 +4836,8 @@ fn initialize_policy_high_water(
     if path.exists() {
         let raw =
             fs::read_to_string(path).map_err(|err| format!("read policy high-water: {err}"))?;
-        let persisted: PolicyHighWater =
-            serde_json::from_str(&raw).map_err(|err| format!("parse policy high-water: {err}"))?;
+        let persisted: PolicyHighWater = strict_json_from_slice(raw.as_bytes())
+            .map_err(|err| format!("parse policy high-water: {err}"))?;
         validate_policy_high_water(snapshot, &persisted)?;
         if snapshot.hash != persisted.policy_hash {
             persist_policy_high_water(path, &current)?;
@@ -4543,7 +4977,7 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
             {
                 return Ok(false);
             }
-            {
+            let (credential_generation_floors_retained, credential_generation_floors_pruned) = {
                 let mut current = state
                     .snapshot
                     .write()
@@ -4552,9 +4986,14 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     .credential_leases
                     .lock()
                     .expect("credential lease mutex poisoned");
+                let mut generations = state
+                    .credential_generations
+                    .lock()
+                    .expect("credential generation mutex poisoned");
                 *current = Arc::clone(&next);
                 leases.clear();
-            }
+                retain_relevant_credential_generation_floors(&mut generations, &next)
+            };
             state
                 .grants
                 .lock()
@@ -4587,6 +5026,8 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     "gmail_proofs_cleared":true,
                     "local_rate_counters_cleared":true,
                     "credential_leases_cleared":true,
+                    "credential_generation_floors_retained":credential_generation_floors_retained,
+                    "credential_generation_floors_pruned":credential_generation_floors_pruned,
                 }),
             );
             Ok(true)
@@ -4716,15 +5157,9 @@ fn is_standard_hop_by_hop_header(name: &str) -> bool {
     )
 }
 
-fn is_serverware_service_auth_header(name: &str) -> bool {
-    matches!(
-        name,
-        "x-serverware-admin-token"
-            | "x-serverware-audit-anchor-token"
-            | "x-serverware-ca-install-token"
-            | "x-serverware-csrf-token"
-            | "x-serverware-data-plane-token"
-    )
+fn is_serverware_internal_header(name: &str) -> bool {
+    name.get(..SERVERWARE_INTERNAL_HEADER_PREFIX.len())
+        .is_some_and(|prefix| prefix.eq_ignore_ascii_case(SERVERWARE_INTERNAL_HEADER_PREFIX))
 }
 
 fn credential_injection_header(injection: &Value) -> Option<String> {
@@ -4949,6 +5384,10 @@ fn body_sha(req: &DecisionRequest) -> String {
 
 fn digest_json(value: &Value) -> String {
     sha256_prefixed(canonical_json(value).as_bytes())
+}
+
+fn digest_json_ensure_ascii(value: &Value) -> String {
+    sha256_prefixed(canonical_json_ensure_ascii(value).as_bytes())
 }
 
 fn random_request_attempt_id() -> Result<String, String> {
@@ -5332,7 +5771,7 @@ fn verify_credential_lease_response(
     let statement_bytes = general_purpose::URL_SAFE_NO_PAD
         .decode(statement_b64.as_bytes())
         .map_err(|err| format!("decode credential lease response statement: {err}"))?;
-    let statement: CredentialLeaseResponseStatement = serde_json::from_slice(&statement_bytes)
+    let statement: CredentialLeaseResponseStatement = strict_json_from_slice(&statement_bytes)
         .map_err(|err| format!("parse credential lease response statement: {err}"))?;
     let canonical_statement = serde_json::to_value(&statement)
         .map_err(|err| format!("serialize credential lease response statement: {err}"))?;
@@ -5432,7 +5871,7 @@ fn decrypt_credential_lease_envelope(
     body: &[u8],
     requested_ttl_seconds: u64,
 ) -> Result<SecretLease, String> {
-    let envelope: CredentialLeaseEnvelope = serde_json::from_slice(body)
+    let envelope: CredentialLeaseEnvelope = strict_json_from_slice(body)
         .map_err(|err| format!("parse credential lease envelope: {err}"))?;
     let issued_at_ms = u128::from(envelope.issued_at_epoch_ms);
     let expires_at_ms = u128::from(envelope.expires_at_epoch_ms);
@@ -5521,7 +5960,7 @@ fn decrypt_credential_lease_envelope(
         .map_err(|_| "credential lease AEAD authentication failed".to_string())?
         .to_vec();
     let plaintext = Zeroizing::new(plaintext);
-    let payload: CredentialLeaseSet = serde_json::from_slice(&plaintext)
+    let payload: CredentialLeaseSet = strict_json_from_slice(&plaintext)
         .map_err(|err| format!("parse decrypted credential lease set: {err}"))?;
     if payload.api_version != "serverware.credentialLeaseSet/v2"
         || payload.recipient_key_id != recipient_key_id
@@ -5802,7 +6241,7 @@ fn run_bounded_json_command_with_timeout(
     if !status.success() {
         return Err(format!("{label} command rejected request"));
     }
-    let value: Value = serde_json::from_slice(
+    let value = strict_json_value_from_slice(
         output
             .as_deref()
             .ok_or_else(|| format!("{label} command produced no output"))?,
@@ -5839,6 +6278,28 @@ struct CredentialLeaseInfo {
     secret_available: bool,
 }
 
+#[derive(Clone)]
+struct CredentialLeaseGeneration {
+    policy_hash: String,
+    version: u64,
+    secret_fingerprint: String,
+    metadata: BTreeMap<String, Value>,
+}
+
+fn credential_secret_fingerprint(secret: &str) -> String {
+    sha256_prefixed(secret.as_bytes())
+}
+
+fn retain_relevant_credential_generation_floors(
+    generations: &mut HashMap<CredentialLeaseScope, CredentialLeaseGeneration>,
+    snapshot: &Snapshot,
+) -> (usize, usize) {
+    let before = generations.len();
+    generations.retain(|scope, _| snapshot.credentials.contains_key(&scope.credential_id));
+    let retained = generations.len();
+    (retained, before.saturating_sub(retained))
+}
+
 fn lease_info(lease: &SecretLease) -> CredentialLeaseInfo {
     CredentialLeaseInfo {
         version: lease.version,
@@ -5871,12 +6332,31 @@ fn cached_credential_lease_info(
     }
 }
 
+fn peek_cached_credential_lease_info(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+) -> Option<CredentialLeaseInfo> {
+    state
+        .credential_generations
+        .lock()
+        .expect("credential generation mutex poisoned")
+        .get(scope)
+        .filter(|generation| generation.policy_hash == snapshot.hash)
+        .map(|generation| CredentialLeaseInfo {
+            version: generation.version,
+            metadata: generation.metadata.clone(),
+            secret_available: false,
+        })
+}
+
 fn cache_scoped_credential_lease(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
     lease: SecretLease,
 ) -> Result<(), String> {
+    let secret_fingerprint = credential_secret_fingerprint(lease.secret.as_str());
     let active = state
         .snapshot
         .read()
@@ -5888,6 +6368,10 @@ fn cache_scoped_credential_lease(
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
+    let mut generations = state
+        .credential_generations
+        .lock()
+        .expect("credential generation mutex poisoned");
     if let Some(current) = leases.get(scope) {
         if lease.version < current.version {
             return Err("credential lease version regression rejected".to_string());
@@ -5903,6 +6387,28 @@ fn cache_scoped_credential_lease(
     } else if leases.len() >= state.credential_lease_cache_max {
         return Err("credential lease cache capacity exhausted".to_string());
     }
+    if let Some(current) = generations.get(scope) {
+        if lease.version < current.version {
+            return Err("credential lease version regression rejected".to_string());
+        }
+        if lease.version == current.version
+            && (secret_fingerprint != current.secret_fingerprint
+                || lease.metadata != current.metadata)
+        {
+            return Err(
+                "credential lease semantics changed without a version increment".to_string(),
+            );
+        }
+    }
+    generations.insert(
+        scope.clone(),
+        CredentialLeaseGeneration {
+            policy_hash: lease.policy_hash.clone(),
+            version: lease.version,
+            secret_fingerprint,
+            metadata: lease.metadata.clone(),
+        },
+    );
     leases.insert(scope.clone(), lease);
     Ok(())
 }
@@ -6120,6 +6626,7 @@ fn earliest_credential_lease_expiry_epoch_ms(state: &GateState) -> Option<u128> 
         .min()
 }
 
+#[cfg(test)]
 fn credential_lease_renewal_candidates(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -6138,6 +6645,74 @@ fn credential_lease_renewal_candidates(
         })
         .map(|lease| lease.scope.clone())
         .collect()
+}
+
+fn policy_credential_lease_scopes(snapshot: &Arc<Snapshot>) -> Vec<CredentialLeaseScope> {
+    let principal_ids = snapshot
+        .principals
+        .iter()
+        .map(|principal| principal.id.as_str())
+        .collect::<Vec<_>>();
+    let mut scopes = HashSet::new();
+    for route in &snapshot.routes {
+        let Some(credential_id) = route.credential_ref.as_deref() else {
+            continue;
+        };
+        for principal_id in &route.principals {
+            if principal_id == "*" {
+                for principal_id in &principal_ids {
+                    scopes.insert(CredentialLeaseScope::new(
+                        principal_id,
+                        &route.id,
+                        credential_id,
+                    ));
+                }
+            } else {
+                scopes.insert(CredentialLeaseScope::new(
+                    principal_id,
+                    &route.id,
+                    credential_id,
+                ));
+            }
+        }
+    }
+    scopes.into_iter().collect()
+}
+
+fn credential_lease_background_candidates(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    renew_before: Duration,
+) -> Vec<CredentialLeaseScope> {
+    let deadline = Instant::now()
+        .checked_add(renew_before)
+        .unwrap_or_else(Instant::now);
+    let leases = state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned");
+    policy_credential_lease_scopes(snapshot)
+        .into_iter()
+        .filter(|scope| {
+            !leases.get(scope).is_some_and(|lease| {
+                lease.policy_hash == snapshot.hash && lease.expires_at_monotonic > deadline
+            })
+        })
+        .collect()
+}
+
+fn credential_generations_ready(state: &GateState, snapshot: &Arc<Snapshot>) -> bool {
+    let generations = state
+        .credential_generations
+        .lock()
+        .expect("credential generation mutex poisoned");
+    policy_credential_lease_scopes(snapshot)
+        .iter()
+        .all(|scope| {
+            generations
+                .get(scope)
+                .is_some_and(|generation| generation.policy_hash == snapshot.hash)
+        })
 }
 
 fn start_credential_lease_renewal(
@@ -6195,7 +6770,7 @@ fn start_credential_lease_renewal(
         .name("credential-lease-renewal-coordinator".to_string())
         .spawn(move || loop {
             let snapshot = current_snapshot(&state);
-            for scope in credential_lease_renewal_candidates(
+            for scope in credential_lease_background_candidates(
                 &state,
                 &snapshot,
                 CREDENTIAL_LEASE_RENEW_BEFORE,
@@ -6585,6 +7160,7 @@ fn decision_audit_event(
         "client_request_digest",
         "request_digest",
         "operation_digest",
+        "attempt_id",
         "flow_id",
         "grant_id",
         "approval_id",
@@ -7091,7 +7667,7 @@ fn consume_shared_grant(
     if !status.is_success() {
         return Err(format!("shared grant consume returned {status}: {text}"));
     }
-    let value: Value = serde_json::from_str(&text)
+    let value = strict_json_value_from_str(&text)
         .map_err(|err| format!("parse shared grant consume response: {err}: {text}"))?;
     if value.get("ok").and_then(Value::as_bool) != Some(true) {
         return Err(format!("shared grant consume response was not ok: {value}"));
@@ -7191,6 +7767,503 @@ fn consume_grant(
     ))
 }
 
+fn release_authorization_url(state: &GateState, operation: &str) -> Result<String, String> {
+    let base = state
+        .release_authorization_base_url
+        .as_deref()
+        .ok_or("release authorization base URL is not configured")?;
+    Ok(format!("{base}/{operation}"))
+}
+
+fn post_release_authorization(
+    state: &GateState,
+    operation: &str,
+    payload: &Value,
+) -> Result<ReleaseAuthorizationResponse, String> {
+    let url = release_authorization_url(state, operation)?;
+    let token = state
+        .release_authorization_token
+        .as_deref()
+        .ok_or("release authorization token is not configured")?;
+    let body = serde_json::to_vec(payload)
+        .map_err(|err| format!("serialize release authorization {operation} request: {err}"))?;
+    let mut last_error = None;
+    for attempt in 0..2 {
+        let response = state
+            .audit_client
+            .post(&url)
+            .header("X-Serverware-Data-Plane-Token", token)
+            .header("Content-Type", "application/json")
+            .body(body.clone())
+            .send();
+        let response = match response {
+            Ok(response) => response,
+            Err(err) => {
+                last_error = Some(format!(
+                    "send release authorization {operation} request: {err}"
+                ));
+                if attempt == 0 {
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+                break;
+            }
+        };
+        let status = response.status();
+        let bytes = response
+            .bytes()
+            .map_err(|err| format!("read release authorization {operation} response: {err}"))?;
+        if bytes.len() > MAX_CONTROL_PLANE_ATTESTATION_BYTES as usize {
+            return Err(format!(
+                "release authorization {operation} response exceeds {} bytes",
+                MAX_CONTROL_PLANE_ATTESTATION_BYTES
+            ));
+        }
+        if status == StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
+            last_error = Some(format!(
+                "release authorization {operation} returned {status}"
+            ));
+            thread::sleep(Duration::from_millis(50));
+            continue;
+        }
+        if !status.is_success() {
+            let detail = String::from_utf8_lossy(&bytes);
+            return Err(format!(
+                "release authorization {operation} returned {status}: {detail}"
+            ));
+        }
+        let response = strict_json_from_slice::<ReleaseAuthorizationResponse>(&bytes)
+            .map_err(|err| format!("parse release authorization {operation} response: {err}"))?;
+        if response.api_version != "serverware.releaseAuthorization/v1" || !response.ok {
+            return Err(format!(
+                "release authorization {operation} response has an invalid contract"
+            ));
+        }
+        return Ok(response);
+    }
+    Err(last_error.unwrap_or_else(|| format!("release authorization {operation} request failed")))
+}
+
+fn validate_release_authorization_binding(
+    response: &ReleaseAuthorizationResponse,
+    attempt_id: &str,
+    binding_digest: Option<&str>,
+) -> Result<(), String> {
+    if response.attempt_id != attempt_id {
+        return Err("release authorization response attempt ID mismatch".to_string());
+    }
+    if !is_sha256_digest(&response.binding_digest)
+        || binding_digest.is_some_and(|expected| response.binding_digest != expected)
+    {
+        return Err("release authorization response binding digest is invalid".to_string());
+    }
+    if response.retry_after_seconds > MAX_RATE_LIMIT_WINDOW_SECONDS {
+        return Err("release authorization response retry interval is invalid".to_string());
+    }
+    Ok(())
+}
+
+fn valid_release_authorization_identity(value: Option<&str>) -> bool {
+    value.is_some_and(|value| {
+        !value.is_empty()
+            && value == value.trim()
+            && value.len() <= 256
+            && !value.chars().any(char::is_control)
+    })
+}
+
+fn validate_reserve_release_authorization_response(
+    response: &ReleaseAuthorizationResponse,
+    attempt_id: &str,
+    jit_required: bool,
+) -> Result<(), String> {
+    validate_release_authorization_binding(response, attempt_id, None)?;
+    let exact_lifecycle = if response.authorized {
+        response.state == "reserved"
+            && response.reason == "reserved"
+            && response.completion_outcome.is_none()
+            && response.reservation_expires_at_epoch_ms.is_some()
+            && response.dispatch_started_at_epoch_ms.is_none()
+            && response.dispatch_expires_at_epoch_ms.is_none()
+            && response.retry_after_seconds == 0
+            && response.approval_status.is_none()
+            && response.approval_expires_at.is_none()
+            && response.approval_created.is_none()
+            && if jit_required {
+                valid_release_authorization_identity(response.grant_id.as_deref())
+                    && valid_release_authorization_identity(response.approval_request_id.as_deref())
+            } else {
+                response.grant_id.is_none() && response.approval_request_id.is_none()
+            }
+    } else {
+        let jit_denial = matches!(
+            response.reason.as_str(),
+            "jit_grant_unavailable" | "jit_grant_expired"
+        );
+        let bounded_reason = matches!(
+            response.reason.as_str(),
+            "jit_grant_unavailable"
+                | "jit_grant_expired"
+                | "shared_quota_denied"
+                | "release_authorization_busy"
+        );
+        response.state == "denied"
+            && bounded_reason
+            && (jit_required || !jit_denial)
+            && !response.idempotent_replay
+            && response.grant_id.is_none()
+            && if jit_denial {
+                valid_release_authorization_identity(response.approval_request_id.as_deref())
+            } else {
+                response.approval_request_id.is_none()
+                    && response.approval_status.is_none()
+                    && response.approval_expires_at.is_none()
+                    && response.approval_created.is_none()
+            }
+            && response.completion_outcome.is_none()
+            && response.reservation_expires_at_epoch_ms.is_none()
+            && response.dispatch_started_at_epoch_ms.is_none()
+            && response.dispatch_expires_at_epoch_ms.is_none()
+    };
+    if !exact_lifecycle {
+        return Err(format!(
+            "release authorization reserve returned invalid lifecycle state {}",
+            response.state
+        ));
+    }
+    Ok(())
+}
+
+fn validate_dispatch_release_authorization_response(
+    response: &ReleaseAuthorizationResponse,
+    reservation: &ReleaseAuthorizationReservation,
+) -> Result<(), String> {
+    validate_release_authorization_binding(
+        response,
+        &reservation.attempt_id,
+        Some(&reservation.binding_digest),
+    )?;
+    let now_ms = now_epoch_ms();
+    let started = response.dispatch_started_at_epoch_ms.map(u128::from);
+    let dispatch_expires = response.dispatch_expires_at_epoch_ms.map(u128::from);
+    let reservation_expires = response.reservation_expires_at_epoch_ms.map(u128::from);
+    if !response.authorized
+        || response.state != "dispatching"
+        || response.reason != "dispatching"
+        || response.completion_outcome.is_some()
+        || reservation_expires != reservation.reservation_expires_at_epoch_ms.map(u128::from)
+        || !matches!((started, dispatch_expires), (Some(start), Some(expires)) if start < expires && expires > now_ms)
+        || response.retry_after_seconds != 0
+        || response.approval_status.is_some()
+        || response.approval_expires_at.is_some()
+        || response.approval_created.is_some()
+        || response.grant_id != reservation.grant_id
+        || response.approval_request_id != reservation.approval_request_id
+    {
+        return Err(format!(
+            "release authorization dispatch did not return exact dispatching state: {}",
+            response.state
+        ));
+    }
+    Ok(())
+}
+
+fn validate_complete_release_authorization_response(
+    response: &ReleaseAuthorizationResponse,
+    reservation: &ReleaseAuthorizationReservation,
+    requested_outcome: &str,
+) -> Result<(), String> {
+    validate_release_authorization_binding(
+        response,
+        &reservation.attempt_id,
+        Some(&reservation.binding_digest),
+    )?;
+    let state = response.state.as_str();
+    let outcome = response.completion_outcome.as_deref();
+    let exact = match requested_outcome {
+        "forwarded" => response.authorized && state == "committed" && outcome == Some("forwarded"),
+        "not_forwarded" => {
+            !response.authorized && state == "cancelled" && outcome == Some("not_forwarded")
+        }
+        "unknown" => {
+            (response.authorized
+                && state == "committed_indeterminate"
+                && outcome == Some("unknown"))
+                || (response.idempotent_replay
+                    && response.authorized
+                    && state == "committed"
+                    && outcome == Some("forwarded"))
+                || (response.idempotent_replay
+                    && !response.authorized
+                    && state == "cancelled"
+                    && outcome == Some("not_forwarded"))
+        }
+        _ => false,
+    };
+    if !exact || response.retry_after_seconds != 0 {
+        return Err(format!(
+            "release authorization completion returned invalid state {} outcome {:?} for {requested_outcome}",
+            response.state, response.completion_outcome
+        ));
+    }
+    Ok(())
+}
+
+fn reserve_release_authorization(
+    state: &GateState,
+    attempt_id: &str,
+    principal_id: &str,
+    route_id: &str,
+    credential_ref: Option<&str>,
+    credential_version: u64,
+    policy_hash: &str,
+    request_digest: &str,
+    expected_operation_digest: &str,
+    operation: &Value,
+    canonical_request: &Value,
+    jit_required: bool,
+) -> Result<ReleaseAuthorizationResponse, String> {
+    if !canonical_request.is_object() {
+        return Err("release authorization canonical request must be an object".to_string());
+    }
+    if canonical_json_ensure_ascii(canonical_request).len()
+        > MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES
+    {
+        return Err(format!(
+            "release authorization canonical request exceeds {} bytes",
+            MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES
+        ));
+    }
+    if digest_json_ensure_ascii(canonical_request) != request_digest {
+        return Err("release authorization canonical request digest mismatch".to_string());
+    }
+    if operation_digest(canonical_request) != expected_operation_digest {
+        return Err("release authorization canonical operation digest mismatch".to_string());
+    }
+    if canonical_request.get("operation") != Some(operation) {
+        return Err("release authorization canonical operation mismatch".to_string());
+    }
+    if !canonical_request
+        .pointer("/request/headers")
+        .is_some_and(Value::is_object)
+    {
+        return Err("release authorization canonical request headers are missing".to_string());
+    }
+    let payload = json!({
+        "apiVersion":"serverware.releaseAuthorizationReserve/v1",
+        "attemptId":attempt_id,
+        "flowId":attempt_id,
+        "principalId":principal_id,
+        "routeId":route_id,
+        "credentialRef":credential_ref,
+        "credentialVersion":credential_version,
+        "policyHash":policy_hash,
+        "requestDigest":request_digest,
+        "operationDigest":expected_operation_digest,
+        "operationContext":operation,
+        "canonicalRequest":canonical_request,
+    });
+    let response = post_release_authorization(state, "reserve", &payload)?;
+    validate_reserve_release_authorization_response(&response, attempt_id, jit_required)?;
+    if !response.authorized
+        && matches!(
+            response.reason.as_str(),
+            "jit_grant_unavailable" | "jit_grant_expired"
+        )
+    {
+        let approval_id = response
+            .approval_request_id
+            .as_deref()
+            .filter(|value| valid_release_authorization_identity(Some(*value)))
+            .ok_or("release authorization JIT denial is missing a valid approval request ID")?;
+        if response.approval_status.as_deref() != Some("pending") {
+            return Err(format!(
+                "release authorization JIT denial has an invalid approval status for {approval_id}"
+            ));
+        }
+        let approval_expires_at = response
+            .approval_expires_at
+            .as_deref()
+            .filter(|value| value.len() <= 128)
+            .ok_or("release authorization JIT denial is missing approval expiry")?;
+        let expires_at = OffsetDateTime::parse(approval_expires_at, &Rfc3339)
+            .map_err(|_| "release authorization JIT denial has an invalid approval expiry")?;
+        if expires_at <= OffsetDateTime::now_utc() {
+            return Err("release authorization JIT denial approval is already expired".to_string());
+        }
+        if !(1..=3600).contains(&response.retry_after_seconds) {
+            return Err(
+                "release authorization JIT denial has an invalid retry interval".to_string(),
+            );
+        }
+        if response.approval_created.is_none() {
+            return Err(
+                "release authorization JIT denial is missing approval creation state".to_string(),
+            );
+        }
+    }
+    Ok(response)
+}
+
+fn release_reservation_from_decision(
+    state: &GateState,
+    decision: &Value,
+) -> Result<Option<ReleaseAuthorizationReservation>, String> {
+    if !state.atomic_release_authorization_enabled {
+        return Ok(None);
+    }
+    let release = decision
+        .get("release_authorization")
+        .and_then(Value::as_object)
+        .ok_or("allowed decision is missing atomic release authorization")?;
+    if release.get("state").and_then(Value::as_str) != Some("reserved") {
+        return Err(
+            "allowed decision is not backed by a reserved release authorization".to_string(),
+        );
+    }
+    let attempt_id = release
+        .get("attempt_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("allowed decision is missing release attempt ID")?;
+    let binding_digest = release
+        .get("binding_digest")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or("allowed decision is missing release binding digest")?;
+    if decision.get("attempt_id").and_then(Value::as_str) != Some(attempt_id)
+        || decision.get("flow_id").and_then(Value::as_str) != Some(attempt_id)
+    {
+        return Err("release attempt correlation is inconsistent".to_string());
+    }
+    Ok(Some(ReleaseAuthorizationReservation {
+        attempt_id: attempt_id.to_string(),
+        binding_digest: binding_digest.to_string(),
+        grant_id: release
+            .get("grant_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        approval_request_id: release
+            .get("approval_request_id")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        reservation_expires_at_epoch_ms: release
+            .get("reservation_expires_at_epoch_ms")
+            .and_then(Value::as_u64),
+    }))
+}
+
+impl<'a> ReleaseAuthorizationGuard<'a> {
+    fn from_decision(state: &'a GateState, decision: &Value) -> Result<Option<Self>, String> {
+        Ok(
+            release_reservation_from_decision(state, decision)?.map(|reservation| Self {
+                state,
+                reservation,
+                stage: ReleaseAuthorizationStage::Reserved,
+            }),
+        )
+    }
+
+    fn dispatch(&mut self) -> Result<(), String> {
+        if self.stage != ReleaseAuthorizationStage::Reserved {
+            return Err("release authorization is not reserved".to_string());
+        }
+        self.stage = ReleaseAuthorizationStage::DispatchUncertain;
+        let response = post_release_authorization(
+            self.state,
+            "dispatch",
+            &json!({
+                "apiVersion":"serverware.releaseAuthorizationDispatch/v1",
+                "attemptId":self.reservation.attempt_id,
+                "bindingDigest":self.reservation.binding_digest,
+            }),
+        )?;
+        validate_dispatch_release_authorization_response(&response, &self.reservation)?;
+        self.stage = ReleaseAuthorizationStage::Dispatching;
+        Ok(())
+    }
+
+    fn complete(&mut self, outcome: &str) -> Result<(), String> {
+        if self.stage == ReleaseAuthorizationStage::Completed {
+            return Ok(());
+        }
+        let response = post_release_authorization(
+            self.state,
+            "complete",
+            &json!({
+                "apiVersion":"serverware.releaseAuthorizationComplete/v1",
+                "attemptId":self.reservation.attempt_id,
+                "bindingDigest":self.reservation.binding_digest,
+                "outcome":outcome,
+            }),
+        )?;
+        validate_complete_release_authorization_response(&response, &self.reservation, outcome)?;
+        self.stage = ReleaseAuthorizationStage::Completed;
+        Ok(())
+    }
+
+    fn complete_forwarded(&mut self) -> Result<(), String> {
+        self.complete("forwarded")
+    }
+}
+
+impl Drop for ReleaseAuthorizationGuard<'_> {
+    fn drop(&mut self) {
+        let outcome = match self.stage {
+            ReleaseAuthorizationStage::Reserved => "not_forwarded",
+            ReleaseAuthorizationStage::DispatchUncertain
+            | ReleaseAuthorizationStage::Dispatching => "unknown",
+            ReleaseAuthorizationStage::Completed => return,
+        };
+        if let Err(err) = self.complete(outcome) {
+            eprintln!(
+                "release authorization completion failed attempt={} outcome={outcome}: {err}",
+                self.reservation.attempt_id
+            );
+        }
+    }
+}
+
+fn cancel_release_reservation(
+    state: &GateState,
+    reservation: ReleaseAuthorizationReservation,
+) -> Result<(), String> {
+    let mut guard = ReleaseAuthorizationGuard {
+        state,
+        reservation,
+        stage: ReleaseAuthorizationStage::Reserved,
+    };
+    guard.complete("not_forwarded")
+}
+
+fn add_decision_correlation(
+    mut decision: Value,
+    principal_id: &str,
+    policy_hash: &str,
+    request_digest: &str,
+    operation_digest: &str,
+    attempt_id: &str,
+    operation: &Value,
+) -> Value {
+    if let Some(object) = decision.as_object_mut() {
+        for (key, value) in [
+            ("principal_id", Value::String(principal_id.to_string())),
+            ("policy_hash", Value::String(policy_hash.to_string())),
+            ("request_digest", Value::String(request_digest.to_string())),
+            (
+                "operation_digest",
+                Value::String(operation_digest.to_string()),
+            ),
+            ("attempt_id", Value::String(attempt_id.to_string())),
+            ("flow_id", Value::String(attempt_id.to_string())),
+            ("operation", operation.clone()),
+        ] {
+            object.insert(key.to_string(), value);
+        }
+    }
+    decision
+}
+
 fn canonical_request(
     req: &DecisionRequest,
     forwarded_headers: &BTreeMap<String, String>,
@@ -7223,7 +8296,7 @@ fn canonical_request(
 }
 
 fn operation_digest(canonical: &Value) -> String {
-    digest_json(&json!({
+    digest_json_ensure_ascii(&json!({
         "principal": canonical["principal"],
         "route_id": canonical["route_id"],
         "credential_ref": canonical["credential_ref"],
@@ -7720,13 +8793,11 @@ fn npm_operation(url: &Url, method: &str, body: &str) -> String {
         || path.starts_with("/-/team/")
         || path.starts_with("/-/org/")
         || path.starts_with("/-/user/")
-    {
-        "metadataWrite".to_string()
-    } else if method == "PUT"
-        && serde_json::from_str::<Value>(body)
-            .ok()
-            .and_then(|body| body.get("_rev").cloned())
-            .is_some()
+        || (method == "PUT"
+            && strict_json_value_from_str(body)
+                .ok()
+                .and_then(|body| body.get("_rev").cloned())
+                .is_some())
     {
         "metadataWrite".to_string()
     } else if method == "PUT" || method == "POST" {
@@ -7754,7 +8825,20 @@ fn npm_operation_fields(
     if let Some(package) = route_package.as_ref() {
         fields.insert("packageName".to_string(), Value::String(package.clone()));
     }
-    if let Ok(Value::Object(body_json)) = serde_json::from_str::<Value>(body) {
+    let body_json = if body.trim().is_empty() {
+        None
+    } else {
+        match strict_json_value_from_str(body) {
+            Ok(Value::Object(body_json)) => Some(body_json),
+            _ => {
+                return Err(json!({
+                    "error":"request_json_invalid",
+                    "status_code":400,
+                }))
+            }
+        }
+    };
+    if let Some(body_json) = body_json {
         if operation == "publish" && body_json.get("_rev").is_some() {
             return Err(json!({"error":"npm_publish_revision_denied"}));
         }
@@ -8205,6 +9289,24 @@ fn validate_adapter(
                 if body_length > max_body {
                     return Err(json!({"error":"generic_body_too_large","maxBodyBytes":max_body}));
                 }
+                if body_mode == "json" && body_length != 0 {
+                    let content_type = request_content_type(forwarded_headers);
+                    if content_type != "application/json" {
+                        return Err(json!({
+                            "error":"request_json_content_type_denied",
+                            "contentType":content_type,
+                            "status_code":415,
+                        }));
+                    }
+                    if req.forwarded_body_utf8_valid == Some(false)
+                        || strict_json_value_from_str(&req.body).is_err()
+                    {
+                        return Err(json!({
+                            "error":"request_json_invalid",
+                            "status_code":400,
+                        }));
+                    }
+                }
                 if body_mode == "formUrlencoded" && body_length != 0 {
                     let content_type = request_content_type(forwarded_headers);
                     if content_type != "application/x-www-form-urlencoded" {
@@ -8562,6 +9664,7 @@ fn enforce_rate_limit(
     policy_hash: &str,
     operation: &Value,
     consume: bool,
+    skip_shared: bool,
 ) -> Result<(), Value> {
     let max = constraint.get("max").and_then(Value::as_u64).unwrap_or(0);
     let window_seconds = constraint
@@ -8590,6 +9693,9 @@ fn enforce_rate_limit(
         .and_then(Value::as_str)
         .unwrap_or("local");
     if store == "shared" {
+        if skip_shared {
+            return Ok(());
+        }
         return enforce_shared_rate_limit(
             state,
             constraint,
@@ -8619,13 +9725,17 @@ fn enforce_rate_limit(
         .constraint_rate_counters
         .lock()
         .expect("constraint rate counter lock poisoned");
-    if counters
-        .get(&key)
-        .is_some_and(|counter| counter.expires_at_ms <= now)
+    if consume
+        && counters
+            .get(&key)
+            .is_some_and(|counter| counter.expires_at_ms <= now)
     {
         counters.remove(&key);
     }
-    if let Some(counter) = counters.get(&key) {
+    if let Some(counter) = counters
+        .get(&key)
+        .filter(|counter| counter.expires_at_ms > now)
+    {
         if counter.count >= max {
             let retry_after = (counter.expires_at_ms.saturating_sub(now) / 1000).max(1);
             let mut extra = Map::new();
@@ -8828,7 +9938,7 @@ fn enforce_shared_rate_limit(
             extra,
         ));
     }
-    let value: Value = serde_json::from_str(&text).map_err(|err| {
+    let value = strict_json_value_from_str(&text).map_err(|err| {
         let mut extra = Map::new();
         extra.insert("status_code".to_string(), json!(503));
         extra.insert("store".to_string(), Value::String("shared".to_string()));
@@ -9676,7 +10786,7 @@ fn enforce_json_body(
             ));
         }
     }
-    let payload = serde_json::from_str::<Value>(&req.body).map_err(|_| {
+    let payload = strict_json_value_from_str(&req.body).map_err(|_| {
         constraint_error(
             constraint,
             "json_body_invalid",
@@ -10185,6 +11295,7 @@ fn evaluate_request_constraints(
     operation: &Value,
     consume_rate_limits: bool,
     rate_limits_only: bool,
+    skip_shared_rate_limits: bool,
 ) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
@@ -10207,6 +11318,7 @@ fn evaluate_request_constraints(
                 policy_hash,
                 operation,
                 consume_rate_limits,
+                skip_shared_rate_limits,
             )?,
             "operationPolicy" => enforce_operation_policy(constraint, operation)?,
             "queryDateWindow" => enforce_query_date_window(constraint, url)?,
@@ -10221,7 +11333,7 @@ fn evaluate_request_constraints(
 }
 
 fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), Value> {
-    let payload = serde_json::from_slice::<Value>(body).map_err(|_| {
+    let payload = strict_json_value_from_slice(body).map_err(|_| {
         let mut extra = Map::new();
         extra.insert("status_code".to_string(), json!(502));
         constraint_payload(
@@ -10413,7 +11525,7 @@ fn enforce_response_json(constraint: &Value, body: &[u8]) -> Result<(), Value> {
     if body.len() as u64 > MAX_BUFFERED_RESPONSE_BODY_BYTES {
         return Err(invalid_json());
     }
-    let payload = serde_json::from_slice::<Value>(body).map_err(|_| invalid_json())?;
+    let payload = strict_json_value_from_slice(body).map_err(|_| invalid_json())?;
     let item_paths = constraint.get("items").and_then(Value::as_array);
     let mut selected = Vec::new();
     let mut item_path_found = false;
@@ -10520,7 +11632,7 @@ fn validate_response_constraints_for_type(
 
 fn decide(state: &GateState, req: DecisionRequest) -> Value {
     let snapshot = current_snapshot(state);
-    decide_internal(state, &snapshot, req, None)
+    decide_internal_with_mode(state, &snapshot, req, None, true)
 }
 
 fn decide_internal(
@@ -10528,6 +11640,16 @@ fn decide_internal(
     snapshot: &Arc<Snapshot>,
     req: DecisionRequest,
     authenticated_principal_id: Option<&str>,
+) -> Value {
+    decide_internal_with_mode(state, snapshot, req, authenticated_principal_id, false)
+}
+
+fn decide_internal_with_mode(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    req: DecisionRequest,
+    authenticated_principal_id: Option<&str>,
+    preview: bool,
 ) -> Value {
     let started = Instant::now();
     if !policy_trust_is_fresh(state) {
@@ -10617,6 +11739,14 @@ fn decide_internal(
             started,
         );
     }
+    if let Err(payload) = validate_runtime_credential_body_policy(route) {
+        let reason = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("credential request body policy invalid")
+            .to_string();
+        return deny_for_route(500, &reason, payload, route, started);
+    }
     let credential_ref = route.credential_ref.clone();
     let injection = if let Some(credential_id) = credential_ref.as_ref() {
         let Some(credential) = snapshot.credentials.get(credential_id) else {
@@ -10646,33 +11776,44 @@ fn decide_internal(
             return deny(status, &reason, payload, started);
         }
     }
-    let (credential_version, secret_available) =
-        if let Some(credential_id) = credential_ref.as_ref() {
-            let scope = CredentialLeaseScope::new(&principal.id, &route.id, credential_id);
-            match ensure_scoped_credential_lease(state, snapshot, &scope) {
-                Ok(info) => {
-                    req.credential_metadata
-                        .insert(credential_id.clone(), info.metadata);
-                    (info.version, info.secret_available)
-                }
-                Err(err) => {
-                    return deny(
-                        503,
-                        "credential lease is unavailable",
-                        json!({
-                            "error":"credential_lease_missing",
-                            "credential_ref":credential_id,
-                            "principal_id":principal.id,
-                            "route_id":route.id,
-                            "detail":err,
-                        }),
-                        started,
-                    )
-                }
-            }
+    let atomic_release = state.atomic_release_authorization_enabled && !preview;
+    let credential_scope = credential_ref
+        .as_ref()
+        .map(|credential_id| CredentialLeaseScope::new(&principal.id, &route.id, credential_id));
+    let (credential_version, mut secret_available) = if let (Some(credential_id), Some(scope)) =
+        (credential_ref.as_ref(), credential_scope.as_ref())
+    {
+        let info = if preview || atomic_release {
+            peek_cached_credential_lease_info(state, snapshot, scope)
+                .ok_or_else(|| "credential generation is not cached".to_string())
         } else {
-            (0, false)
+            ensure_scoped_credential_lease(state, snapshot, scope)
         };
+        match info {
+            Ok(info) => {
+                req.credential_metadata
+                    .insert(credential_id.clone(), info.metadata);
+                (info.version, info.secret_available)
+            }
+            Err(err) => {
+                return deny(
+                    503,
+                    "credential lease generation is unavailable",
+                    json!({
+                        "error":"credential_generation_missing",
+                        "credential_ref":credential_id,
+                        "principal_id":principal.id,
+                        "route_id":route.id,
+                        "detail":err,
+                        "preview":preview,
+                    }),
+                    started,
+                )
+            }
+        }
+    } else {
+        (0, false)
+    };
 
     if route.adapter_type == "gmail.v1" {
         merge_gmail_proofs(
@@ -10770,6 +11911,7 @@ fn decide_internal(
         &operation,
         false,
         false,
+        preview || atomic_release,
     ) {
         let status = payload
             .get("status_code")
@@ -10793,26 +11935,8 @@ fn decide_internal(
         &snapshot.hash,
         &operation,
     );
-    let request_digest = digest_json(&canonical);
+    let request_digest = digest_json_ensure_ascii(&canonical);
     let operation_digest = operation_digest(&canonical);
-    let flow_id = match random_request_attempt_id() {
-        Ok(flow_id) => flow_id,
-        Err(error) => {
-            return deny(
-                503,
-                "request attempt identity unavailable",
-                json!({"error":"request_attempt_identity_unavailable","detail":error}),
-                started,
-            )
-        }
-    };
-    let grant_attempt_id = digest_json(&json!({
-        "v":1,
-        "purpose":"grant-consume",
-        "flow_id":flow_id,
-        "request_digest":request_digest,
-        "operation_digest":operation_digest,
-    }));
     let redacted_display = json!({
         "method": req.method.clone(),
         "url": url.as_str(),
@@ -10830,6 +11954,400 @@ fn decide_internal(
         .get("required")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+
+    if preview {
+        return with_enrollment_session_id(
+            json!({
+                "action": if jit_required {"jit_required"} else {"allow"},
+                "allowed": false,
+                "would_allow": !jit_required,
+                "preview": true,
+                "authorizes_forwarding": false,
+                "status_code": if jit_required {428} else {200},
+                "principal_id": principal.id,
+                "route_id": route.id,
+                "adapter": route.adapter_type,
+                "policy_hash": snapshot.hash,
+                "snapshot_epoch": snapshot.epoch,
+                "credential_ref": credential_ref,
+                "credential_version": credential_version,
+                "client_request_digest": client_request_digest,
+                "request_digest": request_digest,
+                "operation_digest": operation_digest,
+                "attempt_id": Value::Null,
+                "flow_id": Value::Null,
+                "grant_id": Value::Null,
+                "operation": operation,
+                "rewrite": rewrite,
+                "jit": if jit_required {
+                    json!({
+                        "required":true,
+                        "grant_reserved":false,
+                        "grant_consumed":false,
+                        "grant_store":"preview",
+                        "approval_created":false,
+                    })
+                } else {
+                    json!({"required":false})
+                },
+                "approval_id": Value::Null,
+                "expires_at": Value::Null,
+                "injection": Value::Null,
+                "release_authorization": json!({"mode":"preview","state":"not_reserved"}),
+                "canonical_request": canonical,
+                "redacted_display": redacted_display,
+                "decision_us": started.elapsed().as_micros() as u64,
+                "hot_path": {"sqlite_calls": 0, "filesystem_calls": 0},
+            }),
+            enrollment_session_id.as_deref(),
+        );
+    }
+
+    if atomic_release {
+        let attempt_id = match random_request_attempt_id() {
+            Ok(attempt_id) => attempt_id,
+            Err(error) => {
+                return deny(
+                    503,
+                    "request attempt identity unavailable",
+                    json!({"error":"request_attempt_identity_unavailable","detail":error}),
+                    started,
+                )
+            }
+        };
+        let release = match reserve_release_authorization(
+            state,
+            &attempt_id,
+            &principal.id,
+            &route.id,
+            credential_ref.as_deref(),
+            credential_version,
+            &snapshot.hash,
+            &request_digest,
+            &operation_digest,
+            &operation,
+            &canonical,
+            jit_required,
+        ) {
+            Ok(release) => release,
+            Err(err) => {
+                return add_decision_correlation(
+                    deny_for_route(
+                        503,
+                        "atomic release authorization is unavailable",
+                        json!({
+                            "error":"release_authorization_unavailable",
+                            "detail":err,
+                        }),
+                        route,
+                        started,
+                    ),
+                    &principal.id,
+                    &snapshot.hash,
+                    &request_digest,
+                    &operation_digest,
+                    &attempt_id,
+                    &operation,
+                )
+            }
+        };
+        if !release.authorized {
+            let jit_denied = matches!(
+                release.reason.as_str(),
+                "jit_grant_unavailable" | "jit_grant_expired"
+            );
+            let payload = if jit_denied {
+                json!({
+                    "error":"jit_grant_unavailable",
+                    "release_reason":release.reason,
+                    "approval_id":release.approval_request_id,
+                    "approval_status":release.approval_status,
+                    "expires_at":release.approval_expires_at,
+                    "approval_created":release.approval_created,
+                    "retry_after_seconds":release.retry_after_seconds,
+                })
+            } else if release.reason == "shared_quota_denied" {
+                json!({
+                    "error":"credential_rate_limit_exceeded",
+                    "store":"shared",
+                    "release_reason":release.reason,
+                    "retry_after_seconds":release.retry_after_seconds,
+                })
+            } else {
+                json!({
+                    "error":"release_authorization_denied",
+                    "release_reason":release.reason,
+                    "retry_after_seconds":release.retry_after_seconds,
+                })
+            };
+            let mut decision = deny_for_route(
+                if jit_denied { 428 } else { 403 },
+                if jit_denied {
+                    "JIT approval grant is required"
+                } else {
+                    "atomic release authorization denied"
+                },
+                payload,
+                route,
+                started,
+            );
+            if jit_denied {
+                if let Some(object) = decision.as_object_mut() {
+                    object.insert(
+                        "action".to_string(),
+                        Value::String("jit_required".to_string()),
+                    );
+                    object.insert(
+                        "jit".to_string(),
+                        json!({
+                            "required":true,
+                            "grant_reserved":false,
+                            "grant_consumed":false,
+                            "grant_store":"atomic_release_authorization",
+                            "approval_id":release.approval_request_id,
+                            "approval_status":release.approval_status,
+                            "expires_at":release.approval_expires_at,
+                            "approval_created":release.approval_created,
+                            "retry_after_seconds":release.retry_after_seconds,
+                        }),
+                    );
+                    object.insert(
+                        "approval_id".to_string(),
+                        release
+                            .approval_request_id
+                            .clone()
+                            .map(Value::String)
+                            .unwrap_or(Value::Null),
+                    );
+                    object.insert(
+                        "approval_status".to_string(),
+                        release
+                            .approval_status
+                            .clone()
+                            .map(Value::String)
+                            .unwrap_or(Value::Null),
+                    );
+                    object.insert(
+                        "expires_at".to_string(),
+                        release
+                            .approval_expires_at
+                            .clone()
+                            .map(Value::String)
+                            .unwrap_or(Value::Null),
+                    );
+                    object.insert(
+                        "approval_created".to_string(),
+                        release
+                            .approval_created
+                            .map(Value::Bool)
+                            .unwrap_or(Value::Null),
+                    );
+                    object.insert(
+                        "retry_after_seconds".to_string(),
+                        json!(release.retry_after_seconds),
+                    );
+                }
+            }
+            return add_decision_correlation(
+                decision,
+                &principal.id,
+                &snapshot.hash,
+                &request_digest,
+                &operation_digest,
+                &attempt_id,
+                &operation,
+            );
+        }
+        let reservation = ReleaseAuthorizationReservation {
+            attempt_id: attempt_id.clone(),
+            binding_digest: release.binding_digest.clone(),
+            grant_id: release.grant_id.clone(),
+            approval_request_id: release.approval_request_id.clone(),
+            reservation_expires_at_epoch_ms: release.reservation_expires_at_epoch_ms,
+        };
+        if let (Some(credential_id), Some(scope)) =
+            (credential_ref.as_ref(), credential_scope.as_ref())
+        {
+            match ensure_scoped_credential_lease(state, snapshot, scope) {
+                Ok(info) if info.version == credential_version => {
+                    req.credential_metadata
+                        .insert(credential_id.clone(), info.metadata);
+                    secret_available = info.secret_available;
+                }
+                Ok(info) => {
+                    let _ = cancel_release_reservation(state, reservation);
+                    return add_decision_correlation(
+                        deny_for_route(
+                            409,
+                            "credential generation changed after reservation",
+                            json!({
+                                "error":"credential_generation_changed_after_reserve",
+                                "reserved_credential_version":credential_version,
+                                "active_credential_version":info.version,
+                            }),
+                            route,
+                            started,
+                        ),
+                        &principal.id,
+                        &snapshot.hash,
+                        &request_digest,
+                        &operation_digest,
+                        &attempt_id,
+                        &operation,
+                    );
+                }
+                Err(err) => {
+                    let _ = cancel_release_reservation(state, reservation);
+                    return add_decision_correlation(
+                        deny_for_route(
+                            503,
+                            "credential lease is unavailable after reservation",
+                            json!({
+                                "error":"credential_lease_missing",
+                                "credential_ref":credential_id,
+                                "detail":err,
+                            }),
+                            route,
+                            started,
+                        ),
+                        &principal.id,
+                        &snapshot.hash,
+                        &request_digest,
+                        &operation_digest,
+                        &attempt_id,
+                        &operation,
+                    );
+                }
+            }
+        }
+        if let Err(payload) = evaluate_request_constraints(
+            state,
+            route,
+            &req,
+            &headers,
+            &url,
+            &principal.id,
+            credential_ref.as_deref(),
+            credential_version,
+            &snapshot.hash,
+            &operation,
+            true,
+            true,
+            true,
+        ) {
+            let status = payload
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .unwrap_or(403) as u16;
+            let reason = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("credential_constraint_denied")
+                .to_string();
+            let _ = cancel_release_reservation(state, reservation);
+            return add_decision_correlation(
+                deny_for_route(status, &reason, payload, route, started),
+                &principal.id,
+                &snapshot.hash,
+                &request_digest,
+                &operation_digest,
+                &attempt_id,
+                &operation,
+            );
+        }
+        if !snapshot_is_active(state, snapshot) {
+            let _ = cancel_release_reservation(state, reservation);
+            return add_decision_correlation(
+                deny_for_route(
+                    409,
+                    "policy snapshot was revoked during decision",
+                    json!({
+                        "error":"policy_snapshot_revoked",
+                        "snapshot_epoch":snapshot.epoch,
+                    }),
+                    route,
+                    started,
+                ),
+                &principal.id,
+                &snapshot.hash,
+                &request_digest,
+                &operation_digest,
+                &attempt_id,
+                &operation,
+            );
+        }
+        return with_enrollment_session_id(
+            json!({
+                "action":"allow",
+                "allowed":true,
+                "preview":false,
+                "authorizes_forwarding":true,
+                "status_code":200,
+                "principal_id":principal.id,
+                "route_id":route.id,
+                "adapter":route.adapter_type,
+                "policy_hash":snapshot.hash,
+                "snapshot_epoch":snapshot.epoch,
+                "credential_ref":credential_ref,
+                "credential_version":credential_version,
+                "client_request_digest":client_request_digest,
+                "request_digest":request_digest,
+                "operation_digest":operation_digest,
+                "attempt_id":attempt_id,
+                "flow_id":attempt_id,
+                "grant_id":reservation.grant_id,
+                "operation":operation,
+                "rewrite":rewrite,
+                "jit":if jit_required {
+                    json!({
+                        "required":true,
+                        "grant_reserved":true,
+                        "grant_consumed":false,
+                        "grant_id":reservation.grant_id,
+                        "approval_id":reservation.approval_request_id,
+                        "grant_store":"atomic_release_authorization",
+                    })
+                } else {
+                    json!({"required":false})
+                },
+                "approval_id":reservation.approval_request_id,
+                "expires_at":Value::Null,
+                "injection":json!({
+                    "credential_ref":route.credential_ref,
+                    "credential_version":credential_version,
+                    "secret_available":secret_available,
+                    "plan":injection,
+                }),
+                "release_authorization":{
+                    "mode":"atomic",
+                    "state":"reserved",
+                    "attempt_id":reservation.attempt_id,
+                    "binding_digest":reservation.binding_digest,
+                    "grant_id":reservation.grant_id,
+                    "approval_request_id":reservation.approval_request_id,
+                    "reservation_expires_at_epoch_ms":reservation.reservation_expires_at_epoch_ms,
+                },
+                "canonical_request":canonical,
+                "redacted_display":redacted_display,
+                "decision_us":started.elapsed().as_micros() as u64,
+                "hot_path":{"sqlite_calls":0,"filesystem_calls":0},
+            }),
+            enrollment_session_id.as_deref(),
+        );
+    }
+
+    let flow_id = match random_request_attempt_id() {
+        Ok(flow_id) => flow_id,
+        Err(error) => {
+            return deny(
+                503,
+                "request attempt identity unavailable",
+                json!({"error":"request_attempt_identity_unavailable","detail":error}),
+                started,
+            )
+        }
+    };
+    let grant_attempt_id = flow_id.clone();
     let mut grant_audit_reservation = if jit_required {
         match reserve_required_audit(state) {
             Some(reservation) => Some(reservation),
@@ -10883,9 +12401,8 @@ fn decide_internal(
     };
     let grant_available = !jit_required || available_grant.is_some();
     if grant_available {
-        // Shared quota and JIT grant consumption are separate control-plane transactions today.
-        // Consume quota first so a partial failure can burn capacity but can never authorize an
-        // unmetered operation. This must become one control-plane transaction when that endpoint exists.
+        // Legacy compatibility keeps the old quota-before-grant ordering fail-closed when atomic
+        // release authorization is explicitly disabled.
         if let Err(payload) = evaluate_request_constraints(
             state,
             route,
@@ -10899,6 +12416,7 @@ fn decide_internal(
             &operation,
             true,
             true,
+            false,
         ) {
             let status = payload
                 .get("status_code")
@@ -10986,6 +12504,7 @@ fn decide_internal(
                     "credential_version":credential_version,
                     "request_digest":request_digest.clone(),
                     "operation_digest":operation_digest.clone(),
+                    "attempt_id":grant_attempt_id.clone(),
                     "flow_id":flow_id.clone(),
                     "grant_store":grant_store,
                 }),
@@ -11025,6 +12544,7 @@ fn decide_internal(
             "client_request_digest": client_request_digest,
             "request_digest": request_digest,
             "operation_digest": operation_digest,
+            "attempt_id": grant_attempt_id,
             "flow_id": flow_id.clone(),
             "grant_id": consumed_grant.as_ref().map(|grant| grant.id.clone()),
             "operation": operation,
@@ -11397,6 +12917,11 @@ fn filtered_forward_headers(
 }
 
 fn insert_header(headers: &mut HeaderMap, name: &str, value: &str) -> Result<(), String> {
+    if is_serverware_internal_header(name) {
+        return Err(format!(
+            "credential injection header {name} is reserved for Serverware internals"
+        ));
+    }
     let name = HeaderName::from_bytes(name.as_bytes())
         .map_err(|err| format!("invalid injection header {name}: {err}"))?;
     let mut value =
@@ -11436,7 +12961,7 @@ fn secret_for_injection(
         }
         return Ok(Zeroizing::new(lease.secret.as_str().to_string()));
     };
-    let payload: SecretJsonValue = serde_json::from_str(&lease.secret)
+    let payload: SecretJsonValue = strict_json_from_slice(lease.secret.as_bytes())
         .map_err(|err| format!("credential secret is not JSON for field {field}: {err}"))?;
     let parts = secret_field_path_parts(field)?;
     let Some(value) = payload.path_string(&parts) else {
@@ -13639,7 +15164,58 @@ fn response_policy_for_decision(
             .constraints
             .iter()
             .any(|constraint| constraint_phase_includes(constraint, "response")),
+        credential_bearing: route_match
+            .route
+            .credential_ref
+            .as_deref()
+            .is_some_and(|credential_ref| !credential_ref.is_empty()),
     })
+}
+
+fn credential_response_projection_error(
+    credential_bearing: bool,
+    response_config: &Value,
+    adapter_type: &str,
+) -> Option<Value> {
+    if !response_mode_requires_projection(Some(response_config), adapter_type) {
+        return None;
+    }
+    let valid = response_config.as_object().is_some_and(|profile| {
+        validate_response_field_allowlist(profile, "runtime response projection").is_ok()
+    });
+    if valid {
+        return None;
+    }
+    Some(json!({
+        "error": if credential_bearing {
+            "credential_response_projection_invalid"
+        } else {
+            "response_allowed_fields_invalid"
+        },
+        "adapter":adapter_type,
+    }))
+}
+
+fn response_mode_requires_projection(response_config: Option<&Value>, adapter_type: &str) -> bool {
+    let mode = if adapter_type == "gmail.v1" {
+        "json"
+    } else {
+        response_config
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("mode"))
+            .and_then(Value::as_str)
+            .unwrap_or("any")
+    };
+    matches!(
+        mode,
+        "json"
+            | "jsonlStream"
+            | "jsonArrayStream"
+            | "jsonSseStream"
+            | "jsonNestedStream"
+            | "formUrlencodedStream"
+            | "csvStream"
+    )
 }
 
 fn response_config_for_status(response_config: &Value, status: StatusCode) -> Result<Value, Value> {
@@ -14642,8 +16218,14 @@ fn validate_policy_json_response(
     body: Vec<u8>,
     response_config: &Value,
     adapter_type: &str,
+    credential_bearing: bool,
     response_secret_guard: &ResponseSecretGuard,
 ) -> Vec<u8> {
+    if let Some(payload) =
+        credential_response_projection_error(credential_bearing, response_config, adapter_type)
+    {
+        return block_forward_response(state, decision, method, url, status, payload);
+    }
     let mode = response_config
         .get("mode")
         .and_then(Value::as_str)
@@ -14700,7 +16282,7 @@ fn validate_policy_json_response(
             json!({"ok":true,"mode":"adapter_passthrough","adapter":adapter_type}),
         );
     }
-    let mut payload = match serde_json::from_slice::<Value>(&body) {
+    let mut payload = match strict_json_value_from_slice(&body) {
         Ok(payload) => payload,
         Err(_) => {
             return block_forward_response(
@@ -14780,6 +16362,18 @@ fn validate_forward_response(
             return block_forward_response(state, decision, method, url, status, payload)
         }
     };
+    let credential_bearing = route_match
+        .route
+        .credential_ref
+        .as_deref()
+        .is_some_and(|credential_ref| !credential_ref.is_empty());
+    if let Some(payload) = credential_response_projection_error(
+        credential_bearing,
+        &response_config,
+        &route_match.route.adapter_type,
+    ) {
+        return block_forward_response(state, decision, method, url, status, payload);
+    }
     let Some(max_body) = response_config.get("maxBodyBytes").and_then(Value::as_u64) else {
         return block_forward_response(
             state,
@@ -14823,6 +16417,7 @@ fn validate_forward_response(
             body,
             &response_config,
             &route_match.route.adapter_type,
+            credential_bearing,
             response_secret_guard,
         );
     }
@@ -14839,6 +16434,7 @@ fn validate_forward_response(
             body,
             &response_config,
             "gmail.v1",
+            credential_bearing,
             response_secret_guard,
         );
     }
@@ -14881,7 +16477,7 @@ fn validate_forward_response(
             json!({"ok":true,"mode":"validation_disabled"}),
         );
     }
-    let mut payload = match serde_json::from_slice::<Value>(&body) {
+    let mut payload = match strict_json_value_from_slice(&body) {
         Ok(payload) => payload,
         Err(_) => {
             return block_forward_response(
@@ -15086,6 +16682,20 @@ fn finalize_upstream_response(
                 ))
             }
         };
+    if let Some(payload) = credential_response_projection_error(
+        base_response_policy.credential_bearing,
+        &response_config,
+        &base_response_policy.adapter_type,
+    ) {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            payload,
+        ));
+    }
     let released_headers = match released_response_headers(&response_config, &upstream_headers) {
         Ok(headers) => headers,
         Err(payload) => {
@@ -15103,6 +16713,7 @@ fn finalize_upstream_response(
         adapter_type: base_response_policy.adapter_type,
         response_config,
         has_response_constraints: base_response_policy.has_response_constraints,
+        credential_bearing: base_response_policy.credential_bearing,
     };
     let Some(response_body_limit) = response_policy
         .response_config
@@ -15311,6 +16922,14 @@ fn forward_absolute_request_inner(
             decision
         ));
     }
+    let mut release_authorization = match ReleaseAuthorizationGuard::from_decision(state, &decision)
+    {
+        Ok(release) => release,
+        Err(err) => buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"release_authorization_context_invalid","detail":err}),
+        )),
+    };
     if client_request_digest.is_some()
         && decision
             .get("client_request_digest")
@@ -15457,15 +17076,17 @@ fn forward_absolute_request_inner(
             json!({"error":"credential_lease_changed_before_release"}),
         ));
     }
-    if credential_release_binding.as_ref().is_some_and(|binding| {
-        !record_required_credential_release_start(
-            state,
-            &decision,
-            &request_method,
-            &upstream_url,
-            binding,
-        )
-    }) {
+    if release_authorization.is_none()
+        && credential_release_binding.as_ref().is_some_and(|binding| {
+            !record_required_credential_release_start(
+                state,
+                &decision,
+                &request_method,
+                &upstream_url,
+                binding,
+            )
+        })
+    {
         buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"required_credential_audit_unavailable"}),
@@ -15479,6 +17100,14 @@ fn forward_absolute_request_inner(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"credential_lease_changed_before_release"}),
         ));
+    }
+    if let Some(release) = release_authorization.as_mut() {
+        if let Err(err) = release.dispatch() {
+            buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"release_authorization_dispatch_failed","detail":err}),
+            ));
+        }
     }
     let response = match builder.send() {
         Ok(response) => response,
@@ -15501,6 +17130,14 @@ fn forward_absolute_request_inner(
             ));
         }
     };
+    if let Some(release) = release_authorization.as_mut() {
+        if let Err(err) = release.complete_forwarded() {
+            buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"release_authorization_completion_failed","detail":err}),
+            ));
+        }
+    }
     finalize_upstream_response(
         state,
         snapshot,
@@ -15587,6 +17224,14 @@ fn forward_absolute_streaming_request_to(
             decision
         ));
     }
+    let mut release_authorization = match ReleaseAuthorizationGuard::from_decision(state, &decision)
+    {
+        Ok(release) => release,
+        Err(err) => write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"release_authorization_context_invalid","detail":err}),
+        )),
+    };
     let mut upstream_url = target_url;
     apply_rewrite(
         &mut upstream_url,
@@ -15744,15 +17389,17 @@ fn forward_absolute_streaming_request_to(
             json!({"error":"credential_lease_changed_before_release"}),
         ));
     }
-    if credential_release_binding.as_ref().is_some_and(|binding| {
-        !record_required_credential_release_start(
-            state,
-            &decision,
-            &request_method,
-            &upstream_url,
-            binding,
-        )
-    }) {
+    if release_authorization.is_none()
+        && credential_release_binding.as_ref().is_some_and(|binding| {
+            !record_required_credential_release_start(
+                state,
+                &decision,
+                &request_method,
+                &upstream_url,
+                binding,
+            )
+        })
+    {
         write_buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"required_credential_audit_unavailable"}),
@@ -15766,6 +17413,14 @@ fn forward_absolute_streaming_request_to(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"credential_lease_changed_before_release"}),
         ));
+    }
+    if let Some(release) = release_authorization.as_mut() {
+        if let Err(err) = release.dispatch() {
+            write_buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"release_authorization_dispatch_failed","detail":err}),
+            ));
+        }
     }
     let response = match builder.send() {
         Ok(response) => response,
@@ -15805,6 +17460,14 @@ fn forward_absolute_streaming_request_to(
             ));
         }
     };
+    if let Some(release) = release_authorization.as_mut() {
+        if let Err(err) = release.complete_forwarded() {
+            write_buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"release_authorization_completion_failed","detail":err}),
+            ));
+        }
+    }
     let (body_sha256, body_bytes) = request_stream_stats_snapshot(&stats);
     if body_bytes != content_length {
         enqueue_audit(
@@ -15954,6 +17617,14 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
             decision
         ));
     }
+    let mut release_authorization = match ReleaseAuthorizationGuard::from_decision(state, &decision)
+    {
+        Ok(release) => release,
+        Err(err) => write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"release_authorization_context_invalid","detail":err}),
+        )),
+    };
     let mut upstream_url = target_url;
     apply_rewrite(
         &mut upstream_url,
@@ -16053,8 +17724,6 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
     };
     let request_method = request.method.clone();
     let content_length = request.content_length as u64;
-    let client = state.upstream_client.clone();
-    let upstream_url_text = upstream_url.as_str().to_string();
     let (body_sender, body_receiver) = mpsc::sync_channel::<Vec<u8>>(4);
     let stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
     let output_stats = if json_stream_redacts_body(&request_policy.mode) {
@@ -16062,8 +17731,6 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
     } else {
         None
     };
-    let request_policy_for_thread = request_policy.clone();
-    let output_stats_for_thread = output_stats.clone();
     if credential_release_binding
         .as_ref()
         .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
@@ -16073,79 +17740,114 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
             json!({"error":"credential_lease_changed_before_release"}),
         ));
     }
-    if credential_release_binding.as_ref().is_some_and(|binding| {
-        !record_required_credential_release_start(
-            state,
-            &decision,
-            &request_method,
-            &upstream_url,
-            binding,
-        )
-    }) {
+    if release_authorization.is_none()
+        && credential_release_binding.as_ref().is_some_and(|binding| {
+            !record_required_credential_release_start(
+                state,
+                &decision,
+                &request_method,
+                &upstream_url,
+                binding,
+            )
+        })
+    {
         write_buffered!(json_status_response(
             StatusCode::SERVICE_UNAVAILABLE,
             json!({"error":"required_credential_audit_unavailable"}),
         ));
     }
-    let sender_state = Arc::clone(state);
-    let sender_snapshot = Arc::clone(snapshot);
+    let body_reader = ChannelBodyReader::new(body_receiver);
+    let body = match (request_policy.mode.as_str(), output_stats.clone()) {
+        ("jsonlStream", Some(stats)) => Body::new(JsonLinesRedactorReader::new(
+            Box::new(body_reader),
+            request_policy.max_line_bytes,
+            request_policy.allowed_fields.clone(),
+            stats,
+        )),
+        ("jsonArrayStream", Some(stats)) => Body::new(JsonArrayRedactorReader::new(
+            Box::new(body_reader),
+            request_policy.max_item_bytes,
+            request_policy.allowed_fields.clone(),
+            stats,
+        )),
+        ("jsonSseStream", Some(stats)) => Body::new(JsonSseRedactorReader::new(
+            Box::new(body_reader),
+            request_policy.max_line_bytes,
+            request_policy.max_event_bytes,
+            request_policy.allowed_fields.clone(),
+            stats,
+        )),
+        ("jsonNestedStream", Some(stats)) => Body::new(JsonNestedRedactorReader::new(
+            Box::new(body_reader),
+            request_policy.max_nested_bytes,
+            request_policy.allowed_fields.clone(),
+            stats,
+        )),
+        ("formUrlencodedStream", Some(stats)) => Body::new(FormUrlencodedRedactorReader::new(
+            Box::new(body_reader),
+            request_policy.max_pair_bytes,
+            request_policy.allowed_fields.clone(),
+            stats,
+        )),
+        ("csvStream", Some(stats)) => Body::new(CsvRedactorReader::new(
+            Box::new(body_reader),
+            request_policy.max_record_bytes,
+            request_policy.allowed_fields.clone(),
+            stats,
+        )),
+        _ => Body::sized(body_reader, content_length),
+    };
+    let builder = state
+        .upstream_client
+        .request(method, upstream_url.as_str())
+        .headers(headers)
+        .body(body);
+    let (ready_sender, ready_receiver) = mpsc::sync_channel::<()>(0);
+    let (start_sender, start_receiver) = mpsc::sync_channel::<()>(0);
     let sender_thread = thread::spawn(move || {
-        let body_reader = ChannelBodyReader::new(body_receiver);
-        let body = match (
-            request_policy_for_thread.mode.as_str(),
-            output_stats_for_thread,
-        ) {
-            ("jsonlStream", Some(stats)) => Body::new(JsonLinesRedactorReader::new(
-                Box::new(body_reader),
-                request_policy_for_thread.max_line_bytes,
-                request_policy_for_thread.allowed_fields.clone(),
-                stats,
-            )),
-            ("jsonArrayStream", Some(stats)) => Body::new(JsonArrayRedactorReader::new(
-                Box::new(body_reader),
-                request_policy_for_thread.max_item_bytes,
-                request_policy_for_thread.allowed_fields.clone(),
-                stats,
-            )),
-            ("jsonSseStream", Some(stats)) => Body::new(JsonSseRedactorReader::new(
-                Box::new(body_reader),
-                request_policy_for_thread.max_line_bytes,
-                request_policy_for_thread.max_event_bytes,
-                request_policy_for_thread.allowed_fields.clone(),
-                stats,
-            )),
-            ("jsonNestedStream", Some(stats)) => Body::new(JsonNestedRedactorReader::new(
-                Box::new(body_reader),
-                request_policy_for_thread.max_nested_bytes,
-                request_policy_for_thread.allowed_fields.clone(),
-                stats,
-            )),
-            ("formUrlencodedStream", Some(stats)) => Body::new(FormUrlencodedRedactorReader::new(
-                Box::new(body_reader),
-                request_policy_for_thread.max_pair_bytes,
-                request_policy_for_thread.allowed_fields.clone(),
-                stats,
-            )),
-            ("csvStream", Some(stats)) => Body::new(CsvRedactorReader::new(
-                Box::new(body_reader),
-                request_policy_for_thread.max_record_bytes,
-                request_policy_for_thread.allowed_fields.clone(),
-                stats,
-            )),
-            _ => Body::sized(body_reader, content_length),
-        };
-        if credential_release_binding.as_ref().is_some_and(|binding| {
-            !credential_lease_still_releasable(&sender_state, &sender_snapshot, binding)
-        }) {
-            return Err("credential_lease_changed_before_release".to_string());
-        }
-        client
-            .request(method, upstream_url_text)
-            .headers(headers)
-            .body(body)
-            .send()
-            .map_err(redacted_reqwest_error)
+        ready_sender
+            .send(())
+            .map_err(|_| "upstream sender readiness channel closed".to_string())?;
+        start_receiver
+            .recv()
+            .map_err(|_| "upstream sender was cancelled before dispatch".to_string())?;
+        builder.send().map_err(redacted_reqwest_error)
     });
+    if ready_receiver.recv().is_err() {
+        let _ = sender_thread.join();
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_sender_initialization_failed"}),
+        ));
+    }
+    if credential_release_binding
+        .as_ref()
+        .is_some_and(|binding| !credential_lease_still_releasable(state, snapshot, binding))
+    {
+        drop(start_sender);
+        let _ = sender_thread.join();
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"credential_lease_changed_before_release"}),
+        ));
+    }
+    if let Some(release) = release_authorization.as_mut() {
+        if let Err(err) = release.dispatch() {
+            drop(start_sender);
+            let _ = sender_thread.join();
+            write_buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"release_authorization_dispatch_failed","detail":err}),
+            ));
+        }
+    }
+    if start_sender.send(()).is_err() {
+        let _ = sender_thread.join();
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_sender_start_failed"}),
+        ));
+    }
     let pump_result = pump_request_body_to_channel(
         tls,
         prefetched,
@@ -16158,6 +17860,20 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
         .map_err(|_| "upstream request thread panicked".to_string())
         .and_then(|result| result);
     let (body_sha256, body_bytes) = request_stream_stats_snapshot(&stats);
+    let (response, response_error) = match response_result {
+        Ok(response) => {
+            if let Some(release) = release_authorization.as_mut() {
+                if let Err(err) = release.complete_forwarded() {
+                    write_buffered!(json_status_response(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        json!({"error":"release_authorization_completion_failed","detail":err}),
+                    ));
+                }
+            }
+            (Some(response), None)
+        }
+        Err(err) => (None, Some(err)),
+    };
     if let Err(err) = pump_result {
         enqueue_audit(
             state,
@@ -16211,9 +17927,11 @@ fn forward_intercepted_streaming_request_to<R: Read + Write>(
             json!({"error":"request_stream_incomplete","contentLength":content_length,"streamedBytes":body_bytes}),
         ));
     }
-    let response = match response_result {
-        Ok(response) => response,
-        Err(err) => {
+    let response = match response {
+        Some(response) => response,
+        None => {
+            let err = response_error
+                .unwrap_or_else(|| "upstream request failed without a response".to_string());
             let (mutated_body_sha256, mutated_body_bytes) = output_stats
                 .as_ref()
                 .map(request_stream_stats_snapshot)
@@ -16767,7 +18485,7 @@ fn source_tree_digest(path: &Option<String>) -> Value {
     let Ok(bytes) = fs::read(path) else {
         return Value::Null;
     };
-    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+    if let Ok(value) = strict_json_value_from_slice(&bytes) {
         if let Some(digest) = value
             .get("provenance")
             .and_then(|item| item.get("source_tree"))
@@ -16789,7 +18507,7 @@ fn signed_json_digest(path: &Option<String>, digest_field: &str) -> Value {
     let Ok(bytes) = fs::read(path) else {
         return Value::Null;
     };
-    if let Ok(value) = serde_json::from_slice::<Value>(&bytes) {
+    if let Ok(value) = strict_json_value_from_slice(&bytes) {
         if let Some(digest) = value.get(digest_field).and_then(Value::as_str) {
             if digest.starts_with("sha256:") {
                 return Value::String(digest.to_string());
@@ -16888,8 +18606,9 @@ fn build_runtime_manifest(
         "response_proof_attestation_command_sha256":state.response_proof_attestation_command.as_ref().map(|command| sha256_prefixed(command.as_bytes())),
         "response_proof_attestation_command_measurement":command_artifact_measurements(state.response_proof_attestation_command.as_ref()),
         "server_instance_id":state.server_instance_id,
-        "jit_grant_store": if state.grant_consume_url.is_some() {"shared"} else {"local"},
-        "shared_rate_limit_store": state.rate_limit_consume_url.is_some(),
+        "jit_grant_store": if state.atomic_release_authorization_enabled {"atomic_release_authorization"} else if state.grant_consume_url.is_some() {"shared"} else {"local"},
+        "shared_rate_limit_store": state.atomic_release_authorization_enabled || state.rate_limit_consume_url.is_some(),
+        "release_authorization_mode": if state.atomic_release_authorization_enabled {"reserve_dispatch_complete"} else {"legacy"},
         "absolute_form_forwarder":true,
         "absolute_form_request_body_streaming":true,
         "connect_request_body_streaming":true,
@@ -17514,6 +19233,8 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
                         "routes":snapshot.routes.len(),
                         "grants":state.grants.lock().expect("grant cache mutex poisoned").len(),
                         "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
+                        "credential_generations":state.credential_generations.lock().expect("credential generation mutex poisoned").len(),
+                        "credential_generations_ready":credential_generations_ready(&state, &snapshot),
                         "credential_lease_earliest_expiry_epoch_ms":earliest_credential_lease_expiry_epoch_ms(&state),
                         "credential_lease_protocol":"scoped-recipient-bound-pull/v2",
                         "credential_lease_renewal":{
@@ -17530,8 +19251,12 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
                             "queued":state.credential_lease_renewal_queued.load(Ordering::Relaxed),
                             "queue_full":state.credential_lease_renewal_queue_full.load(Ordering::Relaxed),
                         },
-                        "jit_grant_store": if state.grant_consume_url.is_some() {"shared"} else {"local"},
-                        "shared_rate_limit_store":state.rate_limit_consume_url.is_some(),
+                        "jit_grant_store": if state.atomic_release_authorization_enabled {"atomic_release_authorization"} else if state.grant_consume_url.is_some() {"shared"} else {"local"},
+                        "shared_rate_limit_store":state.atomic_release_authorization_enabled || state.rate_limit_consume_url.is_some(),
+                        "release_authorization":{
+                            "enabled":state.atomic_release_authorization_enabled,
+                            "mode":if state.atomic_release_authorization_enabled {"reserve_dispatch_complete"} else {"legacy"},
+                        },
                         "leaf_config_cache":state.leaf_configs.lock().expect("leaf config cache mutex poisoned").len(),
                             "connect_preflight":true,
                             "connect_mitm_interceptor":state.mitm_authority.is_some(),
@@ -17558,7 +19283,7 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
             _ => http_response("404 Not Found", json!({"error":"not_found"})),
         }
     } else if request.method == "POST" && request.target == "/v1/decide" {
-        match serde_json::from_slice::<DecisionRequest>(&request.body) {
+        match strict_json_from_slice::<DecisionRequest>(&request.body) {
             Ok(req) => http_response("200 OK", decide(&state, req)),
             Err(err) => http_response(
                 "400 Bad Request",
@@ -17566,7 +19291,7 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
             ),
         }
     } else if request.method == "POST" && request.target == "/v1/grants" {
-        match serde_json::from_slice::<GrantCreate>(&request.body) {
+        match strict_json_from_slice::<GrantCreate>(&request.body) {
             Ok(req) => http_response("200 OK", create_grant(&state, req)),
             Err(err) => http_response(
                 "400 Bad Request",
@@ -17588,6 +19313,27 @@ fn production_mode(release_channel: Option<&str>) -> bool {
             .as_deref(),
         Some("dev" | "development" | "local" | "test")
     )
+}
+
+fn validate_release_authorization_base_url(value: &str, is_production: bool) -> Result<(), String> {
+    let parsed = Url::parse(value)
+        .map_err(|err| format!("parse release authorization base URL {value}: {err}"))?;
+    if !matches!(parsed.scheme(), "http" | "https")
+        || !parsed.username().is_empty()
+        || parsed.password().is_some()
+        || parsed.query().is_some()
+        || parsed.fragment().is_some()
+        || parsed.path() != "/api/data-plane/release-authorizations"
+    {
+        return Err(
+            "release authorization base URL must use HTTP(S) and the exact API path without embedded credentials, query, or fragment"
+                .to_string(),
+        );
+    }
+    if is_production && parsed.scheme() != "https" {
+        return Err("production release authorization base URL must use HTTPS".to_string());
+    }
+    Ok(())
 }
 
 fn configured_service_token(name: &str) -> Option<String> {
@@ -17770,6 +19516,21 @@ fn main() -> Result<(), String> {
         env::var("SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES").as_deref() == Ok("1");
     let release_channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();
     let is_production = production_mode(release_channel.as_deref());
+    let atomic_release_authorization_enabled =
+        match env::var("SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED").as_deref() {
+            Ok("1") => true,
+            Ok("0") | Err(env::VarError::NotPresent) => false,
+            Ok(_) => {
+                return Err(
+                    "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED must be 0 or 1".to_string(),
+                )
+            }
+            Err(err) => {
+                return Err(format!(
+                    "read SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED: {err}"
+                ))
+            }
+        };
     if is_production && allow_insecure_dev_credential_leases {
         return Err(
             "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES is forbidden outside an explicit development release channel"
@@ -17853,15 +19614,24 @@ fn main() -> Result<(), String> {
     let grant_consume_token = configured_service_token("SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN");
     let rate_limit_consume_token =
         configured_service_token("SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN");
+    let release_authorization_token =
+        configured_service_token("SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN");
     let management_token = configured_service_token("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN");
-    validate_internal_service_tokens(
-        is_production,
-        &[
-            (
-                "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
-                &credential_lease_token,
-            ),
-            ("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", &audit_token),
+    let mut required_tokens = vec![
+        (
+            "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN",
+            &credential_lease_token,
+        ),
+        ("SERVERWARE_DATA_PLANE_AUDIT_TOKEN", &audit_token),
+        ("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", &management_token),
+    ];
+    if atomic_release_authorization_enabled {
+        required_tokens.push((
+            "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN",
+            &release_authorization_token,
+        ));
+    } else {
+        required_tokens.extend([
             (
                 "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN",
                 &grant_consume_token,
@@ -17870,9 +19640,9 @@ fn main() -> Result<(), String> {
                 "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN",
                 &rate_limit_consume_token,
             ),
-            ("SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN", &management_token),
-        ],
-    )?;
+        ]);
+    }
+    validate_internal_service_tokens(is_production, &required_tokens)?;
     if audit_url.is_some() != audit_token.is_some() {
         return Err(
             "SERVERWARE_CONTROL_PLANE_AUDIT_URL and SERVERWARE_DATA_PLANE_AUDIT_TOKEN must be set together"
@@ -17895,7 +19665,7 @@ fn main() -> Result<(), String> {
                 .to_string(),
         );
     }
-    if is_production && grant_consume_url.is_none() {
+    if is_production && !atomic_release_authorization_enabled && grant_consume_url.is_none() {
         return Err(
             "production requires SERVERWARE_CONTROL_PLANE_GRANT_CONSUME_URL for shared JIT grants"
                 .to_string(),
@@ -17910,6 +19680,28 @@ fn main() -> Result<(), String> {
             "SERVERWARE_CONTROL_PLANE_RATE_LIMIT_CONSUME_URL requires SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN"
                 .to_string(),
         );
+    }
+    let release_authorization_base_url =
+        env::var("SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty());
+    if atomic_release_authorization_enabled {
+        if release_authorization_base_url.is_none() {
+            return Err(
+                "atomic release authorization requires SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL"
+                    .to_string(),
+            );
+        }
+        if release_authorization_token.is_none() {
+            return Err(
+                "atomic release authorization requires SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN"
+                    .to_string(),
+            );
+        }
+    }
+    if let Some(value) = release_authorization_base_url.as_deref() {
+        validate_release_authorization_base_url(value, is_production)?;
     }
     if credential_lease_url.is_some() && !allow_insecure_dev_credential_leases {
         if credential_lease_recipient_attestation_command.is_none() {
@@ -17949,6 +19741,10 @@ fn main() -> Result<(), String> {
             ("audit", audit_url.as_deref()),
             ("grant consume", grant_consume_url.as_deref()),
             ("rate-limit consume", rate_limit_consume_url.as_deref()),
+            (
+                "release authorization",
+                release_authorization_base_url.as_deref(),
+            ),
         ] {
             if let Some(value) = value {
                 control_plane_urls.push((label, value));
@@ -18132,6 +19928,7 @@ fn main() -> Result<(), String> {
         gmail_proof_cache_max,
         constraint_rate_counters: Mutex::new(HashMap::new()),
         credential_leases: Mutex::new(HashMap::new()),
+        credential_generations: Mutex::new(HashMap::new()),
         credential_lease_flights: Mutex::new(HashMap::new()),
         credential_lease_url,
         credential_lease_recipient_attestation_command,
@@ -18156,6 +19953,9 @@ fn main() -> Result<(), String> {
         grant_consume_token,
         rate_limit_consume_url,
         rate_limit_consume_token,
+        atomic_release_authorization_enabled,
+        release_authorization_base_url,
+        release_authorization_token,
         management_token,
         audit_queue: Mutex::new(VecDeque::new()),
         audit_reserved: AtomicU64::new(0),
@@ -18194,6 +19994,16 @@ fn main() -> Result<(), String> {
             credential_lease_renewal_workers,
             credential_lease_renewal_queue_capacity,
         )?;
+        if state.atomic_release_authorization_enabled {
+            let deadline = Instant::now() + Duration::from_secs(3);
+            while Instant::now() < deadline {
+                let snapshot = current_snapshot(&state);
+                if credential_generations_ready(&state, &snapshot) {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+        }
     }
     if audit_enabled(&state) {
         let audit_state = Arc::clone(&state);
@@ -18314,6 +20124,7 @@ mod tests {
             gmail_proof_cache_max: 16,
             constraint_rate_counters: Mutex::new(HashMap::new()),
             credential_leases: Mutex::new(HashMap::new()),
+            credential_generations: Mutex::new(HashMap::new()),
             credential_lease_flights: Mutex::new(HashMap::new()),
             credential_lease_url: None,
             credential_lease_recipient_attestation_command: None,
@@ -18335,6 +20146,9 @@ mod tests {
             grant_consume_token: None,
             rate_limit_consume_url: None,
             rate_limit_consume_token: None,
+            atomic_release_authorization_enabled: false,
+            release_authorization_base_url: None,
+            release_authorization_token: None,
             management_token: None,
             audit_queue: Mutex::new(VecDeque::new()),
             audit_reserved: AtomicU64::new(0),
@@ -18382,6 +20196,723 @@ mod tests {
             gmail_proofs: Vec::new(),
             client_request_digest: None,
         }
+    }
+
+    #[test]
+    fn management_decision_is_a_non_mutating_preview() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "demo".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer","header":"Authorization"}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.routes[0].jit = json!({"required":true});
+        snapshot_value.routes[0].constraints = vec![json!({
+            "id":"preview-rate",
+            "type":"rateLimit",
+            "max":1,
+            "windowSeconds":60,
+            "store":"local",
+        })];
+        let snapshot = Arc::new(snapshot_value);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.atomic_release_authorization_enabled = true;
+        state.release_authorization_base_url =
+            Some("http://127.0.0.1:1/api/data-plane/release-authorizations".to_string());
+        state.release_authorization_token = Some("release-token".to_string());
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope,
+                CredentialLeaseGeneration {
+                    policy_hash: snapshot.hash.clone(),
+                    version: 7,
+                    secret_fingerprint: credential_secret_fingerprint("preview-secret"),
+                    metadata: BTreeMap::from([("account".to_string(), json!("preview"))]),
+                },
+            );
+        let decision = decide(
+            &state,
+            correlated_test_decision_request("A_-0123456789abcdefghijk"),
+        );
+
+        assert_eq!(decision["action"], "jit_required");
+        assert_eq!(decision["allowed"], false);
+        assert_eq!(decision["would_allow"], false);
+        assert_eq!(decision["preview"], true);
+        assert_eq!(decision["authorizes_forwarding"], false);
+        assert_eq!(decision["credential_version"], 7);
+        assert!(decision["attempt_id"].is_null());
+        assert!(decision["flow_id"].is_null());
+        assert!(decision["injection"].is_null());
+        assert_eq!(decision["release_authorization"]["state"], "not_reserved");
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+        assert_eq!(
+            state
+                .credential_lease_refresh_success
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state
+                .credential_lease_refresh_failed
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert!(state.grants.lock().expect("grant cache").is_empty());
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+        assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+    }
+
+    #[test]
+    fn atomic_jit_denial_uses_canonical_request_and_surfaces_pending_approval() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
+        let address = listener.local_addr().expect("release listener address");
+        let (payload_sender, payload_receiver) = mpsc::channel();
+        let approval_expires_at = (OffsetDateTime::now_utc() + TimeDuration::minutes(5))
+            .format(&Rfc3339)
+            .expect("approval expiry");
+        let server_approval_expires_at = approval_expires_at.clone();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("release request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("release read timeout");
+            let head = read_request_head_from(&mut stream, None).expect("release request head");
+            let request =
+                read_request_body_from_head(&mut stream, head, MAX_MANAGEMENT_REQUEST_BODY_BYTES)
+                    .expect("release request body");
+            let payload = strict_json_value_from_slice(&request.body).expect("release JSON");
+            let attempt_id = payload["attemptId"]
+                .as_str()
+                .expect("release attempt ID")
+                .to_string();
+            payload_sender
+                .send(payload)
+                .expect("capture release payload");
+            let response = http_response(
+                "200 OK",
+                json!({
+                    "apiVersion":"serverware.releaseAuthorization/v1",
+                    "ok":true,
+                    "authorized":false,
+                    "state":"denied",
+                    "reason":"jit_grant_unavailable",
+                    "attemptId":attempt_id,
+                    "bindingDigest":format!("sha256:{}", "a".repeat(64)),
+                    "idempotentReplay":false,
+                    "grantId":null,
+                    "approvalRequestId":"approval:test",
+                    "approvalStatus":"pending",
+                    "approvalExpiresAt":server_approval_expires_at,
+                    "approvalCreated":true,
+                    "reservationExpiresAtEpochMs":null,
+                    "dispatchStartedAtEpochMs":null,
+                    "dispatchExpiresAtEpochMs":null,
+                    "completionOutcome":null,
+                    "retryAfterSeconds":3,
+                    "quotas":[],
+                    "store":{"backend":"postgres","ha":true},
+                }),
+            );
+            stream.write_all(&response).expect("release response");
+        });
+
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.routes[0].jit = json!({"required":true});
+        let snapshot = Arc::new(snapshot_value);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.atomic_release_authorization_enabled = true;
+        state.release_authorization_base_url = Some(format!(
+            "http://{address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+
+        let decision = decide_internal(
+            &state,
+            &snapshot,
+            correlated_test_decision_request("A_-0123456789abcdefghijk"),
+            Some("agent:test"),
+        );
+        server.join().expect("release server");
+
+        assert_eq!(decision["status_code"], 428);
+        assert_eq!(decision["action"], "jit_required");
+        assert_eq!(decision["allowed"], false);
+        assert_eq!(decision["approval_id"], "approval:test");
+        assert_eq!(decision["approval_status"], "pending");
+        assert_eq!(decision["expires_at"], approval_expires_at);
+        assert_eq!(decision["approval_created"], true);
+        assert_eq!(decision["retry_after_seconds"], 3);
+        assert_eq!(decision["payload"]["approval_id"], "approval:test");
+        assert_eq!(decision["payload"]["approval_status"], "pending");
+        assert_eq!(decision["payload"]["expires_at"], approval_expires_at);
+        assert_eq!(decision["payload"]["approval_created"], true);
+        assert_eq!(decision["payload"]["retry_after_seconds"], 3);
+        assert_eq!(
+            decision["jit"]["grant_store"],
+            "atomic_release_authorization"
+        );
+        assert_eq!(decision["jit"]["approval_id"], "approval:test");
+
+        let payload = payload_receiver.recv().expect("reserve payload");
+        let canonical = payload["canonicalRequest"].clone();
+        assert_eq!(
+            payload["requestDigest"],
+            digest_json_ensure_ascii(&canonical)
+        );
+        assert_eq!(payload["operationDigest"], operation_digest(&canonical));
+        assert_eq!(payload["operationContext"], canonical["operation"]);
+        assert_eq!(
+            canonical["request"]["headers"],
+            json!({"host":"example.test"})
+        );
+        assert!(payload.get("redactedDisplay").is_none());
+    }
+
+    fn test_release_authorization_response(
+        state: &str,
+        completion_outcome: Option<&str>,
+        authorized: bool,
+        idempotent_replay: bool,
+    ) -> ReleaseAuthorizationResponse {
+        ReleaseAuthorizationResponse {
+            api_version: "serverware.releaseAuthorization/v1".to_string(),
+            ok: true,
+            authorized,
+            state: state.to_string(),
+            reason: state.to_string(),
+            attempt_id: "attempt-test".to_string(),
+            binding_digest: format!("sha256:{}", "a".repeat(64)),
+            idempotent_replay,
+            grant_id: None,
+            approval_request_id: None,
+            approval_status: None,
+            approval_expires_at: None,
+            approval_created: None,
+            reservation_expires_at_epoch_ms: (state == "reserved").then_some(1234),
+            dispatch_started_at_epoch_ms: (state == "dispatching").then_some(1235),
+            dispatch_expires_at_epoch_ms: (state == "dispatching").then_some(1236),
+            completion_outcome: completion_outcome.map(str::to_string),
+            retry_after_seconds: 0,
+            quotas: Vec::new(),
+            store: ReleaseAuthorizationStore {
+                backend: Some("sqlite".to_string()),
+                ha: false,
+            },
+        }
+    }
+
+    fn read_release_test_request(listener: &TcpListener) -> (TcpStream, Value) {
+        let (mut stream, _) = listener.accept().expect("release request");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("release read timeout");
+        let head = read_request_head_from(&mut stream, None).expect("release request head");
+        let request =
+            read_request_body_from_head(&mut stream, head, MAX_MANAGEMENT_REQUEST_BODY_BYTES)
+                .expect("release request body");
+        let payload = strict_json_value_from_slice(&request.body).expect("release JSON");
+        (stream, payload)
+    }
+
+    fn release_test_http_response(
+        state: &str,
+        outcome: Option<&str>,
+        authorized: bool,
+        idempotent_replay: bool,
+    ) -> Vec<u8> {
+        http_response(
+            "200 OK",
+            json!({
+                "apiVersion":"serverware.releaseAuthorization/v1",
+                "ok":true,
+                "authorized":authorized,
+                "state":state,
+                "reason":state,
+                "attemptId":"attempt-test",
+                "bindingDigest":format!("sha256:{}", "a".repeat(64)),
+                "idempotentReplay":idempotent_replay,
+                "grantId":null,
+                "approvalRequestId":null,
+                "reservationExpiresAtEpochMs":1234,
+                "dispatchStartedAtEpochMs":if state == "dispatching" {json!(1235)} else {Value::Null},
+                "dispatchExpiresAtEpochMs":if state == "dispatching" {json!(1236)} else {Value::Null},
+                "completionOutcome":outcome,
+                "retryAfterSeconds":0,
+                "quotas":[],
+                "store":{"backend":"sqlite","ha":false},
+            }),
+        )
+    }
+
+    #[test]
+    fn reserve_response_validation_binds_jit_grant_identity_and_denial_reason() {
+        let reserved = test_release_authorization_response("reserved", None, true, false);
+        validate_reserve_release_authorization_response(&reserved, "attempt-test", false)
+            .expect("non-JIT reserve without grant identity is valid");
+        assert!(
+            validate_reserve_release_authorization_response(&reserved, "attempt-test", true,)
+                .expect_err("JIT reserve must carry grant identity")
+                .contains("invalid lifecycle state")
+        );
+
+        let mut jit_reserved = test_release_authorization_response("reserved", None, true, false);
+        jit_reserved.grant_id = Some("grant:test".to_string());
+        jit_reserved.approval_request_id = Some("approval:test".to_string());
+        validate_reserve_release_authorization_response(&jit_reserved, "attempt-test", true)
+            .expect("JIT reserve with both grant identities is valid");
+        assert!(validate_reserve_release_authorization_response(
+            &jit_reserved,
+            "attempt-test",
+            false,
+        )
+        .expect_err("non-JIT reserve must reject grant identity")
+        .contains("invalid lifecycle state"));
+
+        let mut partial_jit = test_release_authorization_response("reserved", None, true, false);
+        partial_jit.grant_id = Some("grant:test".to_string());
+        assert!(validate_reserve_release_authorization_response(
+            &partial_jit,
+            "attempt-test",
+            true,
+        )
+        .is_err());
+        partial_jit.approval_request_id = Some(" approval:test".to_string());
+        assert!(validate_reserve_release_authorization_response(
+            &partial_jit,
+            "attempt-test",
+            true,
+        )
+        .is_err());
+        partial_jit.approval_request_id = Some("approval:\ninvalid".to_string());
+        assert!(validate_reserve_release_authorization_response(
+            &partial_jit,
+            "attempt-test",
+            true,
+        )
+        .is_err());
+
+        let mut replayed_jit = test_release_authorization_response("reserved", None, true, true);
+        replayed_jit.grant_id = Some("grant:test".to_string());
+        replayed_jit.approval_request_id = Some("approval:test".to_string());
+        validate_reserve_release_authorization_response(&replayed_jit, "attempt-test", true)
+            .expect("idempotent replay of the same live JIT reservation is valid");
+
+        let mut wrong_success_reason =
+            test_release_authorization_response("reserved", None, true, false);
+        wrong_success_reason.reason = "authorized".to_string();
+        assert!(validate_reserve_release_authorization_response(
+            &wrong_success_reason,
+            "attempt-test",
+            false,
+        )
+        .is_err());
+
+        let mut unknown_denial = test_release_authorization_response("denied", None, false, false);
+        unknown_denial.reason = "policy_denied".to_string();
+        assert!(validate_reserve_release_authorization_response(
+            &unknown_denial,
+            "attempt-test",
+            false,
+        )
+        .is_err());
+
+        let mut non_jit_jit_denial =
+            test_release_authorization_response("denied", None, false, false);
+        non_jit_jit_denial.reason = "jit_grant_unavailable".to_string();
+        non_jit_jit_denial.approval_request_id = Some("approval:test".to_string());
+        assert!(validate_reserve_release_authorization_response(
+            &non_jit_jit_denial,
+            "attempt-test",
+            false,
+        )
+        .is_err());
+
+        let mut quota_denial = test_release_authorization_response("denied", None, false, false);
+        quota_denial.reason = "shared_quota_denied".to_string();
+        quota_denial.retry_after_seconds = 86_400;
+        validate_reserve_release_authorization_response(&quota_denial, "attempt-test", false)
+            .expect("bounded daily quota denial is valid");
+        quota_denial.retry_after_seconds = MAX_RATE_LIMIT_WINDOW_SECONDS + 1;
+        assert!(validate_reserve_release_authorization_response(
+            &quota_denial,
+            "attempt-test",
+            false,
+        )
+        .expect_err("quota retry interval above the policy maximum must fail closed")
+        .contains("retry interval"));
+    }
+
+    #[test]
+    fn release_lifecycle_response_validation_rejects_cross_state_pairs() {
+        let now_ms = u64::try_from(now_epoch_ms()).expect("current epoch fits u64");
+        let reservation = ReleaseAuthorizationReservation {
+            attempt_id: "attempt-test".to_string(),
+            binding_digest: format!("sha256:{}", "a".repeat(64)),
+            grant_id: None,
+            approval_request_id: None,
+            reservation_expires_at_epoch_ms: Some(now_ms + 30_000),
+        };
+
+        let committed =
+            test_release_authorization_response("committed", Some("forwarded"), true, false);
+        assert!(
+            validate_reserve_release_authorization_response(&committed, "attempt-test", false)
+                .expect_err("reserve must reject terminal state")
+                .contains("invalid lifecycle state")
+        );
+        assert!(validate_complete_release_authorization_response(
+            &committed,
+            &reservation,
+            "unknown"
+        )
+        .expect_err("unknown completion must reject a non-replay forwarded result")
+        .contains("invalid state"));
+
+        let replayed_forwarded =
+            test_release_authorization_response("committed", Some("forwarded"), true, true);
+        validate_complete_release_authorization_response(
+            &replayed_forwarded,
+            &reservation,
+            "unknown",
+        )
+        .expect("lost forwarded completion response may replay during unknown cleanup");
+
+        let indeterminate_not_forwarded = test_release_authorization_response(
+            "committed_indeterminate",
+            Some("not_forwarded"),
+            true,
+            false,
+        );
+        assert!(validate_complete_release_authorization_response(
+            &indeterminate_not_forwarded,
+            &reservation,
+            "not_forwarded",
+        )
+        .is_err());
+
+        let mut dispatching =
+            test_release_authorization_response("dispatching", Some("forwarded"), true, true);
+        dispatching.reservation_expires_at_epoch_ms = reservation.reservation_expires_at_epoch_ms;
+        dispatching.dispatch_started_at_epoch_ms = Some(now_ms);
+        dispatching.dispatch_expires_at_epoch_ms = Some(now_ms + 10_000);
+        assert!(
+            validate_dispatch_release_authorization_response(&dispatching, &reservation)
+                .expect_err("dispatch must reject completion outcome")
+                .contains("exact dispatching state")
+        );
+
+        let mut live_dispatch =
+            test_release_authorization_response("dispatching", None, true, false);
+        live_dispatch.reservation_expires_at_epoch_ms = reservation.reservation_expires_at_epoch_ms;
+        live_dispatch.dispatch_started_at_epoch_ms = Some(now_ms);
+        live_dispatch.dispatch_expires_at_epoch_ms = Some(now_ms + 10_000);
+        validate_dispatch_release_authorization_response(&live_dispatch, &reservation)
+            .expect("dispatch must accept an exact live response");
+
+        live_dispatch.dispatch_expires_at_epoch_ms = Some(now_ms.saturating_sub(1));
+        assert!(
+            validate_dispatch_release_authorization_response(&live_dispatch, &reservation)
+                .expect_err("dispatch must reject an expired authorization")
+                .contains("exact dispatching state")
+        );
+
+        live_dispatch.dispatch_started_at_epoch_ms = Some(now_ms);
+        live_dispatch.dispatch_expires_at_epoch_ms = Some(now_ms + 10_000);
+        live_dispatch.reason = "reserved".to_string();
+        assert!(
+            validate_dispatch_release_authorization_response(&live_dispatch, &reservation)
+                .expect_err("dispatch must reject the wrong reason")
+                .contains("exact dispatching state")
+        );
+    }
+
+    #[test]
+    fn reserved_release_guard_cancels_on_injected_pre_send_failure() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
+        let address = listener.local_addr().expect("release listener address");
+        let (payload_sender, payload_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, payload) = read_release_test_request(&listener);
+            payload_sender.send(payload).expect("capture completion");
+            stream
+                .write_all(&release_test_http_response(
+                    "cancelled",
+                    Some("not_forwarded"),
+                    false,
+                    false,
+                ))
+                .expect("completion response");
+        });
+
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        state.release_authorization_base_url = Some(format!(
+            "http://{address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        {
+            let _guard = ReleaseAuthorizationGuard {
+                state: &state,
+                reservation: ReleaseAuthorizationReservation {
+                    attempt_id: "attempt-test".to_string(),
+                    binding_digest: format!("sha256:{}", "a".repeat(64)),
+                    grant_id: None,
+                    approval_request_id: None,
+                    reservation_expires_at_epoch_ms: Some(1234),
+                },
+                stage: ReleaseAuthorizationStage::Reserved,
+            };
+        }
+        server.join().expect("release server");
+        assert_eq!(
+            payload_receiver.recv().expect("completion payload")["outcome"],
+            "not_forwarded"
+        );
+    }
+
+    #[test]
+    fn dispatch_response_loss_completes_as_unknown() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
+        let address = listener.local_addr().expect("release listener address");
+        let (payload_sender, payload_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (_stream, payload) = read_release_test_request(&listener);
+                payload_sender.send(payload).expect("capture dispatch");
+            }
+            let (mut stream, payload) = read_release_test_request(&listener);
+            payload_sender.send(payload).expect("capture completion");
+            stream
+                .write_all(&release_test_http_response(
+                    "committed_indeterminate",
+                    Some("unknown"),
+                    true,
+                    false,
+                ))
+                .expect("completion response");
+        });
+
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        state.release_authorization_base_url = Some(format!(
+            "http://{address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        let mut guard = ReleaseAuthorizationGuard {
+            state: &state,
+            reservation: ReleaseAuthorizationReservation {
+                attempt_id: "attempt-test".to_string(),
+                binding_digest: format!("sha256:{}", "a".repeat(64)),
+                grant_id: None,
+                approval_request_id: None,
+                reservation_expires_at_epoch_ms: Some(1234),
+            },
+            stage: ReleaseAuthorizationStage::Reserved,
+        };
+        guard
+            .dispatch()
+            .expect_err("lost dispatch responses must remain ambiguous");
+        assert_eq!(guard.stage, ReleaseAuthorizationStage::DispatchUncertain);
+        guard
+            .complete("unknown")
+            .expect("ambiguous dispatch must complete indeterminately");
+        server.join().expect("release server");
+        let payloads = payload_receiver.iter().collect::<Vec<_>>();
+        assert_eq!(payloads.len(), 3);
+        assert_eq!(
+            payloads[0]["apiVersion"],
+            "serverware.releaseAuthorizationDispatch/v1"
+        );
+        assert_eq!(payloads[1], payloads[0]);
+        assert_eq!(payloads[2]["outcome"], "unknown");
+    }
+
+    #[test]
+    fn lost_completion_response_accepts_only_explicit_terminal_replay() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
+        let address = listener.local_addr().expect("release listener address");
+        let (payload_sender, payload_receiver) = mpsc::channel();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (_stream, payload) = read_release_test_request(&listener);
+                payload_sender.send(payload).expect("capture completion");
+            }
+            let (mut stream, payload) = read_release_test_request(&listener);
+            payload_sender
+                .send(payload)
+                .expect("capture replay cleanup");
+            stream
+                .write_all(&release_test_http_response(
+                    "committed",
+                    Some("forwarded"),
+                    true,
+                    true,
+                ))
+                .expect("completion replay response");
+        });
+
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        state.release_authorization_base_url = Some(format!(
+            "http://{address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        let mut guard = ReleaseAuthorizationGuard {
+            state: &state,
+            reservation: ReleaseAuthorizationReservation {
+                attempt_id: "attempt-test".to_string(),
+                binding_digest: format!("sha256:{}", "a".repeat(64)),
+                grant_id: None,
+                approval_request_id: None,
+                reservation_expires_at_epoch_ms: Some(1234),
+            },
+            stage: ReleaseAuthorizationStage::Dispatching,
+        };
+        guard
+            .complete_forwarded()
+            .expect_err("lost forwarded completion responses must remain ambiguous");
+        assert_eq!(guard.stage, ReleaseAuthorizationStage::Dispatching);
+        guard
+            .complete("unknown")
+            .expect("unknown cleanup must accept an idempotent forwarded terminal replay");
+        server.join().expect("release server");
+        let payloads = payload_receiver.iter().collect::<Vec<_>>();
+        assert_eq!(payloads.len(), 3);
+        assert_eq!(payloads[0]["outcome"], "forwarded");
+        assert_eq!(payloads[1], payloads[0]);
+        assert_eq!(payloads[2]["outcome"], "unknown");
+    }
+
+    #[test]
+    fn atomic_release_lifecycle_preserves_attempt_flow_correlation() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("release listener");
+        let address = listener.local_addr().expect("release listener address");
+        let (payload_sender, payload_receiver) = mpsc::channel();
+        let binding_digest = format!("sha256:{}", "a".repeat(64));
+        let server_binding_digest = binding_digest.clone();
+        let now_ms = u64::try_from(now_epoch_ms()).expect("current epoch fits u64");
+        let reservation_expires_at = now_ms + 30_000;
+        let server = thread::spawn(move || {
+            for (state, completion_outcome) in [
+                ("reserved", None),
+                ("dispatching", None),
+                ("committed", Some("forwarded")),
+            ] {
+                let (mut stream, _) = listener.accept().expect("release request");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(2)))
+                    .expect("release read timeout");
+                let head = read_request_head_from(&mut stream, None).expect("release request head");
+                let request = read_request_body_from_head(
+                    &mut stream,
+                    head,
+                    MAX_MANAGEMENT_REQUEST_BODY_BYTES,
+                )
+                .expect("release request body");
+                payload_sender
+                    .send(strict_json_value_from_slice(&request.body).expect("release JSON"))
+                    .expect("capture release payload");
+                let response = http_response(
+                    "200 OK",
+                    json!({
+                        "apiVersion":"serverware.releaseAuthorization/v1",
+                        "ok":true,
+                        "authorized":true,
+                        "state":state,
+                        "reason":state,
+                        "attemptId":"attempt-test",
+                        "bindingDigest":server_binding_digest,
+                        "idempotentReplay":false,
+                        "grantId":null,
+                        "approvalRequestId":null,
+                        "reservationExpiresAtEpochMs":reservation_expires_at,
+                        "dispatchStartedAtEpochMs":if state == "reserved" {Value::Null} else {json!(now_ms)},
+                        "dispatchExpiresAtEpochMs":if state == "reserved" {Value::Null} else {json!(now_ms + 10_000)},
+                        "completionOutcome":completion_outcome,
+                        "retryAfterSeconds":0,
+                        "quotas":[],
+                        "store":{"backend":"sqlite","ha":false},
+                    }),
+                );
+                stream.write_all(&response).expect("release response");
+            }
+        });
+
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        state.atomic_release_authorization_enabled = true;
+        state.release_authorization_base_url = Some(format!(
+            "http://{address}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        let operation = json!({"operation":"read"});
+        let canonical = json!({
+            "request":{"headers":{}},
+            "operation":operation,
+        });
+        let request_digest = digest_json_ensure_ascii(&canonical);
+        let expected_operation_digest = operation_digest(&canonical);
+        let release = reserve_release_authorization(
+            &state,
+            "attempt-test",
+            "agent:test",
+            "route:test",
+            None,
+            0,
+            "sha256:policy-1",
+            &request_digest,
+            &expected_operation_digest,
+            &operation,
+            &canonical,
+            false,
+        )
+        .expect("reserve release authorization");
+        let mut guard = ReleaseAuthorizationGuard {
+            state: &state,
+            reservation: ReleaseAuthorizationReservation {
+                attempt_id: release.attempt_id,
+                binding_digest: release.binding_digest,
+                grant_id: release.grant_id,
+                approval_request_id: release.approval_request_id,
+                reservation_expires_at_epoch_ms: release.reservation_expires_at_epoch_ms,
+            },
+            stage: ReleaseAuthorizationStage::Reserved,
+        };
+        guard.dispatch().expect("dispatch release authorization");
+        guard
+            .complete_forwarded()
+            .expect("complete forwarded release authorization");
+        server.join().expect("release server");
+
+        let payloads = payload_receiver.iter().collect::<Vec<_>>();
+        assert_eq!(payloads.len(), 3);
+        assert_eq!(payloads[0]["attemptId"], "attempt-test");
+        assert_eq!(payloads[0]["flowId"], "attempt-test");
+        assert_eq!(payloads[0]["requestDigest"], request_digest);
+        assert_eq!(payloads[0]["operationDigest"], expected_operation_digest);
+        assert_eq!(payloads[0]["canonicalRequest"], canonical);
+        assert!(payloads[0].get("redactedDisplay").is_none());
+        assert_eq!(payloads[1]["attemptId"], "attempt-test");
+        assert_eq!(payloads[1]["bindingDigest"], binding_digest);
+        assert_eq!(payloads[2]["attemptId"], "attempt-test");
+        assert_eq!(payloads[2]["outcome"], "forwarded");
     }
 
     #[test]
@@ -18554,6 +21085,14 @@ mod tests {
                 "service-secret".to_string(),
             ),
             (
+                "X-Serverware-Response-Nonce".to_string(),
+                "future-internal-value".to_string(),
+            ),
+            (
+                "x-SeRvErWaRe-Future-Internal".to_string(),
+                "future-mixed-case-value".to_string(),
+            ),
+            (
                 "X-Serverware-Enrollment-Session".to_string(),
                 "A_-0123456789abcdefghijk".to_string(),
             ),
@@ -18568,6 +21107,125 @@ mod tests {
         );
         let proof = canonical_client_proof_headers(&headers).expect("proof headers");
         assert_eq!(proof, forwarded);
+
+        let url = Url::parse("https://upstream.invalid/resource").expect("test URL");
+        let canonical =
+            canonical_forwarded_request_headers(&headers, &url, None, &json!({"type":"bearer"}))
+                .expect("canonical forwarded headers");
+        assert_eq!(
+            canonical,
+            BTreeMap::from([
+                ("host".to_string(), "upstream.invalid".to_string()),
+                ("x-visible".to_string(), "visible".to_string()),
+            ])
+        );
+        let upstream = filtered_forward_headers(&headers, &json!({"type":"bearer"}))
+            .expect("actual upstream headers");
+        assert_eq!(upstream.len(), 1);
+        assert_eq!(
+            upstream
+                .get("x-visible")
+                .and_then(|value| value.to_str().ok()),
+            Some("visible")
+        );
+        assert!(!upstream.contains_key("x-serverware-response-nonce"));
+        assert!(!upstream.contains_key("x-serverware-future-internal"));
+    }
+
+    #[test]
+    fn malformed_generic_policy_cannot_forward_internal_prefix_to_upstream_or_proof() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking upstream listener");
+        let upstream = listener.local_addr().expect("test upstream address");
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(2);
+            loop {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        stream
+                            .set_read_timeout(Some(Duration::from_secs(1)))
+                            .expect("upstream read timeout");
+                        let mut request = Vec::new();
+                        let mut buffer = [0_u8; 1024];
+                        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            let read = stream.read(&mut buffer).expect("read upstream request");
+                            assert!(read > 0, "upstream request ended before its header block");
+                            request.extend_from_slice(&buffer[..read]);
+                        }
+                        stream
+                            .write_all(
+                                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"safe\":true}",
+                            )
+                            .expect("write upstream response");
+                        return String::from_utf8(request).expect("ASCII upstream request");
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        assert!(
+                            Instant::now() < deadline,
+                            "request did not reach test upstream"
+                        );
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("accept test upstream request: {err}"),
+                }
+            }
+        });
+
+        let mut snapshot = (*test_snapshot(1)).clone();
+        let route = &mut snapshot.routes[0];
+        route.scheme = "http".to_string();
+        route.host = upstream.ip().to_string();
+        route.port = upstream.port();
+        route.methods = HashSet::from(["GET".to_string()]);
+        route.adapter_config["request"] = json!({
+            "allowedHeaders":["accept", "x-serverware-response-nonce"],
+            "allowedQueryKeys":[],
+            "bodyMode":"none",
+            "maxBodyBytes":0
+        });
+        let snapshot = Arc::new(snapshot);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let headers = BTreeMap::from([
+            ("Accept".to_string(), "application/json".to_string()),
+            (
+                "X-Serverware-Response-Nonce".to_string(),
+                "must-not-leave-the-data-plane".to_string(),
+            ),
+        ]);
+        let result = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "GET".to_string(),
+                target: format!("http://{upstream}/resource"),
+                headers: headers.clone(),
+                body: Vec::new(),
+                client_ip: Some("127.0.0.1".to_string()),
+            },
+            Some("agent:test"),
+            None,
+            None,
+            false,
+        );
+        let response = match result {
+            ForwardResult::Buffered(response) => {
+                String::from_utf8(response).expect("buffered HTTP response")
+            }
+            ForwardResult::Streamed => panic!("test response unexpectedly streamed"),
+        };
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+
+        let captured = server.join().expect("test upstream thread");
+        assert!(captured
+            .to_ascii_lowercase()
+            .contains("accept: application/json"));
+        assert!(!captured.to_ascii_lowercase().contains("x-serverware-"));
+        assert_eq!(
+            canonical_client_proof_headers(&headers).expect("proof headers"),
+            BTreeMap::from([("accept".to_string(), "application/json".to_string())])
+        );
     }
 
     #[test]
@@ -18887,6 +21545,67 @@ mod tests {
             "principals":[{"id":"agent:test","sourceCidrs":["127.0.0.1/32"]}],
             "routes":[route]
         })
+    }
+
+    fn policy_with_credential_route(mut route: Value) -> Value {
+        route["credentialRef"] = json!("credential:test");
+        let mut policy = policy_with_route(route);
+        policy["credentials"] = json!([{
+            "id":"credential:test",
+            "provider":"generic",
+            "injection":{"type":"bearer"}
+        }]);
+        policy
+    }
+
+    fn valid_jit_policy() -> Value {
+        json!({
+            "required":true,
+            "mode":"perOperation",
+            "ttlSeconds":30,
+            "maxUses":1,
+            "consumeOn":"forwardStart",
+            "binding":{
+                "type":"operationDigest",
+                "fields":[
+                    "principal","routeId","credentialRef","credentialVersion","policyHash",
+                    "method","authority","path","query","selectedHeaders","bodySha256"
+                ]
+            },
+            "approvers":{
+                "quorum":1,
+                "users":["user:release"],
+                "authn":{
+                    "webauthnRequired":true,
+                    "userVerification":"required",
+                    "allowedAuthenticatorClasses":["hardware"],
+                    "requireHardwareAttestation":true
+                }
+            }
+        })
+    }
+
+    fn sign_test_policy(
+        mut policy: Value,
+        signing_key: &SigningKey,
+        signing_key_id: &str,
+        sequence: u64,
+    ) -> Value {
+        policy["apiVersion"] = json!("serverware.policy/v1");
+        policy["kind"] = json!("PolicyBundle");
+        policy["metadata"] = json!({
+            "id":"policy:test",
+            "sequence":sequence,
+            "rollbackEpoch":1,
+            "signingKeyId":signing_key_id,
+        });
+        let payload = canonical_json(&signature_payload(&policy));
+        let signature = signing_key.sign(payload.as_bytes());
+        policy["metadata"]["signature"] = json!(format!(
+            "ed25519:{}",
+            general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        ));
+        policy
     }
 
     fn generic_policy_route(body_mode: &str, response_max_body_bytes: Value) -> Value {
@@ -19299,6 +22018,459 @@ mod tests {
     }
 
     #[test]
+    fn generic_buffered_json_enforces_content_type_utf8_and_syntax() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.methods = HashSet::from(["POST".to_string()]);
+        route.adapter_config = json!({"request":{
+            "allowedHeaders":["content-type"],
+            "allowedQueryKeys":[],
+            "bodyMode":"json",
+            "maxBodyBytes":1024
+        }});
+        let validate = |route: &Route,
+                        body: &str,
+                        content_type: &str,
+                        utf8_valid: bool|
+         -> Result<(Value, Value), Value> {
+            let request = DecisionRequest {
+                client_ip: None,
+                method: "POST".to_string(),
+                url: "https://example.test/resource".to_string(),
+                headers: BTreeMap::new(),
+                body: body.to_string(),
+                body_sha256: None,
+                forwarded_body_length: Some(body.len() as u64),
+                forwarded_body_utf8_valid: Some(utf8_valid),
+                credential_metadata: BTreeMap::new(),
+                gmail_proofs: Vec::new(),
+                client_request_digest: None,
+            };
+            let headers = BTreeMap::from([
+                ("host".to_string(), "example.test".to_string()),
+                ("content-length".to_string(), body.len().to_string()),
+                ("content-type".to_string(), content_type.to_string()),
+            ]);
+            validate_adapter(
+                &request,
+                &headers,
+                &Url::parse(&request.url).expect("test URL"),
+                &RouteMatch {
+                    route,
+                    params: BTreeMap::new(),
+                },
+            )
+        };
+
+        validate(
+            &route,
+            r#"{"safe":true}"#,
+            "Application/JSON; charset=utf-8",
+            true,
+        )
+        .expect("valid buffered JSON request");
+        let content_type = validate(&route, r#"{"safe":true}"#, "text/plain", true)
+            .expect_err("non-JSON media type must fail");
+        assert_eq!(content_type["error"], "request_json_content_type_denied");
+        assert_eq!(content_type["status_code"], 415);
+
+        let syntax = validate(&route, r#"{"safe":}"#, "application/json", true)
+            .expect_err("invalid JSON syntax must fail");
+        assert_eq!(syntax["error"], "request_json_invalid");
+        assert_eq!(syntax["status_code"], 400);
+        let utf8 = validate(&route, r#"{"safe":true}"#, "application/json", false)
+            .expect_err("lossy buffered JSON must fail");
+        assert_eq!(utf8["error"], "request_json_invalid");
+        for duplicate in [
+            r#"{"safe":"first","safe":"second"}"#,
+            r#"{"nested":{"safe":"first","safe":"second"}}"#,
+        ] {
+            let duplicate = validate(&route, duplicate, "application/json", true)
+                .expect_err("duplicate buffered JSON object keys must fail");
+            assert_eq!(duplicate["error"], "request_json_invalid");
+        }
+
+        route.adapter_config["request"]["bodyMode"] = json!("any");
+        validate(&route, "not-json", "application/octet-stream", true)
+            .expect("explicit any mode must preserve opaque buffered bodies");
+    }
+
+    #[test]
+    fn duplicate_buffered_json_is_denied_before_upstream_contact() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking upstream listener");
+        let upstream = listener.local_addr().expect("test upstream address");
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+                        let mut request = [0_u8; 4096];
+                        let _ = stream.read(&mut request);
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\n\r\n{\"safe\":true}",
+                        );
+                        return true;
+                    }
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("accept test upstream request: {err}"),
+                }
+            }
+            false
+        });
+
+        let mut snapshot = (*test_snapshot(1)).clone();
+        let route = &mut snapshot.routes[0];
+        route.scheme = "http".to_string();
+        route.host = upstream.ip().to_string();
+        route.port = upstream.port();
+        route.methods = HashSet::from(["POST".to_string()]);
+        route.adapter_config["request"] = json!({
+            "allowedHeaders":["content-type"],
+            "allowedQueryKeys":[],
+            "bodyMode":"json",
+            "maxBodyBytes":1024
+        });
+        route.constraints = vec![json!({
+            "id":"strict-json",
+            "type":"jsonBody",
+            "allowedFields":["safe"]
+        })];
+        let snapshot = Arc::new(snapshot);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let body = br#"{"safe":"allowed","safe":"shadow"}"#.to_vec();
+        let result = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "POST".to_string(),
+                target: format!("http://{upstream}/resource"),
+                headers: BTreeMap::from([(
+                    "content-type".to_string(),
+                    "application/json".to_string(),
+                )]),
+                body,
+                client_ip: Some("127.0.0.1".to_string()),
+            },
+            Some("agent:test"),
+            None,
+            None,
+            false,
+        );
+        let response = match result {
+            ForwardResult::Buffered(response) => {
+                String::from_utf8(response).expect("buffered HTTP denial")
+            }
+            ForwardResult::Streamed => panic!("duplicate buffered request unexpectedly streamed"),
+        };
+        assert!(response.starts_with("HTTP/1.1 400"), "{response}");
+        assert!(response.contains("request_json_invalid"), "{response}");
+        assert!(
+            !server.join().expect("test upstream thread"),
+            "duplicate request contacted the upstream"
+        );
+    }
+
+    #[test]
+    fn jit_policy_admission_matches_python_and_schema_contract() {
+        let mut route = generic_policy_route("none", json!(1024));
+        route["jit"] = valid_jit_policy();
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("complete bounded JIT policy");
+
+        for field in ["query", "selectedHeaders"] {
+            let mut invalid = route.clone();
+            invalid["jit"]["binding"]["fields"]
+                .as_array_mut()
+                .expect("binding fields")
+                .retain(|value| value.as_str() != Some(field));
+            let error = validate_policy_capabilities(&policy_with_route(invalid))
+                .expect_err("missing canonical JIT binding field must fail");
+            assert!(error.contains(field), "{error}");
+        }
+
+        for ttl in [json!(0), json!(3601), json!(1.5), Value::Null] {
+            let mut invalid = route.clone();
+            invalid["jit"]["ttlSeconds"] = ttl;
+            assert!(validate_policy_capabilities(&policy_with_route(invalid)).is_err());
+        }
+        for max_uses in [json!(0), json!(1.5), Value::Null] {
+            let mut invalid = route.clone();
+            invalid["jit"]["maxUses"] = max_uses;
+            assert!(validate_policy_capabilities(&policy_with_route(invalid)).is_err());
+        }
+        for quorum in [json!(2), json!("1"), Value::Null] {
+            let mut invalid = route.clone();
+            invalid["jit"]["approvers"]["quorum"] = quorum;
+            assert!(validate_policy_capabilities(&policy_with_route(invalid)).is_err());
+        }
+        for users in [json!([]), json!([7]), json!("user:release"), Value::Null] {
+            let mut invalid = route.clone();
+            invalid["jit"]["approvers"]["users"] = users;
+            assert!(validate_policy_capabilities(&policy_with_route(invalid)).is_err());
+        }
+
+        let invalid_authn_values = [
+            ("webauthnRequired", json!("true")),
+            ("userVerification", json!("sometimes")),
+            ("allowedAuthenticatorClasses", json!(["unbounded"])),
+            ("requireHardwareAttestation", json!("true")),
+        ];
+        for (field, value) in invalid_authn_values {
+            let mut invalid = route.clone();
+            invalid["jit"]["approvers"]["authn"][field] = value;
+            assert!(validate_policy_capabilities(&policy_with_route(invalid)).is_err());
+        }
+        let mut missing_authn = route.clone();
+        missing_authn["jit"]["approvers"]
+            .as_object_mut()
+            .expect("approvers")
+            .remove("authn");
+        assert!(validate_policy_capabilities(&policy_with_route(missing_authn)).is_err());
+
+        let mut empty_webauthn_classes = route;
+        empty_webauthn_classes["jit"]["approvers"]["authn"]["allowedAuthenticatorClasses"] =
+            json!([]);
+        assert!(validate_policy_capabilities(&policy_with_route(empty_webauthn_classes)).is_err());
+    }
+
+    #[test]
+    fn credential_generic_structured_bodies_require_matching_constraints() {
+        for (body_mode, constraint_type, wrong_type) in [
+            ("json", "jsonBody", "formBody"),
+            ("formUrlencoded", "formBody", "jsonBody"),
+        ] {
+            let route = generic_policy_route(body_mode, json!(1024));
+            let error = validate_policy_capabilities(&policy_with_credential_route(route.clone()))
+                .expect_err("missing credential body constraint must fail admission");
+            assert!(error.contains(body_mode), "{error}");
+            assert!(error.contains(constraint_type), "{error}");
+            assert!(error.contains("non-empty allowedFields"), "{error}");
+
+            let mut wrong = route.clone();
+            wrong["constraints"] = json!([{
+                "id":"wrong-body-policy",
+                "type":wrong_type,
+                "allowedFields":["safe"]
+            }]);
+            assert!(
+                validate_policy_capabilities(&policy_with_credential_route(wrong))
+                    .expect_err("wrong body constraint type must fail admission")
+                    .contains(constraint_type)
+            );
+
+            let mut empty = route.clone();
+            empty["constraints"] = json!([{
+                "id":"empty-body-policy",
+                "type":constraint_type,
+                "allowedFields":[]
+            }]);
+            assert!(
+                validate_policy_capabilities(&policy_with_credential_route(empty))
+                    .expect_err("empty body allowlist must fail admission")
+                    .contains("non-empty allowedFields")
+            );
+
+            let mut valid = route;
+            valid["constraints"] = json!([{
+                "id":"bounded-body-policy",
+                "type":constraint_type,
+                "allowedFields":["safe"]
+            }]);
+            validate_policy_capabilities(&policy_with_credential_route(valid))
+                .expect("matching fail-closed body constraint must be admitted");
+        }
+
+        let opaque = generic_policy_route("any", json!(1024));
+        let error = validate_policy_capabilities(&policy_with_credential_route(opaque))
+            .expect_err("credential-bearing opaque bodies must fail admission");
+        assert!(error.contains("cannot use opaque bodyMode any"), "{error}");
+    }
+
+    #[test]
+    fn runtime_blocks_unadmitted_credential_body_policy_before_credential_lookup() {
+        for (body_mode, constraint_type, wrong_type, content_type, body) in [
+            (
+                "json",
+                "jsonBody",
+                "formBody",
+                "application/json",
+                r#"{"safe":true}"#,
+            ),
+            (
+                "formUrlencoded",
+                "formBody",
+                "jsonBody",
+                "application/x-www-form-urlencoded",
+                "safe=true",
+            ),
+        ] {
+            for constraints in [
+                Vec::new(),
+                vec![json!({
+                    "id":"wrong-body-policy",
+                    "type":wrong_type,
+                    "allowedFields":["safe"]
+                })],
+                vec![json!({
+                    "id":"empty-body-policy",
+                    "type":constraint_type,
+                    "allowedFields":[]
+                })],
+                vec![json!({
+                    "id":"wrong-phase-body-policy",
+                    "type":constraint_type,
+                    "phase":"response",
+                    "allowedFields":["safe"]
+                })],
+            ] {
+                let mut snapshot_value = (*test_snapshot(1)).clone();
+                snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+                snapshot_value.routes[0].adapter_config["request"] = json!({
+                    "allowedHeaders":["content-type"],
+                    "allowedQueryKeys":[],
+                    "bodyMode":body_mode,
+                    "maxBodyBytes":1024
+                });
+                snapshot_value.routes[0].constraints = constraints;
+                let snapshot = Arc::new(snapshot_value);
+                let state = test_gate_state(Arc::clone(&snapshot));
+                let request = DecisionRequest {
+                    client_ip: None,
+                    method: "POST".to_string(),
+                    url: "https://example.test/resource".to_string(),
+                    headers: BTreeMap::from([(
+                        "content-type".to_string(),
+                        content_type.to_string(),
+                    )]),
+                    body: body.to_string(),
+                    body_sha256: Some(sha256_prefixed(body.as_bytes())),
+                    forwarded_body_length: Some(body.len() as u64),
+                    forwarded_body_utf8_valid: Some(true),
+                    credential_metadata: BTreeMap::new(),
+                    gmail_proofs: Vec::new(),
+                    client_request_digest: None,
+                };
+
+                let denied = decide_internal(&state, &snapshot, request, Some("agent:test"));
+                assert_eq!(denied["allowed"], false);
+                assert_eq!(denied["status_code"], 500);
+                assert_eq!(
+                    denied["payload"]["error"],
+                    "credential_request_body_constraint_required"
+                );
+                assert_eq!(denied["payload"]["bodyMode"], body_mode);
+                assert!(snapshot.credentials.is_empty());
+                assert!(state
+                    .credential_leases
+                    .lock()
+                    .expect("credential lease cache")
+                    .is_empty());
+            }
+        }
+
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.routes[0].adapter_config["request"] = json!({
+            "allowedHeaders":["content-type"],
+            "allowedQueryKeys":[],
+            "bodyMode":"any",
+            "maxBodyBytes":1024
+        });
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let denied = decide_internal(
+            &state,
+            &snapshot,
+            DecisionRequest {
+                client_ip: None,
+                method: "POST".to_string(),
+                url: "https://example.test/resource".to_string(),
+                headers: BTreeMap::from([(
+                    "content-type".to_string(),
+                    "application/octet-stream".to_string(),
+                )]),
+                body: "opaque".to_string(),
+                body_sha256: Some(sha256_prefixed(b"opaque")),
+                forwarded_body_length: Some(6),
+                forwarded_body_utf8_valid: Some(true),
+                credential_metadata: BTreeMap::new(),
+                gmail_proofs: Vec::new(),
+                client_request_digest: None,
+            },
+            Some("agent:test"),
+        );
+        assert_eq!(denied["allowed"], false);
+        assert_eq!(
+            denied["payload"]["error"],
+            "credential_opaque_request_body_denied"
+        );
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential lease cache")
+            .is_empty());
+    }
+
+    #[test]
+    fn structured_stream_request_allowed_fields_are_bounded_and_unique() {
+        for body_mode in [
+            "jsonlStream",
+            "jsonArrayStream",
+            "jsonSseStream",
+            "jsonNestedStream",
+            "formUrlencodedStream",
+            "csvStream",
+        ] {
+            let mut missing = generic_policy_route(body_mode, json!(1024));
+            missing["adapter"]["config"]["request"]
+                .as_object_mut()
+                .expect("request config")
+                .remove("allowedFields");
+            let error = validate_policy_capabilities(&policy_with_route(missing))
+                .expect_err("structured streams require request allowedFields");
+            assert!(error.contains("non-empty array"), "{body_mode}: {error}");
+
+            let mut valid = generic_policy_route(body_mode, json!(1024));
+            valid["adapter"]["config"]["request"]["allowedFields"] =
+                json!(["safe", "nested.value"]);
+            validate_policy_capabilities(&policy_with_route(valid))
+                .expect("bounded structured stream projection");
+        }
+
+        for invalid in [
+            json!(["safe", "safe"]),
+            json!(["safe..nested"]),
+            json!(["safe", 7]),
+            Value::Array(
+                (0..65)
+                    .map(|index| Value::String(format!("field{index}")))
+                    .collect(),
+            ),
+            json!(["x".repeat(257)]),
+        ] {
+            let mut route = generic_policy_route("jsonlStream", json!(1024));
+            route["adapter"]["config"]["request"]["allowedFields"] = invalid;
+            validate_policy_capabilities(&policy_with_route(route))
+                .expect_err("malformed structured stream projection must fail admission");
+        }
+
+        for body_mode in ["any", "stream"] {
+            let mut route = generic_policy_route(body_mode, json!(1024));
+            route["adapter"]["config"]["request"]
+                .as_object_mut()
+                .expect("request config")
+                .remove("allowedFields");
+            validate_policy_capabilities(&policy_with_route(route))
+                .expect("opaque request modes must not require structured projections");
+        }
+    }
+
+    #[test]
     fn generic_policy_rejects_credential_injection_collisions() {
         let mut header_route = generic_policy_route("none", json!(1024));
         header_route["credentialRef"] = json!("credential:api-key");
@@ -19323,6 +22495,50 @@ mod tests {
         assert!(validate_policy_capabilities(&query_policy)
             .expect_err("query collision must fail policy admission")
             .contains("collides with credential injection"));
+    }
+
+    #[test]
+    fn generic_policy_rejects_serverware_internal_header_prefix() {
+        let mut allowed_route = generic_policy_route("none", json!(1024));
+        allowed_route["adapter"]["config"]["request"]["allowedHeaders"] =
+            json!(["X-Serverware-Response-Nonce"]);
+        let error = validate_policy_capabilities(&policy_with_route(allowed_route))
+            .expect_err("future internal header must fail generic allowedHeaders admission");
+        assert!(error.contains("credential or internal header"), "{error}");
+
+        let mut required_route = generic_policy_route("none", json!(1024));
+        required_route["adapter"]["config"]["request"]["requiredHeaders"] = json!({
+            "x-serverware-response-nonce":{
+                "type":"string",
+                "minLength":1,
+                "maxLength":128
+            }
+        });
+        let request = required_route["adapter"]["config"]["request"]
+            .as_object()
+            .expect("generic request config");
+        let error = validate_generic_required_header_policy(
+            "route:test",
+            request,
+            &HashSet::from(["x-serverware-response-nonce".to_string()]),
+        )
+        .expect_err("future internal header must fail generic requiredHeaders admission");
+        assert!(error.contains("not an allowed forwarded header"), "{error}");
+
+        let mut injection_policy = policy_with_route(generic_policy_route("none", json!(1024)));
+        injection_policy["credentials"] = json!([{
+            "id":"credential:internal",
+            "injection":{
+                "type":"header",
+                "name":"X-Serverware-Response-Nonce"
+            }
+        }]);
+        let error = validate_policy_capabilities(&injection_policy)
+            .expect_err("internal credential injection target must fail policy admission");
+        assert!(
+            error.contains("reserved for Serverware internals"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -19503,6 +22719,7 @@ mod tests {
             adapter_type: "generic.rest".to_string(),
             response_config: json!({"mode":"stream","maxBodyBytes":1024}),
             has_response_constraints: true,
+            credential_bearing: false,
         };
         assert!(streaming_response_policy(&policy).is_none());
         let constraint = json!({
@@ -19752,9 +22969,18 @@ mod tests {
     }
 
     #[test]
-    fn json_response_projection_is_mandatory_and_filters_sibling_secrets() {
-        for allowed_fields in [None, Some(json!([]))] {
+    fn credential_response_projection_is_mandatory_and_filters_sibling_secrets() {
+        for allowed_fields in [
+            None,
+            Some(json!([])),
+            Some(json!(["safe..secret"])),
+            Some(json!((0..65)
+                .map(|index| format!("field{index}"))
+                .collect::<Vec<_>>())),
+        ] {
             let mut route = generic_policy_route("none", json!(1024));
+            route["credentialRef"] = json!("credential:test");
+            route["adapter"]["config"]["response"]["mode"] = json!("json");
             let response = route["adapter"]["config"]["response"]
                 .as_object_mut()
                 .expect("response policy");
@@ -19767,11 +22993,16 @@ mod tests {
                 }
             }
             let error = validate_policy_capabilities(&policy_with_route(route))
-                .expect_err("JSON response projection must be non-empty");
-            assert!(error.contains("allowedFields must be a non-empty array"));
+                .expect_err("credential response projection must be non-empty");
+            assert!(error.contains("credential-bearing success response"));
+            assert!(error.contains("allowedFields") || error.contains("response field path"));
         }
 
-        let snapshot = test_snapshot(1);
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.routes[0].adapter_config["response"] =
+            json!({"mode":"json","maxBodyBytes":1024});
+        let snapshot = Arc::new(snapshot_value);
         let state = test_gate_state(Arc::clone(&snapshot));
         let decision = json!({
             "principal_id":"agent:test",
@@ -19784,7 +23015,7 @@ mod tests {
         let url = Url::parse("https://example.test/resource").expect("URL");
         let body = br#"{"safe":{"id":"visible"},"provider":{"api_key":"sibling-provider-secret"}}"#
             .to_vec();
-        let blocked = validate_policy_json_response(
+        let blocked = validate_forward_response(
             &state,
             &snapshot,
             &decision,
@@ -19794,27 +23025,73 @@ mod tests {
             Some("application/json"),
             &[],
             body.clone(),
-            &json!({"mode":"json","maxBodyBytes":1024}),
-            "generic.rest",
             &ResponseSecretGuard::default(),
         );
         let blocked = String::from_utf8(blocked).expect("blocked HTTP response");
         assert!(blocked.starts_with("HTTP/1.1 502"));
-        assert!(blocked.contains("response_allowed_fields_missing"));
+        assert!(blocked.contains("credential_response_projection_invalid"));
         assert!(!blocked.contains("sibling-provider-secret"));
 
-        let released = validate_policy_json_response(
-            &state,
-            &snapshot,
-            &decision,
+        for invalid_fields in [
+            json!(["safe..secret"]),
+            json!((0..65)
+                .map(|index| format!("field{index}"))
+                .collect::<Vec<_>>()),
+        ] {
+            let mut invalid_snapshot_value = (*test_snapshot(1)).clone();
+            invalid_snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+            invalid_snapshot_value.routes[0].adapter_config["response"]["allowedFields"] =
+                invalid_fields;
+            let invalid_snapshot = Arc::new(invalid_snapshot_value);
+            let invalid_state = test_gate_state(Arc::clone(&invalid_snapshot));
+            let invalid_decision = json!({
+                "principal_id":"agent:test",
+                "route_id":"route:test",
+                "policy_hash":invalid_snapshot.hash,
+                "snapshot_epoch":invalid_snapshot.epoch,
+                "request_digest":"sha256:request",
+                "operation_digest":"sha256:operation"
+            });
+            let blocked = validate_forward_response(
+                &invalid_state,
+                &invalid_snapshot,
+                &invalid_decision,
+                "GET",
+                &url,
+                StatusCode::OK,
+                Some("application/json"),
+                &[],
+                br#"{"safe":{"id":"visible"}}"#.to_vec(),
+                &ResponseSecretGuard::default(),
+            );
+            let blocked = String::from_utf8(blocked).expect("blocked HTTP response");
+            assert!(blocked.starts_with("HTTP/1.1 502"));
+            assert!(blocked.contains("credential_response_projection_invalid"));
+            assert!(!blocked.contains("visible"));
+        }
+
+        let mut projected_snapshot_value = (*test_snapshot(1)).clone();
+        projected_snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        let projected_snapshot = Arc::new(projected_snapshot_value);
+        let projected_state = test_gate_state(Arc::clone(&projected_snapshot));
+        let projected_decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":projected_snapshot.hash,
+            "snapshot_epoch":projected_snapshot.epoch,
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation"
+        });
+        let released = validate_forward_response(
+            &projected_state,
+            &projected_snapshot,
+            &projected_decision,
             "GET",
             &url,
             StatusCode::OK,
             Some("application/json"),
             &[],
             body,
-            &json!({"mode":"json","maxBodyBytes":1024,"allowedFields":["safe"]}),
-            "generic.rest",
             &ResponseSecretGuard::default(),
         );
         let released = String::from_utf8(released).expect("projected HTTP response");
@@ -19822,6 +23099,193 @@ mod tests {
         assert!(released.contains("visible"));
         assert!(!released.contains("provider"));
         assert!(!released.contains("sibling-provider-secret"));
+    }
+
+    #[test]
+    fn buffered_response_rejects_duplicate_json_object_keys() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation"
+        });
+        let url = Url::parse("https://example.test/resource").expect("URL");
+        for body in [
+            br#"{"safe":"visible","safe":"shadow-secret"}"#.as_slice(),
+            br#"{"safe":{"id":"visible","id":"shadow-secret"}}"#.as_slice(),
+        ] {
+            let blocked = validate_forward_response(
+                &state,
+                &snapshot,
+                &decision,
+                "GET",
+                &url,
+                StatusCode::OK,
+                Some("application/json"),
+                &[],
+                body.to_vec(),
+                &ResponseSecretGuard::default(),
+            );
+            let blocked = String::from_utf8(blocked).expect("blocked HTTP response");
+            assert!(blocked.starts_with("HTTP/1.1 502"), "{blocked}");
+            assert!(blocked.contains("response_invalid_json"), "{blocked}");
+            assert!(!blocked.contains("visible"));
+            assert!(!blocked.contains("shadow-secret"));
+        }
+    }
+
+    #[test]
+    fn invalid_credential_projection_reload_retains_last_good_snapshot() {
+        let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
+        let policy_path = env::temp_dir().join(format!("serverware-policy-{suffix}.json"));
+        let trust_path = env::temp_dir().join(format!("serverware-policy-key-{suffix}.pem"));
+        let (signing_key, public_key_pem, signing_key_id) =
+            response_proof_signing_material().expect("test policy signing material");
+        fs::write(&trust_path, public_key_pem).expect("write policy trust fixture");
+
+        let mut route = generic_policy_route("none", json!(1024));
+        route["credentialRef"] = json!("credential:test");
+        route["adapter"]["config"]["response"]
+            .as_object_mut()
+            .expect("response policy")
+            .remove("allowedFields");
+        let mut candidate = policy_with_route(route);
+        candidate["credentials"] = json!([{
+            "id":"credential:test",
+            "provider":"generic",
+            "injection":{"type":"bearer"}
+        }]);
+        let candidate = sign_test_policy(candidate, &signing_key, &signing_key_id, 2);
+        fs::write(
+            &policy_path,
+            serde_json::to_vec(&candidate).expect("serialize candidate policy"),
+        )
+        .expect("write candidate policy");
+
+        let last_good = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&last_good));
+        state.policy_path = policy_path.to_string_lossy().into_owned();
+        state.policy_trust_root_source =
+            PolicyTrustRootSource::File(trust_path.to_string_lossy().into_owned());
+
+        let error = refresh_policy_snapshot(&state, true)
+            .expect_err("invalid credential projection must fail hot reload");
+        assert!(error.contains("credential-bearing success response"));
+        assert!(error.contains("allowedFields must be a non-empty array"));
+        let active = current_snapshot(&state);
+        assert!(Arc::ptr_eq(&active, &last_good));
+        assert_eq!(active.hash, last_good.hash);
+        assert_eq!(state.policy_reload_success.load(Ordering::Relaxed), 0);
+        assert_eq!(state.policy_reload_failed.load(Ordering::Relaxed), 1);
+
+        fs::remove_file(policy_path).expect("remove candidate policy fixture");
+        fs::remove_file(trust_path).expect("remove policy trust fixture");
+    }
+
+    #[test]
+    fn policy_reload_retains_secret_semantic_floor_for_relevant_credential_ids() {
+        let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
+        let policy_path = env::temp_dir().join(format!("serverware-policy-{suffix}.json"));
+        let trust_path = env::temp_dir().join(format!("serverware-policy-key-{suffix}.pem"));
+        let (signing_key, public_key_pem, signing_key_id) =
+            response_proof_signing_material().expect("test policy signing material");
+        fs::write(&trust_path, public_key_pem).expect("write policy trust fixture");
+
+        let candidate = sign_test_policy(
+            policy_with_credential_route(generic_policy_route("none", json!(1024))),
+            &signing_key,
+            &signing_key_id,
+            2,
+        );
+        fs::write(
+            &policy_path,
+            serde_json::to_vec(&candidate).expect("serialize candidate policy"),
+        )
+        .expect("write candidate policy");
+
+        let mut previous_value = (*test_snapshot(1)).clone();
+        previous_value.policy_signing_key_id = signing_key_id;
+        previous_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer"}),
+            },
+        );
+        previous_value.routes[0].credential_ref = Some("credential:test".to_string());
+        let previous = Arc::new(previous_value);
+        let mut state = test_gate_state(Arc::clone(&previous));
+        state.policy_path = policy_path.to_string_lossy().into_owned();
+        state.policy_trust_root_source =
+            PolicyTrustRootSource::File(trust_path.to_string_lossy().into_owned());
+        let retained_scope =
+            CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let removed_scope =
+            CredentialLeaseScope::new("agent:test", "route:test", "credential:removed");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .extend([
+                (
+                    retained_scope.clone(),
+                    CredentialLeaseGeneration {
+                        policy_hash: previous.hash.clone(),
+                        version: 9,
+                        secret_fingerprint: credential_secret_fingerprint("stable-secret"),
+                        metadata: BTreeMap::from([("account".to_string(), json!("stable"))]),
+                    },
+                ),
+                (
+                    removed_scope.clone(),
+                    CredentialLeaseGeneration {
+                        policy_hash: previous.hash.clone(),
+                        version: 4,
+                        secret_fingerprint: credential_secret_fingerprint("removed-secret"),
+                        metadata: BTreeMap::new(),
+                    },
+                ),
+            ]);
+
+        assert!(refresh_policy_snapshot(&state, true).expect("reload policy"));
+        let active = current_snapshot(&state);
+        let generations = state
+            .credential_generations
+            .lock()
+            .expect("credential generations");
+        let retained = generations
+            .get(&retained_scope)
+            .expect("relevant generation floor retained");
+        assert_eq!(retained.version, 9);
+        assert_eq!(
+            retained.secret_fingerprint,
+            credential_secret_fingerprint("stable-secret")
+        );
+        assert!(!generations.contains_key(&removed_scope));
+        drop(generations);
+
+        let changed_same_version = SecretLease {
+            scope: retained_scope.clone(),
+            version: 9,
+            secret: Zeroizing::new("changed-secret".to_string()),
+            metadata: BTreeMap::from([("account".to_string(), json!("stable"))]),
+            policy_hash: active.hash.clone(),
+            expires_at_epoch_ms: now_epoch_ms() + 60_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(60),
+        };
+        assert_eq!(
+            cache_scoped_credential_lease(&state, &active, &retained_scope, changed_same_version,)
+                .expect_err("reload-retained floor must reject changed same-version secret"),
+            "credential lease semantics changed without a version increment"
+        );
+
+        fs::remove_file(policy_path).expect("remove candidate policy fixture");
+        fs::remove_file(trust_path).expect("remove policy trust fixture");
     }
 
     #[test]
@@ -20669,7 +24133,10 @@ mod tests {
             &snapshot.hash,
             &operation,
         );
-        assert_ne!(digest_json(&canonical), digest_json(&changed));
+        assert_ne!(
+            digest_json_ensure_ascii(&canonical),
+            digest_json_ensure_ascii(&changed)
+        );
         assert_ne!(operation_digest(&canonical), operation_digest(&changed));
 
         for (body, expected) in [
@@ -20890,7 +24357,8 @@ mod tests {
                 "consumeOn":"forwardStart",
                 "binding":{"type":"operationDigest","fields":[
                     "principal","routeId","credentialRef","credentialVersion","policyHash",
-                    "method","authority","path","bodySha256","packageName","packageVersion","tarballIntegrity"
+                    "method","authority","path","query","selectedHeaders","bodySha256",
+                    "packageName","packageVersion","tarballIntegrity"
                 ]},
                 "approvers":{"quorum":1,"users":["user:release"],"authn":{
                     "webauthnRequired":true,
@@ -22019,7 +25487,7 @@ mod tests {
     }
 
     #[test]
-    fn local_rate_precheck_does_not_allocate_and_expired_entries_are_swept() {
+    fn local_rate_precheck_is_non_mutating_and_consume_sweeps_expired_entries() {
         let snapshot = test_snapshot(1);
         let state = test_gate_state(Arc::clone(&snapshot));
         let route = &snapshot.routes[0];
@@ -22040,6 +25508,7 @@ mod tests {
             0,
             &snapshot.hash,
             &operation,
+            false,
             false,
         )
         .expect("precheck");
@@ -22071,13 +25540,40 @@ mod tests {
             &snapshot.hash,
             &operation,
             false,
+            false,
         )
-        .expect("precheck after sweep");
-        assert!(state
-            .constraint_rate_counters
-            .lock()
-            .expect("rate counters")
-            .is_empty());
+        .expect("read-only precheck with expired entry");
+        assert_eq!(
+            state
+                .constraint_rate_counters
+                .lock()
+                .expect("rate counters")
+                .len(),
+            1
+        );
+        enforce_rate_limit(
+            &state,
+            &constraint,
+            route,
+            "agent:test",
+            None,
+            0,
+            &snapshot.hash,
+            &operation,
+            true,
+            false,
+        )
+        .expect("consuming check after expiry");
+        assert_eq!(
+            state
+                .constraint_rate_counters
+                .lock()
+                .expect("rate counters")
+                .values()
+                .next()
+                .map(|counter| counter.count),
+            Some(1)
+        );
     }
 
     #[test]
@@ -22116,6 +25612,7 @@ mod tests {
             &snapshot.hash,
             &json!({"operation":"new-key"}),
             true,
+            false,
         )
         .expect_err("counter capacity must fail closed");
         assert_eq!(error["error"], "local_rate_limit_capacity_exhausted");
@@ -22310,6 +25807,35 @@ mod tests {
             cached.get(&scope).map(|lease| lease.secret.as_str()),
             Some("new")
         );
+        drop(cached);
+        let floor = state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .get(&scope)
+            .cloned()
+            .expect("generation floor");
+        assert_eq!(
+            floor.secret_fingerprint,
+            credential_secret_fingerprint("new")
+        );
+        assert!(!floor.secret_fingerprint.contains("new"));
+
+        state
+            .credential_leases
+            .lock()
+            .expect("lease cache")
+            .remove(&scope);
+        assert_eq!(
+            cache_scoped_credential_lease(&state, &snapshot, &scope, lease(8, "changed"))
+                .expect_err("generation floor must bind same-version secret after eviction"),
+            "credential lease semantics changed without a version increment"
+        );
+        assert_eq!(
+            cache_scoped_credential_lease(&state, &snapshot, &scope, lease(7, "stale"))
+                .expect_err("generation floor must survive lease eviction"),
+            "credential lease version regression rejected"
+        );
     }
 
     #[test]
@@ -22458,5 +25984,31 @@ mod tests {
         assert!(management_bind_is_loopback("127.0.0.1"));
         assert!(management_bind_is_loopback("::1"));
         assert!(!management_bind_is_loopback("0.0.0.0"));
+    }
+
+    #[test]
+    fn production_release_authorization_url_requires_https_independently() {
+        validate_release_authorization_base_url(
+            "http://control.test/api/data-plane/release-authorizations",
+            false,
+        )
+        .expect("development may explicitly use HTTP");
+        assert_eq!(
+            validate_release_authorization_base_url(
+                "http://control.test/api/data-plane/release-authorizations",
+                true,
+            )
+            .expect_err("production release authorization must not depend on lease URL checks"),
+            "production release authorization base URL must use HTTPS"
+        );
+        validate_release_authorization_base_url(
+            "https://control.test/api/data-plane/release-authorizations",
+            true,
+        )
+        .expect("production HTTPS release authorization URL");
+        assert!(
+            validate_release_authorization_base_url("https://control.test/wrong-path", true,)
+                .is_err()
+        );
     }
 }

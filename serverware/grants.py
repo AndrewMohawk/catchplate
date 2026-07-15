@@ -93,6 +93,12 @@ def init_grant_store() -> None:
                     CHECK (state IN ('active', 'consumed', 'revoked')),
                     CHECK (uses_remaining >= 0)
                 );
+                ALTER TABLE approval_grants
+                    ADD COLUMN IF NOT EXISTS reserved_attempt_id TEXT;
+                ALTER TABLE approval_grants
+                    ADD COLUMN IF NOT EXISTS reserved_at_epoch_ms BIGINT;
+                ALTER TABLE approval_grants
+                    ADD COLUMN IF NOT EXISTS reservation_expires_at_epoch_ms BIGINT;
                 CREATE INDEX IF NOT EXISTS approval_grants_active_lookup
                     ON approval_grants (
                         principal_id, route_id, credential_id, credential_version,
@@ -101,6 +107,9 @@ def init_grant_store() -> None:
                     WHERE state = 'active' AND uses_remaining > 0;
                 CREATE INDEX IF NOT EXISTS approval_grants_approval_request
                     ON approval_grants (approval_request_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS approval_grants_reserved_attempt
+                    ON approval_grants (reserved_attempt_id)
+                    WHERE reserved_attempt_id IS NOT NULL;
                 CREATE TABLE IF NOT EXISTS approval_grant_consumptions (
                     id TEXT PRIMARY KEY,
                     grant_id TEXT NOT NULL REFERENCES approval_grants(id) ON DELETE CASCADE,
@@ -335,6 +344,7 @@ def consume_grant_result(
                           AND valid_from <= %(now)s
                           AND expires_at > %(now)s
                           AND uses_remaining > 0
+                          AND reserved_attempt_id IS NULL
                         ORDER BY created_at ASC
                         LIMIT 1
                         FOR UPDATE
@@ -503,6 +513,7 @@ def find_grant_result(
                   AND valid_from <= %(now)s
                   AND expires_at > %(now)s
                   AND uses_remaining > 0
+                  AND reserved_attempt_id IS NULL
                 ORDER BY created_at ASC
                 LIMIT 1
                 """,
@@ -569,6 +580,9 @@ def status() -> dict[str, Any]:
                 SELECT
                     COUNT(*)::bigint AS grants,
                     COUNT(*) FILTER (WHERE state = 'active')::bigint AS active_grants,
+                    COUNT(*) FILTER (
+                        WHERE state = 'active' AND reserved_attempt_id IS NOT NULL
+                    )::bigint AS reserved_grants,
                     COUNT(*) FILTER (WHERE state = 'consumed')::bigint AS consumed_grants
                 FROM approval_grants
                 """

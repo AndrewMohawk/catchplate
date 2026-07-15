@@ -10,6 +10,9 @@ import sys
 import tempfile
 from pathlib import Path
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
 import build_production_images
 import generate_release_provenance
 import serverware_source_tree
@@ -68,6 +71,7 @@ def assert_oci_traceability(path: Path) -> None:
 def assert_dockerignore() -> None:
     ignored = set((ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines())
     required = {".git", ".tmp", "**/target", "ops/production-readiness.env", "*.pem", "*.key"}
+    required.update(f"**/{part}" for part in serverware_source_tree.EXCLUDED_PARTS)
     missing = sorted(required - ignored)
     if missing:
         raise AssertionError(f".dockerignore does not exclude local build/secrets material: {missing}")
@@ -120,6 +124,9 @@ def assert_production_dependencies() -> None:
         "SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-google-oauth-secret",
         "SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-x-oauth-secret",
         "SERVERWARE_OIDC_CLIENT_SECRET_FILE": "/tmp/serverware-compose-test-oidc-secret",
+        "SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY": "/tmp/serverware-compose-test-enrollment-verifier.pub.pem",
+        "SERVERWARE_SETUP_HARDWARE_VERIFIER_PUBLIC_KEY": "/tmp/serverware-compose-test-hardware-verifier.pub.pem",
+        "SERVERWARE_SETUP_FINAL_AUTHORITY_PUBLIC_KEY": "/tmp/serverware-compose-test-final-authority.pub.pem",
         "SERVERWARE_AUDIT_ANCHOR_TLS_DIR": "/tmp/serverware-compose-test-anchor-tls",
     }
     compose_env.update(bind_mount_fixtures)
@@ -333,6 +340,98 @@ def assert_source_tree_digest_covers_untracked_source() -> None:
             raise AssertionError(f"source_tree_digest did not change for an untracked {probe.suffix} file")
 
 
+def local_copy_inputs(path: Path) -> list[str]:
+    inputs: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        fields = raw.strip().split()
+        if (
+            not fields
+            or fields[0].upper() != "COPY"
+            or any(field.startswith("--from=") for field in fields[1:])
+        ):
+            continue
+        while len(fields) > 1 and fields[1].startswith("--"):
+            fields.pop(1)
+        if len(fields) < 3:
+            raise AssertionError(f"unsupported production COPY instruction in {path}: {raw}")
+        inputs.extend(fields[1:-1])
+    return inputs
+
+
+def assert_source_tree_covers_production_copy_surface() -> None:
+    dockerfiles = (
+        ROOT / "Dockerfile.production",
+        ROOT / "data-plane" / "decision-gate-rs" / "Dockerfile.production",
+    )
+    for dockerfile in dockerfiles:
+        for source in local_copy_inputs(dockerfile):
+            source_path = ROOT / source
+            if source_path.is_dir():
+                source_root = Path(source).parts[0]
+                if source_root not in serverware_source_tree.SOURCE_ROOTS:
+                    raise AssertionError(
+                        f"source-tree manifest does not include every untracked byte under {source} copied by {dockerfile}"
+                    )
+            elif not serverware_source_tree.is_source_file(source_path, ROOT):
+                raise AssertionError(f"source-tree manifest omits root input {source} copied by {dockerfile}")
+
+    with tempfile.TemporaryDirectory(prefix="serverware-source-copy-surface-") as checkout_raw:
+        checkout = Path(checkout_raw)
+        (checkout / "scripts").mkdir()
+        (checkout / "policies").mkdir()
+        (checkout / ".gitignore").write_text("scripts/ignored-build-input\n", encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+        subprocess.run(["git", "-C", str(checkout), "add", ".gitignore"], check=True)
+
+        baseline = serverware_source_tree.source_tree_digest(checkout)
+        ignored = checkout / "scripts" / "ignored-build-input"
+        ignored.write_bytes(b"ignored opaque input\x00v1\n")
+        ignored_check = subprocess.run(
+            ["git", "-C", str(checkout), "check-ignore", "-q", "scripts/ignored-build-input"],
+            check=False,
+        )
+        if ignored_check.returncode != 0:
+            raise AssertionError("ignored source-tree adversarial fixture is not ignored by Git")
+        ignored_digest = serverware_source_tree.source_tree_digest(checkout)
+        ignored_entry = next(
+            (
+                item
+                for item in serverware_source_tree.source_tree_files(checkout)
+                if item["path"] == "scripts/ignored-build-input"
+            ),
+            None,
+        )
+        if ignored_entry is None or ignored_digest == baseline:
+            raise AssertionError("source-tree manifest omitted an ignored opaque file under a production COPY root")
+        ignored.write_bytes(b"ignored opaque input\x00v2\n")
+        if serverware_source_tree.source_tree_digest(checkout) == ignored_digest:
+            raise AssertionError("source-tree digest did not bind every byte of an ignored production COPY input")
+
+        opaque_policy = checkout / "policies" / "emergency-policy"
+        opaque_policy.write_bytes(b"opaque untracked policy\x00v1\n")
+        untracked = subprocess.run(
+            ["git", "-C", str(checkout), "ls-files", "--others", "--exclude-standard", "-z"],
+            stdout=subprocess.PIPE,
+            check=True,
+        ).stdout.split(b"\0")
+        if b"policies/emergency-policy" not in untracked:
+            raise AssertionError("opaque policy adversarial fixture is not untracked")
+        policy_digest = serverware_source_tree.source_tree_digest(checkout)
+        policy_entry = next(
+            (
+                item
+                for item in serverware_source_tree.source_tree_files(checkout)
+                if item["path"] == "policies/emergency-policy"
+            ),
+            None,
+        )
+        if policy_entry is None:
+            raise AssertionError("source-tree manifest omitted an opaque untracked policy file")
+        opaque_policy.write_bytes(b"opaque untracked policy\x00v2\n")
+        if serverware_source_tree.source_tree_digest(checkout) == policy_digest:
+            raise AssertionError("source-tree digest did not bind every byte of an opaque untracked policy file")
+
+
 def assert_source_tree_manifest_metadata_and_git_fallback() -> None:
     with tempfile.TemporaryDirectory() as checkout_raw:
         checkout = Path(checkout_raw)
@@ -431,14 +530,93 @@ def assert_release_source_tree_digest_callers_agree() -> None:
         raise AssertionError("release source-tree manifest omitted path/type/mode metadata")
 
 
+def assert_production_release_key_is_pinned() -> None:
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        tmp = Path(tmp_raw)
+        private_path = tmp / "release.pem"
+        public_path = tmp / "release.pub.pem"
+        missing_path = tmp / "missing.pem"
+        try:
+            generate_release_provenance.load_release_key(
+                missing_path,
+                allow_create=False,
+                require_owner_only=True,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("production release signing generated a missing key")
+
+        key = Ed25519PrivateKey.generate()
+        private_path.write_bytes(
+            key.private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            )
+        )
+        private_path.chmod(0o600)
+        public_path.write_bytes(
+            key.public_key().public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        loaded = generate_release_provenance.load_production_release_key(
+            private_path,
+            public_path,
+        )
+        if generate_release_provenance.public_key_id(loaded.public_key()) != (
+            generate_release_provenance.public_key_id(key.public_key())
+        ):
+            raise AssertionError("production release signing changed the configured key")
+
+        private_path.chmod(0o644)
+        try:
+            generate_release_provenance.load_production_release_key(
+                private_path,
+                public_path,
+            )
+        except ValueError as exc:
+            if "group or other" not in str(exc):
+                raise AssertionError(
+                    f"permissive production key failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("production release signing accepted a permissive private key")
+
+        private_path.chmod(0o600)
+        other = Ed25519PrivateKey.generate()
+        public_path.write_bytes(
+            other.public_key().public_bytes(
+                serialization.Encoding.PEM,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            )
+        )
+        try:
+            generate_release_provenance.load_production_release_key(
+                private_path,
+                public_path,
+            )
+        except ValueError as exc:
+            if "does not match" not in str(exc):
+                raise AssertionError(
+                    f"mismatched production key failed for the wrong reason: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("production release signing accepted an untrusted private key")
+
+
 def main() -> None:
     assert_dockerignore()
     assert_production_dependencies()
     assert_release_python_dependency_inventory()
     assert_malformed_python_locks_fail_closed()
     assert_source_tree_digest_covers_untracked_source()
+    assert_source_tree_covers_production_copy_surface()
     assert_source_tree_manifest_metadata_and_git_fallback()
     assert_release_source_tree_digest_callers_agree()
+    assert_production_release_key_is_pinned()
     assert_distroless_no_shell(ROOT / "Dockerfile.production", "gcr.io/distroless/python3-debian12")
     assert_base_images_pinned(ROOT / "Dockerfile.production")
     assert_oci_traceability(ROOT / "Dockerfile.production")

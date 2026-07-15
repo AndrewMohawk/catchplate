@@ -1442,6 +1442,7 @@ def init_db(path: Path = DB_PATH) -> None:
                 grant_max_uses INTEGER,
                 approved_by TEXT,
                 approval_authn TEXT,
+                approver_webauthn_credential_id TEXT,
                 approval_challenge_id TEXT,
                 pending_key TEXT
             );
@@ -1498,6 +1499,7 @@ def init_db(path: Path = DB_PATH) -> None:
                 policy_hash TEXT,
                 request_digest TEXT,
                 operation_digest TEXT,
+                approver_webauthn_credential_id TEXT,
                 uses_remaining INTEGER NOT NULL,
                 valid_from TEXT NOT NULL,
                 expires_at TEXT NOT NULL,
@@ -1709,7 +1711,10 @@ def init_db(path: Path = DB_PATH) -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_used_at TEXT,
-                revoked_at TEXT
+                revoked_at TEXT,
+                revoked_by TEXT,
+                revocation_reason TEXT,
+                revocation_source TEXT
             );
 
             CREATE TABLE IF NOT EXISTS webauthn_challenges (
@@ -1755,9 +1760,15 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(conn, "approval_requests", "grant_max_uses", "INTEGER")
         _ensure_column(conn, "approval_requests", "approved_by", "TEXT")
         _ensure_column(conn, "approval_requests", "approval_authn", "TEXT")
+        _ensure_column(
+            conn, "approval_requests", "approver_webauthn_credential_id", "TEXT"
+        )
         _ensure_column(conn, "approval_requests", "approval_challenge_id", "TEXT")
         _ensure_column(conn, "approval_requests", "pending_key", "TEXT")
         _ensure_column(conn, "approval_grants", "reserved_attempt_id", "TEXT")
+        _ensure_column(
+            conn, "approval_grants", "approver_webauthn_credential_id", "TEXT"
+        )
         _ensure_column(conn, "approval_grants", "reserved_at_epoch_ms", "BIGINT")
         _ensure_column(
             conn,
@@ -1918,6 +1929,34 @@ def init_db(path: Path = DB_PATH) -> None:
             conn, "webauthn_credentials", "attestation_trust_bundle_sequence", "INTEGER"
         )
         _ensure_column(conn, "webauthn_credentials", "attestation_verified_at", "TEXT")
+        _ensure_column(conn, "webauthn_credentials", "revoked_by", "TEXT")
+        _ensure_column(conn, "webauthn_credentials", "revocation_reason", "TEXT")
+        _ensure_column(conn, "webauthn_credentials", "revocation_source", "TEXT")
+        for row in conn.execute(
+            "SELECT id, approval_authn FROM approval_requests "
+            "WHERE approver_webauthn_credential_id IS NULL "
+            "AND approval_authn IS NOT NULL"
+        ).fetchall():
+            authn = loads(row["approval_authn"], {})
+            credential_record_id = (
+                authn.get("credential_record_id")
+                if isinstance(authn, dict)
+                else None
+            )
+            if not credential_record_id:
+                continue
+            conn.execute(
+                "UPDATE approval_requests "
+                "SET approver_webauthn_credential_id = ? WHERE id = ?",
+                (credential_record_id, row["id"]),
+            )
+            conn.execute(
+                "UPDATE approval_grants "
+                "SET approver_webauthn_credential_id = ? "
+                "WHERE approval_request_id = ? "
+                "AND approver_webauthn_credential_id IS NULL",
+                (credential_record_id, row["id"]),
+            )
         for row in conn.execute(
             "SELECT id, credential_version FROM credentials"
         ).fetchall():
@@ -7101,6 +7140,11 @@ def approve_request(
                     "postgres approval and grant stores must use the same DSN for atomic issuance"
                 )
         approved_until = (now + timedelta(seconds=grant_ttl_seconds)).isoformat()
+        approver_webauthn_credential_id = (
+            (authn or {}).get("credential_record_id")
+            if isinstance(authn, dict)
+            else None
+        )
         cur = conn.execute(
             """
             UPDATE approval_requests
@@ -7109,6 +7153,7 @@ def approve_request(
                 decision_note = ?,
                 approved_by = ?,
                 approval_authn = ?,
+                approver_webauthn_credential_id = ?,
                 approval_challenge_id = ?
             WHERE id = ? AND status = 'pending' AND expires_at > ?
             """,
@@ -7117,6 +7162,7 @@ def approve_request(
                 note,
                 actor_id,
                 dumps(authn or {}),
+                approver_webauthn_credential_id,
                 challenge_id,
                 item_id,
                 now_s,
@@ -7145,6 +7191,7 @@ def approve_request(
                     policy_hash=existing["policy_hash"],
                     request_digest=existing["request_digest"],
                     operation_digest=existing["operation_digest"],
+                    approver_webauthn_credential_id=approver_webauthn_credential_id,
                     uses_remaining=grant_max_uses,
                     valid_from=now_s,
                     expires_at=approved_until,
@@ -7159,9 +7206,9 @@ def approve_request(
                     INSERT INTO approval_grants (
                         id, approval_request_id, state, principal_id, route_id, credential_id,
                         credential_version, policy_hash, request_digest, operation_digest, uses_remaining,
-                        valid_from, expires_at, created_at
+                        approver_webauthn_credential_id, valid_from, expires_at, created_at
                     )
-                    VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         grant_id,
@@ -7174,6 +7221,7 @@ def approve_request(
                         existing["request_digest"],
                         existing["operation_digest"],
                         grant_max_uses,
+                        approver_webauthn_credential_id,
                         now_s,
                         approved_until,
                         now_s,
@@ -9579,6 +9627,14 @@ def create_webauthn_credential(
     item_id = str(uuid.uuid4())
     now = iso_now()
     with connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM webauthn_credentials WHERE credential_id = ?",
+            (credential_id,),
+        ).fetchone()
+        if existing is not None:
+            raise ValueError(
+                "WebAuthn credential ID was already registered and cannot be reused"
+            )
         conn.execute(
             """
             INSERT INTO webauthn_credentials (
@@ -9590,25 +9646,6 @@ def create_webauthn_credential(
                 created_at, updated_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(credential_id) DO UPDATE SET
-                user_id = excluded.user_id,
-                label = excluded.label,
-                public_key_cose = excluded.public_key_cose,
-                sign_count = excluded.sign_count,
-                aaguid = excluded.aaguid,
-                authenticator_class = excluded.authenticator_class,
-                attestation_fmt = excluded.attestation_fmt,
-                attestation_trusted = excluded.attestation_trusted,
-                attestation_trust_path = excluded.attestation_trust_path,
-                attestation_leaf_sha256 = excluded.attestation_leaf_sha256,
-                attestation_root_sha256 = excluded.attestation_root_sha256,
-                attestation_trust_bundle_digest = excluded.attestation_trust_bundle_digest,
-                attestation_trust_bundle_sequence = excluded.attestation_trust_bundle_sequence,
-                attestation_verified_at = excluded.attestation_verified_at,
-                transports = excluded.transports,
-                dev_private_key_pem = excluded.dev_private_key_pem,
-                updated_at = excluded.updated_at,
-                revoked_at = NULL
             """,
             (
                 item_id,
@@ -9640,27 +9677,102 @@ def create_webauthn_credential(
     return row_to_webauthn_credential(row)
 
 
-def get_webauthn_credential(credential_id: str) -> dict[str, Any] | None:
+def get_webauthn_credential(
+    credential_id: str, *, include_revoked: bool = False
+) -> dict[str, Any] | None:
+    revoked_clause = "" if include_revoked else " AND revoked_at IS NULL"
     with connect() as conn:
         row = conn.execute(
-            "SELECT * FROM webauthn_credentials WHERE credential_id = ? AND revoked_at IS NULL",
+            "SELECT * FROM webauthn_credentials WHERE credential_id = ?"
+            + revoked_clause,
             (credential_id,),
         ).fetchone()
     return row_to_webauthn_credential(row) if row else None
 
 
-def list_webauthn_credentials(user_id: str | None = None) -> list[dict[str, Any]]:
+def get_webauthn_credential_by_record_id(
+    record_id: str, *, include_revoked: bool = False
+) -> dict[str, Any] | None:
+    where = "id = ?" if include_revoked else "id = ? AND revoked_at IS NULL"
+    with connect() as conn:
+        row = conn.execute(
+            f"SELECT * FROM webauthn_credentials WHERE {where}", (record_id,)
+        ).fetchone()
+    return row_to_webauthn_credential(row) if row else None
+
+
+def list_webauthn_credentials(
+    user_id: str | None = None, *, include_revoked: bool = False
+) -> list[dict[str, Any]]:
     args: list[Any] = []
-    where = "WHERE revoked_at IS NULL"
+    clauses: list[str] = []
+    if not include_revoked:
+        clauses.append("revoked_at IS NULL")
     if user_id:
-        where += " AND user_id = ?"
+        clauses.append("user_id = ?")
         args.append(user_id)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
     with connect() as conn:
         rows = conn.execute(
             f"SELECT * FROM webauthn_credentials {where} ORDER BY created_at DESC",
             args,
         ).fetchall()
     return [row_to_webauthn_credential(row) for row in rows]
+
+
+def revoke_webauthn_credential(
+    record_id: str,
+    *,
+    actor_id: str,
+    reason: str | None = None,
+    source: str = "explicit",
+    _connection: Any | None = None,
+) -> dict[str, Any]:
+    now_s = iso_now()
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
+        row = conn.execute(
+            "SELECT * FROM webauthn_credentials WHERE id = ?", (record_id,)
+        ).fetchone()
+        if row is None:
+            return {"ok": False, "reason": "credential_not_found"}
+        if row["revoked_at"] is not None:
+            return {
+                "ok": False,
+                "reason": "credential_already_revoked",
+                "credential": row_to_webauthn_credential(row),
+            }
+        cur = conn.execute(
+            """
+            UPDATE webauthn_credentials
+            SET revoked_at = ?, revoked_by = ?, revocation_reason = ?,
+                revocation_source = ?, updated_at = ?
+            WHERE id = ? AND revoked_at IS NULL
+            """,
+            (now_s, actor_id, reason, source, now_s, record_id),
+        )
+        if cur.rowcount != 1:
+            return {"ok": False, "reason": "credential_revocation_raced"}
+        revoked_grants = conn.execute(
+            """
+            UPDATE approval_grants
+            SET state = 'revoked', uses_remaining = 0,
+                reserved_attempt_id = NULL, reserved_at_epoch_ms = NULL,
+                reservation_expires_at_epoch_ms = NULL
+            WHERE approver_webauthn_credential_id = ? AND state = 'active'
+            """,
+            (record_id,),
+        )
+        updated = conn.execute(
+            "SELECT * FROM webauthn_credentials WHERE id = ?", (record_id,)
+        ).fetchone()
+    return {
+        "ok": True,
+        "credential": row_to_webauthn_credential(updated),
+        "revoked_grant_count": revoked_grants.rowcount,
+    }
 
 
 def update_webauthn_sign_count(credential_id: str, sign_count: int) -> None:

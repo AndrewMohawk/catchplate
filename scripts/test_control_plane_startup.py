@@ -17,7 +17,7 @@ os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
 os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
 
-from serverware import control_plane_runner, control_plane_startup
+from serverware import control_plane_runner, control_plane_startup  # noqa: E402
 
 
 _PRODUCTION_CONFIGURATION = {
@@ -27,6 +27,11 @@ _PRODUCTION_CONFIGURATION = {
     "WEB_TLS_KEY_FILE": "/run/serverware/tls.key",
     "WEBAUTHN_BOOTSTRAP_TOKEN": "bootstrap-token-with-at-least-32-characters",
     "CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": True,
+    "CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION": True,
+    "CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES": (
+        "yubikey",
+        "hardware",
+    ),
     "CONTROL_PLANE_TWO_PERSON_REQUIRED": True,
     "MASTER_KEY_UNSEAL_COMMAND": "unseal-master-key",
     "NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": "nsm-unseal {ciphertext}",
@@ -39,6 +44,15 @@ class ControlPlaneStartupTests(unittest.TestCase):
             "tls": {"WEB_TLS_CERT_FILE": "", "WEB_TLS_KEY_FILE": ""},
             "bootstrap token": {"WEBAUTHN_BOOTSTRAP_TOKEN": "short"},
             "mutation WebAuthn": {"CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": False},
+            "hardware mutation WebAuthn": {
+                "CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION": False
+            },
+            "bounded authenticator classes": {
+                "CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES": (
+                    "yubikey",
+                    "platform",
+                )
+            },
             "two person": {"CONTROL_PLANE_TWO_PERSON_REQUIRED": False},
             "master key custody": {"MASTER_KEY_UNSEAL_COMMAND": ""},
             "NSM custody": {"NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": ""},

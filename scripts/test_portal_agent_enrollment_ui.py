@@ -20,6 +20,25 @@ def canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def javascript_function_source(
+    source: str, name_pattern: str, *, label: str
+) -> tuple[str, str]:
+    match = re.search(
+        rf"(?:async\s+)?function\s+(?P<name>{name_pattern})\s*\([^)]*\)\s*\{{",
+        source,
+        flags=re.IGNORECASE,
+    )
+    if match is None:
+        raise AssertionError(f"could not locate {label} function")
+    following = source[match.end() :]
+    next_function = re.search(
+        r"\n\s{4}(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(",
+        following,
+    )
+    end = len(source) if next_function is None else match.end() + next_function.start()
+    return match.group("name"), source[match.start() : end]
+
+
 class PortalAccessibilityParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -247,6 +266,86 @@ def main() -> None:
         for marker in ('"action": action', '"resourceId": resource_id', '"payloadDigest": payload_digest'):
             if marker not in app_source:
                 raise AssertionError(f"control-plane WebAuthn challenge detail missing: {marker}")
+
+        if re.search(
+            r"<h2[^>]*>\s*(?:Operator\s+)?Passkeys\s*</h2>",
+            ui_html,
+            flags=re.IGNORECASE,
+        ) is None:
+            raise AssertionError("portal must expose an operator passkey lifecycle view")
+        passkey_renderer_name, passkey_renderer = javascript_function_source(
+            ui_html,
+            r"render\w*(?:passkey|webauthn)\w*",
+            label="passkey lifecycle renderer",
+        )
+        for marker in (
+            "state.webauthnCredentials",
+            "item.label",
+            "item.id",
+            "item.active",
+            "item.authenticator_class",
+            "item.current_trust",
+            "item.attestation_root_sha256",
+            "item.last_used_at",
+            "item.revoked_at",
+            "item.revocation_source",
+            "Revoke",
+        ):
+            if marker not in passkey_renderer:
+                raise AssertionError(
+                    f"portal passkey lifecycle view omitted safe field or action: {marker}"
+                )
+        if re.search(rf"\b{re.escape(passkey_renderer_name)}\s*\(\s*\)\s*;", ui_html) is None:
+            raise AssertionError("portal passkey lifecycle renderer is not wired into rendering")
+        for forbidden in (
+            "public_key_cose",
+            "dev_private_key_pem",
+            "json(item)",
+            "JSON.stringify(item)",
+            "BEGIN PRIVATE KEY",
+            "BEGIN PUBLIC KEY",
+        ):
+            if forbidden in passkey_renderer:
+                raise AssertionError(
+                    f"portal passkey lifecycle view may render key material: {forbidden}"
+                )
+        if re.search(r"item\.credential_id(?!_sha256)", passkey_renderer):
+            raise AssertionError(
+                "portal passkey lifecycle view must not render the raw credential id"
+            )
+        for private_field in ("public_key_cose", "dev_private_key_pem"):
+            if private_field in ui_html:
+                raise AssertionError(
+                    f"portal JavaScript must not reference WebAuthn key material: {private_field}"
+                )
+
+        _, passkey_revoke = javascript_function_source(
+            ui_html,
+            r"(?:revoke\w*(?:passkey|webauthn)\w*|(?:passkey|webauthn)\w*revoke\w*)",
+            label="passkey revoke command",
+        )
+        revoke_markers = (
+            "runControlPlaneMutation(",
+            "method: 'POST'",
+            ".trim()",
+        )
+        for marker in revoke_markers:
+            if marker not in passkey_revoke:
+                raise AssertionError(f"portal passkey revoke command missing: {marker}")
+        if not re.search(
+            r"`/api/webauthn/credentials/\$\{encodeURIComponent\([^)]+\)\}/revoke`",
+            passkey_revoke,
+        ):
+            raise AssertionError("portal passkey revoke command must URL-encode the credential record id")
+        if not re.search(
+            r"body\s*:\s*\{\s*reason\s*:\s*reason\.trim\(\)\s*\}",
+            passkey_revoke,
+        ):
+            raise AssertionError(
+                "portal passkey revoke command must send only the trimmed revocation reason"
+            )
+        if "window.confirm" not in passkey_revoke and "window.prompt" not in passkey_revoke:
+            raise AssertionError("portal passkey revoke command must require explicit operator confirmation")
 
         oauth_markers = (
             "const oauthDraftKey = 'serverware.oauthDraft'",
@@ -885,6 +984,11 @@ function credentialToJson(value){return value;}
                     raise AssertionError(f"PolicyBundle portal template lacks a bounded error projection: {template_id}")
                 if route["adapter"]["type"] == "x.v2":
                     route["adapter"]["config"]["appIds"] = ["demo-x-app"]
+                if any(
+                    "providerAccount" in (constraint.get("key") or {}).get("operationFields", [])
+                    for constraint in route["constraints"]
+                ):
+                    candidate["credentials"][0]["providerSubject"] = "portal-test-account"
                 if template.get("jit"):
                     route["jit"] = copy.deepcopy(template["jit"])
                     route["jit"]["approvers"]["users"] = ["user:portal-test-approver"]

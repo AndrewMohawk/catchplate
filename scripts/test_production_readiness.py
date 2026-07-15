@@ -471,10 +471,12 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_OIDC_SESSION_TTL_SECONDS": "3600",
             "SERVERWARE_WEBAUTHN_ORIGIN": "https://serverware.prod.acme-corp.net",
             "SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED": "1",
+            "SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION": "1",
+            "SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES": "yubikey,hardware",
             "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED": "0",
             "SERVERWARE_CA_INSTALL_SESSION_TTL_SECONDS": "300",
             "SERVERWARE_CONTROL_PLANE_TWO_PERSON_REQUIRED": "1",
-            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.oauth.activate,credential.oauth.uncertain.resolve,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant,setup.attestation.finalize",
+            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS": "credential.create,credential.oauth.activate,credential.oauth.uncertain.resolve,credential.update,credential.delete,route.create,route.update,route.delete,policy.publish,webauthn.credential.register,webauthn.credential.revoke,webauthn.trust.publish,rbac.role.change,rbac.deprovision,control_plane.token.rotate,break_glass.grant,setup.attestation.finalize",
             "SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN": "test-production-bootstrap-token-32-chars-minimum",
             "SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED": "1",
             "SERVERWARE_POLICY_CANARY_REQUIRED": "1",
@@ -1420,6 +1422,21 @@ def main() -> None:
     no_mutation_mfa_env.pop("SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED", None)
     expect_failure(no_mutation_mfa_env, "WebAuthn MFA")
 
+    no_hardware_attestation_env = good_env()
+    no_hardware_attestation_env.pop(
+        "SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION", None
+    )
+    expect_failure(no_hardware_attestation_env, "hardware-attested WebAuthn")
+
+    broad_authenticator_classes_env = good_env()
+    broad_authenticator_classes_env[
+        "SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES"
+    ] = "yubikey,hardware,platform"
+    expect_failure(
+        broad_authenticator_classes_env,
+        "must be limited to yubikey and hardware",
+    )
+
     missing_setup_trust_env = good_env()
     missing_setup_trust_env.pop("SERVERWARE_SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY", None)
     expect_failure(missing_setup_trust_env, "SETUP_ENROLLMENT_VERIFIER_PUBLIC_KEY")
@@ -1452,6 +1469,24 @@ def main() -> None:
     partial_two_person_env = good_env()
     partial_two_person_env["SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS"] = "credential.update,policy.publish"
     expect_failure(partial_two_person_env, "must cover credential creation, exact-account OAuth activation")
+
+    for required_action in (
+        "webauthn.credential.revoke",
+        "webauthn.trust.publish",
+    ):
+        missing_webauthn_action_env = good_env()
+        configured_actions = missing_webauthn_action_env[
+            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS"
+        ].split(",")
+        missing_webauthn_action_env[
+            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS"
+        ] = ",".join(
+            action for action in configured_actions if action != required_action
+        )
+        expect_failure(
+            missing_webauthn_action_env,
+            "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS",
+        )
 
     no_policy_dry_run_env = good_env()
     no_policy_dry_run_env.pop("SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED", None)

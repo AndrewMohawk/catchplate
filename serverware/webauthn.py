@@ -514,6 +514,16 @@ def verify_registration(
     cursor += 2
     credential_id_raw = auth_data[cursor:cursor + credential_len]
     registered_credential_id = b64u(credential_id_raw)
+    if credential_id != registered_credential_id:
+        raise WebAuthnError(
+            "registration response credential id does not match attested credential id"
+        )
+    if db.get_webauthn_credential(
+        registered_credential_id, include_revoked=True
+    ) is not None:
+        raise WebAuthnError(
+            "WebAuthn credential ID was already registered and cannot be reused"
+        )
     cursor += credential_len
     public_key_cose = auth_data[cursor:]
     attestation_result = _verify_attestation_statement(
@@ -525,24 +535,27 @@ def verify_registration(
         public_key_cose,
     )
     attestation_trusted = bool(attestation_result["trusted"])
-    stored = db.create_webauthn_credential(
-        credential_id=registered_credential_id,
-        user_id=user_id,
-        label=label,
-        public_key_cose=b64u(public_key_cose),
-        sign_count=parsed["sign_count"],
-        aaguid=aaguid,
-        authenticator_class=_classify_authenticator(aaguid, attestation_trusted, attestation_result.get("trust_class")),
-        attestation_fmt=attestation_result["fmt"],
-        attestation_trusted=attestation_trusted,
-        attestation_trust_path=attestation_result["trust_path"],
-        attestation_leaf_sha256=attestation_result["leaf_sha256"],
-        attestation_root_sha256=attestation_result["root_sha256"],
-        attestation_trust_bundle_digest=attestation_result.get("trust_bundle_digest"),
-        attestation_trust_bundle_sequence=attestation_result.get("trust_bundle_sequence"),
-        attestation_verified_at=attestation_result["verified_at"],
-        transports=response.get("transports") or [],
-    )
+    try:
+        stored = db.create_webauthn_credential(
+            credential_id=registered_credential_id,
+            user_id=user_id,
+            label=label,
+            public_key_cose=b64u(public_key_cose),
+            sign_count=parsed["sign_count"],
+            aaguid=aaguid,
+            authenticator_class=_classify_authenticator(aaguid, attestation_trusted, attestation_result.get("trust_class")),
+            attestation_fmt=attestation_result["fmt"],
+            attestation_trusted=attestation_trusted,
+            attestation_trust_path=attestation_result["trust_path"],
+            attestation_leaf_sha256=attestation_result["leaf_sha256"],
+            attestation_root_sha256=attestation_result["root_sha256"],
+            attestation_trust_bundle_digest=attestation_result.get("trust_bundle_digest"),
+            attestation_trust_bundle_sequence=attestation_result.get("trust_bundle_sequence"),
+            attestation_verified_at=attestation_result["verified_at"],
+            transports=response.get("transports") or [],
+        )
+    except ValueError as exc:
+        raise WebAuthnError(str(exc)) from exc
     redacted = _redact_credential(stored)
     if require_authorization:
         redacted["_registration_authorization"] = authorization
@@ -594,7 +607,7 @@ def approval_options(
         payload=payload,
         ttl_seconds=120,
     )
-    credentials = [_credential_descriptor(item) for item in db.list_webauthn_credentials(user_id)]
+    credentials = _credential_descriptors_for_policy(user_id, authn_policy)
     return {
         "publicKey": {
             "challenge": challenge,
@@ -636,7 +649,7 @@ def control_plane_mutation_options(
         payload=payload,
         ttl_seconds=120,
     )
-    credentials = [_credential_descriptor(item) for item in db.list_webauthn_credentials(user_id)]
+    credentials = _credential_descriptors_for_policy(user_id, authn_policy)
     return {
         "publicKey": {
             "challenge": challenge,
@@ -653,15 +666,144 @@ def control_plane_mutation_options(
     }
 
 
-def _allowed_authenticator(credential: dict[str, Any], authn_policy: dict[str, Any]) -> None:
+def credential_trust_status(
+    credential: dict[str, Any], *, trust_roots: list[TrustRoot] | None = None
+) -> dict[str, Any]:
+    enrollment_trusted = bool(credential.get("attestation_trusted"))
+    stored_class = str(credential.get("authenticator_class") or "unknown")
+    if (
+        stored_class == "dev"
+        and DEV_AUTHENTICATOR_ENABLED
+        and credential.get("dev_private_key_pem")
+    ):
+        return {
+            "enrollment_trusted": enrollment_trusted,
+            "currently_trusted": enrollment_trusted,
+            "reason": "development_authenticator" if enrollment_trusted else "not_attested",
+            "effective_authenticator_class": "dev" if enrollment_trusted else "unknown",
+            "current_trust_bundle_digest": credential.get(
+                "attestation_trust_bundle_digest"
+            ),
+            "current_trust_bundle_sequence": credential.get(
+                "attestation_trust_bundle_sequence"
+            ),
+        }
+    if not enrollment_trusted:
+        return {
+            "enrollment_trusted": False,
+            "currently_trusted": False,
+            "reason": "not_attested",
+            "effective_authenticator_class": "unknown",
+            "current_trust_bundle_digest": None,
+            "current_trust_bundle_sequence": None,
+        }
+    root_digest = credential.get("attestation_root_sha256")
+    if not root_digest:
+        return {
+            "enrollment_trusted": True,
+            "currently_trusted": False,
+            "reason": "attestation_root_missing",
+            "effective_authenticator_class": "unknown",
+            "current_trust_bundle_digest": None,
+            "current_trust_bundle_sequence": None,
+        }
+    roots = load_trust_roots() if trust_roots is None else trust_roots
+    root = next(
+        (item for item in roots if item.certificate_sha256 == root_digest), None
+    )
+    if root is None:
+        return {
+            "enrollment_trusted": True,
+            "currently_trusted": False,
+            "reason": "trust_root_withdrawn",
+            "effective_authenticator_class": "unknown",
+            "current_trust_bundle_digest": None,
+            "current_trust_bundle_sequence": None,
+        }
+    aaguid = str(credential.get("aaguid") or "").lower()
+    if root.aaguids and aaguid not in {item.lower() for item in root.aaguids}:
+        return {
+            "enrollment_trusted": True,
+            "currently_trusted": False,
+            "reason": "aaguid_no_longer_trusted",
+            "effective_authenticator_class": "unknown",
+            "current_trust_bundle_digest": root.bundle_digest,
+            "current_trust_bundle_sequence": root.bundle_sequence,
+        }
+    if root.authenticator_class and root.authenticator_class != stored_class:
+        return {
+            "enrollment_trusted": True,
+            "currently_trusted": False,
+            "reason": "authenticator_class_changed",
+            "effective_authenticator_class": "unknown",
+            "current_trust_bundle_digest": root.bundle_digest,
+            "current_trust_bundle_sequence": root.bundle_sequence,
+        }
+    return {
+        "enrollment_trusted": True,
+        "currently_trusted": True,
+        "reason": "trusted_by_current_root",
+        "effective_authenticator_class": stored_class,
+        "current_trust_bundle_digest": root.bundle_digest,
+        "current_trust_bundle_sequence": root.bundle_sequence,
+        "current_trust_root_id": root.id,
+        "current_trust_root_sha256": root.certificate_sha256,
+    }
+
+
+def _credential_descriptors_for_policy(
+    user_id: str, authn_policy: dict[str, Any]
+) -> list[dict[str, Any]]:
+    credentials = db.list_webauthn_credentials(user_id)
+    roots: list[TrustRoot] | None = None
+    if any(
+        item.get("attestation_trusted")
+        and not (
+            item.get("authenticator_class") == "dev"
+            and DEV_AUTHENTICATOR_ENABLED
+            and item.get("dev_private_key_pem")
+        )
+        for item in credentials
+    ):
+        try:
+            roots = load_trust_roots()
+        except WebAuthnTrustError:
+            return []
+    eligible: list[dict[str, Any]] = []
+    for item in credentials:
+        try:
+            _allowed_authenticator(item, authn_policy, trust_roots=roots)
+        except WebAuthnError:
+            continue
+        eligible.append(_credential_descriptor(item))
+    return eligible
+
+
+def _allowed_authenticator(
+    credential: dict[str, Any],
+    authn_policy: dict[str, Any],
+    *,
+    trust_roots: list[TrustRoot] | None = None,
+) -> dict[str, Any]:
+    try:
+        trust = credential_trust_status(credential, trust_roots=trust_roots)
+    except WebAuthnTrustError as exc:
+        raise WebAuthnError(f"WebAuthn attestation trust unavailable: {exc}") from exc
     allowed = set(authn_policy.get("allowedAuthenticatorClasses") or [])
-    credential_classes = {credential["authenticator_class"]}
-    if credential.get("attestation_trusted") and credential["authenticator_class"] != "platform":
+    credential_classes = {trust["effective_authenticator_class"]}
+    if trust["currently_trusted"] and trust["effective_authenticator_class"] != "platform":
         credential_classes.add("hardware")
     if allowed and not allowed.intersection(credential_classes):
-        raise WebAuthnError(f"authenticator class {credential['authenticator_class']} is not allowed")
-    if authn_policy.get("requireHardwareAttestation") and not credential.get("attestation_trusted"):
+        if trust["reason"] == "trust_root_withdrawn":
+            raise WebAuthnError("authenticator attestation trust root was withdrawn")
+        raise WebAuthnError(
+            f"authenticator class {trust['effective_authenticator_class']} is not allowed"
+        )
+    if authn_policy.get("requireHardwareAttestation") and not trust["currently_trusted"]:
+        if trust["reason"] == "trust_root_withdrawn":
+            raise WebAuthnError("authenticator attestation trust root was withdrawn")
         raise WebAuthnError("trusted hardware attestation required")
+    return trust
 
 
 def _verify_assertion_signature(credential: dict[str, Any], response: dict[str, Any], authn_policy: dict[str, Any]) -> dict[str, Any]:
@@ -694,7 +836,7 @@ def verify_approval_assertion(
         raise WebAuthnError("registered WebAuthn credential not found")
     if credential["user_id"] != user_id:
         raise WebAuthnError("WebAuthn credential belongs to a different user")
-    _allowed_authenticator(credential, authn_policy)
+    trust = _allowed_authenticator(credential, authn_policy)
 
     response = assertion.get("response") or {}
     verified = _verify_assertion_signature(credential, response, authn_policy)
@@ -757,7 +899,12 @@ def verify_approval_assertion(
         "credential_record_id": credential["id"],
         "authenticator_class": credential["authenticator_class"],
         "aaguid": credential.get("aaguid"),
-        "attestation_trusted": bool(credential.get("attestation_trusted")),
+        "attestation_trusted": trust["currently_trusted"],
+        "attestation_enrollment_trusted": trust["enrollment_trusted"],
+        "attestation_trust_reason": trust["reason"],
+        "effective_authenticator_class": trust["effective_authenticator_class"],
+        "current_trust_bundle_digest": trust.get("current_trust_bundle_digest"),
+        "current_trust_bundle_sequence": trust.get("current_trust_bundle_sequence"),
         "attestation_root_sha256": credential.get("attestation_root_sha256"),
         "user_present": parsed["user_present"],
         "user_verified": parsed["user_verified"],
@@ -783,7 +930,7 @@ def verify_control_plane_mutation_assertion(
         raise WebAuthnError("registered WebAuthn credential not found")
     if credential["user_id"] != user_id:
         raise WebAuthnError("WebAuthn credential belongs to a different user")
-    _allowed_authenticator(credential, authn_policy)
+    trust = _allowed_authenticator(credential, authn_policy)
 
     response = assertion.get("response") or {}
     verified = _verify_assertion_signature(credential, response, authn_policy)
@@ -821,7 +968,12 @@ def verify_control_plane_mutation_assertion(
         "credential_record_id": credential["id"],
         "authenticator_class": credential["authenticator_class"],
         "aaguid": credential.get("aaguid"),
-        "attestation_trusted": bool(credential.get("attestation_trusted")),
+        "attestation_trusted": trust["currently_trusted"],
+        "attestation_enrollment_trusted": trust["enrollment_trusted"],
+        "attestation_trust_reason": trust["reason"],
+        "effective_authenticator_class": trust["effective_authenticator_class"],
+        "current_trust_bundle_digest": trust.get("current_trust_bundle_digest"),
+        "current_trust_bundle_sequence": trust.get("current_trust_bundle_sequence"),
         "attestation_root_sha256": credential.get("attestation_root_sha256"),
         "user_present": parsed["user_present"],
         "user_verified": parsed["user_verified"],

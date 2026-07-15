@@ -867,6 +867,27 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     )
     add(
         failures,
+        env_bool(
+            env,
+            "SERVERWARE_CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION",
+        ),
+        "high-risk control-plane mutations must require hardware-attested WebAuthn",
+    )
+    mutation_authenticator_classes = {
+        item.strip()
+        for item in env.get(
+            "SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES", ""
+        ).split(",")
+        if item.strip()
+    }
+    add(
+        failures,
+        bool(mutation_authenticator_classes)
+        and mutation_authenticator_classes.issubset({"yubikey", "hardware"}),
+        "SERVERWARE_CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES must be limited to yubikey and hardware",
+    )
+    add(
+        failures,
         not env_bool(env, "SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED", default=True),
         "direct CA download must be disabled in production; use verifier-mediated install sessions",
     )
@@ -896,6 +917,8 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
         "route.delete",
         "policy.publish",
         "webauthn.credential.register",
+        "webauthn.credential.revoke",
+        "webauthn.trust.publish",
         "rbac.role.change",
         "rbac.deprovision",
         "control_plane.token.rotate",
@@ -905,7 +928,7 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     add(
         failures,
         "*" in two_person_actions or required_two_person_actions.issubset(two_person_actions),
-        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, uncertain OAuth issuance resolution, route, policy publish, WebAuthn enrollment, RBAC, deprovisioning, token rotation, break-glass, and setup attestation finalization mutations",
+        "SERVERWARE_CONTROL_PLANE_TWO_PERSON_ACTIONS must cover credential creation, exact-account OAuth activation, uncertain OAuth issuance resolution, route, policy publish, WebAuthn enrollment, revocation, trust publication, RBAC, deprovisioning, token rotation, break-glass, and setup attestation finalization mutations",
     )
     bootstrap_token = env.get("SERVERWARE_WEBAUTHN_BOOTSTRAP_TOKEN", "")
     add(

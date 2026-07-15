@@ -610,6 +610,20 @@ def _capture_screenshot(page: Any, selector: str, destination: Path) -> None:
     )
 
 
+def _capture_mobile_screenshot(page: Any, selector: str, destination: Path) -> None:
+    page.set_viewport_size({"width": 390, "height": 844})
+    page.locator(selector).scroll_into_view_if_needed()
+    page.evaluate("window.scrollBy(0, -8)")
+    page.wait_for_timeout(150)
+    page.screenshot(
+        path=str(destination),
+        type="png",
+        full_page=False,
+        mask=[page.locator("#admin-token")],
+        mask_color="#e8efed",
+    )
+
+
 def _assert_storage_and_disk_do_not_leak_tokens(
     page: Any,
     context: Any,
@@ -790,6 +804,18 @@ def _run_browser_journey(
                 raise AssertionError(
                     f"demo seed failed: {seed_status}; refresh stack: {refresh_stack}"
                 )
+            if screenshots_dir is not None:
+                _capture_screenshot(
+                    page,
+                    ".passkey-section",
+                    screenshots_dir / "operator-portal-desktop.png",
+                )
+                _capture_mobile_screenshot(
+                    page,
+                    ".passkey-section",
+                    screenshots_dir / "operator-portal-mobile.png",
+                )
+                page.set_viewport_size({"width": 1440, "height": 1100})
 
             google_credential = _connect_oauth(
                 page,
@@ -934,7 +960,7 @@ def main() -> None:
     parser.add_argument(
         "--screenshots-dir",
         type=Path,
-        help="refresh operator-portal-oauth.png and operator-portal-policy.png in this directory",
+        help="refresh the canonical desktop, mobile, OAuth, and policy screenshots",
     )
     args = parser.parse_args()
     screenshots_dir = args.screenshots_dir.resolve() if args.screenshots_dir else None

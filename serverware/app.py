@@ -186,6 +186,7 @@ from serverware.setup_receipts import (
 from serverware.webauthn import (
     WebAuthnError,
     approval_options,
+    credential_trust_status,
     control_plane_mutation_options,
     create_dev_credential,
     dev_assertion,
@@ -197,6 +198,8 @@ from serverware.webauthn import (
 from serverware.webauthn_trust import (
     WebAuthnTrustError,
     status as webauthn_trust_status,
+    trust_roots_from_bundle,
+    verify_trust_bundle,
     write_trust_bundle,
 )
 
@@ -589,8 +592,19 @@ class WebAuthnRegistrationFinish(BaseModel):
     response: dict[str, Any]
 
 
+class WebAuthnCredentialRevoke(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=500)
+    mfa: dict[str, Any] | None = None
+
+
 class WebAuthnTrustPublish(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     bundle: dict[str, Any]
+    reason: str | None = Field(default=None, max_length=500)
+    mfa: dict[str, Any] | None = None
 
 
 class DevAssertionRequest(BaseModel):
@@ -3218,7 +3232,12 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         if snapshot is not None and can_view_routes
         else []
     )
-    webauthn_credential_count = len(db.list_webauthn_credentials(identity.user_id))
+    webauthn_credential_history = db.list_webauthn_credentials(
+        identity.user_id, include_revoked=True
+    )
+    webauthn_credential_count = sum(
+        1 for item in webauthn_credential_history if item.get("revoked_at") is None
+    )
     result = {
         "credentials": credentials,
         "pendingOAuthCredentials": pending_oauth_credentials,
@@ -3242,8 +3261,13 @@ def bootstrap(identity: AdminIdentity = Depends(require_admin)) -> dict[str, Any
         "currentUserId": identity.user_id,
         "currentUserRoles": sorted(identity.roles),
         "webauthnCredentialCount": webauthn_credential_count,
+        "webauthnCredentialHistoryCount": len(webauthn_credential_history),
+        "webauthnCredentials": [
+            _redacted_webauthn_credential(item)
+            for item in webauthn_credential_history
+        ],
         "webauthnBootstrapRequired": (
-            webauthn_credential_count == 0
+            len(webauthn_credential_history) == 0
             and RELEASE_CHANNEL.strip().lower()
             not in {"dev", "development", "local", "test"}
         ),
@@ -8163,12 +8187,62 @@ def approval_webauthn_options(
     )
 
 
+def _redacted_webauthn_credential(item: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(item)
+    try:
+        current_trust = credential_trust_status(item)
+    except WebAuthnTrustError as exc:
+        current_trust = {
+            "enrollment_trusted": bool(item.get("attestation_trusted")),
+            "currently_trusted": False,
+            "reason": "trust_store_error",
+            "effective_authenticator_class": "unknown",
+            "error": str(exc),
+        }
+    redacted.pop("public_key_cose", None)
+    redacted.pop("dev_private_key_pem", None)
+    redacted["current_trust"] = current_trust
+    redacted["active"] = item.get("revoked_at") is None
+    redacted["credential_id_sha256"] = "sha256:" + hashlib.sha256(
+        str(item["credential_id"]).encode("utf-8")
+    ).hexdigest()
+    redacted.pop("credential_id", None)
+    return redacted
+
+
+def _webauthn_trust_withdrawal_impact(
+    candidate_roots: list[Any],
+) -> list[dict[str, Any]]:
+    affected: list[dict[str, Any]] = []
+    for item in db.list_webauthn_credentials():
+        after = credential_trust_status(item, trust_roots=candidate_roots)
+        if after.get("enrollment_trusted") and not after.get("currently_trusted"):
+            affected.append(
+                {
+                    "credential_record_id": item["id"],
+                    "credential_id_sha256": "sha256:"
+                    + hashlib.sha256(
+                        str(item["credential_id"]).encode("utf-8")
+                    ).hexdigest(),
+                    "user_id": item["user_id"],
+                    "reason": after["reason"],
+                    "attestation_root_sha256": item.get(
+                        "attestation_root_sha256"
+                    ),
+                }
+            )
+    return affected
+
+
 @app.post("/api/webauthn/register/options")
 def webauthn_register_options(
     payload: WebAuthnRegistrationStart,
     identity: AdminIdentity = Depends(require_role("admin", "approver")),
 ) -> dict[str, Any]:
     existing = db.list_webauthn_credentials(identity.user_id)
+    credential_history = db.list_webauthn_credentials(
+        identity.user_id, include_revoked=True
+    )
     production_release = RELEASE_CHANNEL.strip().lower() not in {
         "dev",
         "development",
@@ -8180,11 +8254,11 @@ def webauthn_register_options(
             "user_id": identity.user_id,
             "label": payload.label,
             "existing_credential_ids": sorted(
-                str(item["credential_id"]) for item in existing
+                str(item["credential_id"]) for item in credential_history
             ),
         }
     )
-    if not existing:
+    if not credential_history:
         if production_release:
             if len(WEBAUTHN_BOOTSTRAP_TOKEN) < 32:
                 raise HTTPException(
@@ -8272,15 +8346,101 @@ def webauthn_register_verify(
 
 @app.get("/api/webauthn/credentials")
 def webauthn_credentials(
+    include_revoked: bool = Query(default=False, alias="includeRevoked"),
     identity: AdminIdentity = Depends(require_role("admin", "approver")),
 ) -> list[dict[str, Any]]:
-    items = []
-    for item in db.list_webauthn_credentials(identity.user_id):
-        redacted = dict(item)
-        redacted.pop("public_key_cose", None)
-        redacted.pop("dev_private_key_pem", None)
-        items.append(redacted)
-    return items
+    return [
+        _redacted_webauthn_credential(item)
+        for item in db.list_webauthn_credentials(
+            identity.user_id, include_revoked=include_revoked
+        )
+    ]
+
+
+@app.post("/api/webauthn/credentials/{record_id}/revoke")
+def webauthn_credential_revoke(
+    record_id: str,
+    payload: WebAuthnCredentialRevoke,
+    identity: AdminIdentity = Depends(require_role("admin", "approver")),
+) -> dict[str, Any]:
+    credential = db.get_webauthn_credential_by_record_id(
+        record_id, include_revoked=True
+    )
+    if credential is None:
+        raise HTTPException(status_code=404, detail="WebAuthn credential not found")
+    if credential.get("revoked_at") is not None:
+        raise HTTPException(status_code=409, detail="WebAuthn credential is already revoked")
+    if credential["user_id"] != identity.user_id and not identity.has_any_role(
+        {"admin"}
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="only an admin can revoke another operator's WebAuthn credential",
+        )
+    action = "webauthn.credential.revoke"
+    mutation_payload = {
+        "credential_record_id": record_id,
+        "credential_id_sha256": "sha256:"
+        + hashlib.sha256(
+            str(credential["credential_id"]).encode("utf-8")
+        ).hexdigest(),
+        "credential_user_id": credential["user_id"],
+        "label": credential["label"],
+        "attestation_root_sha256": credential.get("attestation_root_sha256"),
+        "reason": payload.reason,
+    }
+    payload_digest = _control_plane_payload_digest(mutation_payload)
+    mfa = _require_control_plane_mutation_mfa(
+        action=action,
+        resource_id=record_id,
+        payload_digest=payload_digest,
+        mfa=payload.mfa,
+        identity=identity,
+    )
+    with db.connect() as conn:
+        two_person = _require_control_plane_two_person(
+            action=action,
+            resource_id=record_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request=mutation_payload,
+            connection=conn,
+        )
+        result = db.revoke_webauthn_credential(
+            record_id,
+            actor_id=identity.user_id,
+            reason=payload.reason,
+            source="explicit",
+            _connection=conn,
+        )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "webauthn_credential_not_revocable",
+                    "reason": result.get("reason"),
+                },
+            )
+    revoked = result["credential"]
+    db.record_audit_event(
+        "webauthn.credential_revoked",
+        {
+            **mutation_payload,
+            "revoked_at": revoked["revoked_at"],
+            "revoked_by": revoked["revoked_by"],
+            "revoked_grant_count": result.get("revoked_grant_count", 0),
+            "payload_digest": payload_digest,
+            "control_plane_mfa": mfa,
+            "control_plane_approval": two_person,
+        },
+        actor_id=identity.user_id,
+    )
+    return {
+        "ok": True,
+        "credential": _redacted_webauthn_credential(revoked),
+        "revokedGrantCount": result.get("revoked_grant_count", 0),
+    }
 
 
 @app.get("/api/webauthn/trust/status")
@@ -8299,6 +8459,77 @@ def webauthn_trust_publish(
     identity: AdminIdentity = Depends(require_role("admin")),
 ) -> dict[str, Any]:
     try:
+        candidate_info = verify_trust_bundle(payload.bundle, update_state=False)
+        candidate_roots = trust_roots_from_bundle(
+            payload.bundle, update_state=False
+        )
+        current_status = webauthn_trust_status()
+    except WebAuthnTrustError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    affected = _webauthn_trust_withdrawal_impact(candidate_roots)
+    action = "webauthn.trust.publish"
+    mutation_payload = {
+        "bundle_digest": candidate_info["digest"],
+        "sequence": candidate_info["sequence"],
+        "rollback_epoch": candidate_info["rollback_epoch"],
+        "current_bundle_digest": (current_status.get("state") or {}).get(
+            "bundle_digest"
+        ),
+        "root_certificate_sha256": sorted(
+            root.certificate_sha256 for root in candidate_roots
+        ),
+        "withdrawn_credential_record_ids": sorted(
+            item["credential_record_id"] for item in affected
+        ),
+        "reason": payload.reason,
+    }
+    payload_digest = _control_plane_payload_digest(mutation_payload)
+    mfa = _require_control_plane_mutation_mfa(
+        action=action,
+        resource_id="webauthn-trust-bundle",
+        payload_digest=payload_digest,
+        mfa=payload.mfa,
+        identity=identity,
+    )
+    two_person = _require_control_plane_two_person(
+        action=action,
+        resource_id="webauthn-trust-bundle",
+        payload_digest=payload_digest,
+        mfa=payload.mfa,
+        identity=identity,
+        request=mutation_payload,
+    )
+    withdrawal_reason = payload.reason or (
+        "Attestation trust withdrawn by signed bundle "
+        + candidate_info["digest"]
+    )
+    revoked_by_withdrawal: list[dict[str, Any]] = []
+    with db.connect() as conn:
+        for item in affected:
+            revoked = db.revoke_webauthn_credential(
+                item["credential_record_id"],
+                actor_id=identity.user_id,
+                reason=withdrawal_reason,
+                source="trust-root-withdrawal",
+                _connection=conn,
+            )
+            if not revoked.get("ok"):
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "webauthn_trust_withdrawal_revocation_failed",
+                        "credentialRecordId": item["credential_record_id"],
+                        "reason": revoked.get("reason"),
+                    },
+                )
+            redacted_revoked = _redacted_webauthn_credential(
+                revoked["credential"]
+            )
+            redacted_revoked["revoked_grant_count"] = revoked.get(
+                "revoked_grant_count", 0
+            )
+            revoked_by_withdrawal.append(redacted_revoked)
+    try:
         result = write_trust_bundle(payload.bundle)
     except WebAuthnTrustError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -8309,6 +8540,27 @@ def webauthn_trust_publish(
             "sequence": result.get("sequence"),
             "rollback_epoch": result.get("rollback_epoch"),
             "signing_key_id": result.get("signing_key_id"),
+            "root_certificate_sha256": result.get(
+                "root_certificate_sha256"
+            ),
+            "withdrawn_credentials": affected,
+            "revoked_credentials": [
+                {
+                    "credential_record_id": item["id"],
+                    "credential_id_sha256": item["credential_id_sha256"],
+                    "user_id": item["user_id"],
+                    "revoked_at": item["revoked_at"],
+                    "revocation_source": item["revocation_source"],
+                    "revoked_grant_count": item.get(
+                        "revoked_grant_count", 0
+                    ),
+                }
+                for item in revoked_by_withdrawal
+            ],
+            "reason": payload.reason,
+            "payload_digest": payload_digest,
+            "control_plane_mfa": mfa,
+            "control_plane_approval": two_person,
         },
         actor_id=identity.user_id,
     )
@@ -10694,7 +10946,6 @@ UI_HTML = r"""
       <button id="operator-sign-in" class="secondary" type="button" onclick="runUiAction('Sign in', signInWithOIDC)" hidden>Sign in</button>
       <button id="operator-sign-out" class="secondary" type="button" onclick="runUiAction('Sign out', signOutOperator)" hidden>Sign out</button>
       <button class="secondary" type="button" onclick="runUiAction('Refresh', refresh)">Refresh</button>
-      <button class="secondary" type="button" onclick="runUiAction('Register passkey', registerPasskey)">Register passkey</button>
       <button type="button" onclick="runUiAction('Seed demo', seedDemo)">Seed demo</button>
     </div>
   </header>
@@ -10713,6 +10964,17 @@ UI_HTML = r"""
   </dialog>
   <main id="main-content" tabindex="-1">
     <div class="main-grid">
+    <section class="passkey-section" aria-labelledby="passkey-heading">
+      <div class="toolbar">
+        <h2 id="passkey-heading" style="margin-right:auto">Operator passkeys</h2>
+        <span id="passkey-count" class="pill warn">No active passkeys</span>
+        <button class="secondary" type="button" onclick="runUiAction('Register passkey', registerPasskey)">Register passkey</button>
+      </div>
+      <table class="mobile-table">
+        <thead><tr><th>Passkey</th><th>State</th><th>Current trust</th><th>Last used</th><th>Action</th></tr></thead>
+        <tbody id="webauthn-credentials"><tr class="empty-row"><td colspan="5" class="muted">No passkeys registered</td></tr></tbody>
+      </table>
+    </section>
       <section class="setup-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Setup and Verify</h2>
@@ -11994,6 +12256,34 @@ UI_HTML = r"""
       $('policy-principal').innerHTML = options;
     }
 
+    function renderPasskeys() {
+      const items = state.webauthnCredentials || [];
+      const active = items.filter((item) => item.active !== false && !item.revoked_at);
+      $('passkey-count').textContent = active.length === 1 ? '1 active passkey' : `${active.length} active passkeys`;
+      $('passkey-count').className = active.length ? 'pill good' : 'pill warn';
+      $('webauthn-credentials').innerHTML = items.map((item) => {
+        const revoked = item.active === false || Boolean(item.revoked_at);
+        const trust = item.current_trust || {};
+        const trusted = trust.currently_trusted === true;
+        const stateCell = revoked
+          ? `<span class="pill bad">revoked</span><br><span class="muted">${esc(item.revocation_source || 'explicit')}</span>`
+          : '<span class="pill good">active</span>';
+        const trustCell = trusted
+          ? `<span class="pill good">${esc(trust.effective_authenticator_class || item.authenticator_class || 'trusted')}</span>`
+          : `<span class="pill ${revoked ? 'warn' : 'bad'}">${esc(trust.reason || 'untrusted')}</span>`;
+        const action = revoked
+          ? '<span class="muted">Retained for audit</span>'
+          : `<button class="danger" type="button" onclick="runUiAction('Revoke passkey', () => revokePasskey('${esc(item.id)}'))">Revoke</button>`;
+        return `<tr>
+          <td data-label="Passkey"><strong>${esc(item.label)}</strong><br><code>${esc(item.id)}</code><br><span class="muted">${esc(item.authenticator_class || 'unknown')}</span></td>
+          <td data-label="State">${stateCell}</td>
+          <td data-label="Current trust">${trustCell}<br><code>${esc(item.attestation_root_sha256 || 'no attestation root')}</code></td>
+          <td data-label="Last used"><code>${esc(item.last_used_at || 'never')}</code></td>
+          <td data-label="Action">${action}</td>
+        </tr>`;
+      }).join('') || '<tr class="empty-row"><td colspan="5" class="muted">No passkeys registered</td></tr>';
+    }
+
     function render(controlState = captureControlState()) {
       renderAuthStatus();
       $('ca-status').textContent = state.ca_ready ? 'CA ready' : 'CA pending';
@@ -12007,6 +12297,7 @@ UI_HTML = r"""
       syncPolicyTemplateEditor();
       renderPolicyPrincipalOptions();
       renderPolicyCredentialOptions(controlState['id:policy-credential']?.value || '');
+      renderPasskeys();
       renderSetupWorkflow(controlState);
       renderEnrollmentOutput();
       renderPendingOAuthCredentials();
@@ -13230,6 +13521,28 @@ UI_HTML = r"""
       if (authorized.pending) return authorized;
       await completePasskeyRegistration(authorized.result);
       return authorized;
+    }
+    async function revokePasskey(recordId) {
+      const item = (state.webauthnCredentials || []).find((candidate) => candidate.id === recordId);
+      if (!item || item.revoked_at) throw new Error('Passkey is no longer active');
+      const activeCount = (state.webauthnCredentials || []).filter((candidate) => !candidate.revoked_at).length;
+      const warning = activeCount === 1
+        ? 'This is your last active passkey. Revocation will disable passkey-protected actions until an administrator performs recovery.\n\n'
+        : '';
+      const reason = window.prompt(`${warning}Reason for revoking ${item.label}:`, 'Retired authenticator');
+      if (reason === null) return cancelledAction('Passkey revocation');
+      if (!reason.trim()) throw new Error('A revocation reason is required');
+      const mutation = {
+        kind: 'webauthn-revoke',
+        label: `Revoke passkey ${item.label}`,
+        persist: false,
+        path: `/api/webauthn/credentials/${encodeURIComponent(recordId)}/revoke`,
+        method: 'POST',
+        body: {reason: reason.trim()}
+      };
+      const completed = await runControlPlaneMutation(mutation);
+      if (!completed.pending) await finishMutation(completed.mutation, completed.result);
+      return completed;
     }
     async function completePasskeyRegistration(options) {
       const credential = await navigator.credentials.create({publicKey: prepareCreationOptions(options)});

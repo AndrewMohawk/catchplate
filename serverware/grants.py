@@ -83,6 +83,7 @@ def init_grant_store() -> None:
                     policy_hash TEXT NOT NULL,
                     request_digest TEXT NOT NULL,
                     operation_digest TEXT,
+                    approver_webauthn_credential_id TEXT,
                     uses_remaining INTEGER NOT NULL,
                     valid_from TIMESTAMPTZ NOT NULL,
                     expires_at TIMESTAMPTZ NOT NULL,
@@ -99,6 +100,8 @@ def init_grant_store() -> None:
                     ADD COLUMN IF NOT EXISTS reserved_at_epoch_ms BIGINT;
                 ALTER TABLE approval_grants
                     ADD COLUMN IF NOT EXISTS reservation_expires_at_epoch_ms BIGINT;
+                ALTER TABLE approval_grants
+                    ADD COLUMN IF NOT EXISTS approver_webauthn_credential_id TEXT;
                 CREATE INDEX IF NOT EXISTS approval_grants_active_lookup
                     ON approval_grants (
                         principal_id, route_id, credential_id, credential_version,
@@ -159,6 +162,7 @@ def create_grant(
     policy_hash: str,
     request_digest: str,
     operation_digest: str | None,
+    approver_webauthn_credential_id: str | None,
     uses_remaining: int,
     valid_from: str,
     expires_at: str,
@@ -178,12 +182,14 @@ def create_grant(
                 INSERT INTO approval_grants (
                     id, approval_request_id, state, principal_id, route_id, credential_id,
                     credential_version, policy_hash, request_digest, operation_digest,
-                    uses_remaining, valid_from, expires_at, created_at, updated_at
+                    approver_webauthn_credential_id, uses_remaining, valid_from,
+                    expires_at, created_at, updated_at
                 )
                 VALUES (
                     %(id)s, %(approval_request_id)s, 'active', %(principal_id)s, %(route_id)s,
                     %(credential_id)s, %(credential_version)s, %(policy_hash)s, %(request_digest)s,
-                    %(operation_digest)s, %(uses_remaining)s, %(valid_from)s::timestamptz,
+                    %(operation_digest)s, %(approver_webauthn_credential_id)s,
+                    %(uses_remaining)s, %(valid_from)s::timestamptz,
                     %(expires_at)s::timestamptz, %(created_at)s::timestamptz,
                     %(created_at)s::timestamptz
                 )
@@ -200,6 +206,7 @@ def create_grant(
                     "policy_hash": policy_hash,
                     "request_digest": request_digest,
                     "operation_digest": operation_digest,
+                    "approver_webauthn_credential_id": approver_webauthn_credential_id,
                     "uses_remaining": uses_remaining,
                     "valid_from": valid_from,
                     "expires_at": expires_at,

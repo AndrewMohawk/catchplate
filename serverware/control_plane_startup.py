@@ -4,6 +4,8 @@ from serverware import db
 from serverware.ca_material import ensure_mitm_ca_material
 from serverware.config import (
     ATOMIC_RELEASE_AUTHORIZATION_ENABLED,
+    CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES,
+    CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION,
     CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
     CONTROL_PLANE_TWO_PERSON_REQUIRED,
     MASTER_KEY_UNSEAL_COMMAND,
@@ -54,6 +56,20 @@ def validate_control_plane_configuration() -> None:
         )
     if not CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED:
         raise RuntimeError("production requires control-plane WebAuthn mutation authorization")
+    if not CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION:
+        raise RuntimeError(
+            "production requires hardware-attested control-plane WebAuthn authorization"
+        )
+    allowed_authenticator_classes = set(
+        CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES
+    )
+    if not allowed_authenticator_classes or not allowed_authenticator_classes.issubset(
+        {"yubikey", "hardware"}
+    ):
+        raise RuntimeError(
+            "production control-plane WebAuthn authenticator classes must be limited "
+            "to yubikey and hardware"
+        )
     if not CONTROL_PLANE_TWO_PERSON_REQUIRED:
         raise RuntimeError("production requires two-person control-plane authorization")
     if not MASTER_KEY_UNSEAL_COMMAND:

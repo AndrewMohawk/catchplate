@@ -236,6 +236,15 @@ def _enforce_rollback(bundle: dict[str, Any], digest: str) -> None:
     if rollback_epoch == last_epoch and sequence < last_sequence:
         raise WebAuthnTrustError("WebAuthn trust bundle sequence is stale")
     if (
+        state.get("bundle_digest")
+        and rollback_epoch == last_epoch
+        and sequence == last_sequence
+        and digest != state.get("bundle_digest")
+    ):
+        raise WebAuthnTrustError(
+            "WebAuthn trust bundle content changed without advancing sequence"
+        )
+    if (
         sequence != last_sequence
         or rollback_epoch != last_epoch
         or digest != state.get("bundle_digest")
@@ -319,19 +328,34 @@ def _legacy_roots_from_path(path: Path) -> list[TrustRoot]:
 def load_trust_roots() -> list[TrustRoot]:
     if WEBAUTHN_TRUST_BUNDLE_PATH.exists():
         bundle = json.loads(WEBAUTHN_TRUST_BUNDLE_PATH.read_text(encoding="utf-8"))
-        bundle_info = verify_trust_bundle(bundle)
-        return [_trust_root_from_bundle_item(item, bundle_info) for item in bundle.get("roots") or []]
+        return trust_roots_from_bundle(bundle)
     return _legacy_roots_from_path(WEBAUTHN_TRUST_ROOTS_PATH)
 
 
+def trust_roots_from_bundle(
+    bundle: dict[str, Any], *, update_state: bool = True
+) -> list[TrustRoot]:
+    bundle_info = verify_trust_bundle(bundle, update_state=update_state)
+    return [
+        _trust_root_from_bundle_item(item, bundle_info)
+        for item in bundle.get("roots") or []
+    ]
+
+
 def write_trust_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
-    info = verify_trust_bundle(bundle)
+    roots = trust_roots_from_bundle(bundle)
+    info = verify_trust_bundle(bundle, update_state=False)
     WEBAUTHN_TRUST_BUNDLE_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp = WEBAUTHN_TRUST_BUNDLE_PATH.with_name(f".{WEBAUTHN_TRUST_BUNDLE_PATH.name}.tmp")
     tmp.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.chmod(tmp, 0o600)
     os.replace(tmp, WEBAUTHN_TRUST_BUNDLE_PATH)
-    return {"ok": True, **info}
+    return {
+        "ok": True,
+        **info,
+        "root_count": len(roots),
+        "root_certificate_sha256": sorted(root.certificate_sha256 for root in roots),
+    }
 
 
 def status() -> dict[str, Any]:

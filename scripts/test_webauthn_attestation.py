@@ -129,7 +129,28 @@ def register(webauthn, user_id: str, label: str, response: dict) -> dict:
     return webauthn.verify_registration(user_id, label, response)
 
 
-def publish_bundle(webauthn_trust, *, sequence: int, rollback_epoch: int, root_cert: x509.Certificate, root_id: str) -> dict:
+def publish_bundle(
+    webauthn_trust,
+    *,
+    sequence: int,
+    rollback_epoch: int,
+    root_cert: x509.Certificate | None,
+    root_id: str | None = None,
+    write: bool = True,
+) -> dict:
+    roots = []
+    if root_cert is not None:
+        if not root_id:
+            raise ValueError("root_id is required when root_cert is provided")
+        roots.append(
+            {
+                "id": root_id,
+                "authenticatorClass": "yubikey",
+                "aaguids": [str(uuid.UUID(bytes=YUBIKEY_AAGUID))],
+                "certificatePem": root_cert.public_bytes(serialization.Encoding.PEM).decode("ascii"),
+                "certificateSha256": webauthn_trust.cert_digest(root_cert),
+            }
+        )
     raw = {
         "apiVersion": "serverware.webauthnTrust/v1",
         "kind": "WebAuthnTrustBundle",
@@ -139,18 +160,13 @@ def publish_bundle(webauthn_trust, *, sequence: int, rollback_epoch: int, root_c
             "rollbackEpoch": rollback_epoch,
             "validFrom": (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat(),
         },
-        "roots": [
-            {
-                "id": root_id,
-                "authenticatorClass": "yubikey",
-                "aaguids": [str(uuid.UUID(bytes=YUBIKEY_AAGUID))],
-                "certificatePem": root_cert.public_bytes(serialization.Encoding.PEM).decode("ascii"),
-                "certificateSha256": webauthn_trust.cert_digest(root_cert),
-            }
-        ],
+        "roots": roots,
     }
     signed = webauthn_trust.sign_trust_bundle(raw)
-    return {"bundle": signed, "result": webauthn_trust.write_trust_bundle(signed)}
+    return {
+        "bundle": signed,
+        "result": webauthn_trust.write_trust_bundle(signed) if write else None,
+    }
 
 
 def main() -> None:
@@ -164,7 +180,9 @@ def main() -> None:
         os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"
         os.environ["SERVERWARE_WEBAUTHN_ORIGIN"] = "http://localhost:3000"
 
+        from serverware import app as app_module
         from serverware import db, webauthn, webauthn_trust
+        from serverware.auth import AdminIdentity
 
         db.init_db()
         trusted_root_key, trusted_root_cert = make_ca("trusted fido root")
@@ -181,6 +199,19 @@ def main() -> None:
             root_cert=trusted_root_cert,
             root_id="trusted-root-v1",
         )
+        try:
+            publish_bundle(
+                webauthn_trust,
+                sequence=1,
+                rollback_epoch=1,
+                root_cert=trusted_root_cert,
+                root_id="conflicting-root-v1",
+            )
+        except webauthn_trust.WebAuthnTrustError as exc:
+            if "content changed without advancing sequence" not in str(exc):
+                raise
+        else:
+            raise SystemExit("signed WebAuthn trust bundle content changed without advancing sequence")
 
         unauthorized_options = webauthn.registration_options("user:unauthorized", "stolen-session key")
         unauthorized_response = registration_response(
@@ -286,7 +317,7 @@ def main() -> None:
         rotated_leaf_key, rotated_leaf_cert = make_leaf(
             "rotated yubikey attestation", rotated_intermediate_cert, rotated_intermediate_key
         )
-        rotated_bundle = publish_bundle(
+        publish_bundle(
             webauthn_trust,
             sequence=2,
             rollback_epoch=1,
@@ -304,6 +335,16 @@ def main() -> None:
         rotated = register(webauthn, "user:test", "rotated yubikey", rotated_response)
         if rotated["authenticator_class"] != "yubikey" or rotated["attestation_trust_bundle_sequence"] != 2:
             raise SystemExit(f"rotated trust bundle was not used: {rotated}")
+        try:
+            webauthn._allowed_authenticator(
+                trusted,
+                {"allowedAuthenticatorClasses": ["hardware"], "requireHardwareAttestation": True},
+            )
+        except webauthn.WebAuthnError as exc:
+            if "attestation trust root was withdrawn" not in str(exc):
+                raise
+        else:
+            raise SystemExit("credential trusted at enrollment remained usable after its trust root was withdrawn")
         try:
             webauthn_trust.write_trust_bundle(first_bundle["bundle"])
         except webauthn_trust.WebAuthnTrustError as exc:
@@ -349,6 +390,74 @@ def main() -> None:
         else:
             raise SystemExit("registration accepted a mismatched attestation certificate AAGUID")
 
+        emergency_bundle = publish_bundle(
+            webauthn_trust,
+            sequence=3,
+            rollback_epoch=1,
+            root_cert=None,
+            write=False,
+        )
+        emergency_result = app_module.webauthn_trust_publish(
+            app_module.WebAuthnTrustPublish(
+                bundle=emergency_bundle["bundle"],
+                reason="emergency withdrawal regression test",
+            ),
+            identity=AdminIdentity(
+                "user:security-admin",
+                frozenset({"admin"}),
+                "test",
+            ),
+        )
+        emergency_bundle["result"] = emergency_result
+        if emergency_result.get("root_count") != 0:
+            raise SystemExit(f"empty-root emergency bundle reported roots: {emergency_bundle}")
+        if emergency_result.get("root_certificate_sha256") != []:
+            raise SystemExit(f"empty-root emergency bundle reported root digests: {emergency_bundle}")
+        if webauthn_trust.load_trust_roots() != []:
+            raise SystemExit("empty-root emergency bundle did not withdraw every trust root")
+        for credential in (trusted, rotated):
+            if db.get_webauthn_credential(credential["credential_id"]) is not None:
+                raise SystemExit("trust-root withdrawal left an affected credential active")
+            retained = db.get_webauthn_credential(
+                credential["credential_id"], include_revoked=True
+            )
+            if retained is None or retained.get("revocation_source") != "trust-root-withdrawal":
+                raise SystemExit(
+                    f"trust-root withdrawal did not retain revocation provenance: {retained}"
+                )
+        try:
+            webauthn._allowed_authenticator(
+                rotated,
+                {"allowedAuthenticatorClasses": ["hardware"], "requireHardwareAttestation": True},
+            )
+        except webauthn.WebAuthnError as exc:
+            if "attestation trust root was withdrawn" not in str(exc):
+                raise
+        else:
+            raise SystemExit("empty-root emergency bundle left a previously trusted credential usable")
+
+        restored_bundle = publish_bundle(
+            webauthn_trust,
+            sequence=4,
+            rollback_epoch=1,
+            root_cert=rotated_root_cert,
+            root_id="trusted-root-v2-restored",
+            write=False,
+        )
+        app_module.webauthn_trust_publish(
+            app_module.WebAuthnTrustPublish(
+                bundle=restored_bundle["bundle"],
+                reason="root restoration regression test",
+            ),
+            identity=AdminIdentity(
+                "user:security-admin",
+                frozenset({"admin"}),
+                "test",
+            ),
+        )
+        if db.get_webauthn_credential(rotated["credential_id"]) is not None:
+            raise SystemExit("re-adding a withdrawn root silently reactivated a credential")
+
         print(
             json.dumps(
                 {
@@ -356,8 +465,8 @@ def main() -> None:
                     "webauthn_attestation": "pass",
                     "trusted_class": trusted["authenticator_class"],
                     "trusted_root": trusted["attestation_root_sha256"],
-                    "trust_bundle_digest": rotated_bundle["result"]["digest"],
-                    "trust_bundle_sequence": rotated["attestation_trust_bundle_sequence"],
+                    "trust_bundle_digest": emergency_bundle["result"]["digest"],
+                    "trust_bundle_sequence": emergency_bundle["result"]["sequence"],
                     "untrusted_class": untrusted["authenticator_class"],
                     "spoofed_class": spoofed["authenticator_class"],
                 },

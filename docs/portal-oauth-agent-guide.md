@@ -6,7 +6,7 @@ This guide covers the operator path for connecting OAuth-backed services in the 
 
 [Private deployment screenshot omitted from public source.]
 
-The screenshots in this guide are rendered from the real portal UI. The desktop view above shows a selected cancelled fixture run, its revision and current-assignee label, pending configuration/runtime/hardware statuses, the handoff field, and the assignment actions beside the credential controls. The OAuth and policy screenshots below come from the deterministic HTTPS browser journey in `scripts/test_portal_browser_oauth.py`; that journey exercises real portal redirects and callback handling against a bounded local provider simulator. It is not evidence of a live Google/X tenant or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
+The screenshots in this guide are rendered from the real portal UI by the deterministic HTTPS browser journey in `scripts/test_portal_browser_oauth.py`. The desktop view above shows the empty operator-passkey inventory, pending configuration/runtime/hardware statuses, handoff field, and assignment controls after the demo state is seeded. The OAuth and policy screenshots below exercise real portal redirects and callback handling against a bounded local provider simulator. They are not evidence of a live Google/X tenant, production WebAuthn enrollment, or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
 
 ## Authenticate The Operator
 
@@ -15,6 +15,14 @@ Development accepts the `dev-admin-token` through the portal token field. Produc
 The portal **Sign in** button calls `GET /api/auth/oidc/start`. Serverware creates one-use state, a separate browser nonce, an OIDC nonce, and an S256 PKCE verifier/challenge. The encrypted verifier, OIDC nonce, and only the browser nonce digest are stored in the metadata store; the raw browser nonce is an `HttpOnly`/`SameSite=Lax` callback cookie. The callback consumes the state once, exchanges the code with the verifier, validates the ID token against the pinned issuer/audience/JWKS/algorithm set and OIDC nonce, applies the configured subject and RBAC role claims, and sets an `HttpOnly` session cookie. Its lifetime cannot exceed either the ID token expiry or `SERVERWARE_OIDC_SESSION_TTL_SECONDS`.
 
 Unsafe API calls made through that cookie require Serverware's double-submit CSRF cookie and `X-Serverware-CSRF-Token` header. The portal obtains and sends the CSRF token automatically. Authorization remains live: role-gated requests re-read the authoritative role binding, so a deprovisioned production subject is denied even while its ID token has time remaining. **Sign out** removes the OIDC session and CSRF cookies and records an audit event.
+
+## Manage Operator Passkeys
+
+The first portal band lists the current operator's active and revoked passkeys, effective authenticator class under the current trust bundle, attestation-root digest, last-use time, and retained revocation source. The API and bootstrap payload omit COSE public keys, development private material, and raw credential IDs. **Register passkey** uses the one-time production bootstrap token only when the operator has no historical enrollment. Every later registration is a digest-bound control-plane mutation and can require a different operator's approval.
+
+**Revoke** requires a non-empty reason, a fresh assertion over the exact credential record and reason, and the configured two-person approval. The row is soft-revoked rather than deleted; assertion lookup and sign-counter CAS exclude it, credential-ID reuse is rejected, and unconsumed JIT grants created by that authenticator are revoked. Revoking the last active passkey intentionally does not reopen bootstrap. The portal warns before this lockout, and recovery must use the separately controlled administrative procedure for that deployment.
+
+Publishing a signed trust bundle re-evaluates every active attested credential against the candidate roots, AAGUID restrictions, and class. Removed trust soft-revokes affected rows with source `trust-root-withdrawal`; an empty `roots` array withdraws all roots. A later bundle may restore a root for new registrations, but it cannot reactivate historical rows. Production protects `webauthn.credential.revoke` and `webauthn.trust.publish` with hardware WebAuthn and two-person approval. Passkey revocation currently blocks passkey-protected JIT/mutation authority but does not terminate an already issued OIDC browser cookie, because browser sessions are not yet bound to a WebAuthn record.
 
 ## Configure OAuth Providers
 
@@ -182,7 +190,7 @@ The portal keeps **Approve** disabled until the matching review has been opened.
 
 [Private deployment screenshot omitted from public source.]
 
-The mobile screenshot shows the responsive Setup and Verify workflow: pending configuration/runtime/hardware status pills, a selected cancelled fixture run, the next-operator subject field, and the same assignment controls stacked for a narrow viewport. The fixture credential and run demonstrate rendered workflow state, not a live provider login, production WebAuthn ceremony, physical YubiKey use, independent enrollment verification, or hardware attestation.
+The mobile screenshot shows the responsive operator-passkey and Setup and Verify workflows: the empty passkey state, pending configuration/runtime/hardware status pills, next-operator subject field, and assignment controls stacked for a narrow viewport. The seeded state demonstrates rendered workflow behavior, not a live provider login, production WebAuthn ceremony, physical YubiKey use, independent enrollment verification, or hardware attestation.
 
 ## Teach Agents To Use Serverware
 

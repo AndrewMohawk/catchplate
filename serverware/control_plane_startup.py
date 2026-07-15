@@ -27,6 +27,7 @@ from serverware.setup_receipt_service import (
     SetupReceiptTrustConfigurationError,
     setup_receipt_trust_profile,
 )
+from serverware.webauthn_trust import reconcile_trust_publications
 
 
 _DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
@@ -89,6 +90,23 @@ def validate_control_plane_startup() -> None:
     validate_control_plane_configuration()
     ensure_data_dirs()
     db.init_db()
+    try:
+        reconcile_trust_publications()
+    except Exception as exc:
+        raise RuntimeError(
+            "control plane could not reconcile WebAuthn trust publication"
+        ) from exc
+    metadata_audit_delivery = db.drain_metadata_audit_outbox_fully(
+        limit=500, max_batches=200 if production_release() else 1
+    )
+    if production_release():
+        if (
+            metadata_audit_delivery["failed"] > 0
+            or metadata_audit_delivery["pending"] > 0
+        ):
+            raise RuntimeError(
+                "production control plane requires complete metadata audit outbox delivery"
+            )
     if production_release():
         audit_verification = db.verify_audit_chain()
         if (

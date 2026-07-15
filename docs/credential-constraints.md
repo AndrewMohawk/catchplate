@@ -40,7 +40,7 @@ For streaming responses, validation and projection happen incrementally. Serverw
 
 `operationPolicy`: allow or deny normalized adapter operations. Use this to block writes for one app while allowing reads, or to make a broad route safe even if SDKs choose unexpected endpoints.
 
-`rateLimit`: fixed-window credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. Examples: one tweet per provider account per day, five Slack posts per hour, ten bounded JSON object-store writes per hour. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas.
+`rateLimit`: fixed-window credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. Examples: one tweet per provider account per day, five Slack posts per principal/credential/route assignment per hour, and ten bounded JSON object-store writes per principal/credential/route assignment per hour. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas.
 
 `queryDateWindow`: bounds query parameters such as `start_time`, `end_time`, or `since` to a maximum lookback. Formats supported: RFC3339, date, epoch seconds, and epoch milliseconds.
 
@@ -204,7 +204,7 @@ Policy admission rejects `responseJson` with the wrong phase, missing or empty `
 
 ### Request-to-response bindings
 
-`responseBinding` proves that selected fields in a successful upstream JSON response agree with the operation that Serverware authorized. It does not read arbitrary request paths and it does not redact the response. For example, the tokenized Stripe PaymentIntent route binds the captured form amount, currency, and payment-method token to Stripe's response:
+`responseBinding` proves that selected fields in a successful upstream JSON response agree with the operation that Serverware authorized. It reads only explicitly declared operation, top-level body, and route-parameter sources; it does not evaluate arbitrary request paths and it does not redact the response. For example, the tokenized Stripe PaymentIntent route binds the captured form amount, currency, and payment-method token to Stripe's response:
 
 ```json
 {
@@ -239,14 +239,26 @@ Policy admission rejects `responseJson` with the wrong phase, missing or empty `
 
 `phase` is required and must be `response`. `successStatusCodes` explicitly admits 1-8 unique `2xx` statuses; a different success status is a binding failure, not an implicit success. `contentTypes` explicitly admits 1-4 unique lower-case media types and the upstream response must contain exactly one matching `Content-Type`. An absent, duplicate, or different content type fails closed, as does any non-identity `Content-Encoding`. `operations` is optional; when present it is a non-empty, unique list and the constraint applies only to those exact normalized operation names. A matching response without operation context fails closed. Each constraint defines 1-8 bindings. Every binding has exactly `id`, `operationField`, `responseField`, and `comparison`; binding IDs and response fields must be unique.
 
-`operationField` is an exact key lookup in the adapter's flat normalized operation map. Dots in a key are literal: `metadata.agent_request_id` names one flat captured key and does not traverse nested request data. A source must be a string no larger than 4096 UTF-8 bytes. The v1 primitive is admitted only for `generic.rest` routes with a buffered `formUrlencoded` request and a `json` response capped at 65,536 bytes. Policy admission requires `request.operation`, limits available sources to the literal `operation` key plus the exact names declared in `request.operation.formFields`, and proves each non-operation source is required and typed by `formBody`. `canonicalInteger` sources require `type: "integer"`; `exactString` sources require `type: "string"`. A missing, duplicate, non-string, oversized, or otherwise invalid source denies the request before request quota reservation, JIT grant consumption, credential lease acquisition, credential injection, or upstream contact.
+`operationField` is an exact key lookup in the adapter's flat normalized operation map. Dots in a key are literal: `metadata.agent_request_id` names one flat captured key and does not traverse nested request data. A source must be a string no larger than 4096 UTF-8 bytes.
+
+The v2 source contract is admitted only for `generic.rest` routes with a buffered `json` response capped at 65,536 bytes. `request.operation` defines a required `name` and may declare three bounded source arrays:
+
+- `formFields`: at most 16 unique form keys, available only with `bodyMode: "formUrlencoded"`.
+- `jsonFields`: at most 16 unique top-level JSON object keys, available only with `bodyMode: "json"`. Dots are forbidden because `jsonBody` uses dots for structural traversal; nested JSON values cannot be captured as operation sources.
+- `pathParams`: at most 16 unique route parameter names. Every name must be an exact, non-repeated `{placeholder}` in every path in `route.match.paths`. If equal-specificity templates can match the same path, each configured source must occupy the same segment position; swapped placeholders are rejected.
+
+Form and path source names must match `[A-Za-z][A-Za-z0-9_.-]{0,127}`; JSON source names use the stricter `[A-Za-z][A-Za-z0-9_-]{0,127}` top-level-key contract. Names must be unique across all three arrays, and `operation` is reserved. A route can therefore use `responseBinding` with any request body mode when its declared sources are compatible: for example, a `bodyMode: "none"` GET can bind `operation` and declared path parameters without inventing a request body. Path sources support `exactString` only.
+
+JSON capture uses the same strict decoder as request constraints. The request root must be an object and only exact top-level keys are inspected. A JSON string is captured as its exact decoded UTF-8 value, with no trimming or Unicode normalization. A JSON integer is captured as its canonical base-10 string only when it fits signed i64. Booleans, floats, nulls, arrays, objects, out-of-range integers, invalid UTF-8 strings, malformed JSON, duplicate-key JSON, and non-object roots produce no JSON sources. `-0` is rejected by the strict decoder. Form capture likewise requires one unambiguous normalized value for the configured key. These extraction failures do not bypass request validation: ordinary `jsonBody` or `formBody` constraints run before source preflight and preserve their canonical denial.
+
+Policy admission proves every bound form or JSON source is required by the corresponding `formBody` or `jsonBody` constraint. `canonicalInteger` requires `type: "integer"`; `exactString` requires `type: "string"`. Path parameters need no body rule because admission proves the route placeholder and runtime uses the matched route parameters. A missing, duplicate, mistyped, oversized, or otherwise invalid source denies the request before request quota reservation, JIT grant consumption, credential lease acquisition, credential injection, or upstream contact.
 
 `responseField` is a unique explicit dotted JSON path, not an operation-map key. Empty components and wildcards are forbidden. The response root and every intermediate node must be JSON objects; arrays are never traversed, even single-element arrays. The final value must be a scalar. This prevents fields from separate array elements from being combined into a false match. Missing paths, arrays, objects, or other non-scalar final values fail closed. The two comparisons are deliberately narrow:
 
 - `exactString` requires the response value to be a JSON string exactly equal to the captured source. There is no trimming, case folding, Unicode normalization, or scalar coercion.
 - `canonicalInteger` requires the source string to match `0|-?[1-9][0-9]*` and fit the signed 64-bit range `-9223372036854775808` through `9223372036854775807`. The response must be an equal JSON integer in that range, not a string, boolean, or floating-point value. Leading zeroes, `+`, `-0`, decimal points, and exponents are not canonical.
 
-The validation order is fail closed. Policy admission validates the bounded binding shape, response envelope, required typed sources, and adapter capture contract. At request time the adapter validates and classifies the request, ordinary request-body constraints run first so malformed or duplicate form fields keep their canonical denial, and then Serverware validates all applicable binding sources before any credential lookup or release state is reserved or consumed. At response time Serverware validates the configured success status and media envelope, then runs `responseBinding` and `responseJson` against the original bounded upstream entity before adapter semantic validation, canonicalization, `responseDateWindow`, structural `allowedFields` projection, released-header checks, and the final credential-reflection guard.
+The validation order is fail closed. Policy admission validates the bounded binding shape, response envelope, required typed sources, route placeholders, and adapter capture contract. At request time the adapter validates and classifies the request, ordinary request-body constraints run first so malformed, duplicate, or mistyped form/JSON fields keep their canonical denial, and then Serverware validates all applicable binding sources before any credential lookup or release state is reserved or consumed. At response time Serverware validates the configured success status and media envelope, then runs `responseBinding` and `responseJson` against the original bounded upstream entity before adapter semantic validation, canonicalization, `responseDateWindow`, structural `allowedFields` projection, released-header checks, and the final credential-reflection guard.
 
 Response binding is considered only for upstream `2xx` responses, and only configured `successStatusCodes` can pass. Redirects are blocked separately, and `4xx`/`5xx` bodies use the bounded error response profile without applying success bindings. An unapproved success status or media type, invalid JSON, missing operation context, a missing object-only response path, a type mismatch, or an unequal value produces a synthetic `502`; the upstream body is replaced and no upstream status, headers, or body bytes are released to the agent. Because binding requires the complete body before release, any route with `responseBinding` is rejected at policy admission when its response mode is streaming, including structured streaming modes. The development mitmproxy transport also forces response buffering in `responseheaders`; non-development deployments use the Rust decision gate.
 
@@ -261,6 +273,15 @@ The bounded object-store write in [policies/credential-limits.examples.json](../
   "adapter": {
     "type": "generic.rest",
     "config": {
+      "request": {
+        "bodyMode": "json",
+        "maxBodyBytes": 65536,
+        "operation": {
+          "name": "object_store.objects.put",
+          "jsonFields": ["sha256"],
+          "pathParams": ["artifact_id"]
+        }
+      },
       "response": {
         "mode": "json",
         "maxBodyBytes": 65536,
@@ -278,12 +299,24 @@ The bounded object-store write in [policies/credential-limits.examples.json](../
         "id": {"required": true, "type": "string", "maxLength": 128, "pattern": "^[A-Za-z0-9._-]{1,128}$"},
         "sha256": {"required": true, "type": "string", "maxLength": 71, "pattern": "^sha256:[0-9a-f]{64,64}$"}
       }
+    },
+    {
+      "id": "object-store-response-binding",
+      "type": "responseBinding",
+      "phase": "response",
+      "operations": ["object_store.objects.put"],
+      "successStatusCodes": [200],
+      "contentTypes": ["application/json"],
+      "bindings": [
+        {"id": "artifact-id", "operationField": "artifact_id", "responseField": "id", "comparison": "exactString"},
+        {"id": "sha256", "operationField": "sha256", "responseField": "sha256", "comparison": "exactString"}
+      ]
     }
   ]
 }
 ```
 
-Here `responseJson` proves that the provider reported success and returned a bounded object ID and SHA-256 digest. `allowedFields` separately guarantees that only those three fields can reach the agent.
+Here `responseJson` proves that the provider reported success and returned a bounded object ID and SHA-256-shaped string. `responseBinding` separately proves that the ID equals the matched `{artifact_id}` and that the returned string equals the caller-declared top-level `sha256` metadata echoed by the provider. `allowedFields` guarantees that only those three fields can reach the agent. This generic template does not hash `content` or prove that the declared digest matches the uploaded bytes; that requires an explicit provider adapter or a future request-content digest source.
 
 Every response profile has an explicit `maxBodyBytes`. A `2xx` status uses the success profile. Redirects are always blocked with `response_redirect_not_allowed`; Serverware never follows or releases an upstream `Location`. A `4xx` or `5xx` status uses the nested `error` profile, and fails closed with `response_error_policy_missing` if that profile is absent. Gmail and npm require bounded JSON error profiles at policy admission. Generic REST and X permit an omitted error profile at admission for compatibility, but an actual error response is still blocked when no profile exists. Other status classes are invalid.
 

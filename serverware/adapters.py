@@ -69,6 +69,7 @@ _RESPONSE_CONTENT_TYPES = {
 }
 _MEDIA_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 _RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
+_JSON_OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 
 
 class ApiAdapter:
@@ -513,21 +514,56 @@ class ApiAdapter:
         operation = ((route.adapter_config.get("request") or {}).get("operation") or {})
         name = operation.get("name")
         fields: dict[str, str] = {"operation": str(name)} if name else {}
+
+        for field in operation.get("pathParams") or []:
+            value = params.get(str(field))
+            if isinstance(value, str):
+                try:
+                    value.encode("utf-8")
+                except UnicodeEncodeError:
+                    continue
+                fields[str(field)] = value
+
         configured_form_fields = {str(item) for item in operation.get("formFields") or []}
-        if not configured_form_fields:
-            return fields
-        try:
-            pairs = self._parse_form_urlencoded(flow.request.raw_content or b"")
-        except ValueError:
-            return fields
-        values: dict[str, list[str]] = {}
-        for key, value in pairs:
-            normalized = self._normalized_form_key(key)
-            if normalized in configured_form_fields:
-                values.setdefault(normalized, []).append(value)
-        for field, found in values.items():
-            if len(found) == 1:
-                fields[field] = found[0]
+        if configured_form_fields:
+            try:
+                pairs = self._parse_form_urlencoded(flow.request.raw_content or b"")
+            except ValueError:
+                pairs = []
+            values: dict[str, list[str]] = {}
+            for key, value in pairs:
+                normalized = self._normalized_form_key(key)
+                if normalized in configured_form_fields:
+                    values.setdefault(normalized, []).append(value)
+            for field, found in values.items():
+                if len(found) == 1:
+                    fields[field] = found[0]
+
+        configured_json_fields = {
+            item
+            for item in operation.get("jsonFields") or []
+            if isinstance(item, str) and _JSON_OPERATION_FIELD_RE.fullmatch(item)
+        }
+        if configured_json_fields:
+            try:
+                body = strict_json_loads(flow.request.raw_content or b"")
+            except (TypeError, ValueError):
+                body = None
+            if isinstance(body, dict):
+                for field in configured_json_fields:
+                    value = body.get(field)
+                    if isinstance(value, str):
+                        try:
+                            value.encode("utf-8")
+                        except UnicodeEncodeError:
+                            continue
+                        fields[field] = value
+                    elif (
+                        isinstance(value, int)
+                        and not isinstance(value, bool)
+                        and -(2**63) <= value <= 2**63 - 1
+                    ):
+                        fields[field] = str(value)
         return fields
 
     def _allowed_field_paths(self, response_cfg: dict[str, Any]) -> list[tuple[str, ...]]:

@@ -10,8 +10,10 @@ import json
 import os
 import re
 import sqlite3
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +51,8 @@ _AUDIT_EVENT_JSON_WRITE_MAX_BYTES = 2 * 1024 * 1024
 _AUDIT_EVENT_JSON_STORED_MAX_BYTES = 8 * 1024 * 1024
 _AUDIT_VERIFY_BATCH_TARGET_BYTES = 64 * 1024 * 1024
 _AUDIT_VERIFY_BATCH_SIZE = 32
+_METADATA_AUDIT_OUTBOX_MAX_PENDING = 100_000
+_METADATA_AUDIT_OUTBOX_CLAIM_TTL_SECONDS = 60
 
 
 def utcnow() -> datetime:
@@ -57,6 +61,22 @@ def utcnow() -> datetime:
 
 def iso_now() -> str:
     return utcnow().isoformat()
+
+
+def _metadata_utcnow(conn: Any) -> datetime:
+    if isinstance(conn, PostgresMetadataConnection):
+        value = conn.execute("SELECT clock_timestamp() AS now").fetchone()["now"]
+    else:
+        value = conn.execute(
+            "SELECT strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now') AS now"
+        ).fetchone()["now"]
+    if isinstance(value, str):
+        value = datetime.fromisoformat(value)
+    if not isinstance(value, datetime):
+        raise MetadataStoreError("metadata database clock returned an invalid value")
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def dumps(value: Any) -> str:
@@ -189,6 +209,9 @@ _OIDC_LOGIN_STATE_CREATION_LOCK_KEY = 0x5357524F49444353
 _OAUTH_REVOCATION_WORK_LOCK_KEY = 0x5357524F41555257
 _POLICY_HIGH_WATER_LOCK_KEY = 0x535752504F4C4943
 _SETUP_SESSION_LOCK_KEY = 0x5357525345545550
+_WEBAUTHN_AUTHORITY_LOCK_KEY = 0x5357525745415554
+_METADATA_MIGRATION_LOCK_KEY = 0x5357524D4554414D
+_METADATA_AUDIT_OUTBOX_LOCK_KEY = 0x5357524D4155444F
 _PENDING_APPROVAL_MAX_COUNT = 10_000
 _PENDING_APPROVAL_MAX_PAYLOAD_BYTES = 64 * 1024
 _APPROVAL_REVIEW_RECEIPT_MAX_COUNT = 10_000
@@ -732,6 +755,16 @@ def _lock_pending_approval_creation(conn: Any) -> None:
         conn.execute("BEGIN IMMEDIATE")
 
 
+def _lock_webauthn_authority(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (_WEBAUTHN_AUTHORITY_LOCK_KEY,),
+        )
+    elif not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
 def _expire_and_count_pending_approvals(conn: Any, now_s: str) -> int:
     conn.execute(
         "UPDATE approval_requests SET status = 'expired' "
@@ -1000,7 +1033,7 @@ def _append_postgres_audit_event(
 
 
 def append_audit_event(
-    conn: sqlite3.Connection,
+    conn: Any,
     *,
     event_type: str,
     actor_type: str,
@@ -1013,7 +1046,8 @@ def append_audit_event(
     ):
         raise AuditStoreError("audit idempotency key must contain 1-256 characters")
     if audit_uses_postgres():
-        return _append_postgres_audit_event(
+        return _stage_metadata_audit_event(
+            conn,
             event_type=event_type,
             actor_type=actor_type,
             actor_id=actor_id,
@@ -1173,11 +1207,291 @@ def connect() -> Any:
     return conn
 
 
+def _lock_metadata_audit_outbox(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (_METADATA_AUDIT_OUTBOX_LOCK_KEY,),
+        )
+    elif not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def _stage_metadata_audit_event(
+    conn: Any,
+    *,
+    event_type: str,
+    actor_type: str,
+    actor_id: str | None,
+    event: dict[str, Any],
+    idempotency_key: str | None = None,
+) -> dict[str, Any]:
+    event_id = idempotency_key or str(uuid.uuid4())
+    event_json = dumps(event)
+    _validate_audit_event_json(event_json)
+    _lock_metadata_audit_outbox(conn)
+    existing = conn.execute(
+        "SELECT * FROM metadata_audit_outbox WHERE id = ?", (event_id,)
+    ).fetchone()
+    if existing is not None:
+        if (
+            existing["event_type"] != event_type
+            or existing["actor_type"] != actor_type
+            or existing["actor_id"] != actor_id
+            or existing["event_json"] != event_json
+        ):
+            raise AuditStoreError(
+                "metadata audit outbox idempotency key was reused with different event data"
+            )
+        return {
+            "id": str(existing["id"]),
+            "event_type": str(existing["event_type"]),
+            "actor_type": str(existing["actor_type"]),
+            "actor_id": existing["actor_id"],
+            "event": loads(existing["event_json"], {}),
+            "event_hash": existing["audit_event_hash"],
+            "created_at": str(existing["created_at"]),
+            "outbox_status": str(existing["status"]),
+        }
+    count = conn.execute(
+        "SELECT COUNT(*) AS count FROM metadata_audit_outbox "
+        "WHERE status IN ('pending', 'claimed')"
+    ).fetchone()
+    if int(count["count"] if count else 0) >= _METADATA_AUDIT_OUTBOX_MAX_PENDING:
+        raise AuditStoreError("metadata audit outbox is at capacity")
+    created_at = _metadata_utcnow(conn).isoformat()
+    conn.execute(
+        """
+        INSERT INTO metadata_audit_outbox (
+            id, event_type, actor_type, actor_id, event_json, status, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, 'pending', ?)
+        """,
+        (event_id, event_type, actor_type, actor_id, event_json, created_at),
+    )
+    return {
+        "id": event_id,
+        "event_type": event_type,
+        "actor_type": actor_type,
+        "actor_id": actor_id,
+        "event": event,
+        "event_hash": None,
+        "created_at": created_at,
+        "outbox_status": "pending",
+    }
+
+
+def claim_metadata_audit_outbox(
+    *, worker_id: str, limit: int = 100
+) -> list[dict[str, Any]]:
+    if not isinstance(worker_id, str) or not 1 <= len(worker_id) <= 128:
+        raise AuditStoreError("metadata audit outbox worker ID must contain 1-128 characters")
+    if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 500:
+        raise AuditStoreError("metadata audit outbox claim limit must be between 1 and 500")
+    claim_id = f"{worker_id}:{uuid.uuid4()}"
+    with connect() as conn:
+        _lock_metadata_audit_outbox(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        stale_before = (
+            now - timedelta(seconds=_METADATA_AUDIT_OUTBOX_CLAIM_TTL_SECONDS)
+        ).isoformat()
+        conn.execute(
+            """
+            UPDATE metadata_audit_outbox
+            SET status = 'pending', claim_id = NULL, claimed_at = NULL
+            WHERE status = 'claimed' AND claimed_at <= ?
+            """,
+            (stale_before,),
+        )
+        active_claim = conn.execute(
+            "SELECT 1 FROM metadata_audit_outbox WHERE status = 'claimed' LIMIT 1"
+        ).fetchone()
+        if active_claim is not None:
+            return []
+        rows = conn.execute(
+            """
+            SELECT * FROM metadata_audit_outbox
+            WHERE status = 'pending'
+            ORDER BY created_at ASC, id ASC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        claimed: list[dict[str, Any]] = []
+        for row in rows:
+            updated = conn.execute(
+                """
+                UPDATE metadata_audit_outbox
+                SET status = 'claimed', claim_id = ?, claimed_at = ?,
+                    attempts = attempts + 1, last_error = NULL
+                WHERE id = ? AND status = 'pending'
+                """,
+                (claim_id, now_s, row["id"]),
+            )
+            if updated.rowcount != 1:
+                continue
+            item = conn.execute(
+                "SELECT * FROM metadata_audit_outbox WHERE id = ?", (row["id"],)
+            ).fetchone()
+            claimed.append(
+                {
+                    "id": str(item["id"]),
+                    "event_type": str(item["event_type"]),
+                    "actor_type": str(item["actor_type"]),
+                    "actor_id": item["actor_id"],
+                    "event": loads(item["event_json"], {}),
+                    "claim_id": str(item["claim_id"]),
+                    "attempts": int(item["attempts"] or 0),
+                }
+            )
+    return claimed
+
+
+def finish_metadata_audit_outbox(
+    event_id: str,
+    *,
+    claim_id: str,
+    audit_event_hash: str | None = None,
+    error: str | None = None,
+) -> bool:
+    if (audit_event_hash is None) == (error is None):
+        raise AuditStoreError(
+            "finish metadata audit outbox requires exactly one of audit_event_hash or error"
+        )
+    with connect() as conn:
+        _lock_metadata_audit_outbox(conn)
+        if error is not None:
+            result = conn.execute(
+                """
+                UPDATE metadata_audit_outbox
+                SET status = 'pending', claim_id = NULL, claimed_at = NULL,
+                    last_error = ?
+                WHERE id = ? AND status = 'claimed' AND claim_id = ?
+                """,
+                (str(error)[:2048], event_id, claim_id),
+            )
+        else:
+            if not isinstance(audit_event_hash, str) or not re.fullmatch(
+                r"sha256:[0-9a-f]{64}", audit_event_hash
+            ):
+                raise AuditStoreError("metadata audit event hash is invalid")
+            now_s = _metadata_utcnow(conn).isoformat()
+            result = conn.execute(
+                """
+                UPDATE metadata_audit_outbox
+                SET status = 'audited', audited_at = ?, audit_event_hash = ?,
+                    claim_id = NULL, claimed_at = NULL, last_error = NULL
+                WHERE id = ? AND status = 'claimed' AND claim_id = ?
+                """,
+                (now_s, audit_event_hash, event_id, claim_id),
+            )
+    return result.rowcount == 1
+
+
+def metadata_audit_outbox_status() -> dict[str, int]:
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS count FROM metadata_audit_outbox GROUP BY status"
+        ).fetchall()
+    counts = {str(row["status"]): int(row["count"]) for row in rows}
+    return {
+        "pending": counts.get("pending", 0),
+        "claimed": counts.get("claimed", 0),
+        "audited": counts.get("audited", 0),
+    }
+
+
+def drain_metadata_audit_outbox(limit: int = 100) -> dict[str, int]:
+    if not audit_uses_postgres():
+        return {"claimed": 0, "audited": 0, "failed": 0, "pending": 0}
+    claimed = claim_metadata_audit_outbox(
+        worker_id=f"metadata-audit:{os.getpid()}", limit=limit
+    )
+    audited = 0
+    failed = 0
+    for item in claimed:
+        try:
+            result = record_audit_event(
+                item["event_type"],
+                item["event"],
+                actor_type=item["actor_type"],
+                actor_id=item["actor_id"],
+                idempotency_key=item["id"],
+            )
+            if not finish_metadata_audit_outbox(
+                item["id"],
+                claim_id=item["claim_id"],
+                audit_event_hash=result["event_hash"],
+            ):
+                raise AuditStoreError("metadata audit outbox claim was lost")
+            audited += 1
+        except Exception as exc:
+            failed += 1
+            try:
+                finish_metadata_audit_outbox(
+                    item["id"],
+                    claim_id=item["claim_id"],
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+            except Exception:
+                pass
+    status = metadata_audit_outbox_status()
+    return {
+        "claimed": len(claimed),
+        "audited": audited,
+        "failed": failed,
+        "pending": status["pending"] + status["claimed"],
+    }
+
+
+def drain_metadata_audit_outbox_fully(
+    *, limit: int = 500, max_batches: int = 200
+) -> dict[str, int]:
+    if isinstance(max_batches, bool) or not isinstance(max_batches, int) or max_batches < 1:
+        raise AuditStoreError("metadata audit outbox max batches must be positive")
+    result = {"claimed": 0, "audited": 0, "failed": 0, "pending": 0}
+    for _ in range(max_batches):
+        batch = drain_metadata_audit_outbox(limit=limit)
+        result["claimed"] += batch["claimed"]
+        result["audited"] += batch["audited"]
+        result["failed"] += batch["failed"]
+        result["pending"] = batch["pending"]
+        if result["failed"] > 0 or result["pending"] == 0:
+            break
+        if batch["claimed"] == 0:
+            time.sleep(0.01)
+    return result
+
+
+def _serialize_sqlite_metadata_migration(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        if metadata_uses_postgres():
+            return function(*args, **kwargs)
+        lock_path = DB_PATH.with_name(DB_PATH.name + ".migration.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        with lock_path.open("a+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                return function(*args, **kwargs)
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    return wrapped
+
+
+@_serialize_sqlite_metadata_migration
 def init_db(path: Path = DB_PATH) -> None:
     ensure_data_dirs()
     grants.init_grant_store()
     init_audit_store()
     with connect() as conn:
+        if isinstance(conn, PostgresMetadataConnection):
+            conn.execute(
+                "SELECT pg_advisory_xact_lock(?)",
+                (_METADATA_MIGRATION_LOCK_KEY,),
+            )
         if not isinstance(conn, PostgresMetadataConnection):
             conn.execute(
                 """
@@ -1355,6 +1669,53 @@ def init_db(path: Path = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS setup_session_events_audit_outbox
                 ON setup_session_events (audit_status, audit_claimed_at, created_at);
 
+            CREATE TABLE IF NOT EXISTS metadata_audit_outbox (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                actor_type TEXT NOT NULL,
+                actor_id TEXT,
+                event_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                claim_id TEXT,
+                claimed_at TEXT,
+                attempts BIGINT NOT NULL DEFAULT 0,
+                audited_at TEXT,
+                audit_event_hash TEXT,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                CHECK (status IN ('pending', 'claimed', 'audited'))
+            );
+
+            CREATE INDEX IF NOT EXISTS metadata_audit_outbox_delivery
+                ON metadata_audit_outbox (status, claimed_at, created_at, id);
+
+            CREATE TABLE IF NOT EXISTS webauthn_trust_publications (
+                id TEXT PRIMARY KEY,
+                scope TEXT NOT NULL,
+                previous_bundle_digest TEXT,
+                bundle_digest TEXT NOT NULL UNIQUE,
+                sequence BIGINT NOT NULL,
+                rollback_epoch BIGINT NOT NULL,
+                signing_key_id TEXT NOT NULL,
+                bundle_json TEXT NOT NULL,
+                payload_digest TEXT NOT NULL,
+                actor_id TEXT NOT NULL,
+                withdrawn_credential_ids_json TEXT NOT NULL,
+                audit_event_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                attempts BIGINT NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                published_at TEXT,
+                CHECK (scope = 'global'),
+                CHECK (status IN ('pending', 'published')),
+                UNIQUE (rollback_epoch, sequence)
+            );
+
+            CREATE UNIQUE INDEX IF NOT EXISTS webauthn_trust_publications_one_pending
+                ON webauthn_trust_publications (scope)
+                WHERE status = 'pending';
+
             CREATE TABLE IF NOT EXISTS oidc_login_states (
                 id TEXT PRIMARY KEY,
                 encrypted_secret TEXT NOT NULL,
@@ -1462,7 +1823,8 @@ def init_db(path: Path = DB_PATH) -> None:
                 consumed_by TEXT,
                 consumed_at TEXT,
                 decision_note TEXT,
-                approval_authn TEXT
+                approval_authn TEXT,
+                approver_webauthn_credential_id TEXT
             );
 
             CREATE INDEX IF NOT EXISTS control_plane_approvals_pending_lookup
@@ -1795,6 +2157,16 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(conn, "control_plane_approvals", "approval_authn", "TEXT")
         _ensure_column(
             conn,
+            "control_plane_approvals",
+            "approver_webauthn_credential_id",
+            "TEXT",
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS control_plane_approvals_webauthn_lookup "
+            "ON control_plane_approvals (approver_webauthn_credential_id, status)"
+        )
+        _ensure_column(
+            conn,
             "pending_oauth_credentials",
             "status",
             "TEXT NOT NULL DEFAULT 'pending'",
@@ -1967,18 +2339,9 @@ def init_db(path: Path = DB_PATH) -> None:
 
 def _ensure_column(conn: Any, table: str, column: str, decl: str) -> None:
     if isinstance(conn, PostgresMetadataConnection):
-        row = conn.execute(
-            """
-            SELECT 1
-            FROM information_schema.columns
-            WHERE table_schema = current_schema()
-              AND table_name = ?
-              AND column_name = ?
-            """,
-            (table, column),
-        ).fetchone()
-        if not row:
-            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+        conn.execute(
+            f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {decl}"
+        )
         return
     columns = {
         row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -5426,6 +5789,7 @@ def activate_pending_oauth_credential(
     actor_id: str,
     setup_session_id: str | None = None,
     setup_expected_revision: int | None = None,
+    require_webauthn: bool = False,
 ) -> dict[str, Any]:
     if (setup_session_id is None) != (setup_expected_revision is None):
         raise SetupSessionValidationError(
@@ -5443,11 +5807,13 @@ def activate_pending_oauth_credential(
                 "setup_expected_revision must be a non-negative integer"
             )
     now = utcnow()
-    now_s = now.isoformat()
     action = "credential.oauth.activate"
     if setup_id is not None:
         _expire_setup_sessions_before_mutation(now)
     with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
         setup_row = None
         if setup_id is not None:
             _lock_setup_sessions(conn)
@@ -5561,6 +5927,27 @@ def activate_pending_oauth_credential(
             return {"ok": False, "reason": f"approval_{approval['status']}"}
         if approval["expires_at"] <= now_s:
             return {"ok": False, "reason": "approval_expired"}
+        approver_webauthn_credential_id = approval[
+            "approver_webauthn_credential_id"
+        ]
+        if require_webauthn and not approver_webauthn_credential_id:
+            return {
+                "ok": False,
+                "reason": "approval_webauthn_required",
+            }
+        if approver_webauthn_credential_id:
+            approver_credential = conn.execute(
+                "SELECT revoked_at FROM webauthn_credentials WHERE id = ?",
+                (approver_webauthn_credential_id,),
+            ).fetchone()
+            if (
+                approver_credential is None
+                or approver_credential["revoked_at"] is not None
+            ):
+                return {
+                    "ok": False,
+                    "reason": "approval_authenticator_revoked",
+                }
         if (
             reconnect_target is None
             and conn.execute(
@@ -5575,10 +5962,32 @@ def activate_pending_oauth_credential(
             UPDATE control_plane_approvals
             SET status = 'consumed', consumed_by = ?, consumed_at = ?
             WHERE id = ? AND status = 'approved' AND expires_at > ?
+              AND (
+                approver_webauthn_credential_id IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM webauthn_credentials
+                    WHERE webauthn_credentials.id =
+                        control_plane_approvals.approver_webauthn_credential_id
+                      AND webauthn_credentials.revoked_at IS NULL
+                )
+              )
             """,
             (actor_id, now_s, approval_id, now_s),
         )
         if consumed.rowcount != 1:
+            if approver_webauthn_credential_id:
+                approver_credential = conn.execute(
+                    "SELECT revoked_at FROM webauthn_credentials WHERE id = ?",
+                    (approver_webauthn_credential_id,),
+                ).fetchone()
+                if (
+                    approver_credential is None
+                    or approver_credential["revoked_at"] is not None
+                ):
+                    return {
+                        "ok": False,
+                        "reason": "approval_authenticator_revoked",
+                    }
             return {"ok": False, "reason": "approval_state_changed"}
 
         superseded_revocation_work_id = None
@@ -6415,8 +6824,29 @@ def row_to_approval(row: sqlite3.Row) -> dict[str, Any]:
 def row_to_control_plane_approval(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["request"] = loads(item.pop("request_json", None), {})
-    item["approval_authn"] = loads(item.get("approval_authn"), None)
+    item.pop("approval_authn", None)
     return item
+
+
+def _control_plane_authn_summary(authn: dict[str, Any]) -> dict[str, Any]:
+    allowed = (
+        "method",
+        "user_id",
+        "credential_record_id",
+        "authenticator_class",
+        "effective_authenticator_class",
+        "attestation_trusted",
+        "current_trust_bundle_digest",
+        "current_trust_bundle_sequence",
+        "control_plane_action",
+        "resource_id",
+        "payload_digest",
+        "control_plane_approval_id",
+        "approval_requester_id",
+        "approval_expires_at",
+        "decision",
+    )
+    return {field: authn[field] for field in allowed if field in authn}
 
 
 def ensure_control_plane_approval(
@@ -6427,6 +6857,7 @@ def ensure_control_plane_approval(
     requester_id: str,
     request: dict[str, Any],
     ttl_seconds: int,
+    require_webauthn: bool = False,
 ) -> dict[str, Any]:
     now = utcnow()
     now_s = now.isoformat()
@@ -6436,6 +6867,52 @@ def ensure_control_plane_approval(
     )
     resource_args: tuple[Any, ...] = () if resource_id is None else (resource_id,)
     with connect() as conn:
+        _lock_webauthn_authority(conn)
+        if require_webauthn:
+            legacy_rows = conn.execute(
+                f"""
+                SELECT id, approved_by FROM control_plane_approvals
+                WHERE action = ?
+                  AND {resource_clause}
+                  AND payload_digest = ?
+                  AND requester_id = ?
+                  AND status = 'approved'
+                  AND expires_at > ?
+                  AND approver_webauthn_credential_id IS NULL
+                """,
+                (action, *resource_args, payload_digest, requester_id, now_s),
+            ).fetchall()
+            conn.execute(
+                f"""
+                UPDATE control_plane_approvals
+                SET status = 'invalidated',
+                    decision_note = 'invalidated: WebAuthn enforcement requires new approval'
+                WHERE action = ?
+                  AND {resource_clause}
+                  AND payload_digest = ?
+                  AND requester_id = ?
+                  AND status = 'approved'
+                  AND expires_at > ?
+                  AND approver_webauthn_credential_id IS NULL
+                """,
+                (action, *resource_args, payload_digest, requester_id, now_s),
+            )
+            for legacy in legacy_rows:
+                append_audit_event(
+                    conn,
+                    event_type="control_plane.approval.invalidated",
+                    actor_type="system",
+                    actor_id=None,
+                    event={
+                        "approval_id": legacy["id"],
+                        "action": action,
+                        "resource_id": resource_id,
+                        "payload_digest": payload_digest,
+                        "requester_id": requester_id,
+                        "approved_by": legacy["approved_by"],
+                        "reason": "webauthn_enforcement_requires_new_approval",
+                    },
+                )
         existing = conn.execute(
             f"""
             SELECT * FROM control_plane_approvals
@@ -6445,10 +6922,22 @@ def ensure_control_plane_approval(
               AND requester_id = ?
               AND status IN ('pending', 'approved')
               AND expires_at > ?
+              AND (
+                status = 'pending'
+                OR ? = 0
+                OR approver_webauthn_credential_id IS NOT NULL
+              )
             ORDER BY requested_at DESC
             LIMIT 1
             """,
-            (action, *resource_args, payload_digest, requester_id, now_s),
+            (
+                action,
+                *resource_args,
+                payload_digest,
+                requester_id,
+                now_s,
+                1 if require_webauthn else 0,
+            ),
         ).fetchone()
         if existing:
             return row_to_control_plane_approval(existing)
@@ -6508,9 +6997,26 @@ def approve_control_plane_approval(
     actor_id: str,
     note: str | None = None,
     authn: dict[str, Any] | None = None,
+    require_webauthn: bool = False,
 ) -> dict[str, Any] | None:
-    now_s = iso_now()
+    authn_evidence = authn or {}
+    approver_webauthn_credential_id = authn_evidence.get(
+        "credential_record_id"
+    )
+    if approver_webauthn_credential_id is not None and (
+        not isinstance(approver_webauthn_credential_id, str)
+        or not approver_webauthn_credential_id
+    ):
+        raise MetadataStoreError(
+            "control-plane approval WebAuthn credential record is invalid"
+        )
+    if require_webauthn and not approver_webauthn_credential_id:
+        raise MetadataStoreError(
+            "control-plane approval requires verified WebAuthn evidence"
+        )
     with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
         existing = conn.execute(
             "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
         ).fetchone()
@@ -6520,6 +7026,37 @@ def approve_control_plane_approval(
             return None
         if existing["requester_id"] == actor_id:
             return None
+        if approver_webauthn_credential_id:
+            expected_evidence = {
+                "method": "webauthn",
+                "user_id": actor_id,
+                "control_plane_action": existing["action"],
+                "resource_id": existing["resource_id"],
+                "payload_digest": existing["payload_digest"],
+                "control_plane_approval_id": existing["id"],
+                "approval_requester_id": existing["requester_id"],
+                "approval_expires_at": existing["expires_at"],
+                "decision": "approve",
+            }
+            if any(
+                authn_evidence.get(field) != expected
+                for field, expected in expected_evidence.items()
+            ):
+                raise MetadataStoreError(
+                    "control-plane approval WebAuthn evidence binding is invalid"
+                )
+            approver_credential = conn.execute(
+                "SELECT user_id, revoked_at FROM webauthn_credentials WHERE id = ?",
+                (approver_webauthn_credential_id,),
+            ).fetchone()
+            if (
+                approver_credential is None
+                or approver_credential["user_id"] != actor_id
+                or approver_credential["revoked_at"] is not None
+            ):
+                raise MetadataStoreError(
+                    "control-plane approval WebAuthn credential is not active for the approver"
+                )
         cur = conn.execute(
             """
             UPDATE control_plane_approvals
@@ -6527,10 +7064,31 @@ def approve_control_plane_approval(
                 approved_by = ?,
                 approved_at = ?,
                 decision_note = ?,
-                approval_authn = ?
+                approval_authn = ?,
+                approver_webauthn_credential_id = ?
             WHERE id = ? AND status = 'pending' AND expires_at > ?
+              AND (
+                ? = 0
+                OR EXISTS (
+                    SELECT 1 FROM webauthn_credentials
+                    WHERE webauthn_credentials.id = ?
+                      AND webauthn_credentials.user_id = ?
+                      AND webauthn_credentials.revoked_at IS NULL
+                )
+              )
             """,
-            (actor_id, now_s, note, dumps(authn or {}), item_id, now_s),
+            (
+                actor_id,
+                now_s,
+                note,
+                dumps(_control_plane_authn_summary(authn_evidence)),
+                approver_webauthn_credential_id,
+                item_id,
+                now_s,
+                1 if approver_webauthn_credential_id else 0,
+                approver_webauthn_credential_id,
+                actor_id,
+            ),
         )
         if cur.rowcount != 1:
             return None
@@ -6546,7 +7104,7 @@ def approve_control_plane_approval(
                 "payload_digest": existing["payload_digest"],
                 "requester_id": existing["requester_id"],
                 "approved_by": actor_id,
-                "approval_authn": authn or {},
+                "approval_authn": _control_plane_authn_summary(authn_evidence),
                 "note": note,
             },
         )
@@ -6563,14 +7121,22 @@ def consume_control_plane_approval(
     resource_id: str | None,
     payload_digest: str,
     actor_id: str,
+    require_webauthn: bool = False,
     _connection: Any | None = None,
     _now: datetime | None = None,
 ) -> dict[str, Any]:
-    now_s = (_now or utcnow()).isoformat()
     connection_scope = (
         connect() if _connection is None else contextlib.nullcontext(_connection)
     )
     with connection_scope as conn:
+        _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        if _now is not None:
+            supplied_now = _now
+            if supplied_now.tzinfo is None:
+                supplied_now = supplied_now.replace(tzinfo=timezone.utc)
+            now = max(now, supplied_now.astimezone(timezone.utc))
+        now_s = now.isoformat()
         existing = conn.execute(
             "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
         ).fetchone()
@@ -6590,6 +7156,27 @@ def consume_control_plane_approval(
             return {"ok": False, "reason": f"approval_{existing['status']}"}
         if existing["expires_at"] <= now_s:
             return {"ok": False, "reason": "approval_expired"}
+        approver_webauthn_credential_id = existing[
+            "approver_webauthn_credential_id"
+        ]
+        if require_webauthn and not approver_webauthn_credential_id:
+            return {
+                "ok": False,
+                "reason": "approval_webauthn_required",
+            }
+        if approver_webauthn_credential_id:
+            approver_credential = conn.execute(
+                "SELECT revoked_at FROM webauthn_credentials WHERE id = ?",
+                (approver_webauthn_credential_id,),
+            ).fetchone()
+            if (
+                approver_credential is None
+                or approver_credential["revoked_at"] is not None
+            ):
+                return {
+                    "ok": False,
+                    "reason": "approval_authenticator_revoked",
+                }
         cur = conn.execute(
             """
             UPDATE control_plane_approvals
@@ -6597,10 +7184,32 @@ def consume_control_plane_approval(
                 consumed_by = ?,
                 consumed_at = ?
             WHERE id = ? AND status = 'approved' AND expires_at > ?
+              AND (
+                approver_webauthn_credential_id IS NULL
+                OR EXISTS (
+                    SELECT 1 FROM webauthn_credentials
+                    WHERE webauthn_credentials.id =
+                        control_plane_approvals.approver_webauthn_credential_id
+                      AND webauthn_credentials.revoked_at IS NULL
+                )
+              )
             """,
             (actor_id, now_s, item_id, now_s),
         )
         if cur.rowcount != 1:
+            if approver_webauthn_credential_id:
+                approver_credential = conn.execute(
+                    "SELECT revoked_at FROM webauthn_credentials WHERE id = ?",
+                    (approver_webauthn_credential_id,),
+                ).fetchone()
+                if (
+                    approver_credential is None
+                    or approver_credential["revoked_at"] is not None
+                ):
+                    return {
+                        "ok": False,
+                        "reason": "approval_authenticator_revoked",
+                    }
             return {"ok": False, "reason": "approval_state_changed"}
         append_audit_event(
             conn,
@@ -6614,6 +7223,7 @@ def consume_control_plane_approval(
                 "payload_digest": payload_digest,
                 "requester_id": actor_id,
                 "approved_by": existing["approved_by"],
+                "approver_webauthn_credential_id": approver_webauthn_credential_id,
             },
         )
         row = conn.execute(
@@ -9596,12 +10206,263 @@ def list_similar_approvals(
     return [row_to_approval(row) for row in rows]
 
 
+def _row_to_webauthn_trust_publication(row: Any) -> dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "previous_bundle_digest": row["previous_bundle_digest"],
+        "bundle_digest": str(row["bundle_digest"]),
+        "sequence": int(row["sequence"]),
+        "rollback_epoch": int(row["rollback_epoch"]),
+        "signing_key_id": str(row["signing_key_id"]),
+        "bundle": loads(row["bundle_json"], {}),
+        "payload_digest": str(row["payload_digest"]),
+        "actor_id": str(row["actor_id"]),
+        "withdrawn_credential_ids": loads(
+            row["withdrawn_credential_ids_json"], []
+        ),
+        "audit_event": loads(row["audit_event_json"], {}),
+        "status": str(row["status"]),
+        "attempts": int(row["attempts"] or 0),
+        "last_error": row["last_error"],
+        "created_at": str(row["created_at"]),
+        "published_at": row["published_at"],
+    }
+
+
+def stage_webauthn_trust_publication(
+    *,
+    previous_bundle_digest: str | None,
+    bundle_digest: str,
+    sequence: int,
+    rollback_epoch: int,
+    signing_key_id: str,
+    bundle: dict[str, Any],
+    payload_digest: str,
+    actor_id: str,
+    withdrawn_credential_ids: list[str],
+    audit_event: dict[str, Any],
+    _connection: Any,
+) -> dict[str, Any]:
+    conn = _connection
+    _lock_webauthn_authority(conn)
+    bundle_json = dumps(bundle)
+    event_json = dumps(audit_event)
+    _validate_audit_event_json(event_json)
+    if len(bundle_json.encode("utf-8")) > _AUDIT_EVENT_JSON_WRITE_MAX_BYTES:
+        raise MetadataStoreError("WebAuthn trust publication bundle exceeds 2 MiB")
+    existing = conn.execute(
+        "SELECT * FROM webauthn_trust_publications WHERE bundle_digest = ?",
+        (bundle_digest,),
+    ).fetchone()
+    if existing is not None:
+        if (
+            existing["bundle_json"] != bundle_json
+            or int(existing["sequence"]) != sequence
+            or int(existing["rollback_epoch"]) != rollback_epoch
+        ):
+            raise MetadataStoreError("WebAuthn trust publication digest was reused")
+        return _row_to_webauthn_trust_publication(existing)
+    pending = conn.execute(
+        "SELECT id FROM webauthn_trust_publications WHERE status = 'pending' LIMIT 1"
+    ).fetchone()
+    if pending is not None:
+        raise MetadataStoreError("a WebAuthn trust publication is already pending")
+    latest = conn.execute(
+        """
+        SELECT rollback_epoch, sequence, bundle_digest
+        FROM webauthn_trust_publications
+        ORDER BY rollback_epoch DESC, sequence DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if latest is not None and (
+        rollback_epoch < int(latest["rollback_epoch"])
+        or (
+            rollback_epoch == int(latest["rollback_epoch"])
+            and sequence <= int(latest["sequence"])
+        )
+    ):
+        raise MetadataStoreError("WebAuthn trust publication is not monotonic")
+    publication_id = str(uuid.uuid4())
+    created_at = _metadata_utcnow(conn).isoformat()
+    conn.execute(
+        """
+        INSERT INTO webauthn_trust_publications (
+            id, scope, previous_bundle_digest, bundle_digest, sequence,
+            rollback_epoch, signing_key_id, bundle_json, payload_digest,
+            actor_id, withdrawn_credential_ids_json, audit_event_json,
+            status, created_at
+        )
+        VALUES (?, 'global', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+        """,
+        (
+            publication_id,
+            previous_bundle_digest,
+            bundle_digest,
+            sequence,
+            rollback_epoch,
+            signing_key_id,
+            bundle_json,
+            payload_digest,
+            actor_id,
+            dumps(sorted(withdrawn_credential_ids)),
+            event_json,
+            created_at,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM webauthn_trust_publications WHERE id = ?",
+        (publication_id,),
+    ).fetchone()
+    return _row_to_webauthn_trust_publication(row)
+
+
+def get_pending_webauthn_trust_publication() -> dict[str, Any] | None:
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT * FROM webauthn_trust_publications
+            WHERE status = 'pending'
+            ORDER BY created_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+    return _row_to_webauthn_trust_publication(row) if row else None
+
+
+def record_webauthn_trust_publication_error(
+    publication_id: str, error: str
+) -> None:
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        conn.execute(
+            """
+            UPDATE webauthn_trust_publications
+            SET attempts = attempts + 1, last_error = ?
+            WHERE id = ? AND status = 'pending'
+            """,
+            (str(error)[:2048], publication_id),
+        )
+
+
+def complete_webauthn_trust_publication(
+    publication_id: str,
+) -> dict[str, Any]:
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        row = conn.execute(
+            "SELECT * FROM webauthn_trust_publications WHERE id = ?",
+            (publication_id,),
+        ).fetchone()
+        if row is None:
+            raise MetadataStoreError("WebAuthn trust publication was not found")
+        if row["status"] == "published":
+            return _row_to_webauthn_trust_publication(row)
+        now_s = _metadata_utcnow(conn).isoformat()
+        updated = conn.execute(
+            """
+            UPDATE webauthn_trust_publications
+            SET status = 'published', published_at = ?, last_error = NULL
+            WHERE id = ? AND status = 'pending'
+            """,
+            (now_s, publication_id),
+        )
+        if updated.rowcount != 1:
+            raise MetadataStoreError("WebAuthn trust publication state changed")
+        append_audit_event(
+            conn,
+            event_type="webauthn.trust_bundle.published",
+            actor_type="admin",
+            actor_id=row["actor_id"],
+            event=loads(row["audit_event_json"], {}),
+            idempotency_key=f"webauthn-trust:{publication_id}",
+        )
+        published = conn.execute(
+            "SELECT * FROM webauthn_trust_publications WHERE id = ?",
+            (publication_id,),
+        ).fetchone()
+    return _row_to_webauthn_trust_publication(published)
+
+
 def row_to_webauthn_credential(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["transports"] = loads(item.get("transports"), [])
     item["attestation_trusted"] = bool(item.get("attestation_trusted"))
     item["attestation_trust_path"] = loads(item.get("attestation_trust_path"), [])
     return item
+
+
+def _insert_webauthn_credential(
+    conn: Any,
+    *,
+    item_id: str,
+    now_s: str,
+    credential_id: str,
+    user_id: str,
+    label: str,
+    public_key_cose: str,
+    sign_count: int,
+    aaguid: str | None,
+    authenticator_class: str,
+    attestation_fmt: str | None,
+    attestation_trusted: bool,
+    attestation_trust_path: list[str] | None,
+    attestation_leaf_sha256: str | None,
+    attestation_root_sha256: str | None,
+    attestation_trust_bundle_digest: str | None,
+    attestation_trust_bundle_sequence: int | None,
+    attestation_verified_at: str | None,
+    transports: list[str] | None,
+    dev_private_key_pem: str | None,
+) -> dict[str, Any]:
+    existing = conn.execute(
+        "SELECT id FROM webauthn_credentials WHERE credential_id = ?",
+        (credential_id,),
+    ).fetchone()
+    if existing is not None:
+        raise ValueError(
+            "WebAuthn credential ID was already registered and cannot be reused"
+        )
+    conn.execute(
+        """
+        INSERT INTO webauthn_credentials (
+            id, credential_id, user_id, label, public_key_cose, sign_count,
+            aaguid, authenticator_class, attestation_fmt, attestation_trusted,
+            attestation_trust_path, attestation_leaf_sha256, attestation_root_sha256,
+            attestation_trust_bundle_digest, attestation_trust_bundle_sequence,
+            attestation_verified_at, transports, dev_private_key_pem,
+            created_at, updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            item_id,
+            credential_id,
+            user_id,
+            label,
+            public_key_cose,
+            sign_count,
+            aaguid,
+            authenticator_class,
+            attestation_fmt,
+            1 if attestation_trusted else 0,
+            dumps(attestation_trust_path or []),
+            attestation_leaf_sha256,
+            attestation_root_sha256,
+            attestation_trust_bundle_digest,
+            attestation_trust_bundle_sequence,
+            attestation_verified_at,
+            dumps(transports or []),
+            dev_private_key_pem,
+            now_s,
+            now_s,
+        ),
+    )
+    row = conn.execute(
+        "SELECT * FROM webauthn_credentials WHERE credential_id = ?",
+        (credential_id,),
+    ).fetchone()
+    return row_to_webauthn_credential(row)
 
 
 def create_webauthn_credential(
@@ -9625,56 +10486,137 @@ def create_webauthn_credential(
     dev_private_key_pem: str | None = None,
 ) -> dict[str, Any]:
     item_id = str(uuid.uuid4())
-    now = iso_now()
     with connect() as conn:
-        existing = conn.execute(
-            "SELECT id FROM webauthn_credentials WHERE credential_id = ?",
-            (credential_id,),
-        ).fetchone()
-        if existing is not None:
-            raise ValueError(
-                "WebAuthn credential ID was already registered and cannot be reused"
-            )
-        conn.execute(
-            """
-            INSERT INTO webauthn_credentials (
-                id, credential_id, user_id, label, public_key_cose, sign_count,
-                aaguid, authenticator_class, attestation_fmt, attestation_trusted,
-                attestation_trust_path, attestation_leaf_sha256, attestation_root_sha256,
-                attestation_trust_bundle_digest, attestation_trust_bundle_sequence,
-                attestation_verified_at, transports, dev_private_key_pem,
-                created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                item_id,
-                credential_id,
-                user_id,
-                label,
-                public_key_cose,
-                sign_count,
-                aaguid,
-                authenticator_class,
-                attestation_fmt,
-                1 if attestation_trusted else 0,
-                dumps(attestation_trust_path or []),
-                attestation_leaf_sha256,
-                attestation_root_sha256,
-                attestation_trust_bundle_digest,
-                attestation_trust_bundle_sequence,
-                attestation_verified_at,
-                dumps(transports or []),
-                dev_private_key_pem,
-                now,
-                now,
-            ),
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        stored = _insert_webauthn_credential(
+            conn,
+            item_id=item_id,
+            now_s=now_s,
+            credential_id=credential_id,
+            user_id=user_id,
+            label=label,
+            public_key_cose=public_key_cose,
+            sign_count=sign_count,
+            aaguid=aaguid,
+            authenticator_class=authenticator_class,
+            attestation_fmt=attestation_fmt,
+            attestation_trusted=attestation_trusted,
+            attestation_trust_path=attestation_trust_path,
+            attestation_leaf_sha256=attestation_leaf_sha256,
+            attestation_root_sha256=attestation_root_sha256,
+            attestation_trust_bundle_digest=attestation_trust_bundle_digest,
+            attestation_trust_bundle_sequence=attestation_trust_bundle_sequence,
+            attestation_verified_at=attestation_verified_at,
+            transports=transports,
+            dev_private_key_pem=dev_private_key_pem,
         )
-        row = conn.execute(
-            "SELECT * FROM webauthn_credentials WHERE credential_id = ?",
-            (credential_id,),
+        if dev_private_key_pem is not None:
+            append_audit_event(
+                conn,
+                event_type="webauthn.dev_credential_created",
+                actor_type="admin",
+                actor_id=user_id,
+                event={"user_id": user_id, "credential_id": credential_id},
+            )
+        return stored
+
+
+def finalize_webauthn_registration(
+    *,
+    challenge: str,
+    user_id: str,
+    credential_id: str,
+    label: str,
+    public_key_cose: str,
+    sign_count: int,
+    aaguid: str | None,
+    authenticator_class: str,
+    attestation_fmt: str | None = None,
+    attestation_trusted: bool = False,
+    attestation_trust_path: list[str] | None = None,
+    attestation_leaf_sha256: str | None = None,
+    attestation_root_sha256: str | None = None,
+    attestation_trust_bundle_digest: str | None = None,
+    attestation_trust_bundle_sequence: int | None = None,
+    attestation_verified_at: str | None = None,
+    transports: list[str] | None = None,
+) -> dict[str, Any] | None:
+    item_id = str(uuid.uuid4())
+    with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        challenge_row = conn.execute(
+            """
+            SELECT * FROM webauthn_challenges
+            WHERE challenge = ?
+              AND challenge_type = 'registration'
+              AND user_id = ?
+              AND approval_request_id IS NULL
+              AND used_at IS NULL
+              AND expires_at > ?
+            """,
+            (challenge, user_id, now_s),
         ).fetchone()
-    return row_to_webauthn_credential(row)
+        if challenge_row is None:
+            return None
+        consumed = conn.execute(
+            """
+            UPDATE webauthn_challenges
+            SET used_at = ?
+            WHERE id = ? AND used_at IS NULL AND expires_at > ?
+            """,
+            (now_s, challenge_row["id"], now_s),
+        )
+        if consumed.rowcount != 1:
+            return None
+        credential = _insert_webauthn_credential(
+            conn,
+            item_id=item_id,
+            now_s=now_s,
+            credential_id=credential_id,
+            user_id=user_id,
+            label=label,
+            public_key_cose=public_key_cose,
+            sign_count=sign_count,
+            aaguid=aaguid,
+            authenticator_class=authenticator_class,
+            attestation_fmt=attestation_fmt,
+            attestation_trusted=attestation_trusted,
+            attestation_trust_path=attestation_trust_path,
+            attestation_leaf_sha256=attestation_leaf_sha256,
+            attestation_root_sha256=attestation_root_sha256,
+            attestation_trust_bundle_digest=attestation_trust_bundle_digest,
+            attestation_trust_bundle_sequence=attestation_trust_bundle_sequence,
+            attestation_verified_at=attestation_verified_at,
+            transports=transports,
+            dev_private_key_pem=None,
+        )
+        challenge_payload = loads(challenge_row["payload_json"], {})
+        append_audit_event(
+            conn,
+            event_type="webauthn.credential_registered",
+            actor_type="admin",
+            actor_id=user_id,
+            event={
+                "user_id": user_id,
+                "credential_id": credential_id,
+                "authenticator_class": authenticator_class,
+                "aaguid": aaguid,
+                "attestation_fmt": attestation_fmt,
+                "attestation_trusted": attestation_trusted,
+                "attestation_root_sha256": attestation_root_sha256,
+                "registration_authorization": challenge_payload.get("authorization"),
+            },
+        )
+        claimed = conn.execute(
+            "SELECT * FROM webauthn_challenges WHERE id = ?",
+            (challenge_row["id"],),
+        ).fetchone()
+        return {
+            "challenge": row_to_webauthn_challenge(claimed),
+            "credential": credential,
+        }
 
 
 def get_webauthn_credential(
@@ -9720,19 +10662,49 @@ def list_webauthn_credentials(
     return [row_to_webauthn_credential(row) for row in rows]
 
 
+def _invalidate_live_webauthn_registration_challenges(
+    conn: Any, now_s: str
+) -> int:
+    invalidated = conn.execute(
+        """
+        UPDATE webauthn_challenges
+        SET used_at = ?
+        WHERE challenge_type = 'registration'
+          AND used_at IS NULL
+          AND expires_at > ?
+        """,
+        (now_s, now_s),
+    )
+    return invalidated.rowcount
+
+
+def invalidate_webauthn_registration_challenges(
+    *, _connection: Any | None = None
+) -> int:
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
+        return _invalidate_live_webauthn_registration_challenges(conn, now_s)
+
+
 def revoke_webauthn_credential(
     record_id: str,
     *,
     actor_id: str,
     reason: str | None = None,
     source: str = "explicit",
+    audit_event: dict[str, Any] | None = None,
     _connection: Any | None = None,
 ) -> dict[str, Any]:
-    now_s = iso_now()
     connection_scope = (
         connect() if _connection is None else contextlib.nullcontext(_connection)
     )
     with connection_scope as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
         row = conn.execute(
             "SELECT * FROM webauthn_credentials WHERE id = ?", (record_id,)
         ).fetchone()
@@ -9765,13 +10737,74 @@ def revoke_webauthn_credential(
             """,
             (record_id,),
         )
+        invalidated_approvals = conn.execute(
+            """
+            SELECT id, action, resource_id, payload_digest, requester_id, approved_by
+            FROM control_plane_approvals
+            WHERE approver_webauthn_credential_id = ? AND status = 'approved'
+            """,
+            (record_id,),
+        ).fetchall()
+        revoked_control_plane_approvals = conn.execute(
+            """
+            UPDATE control_plane_approvals
+            SET status = 'invalidated'
+            WHERE approver_webauthn_credential_id = ? AND status = 'approved'
+            """,
+            (record_id,),
+        )
+        invalidated_registration_challenge_count = 0
+        if source == "explicit":
+            invalidated_registration_challenge_count = (
+                _invalidate_live_webauthn_registration_challenges(conn, now_s)
+            )
         updated = conn.execute(
             "SELECT * FROM webauthn_credentials WHERE id = ?", (record_id,)
         ).fetchone()
+        for approval in invalidated_approvals:
+            append_audit_event(
+                conn,
+                event_type="control_plane.approval.invalidated",
+                actor_type="system",
+                actor_id=None,
+                event={
+                    "approval_id": approval["id"],
+                    "action": approval["action"],
+                    "resource_id": approval["resource_id"],
+                    "payload_digest": approval["payload_digest"],
+                    "requester_id": approval["requester_id"],
+                    "approved_by": approval["approved_by"],
+                    "approver_webauthn_credential_id": record_id,
+                    "reason": "approver_webauthn_credential_revoked",
+                },
+            )
+        if audit_event is not None:
+            append_audit_event(
+                conn,
+                event_type="webauthn.credential_revoked",
+                actor_type="admin",
+                actor_id=actor_id,
+                event={
+                    **audit_event,
+                    "revoked_at": updated["revoked_at"],
+                    "revoked_by": updated["revoked_by"],
+                    "revoked_grant_count": revoked_grants.rowcount,
+                    "revoked_control_plane_approval_count": (
+                        revoked_control_plane_approvals.rowcount
+                    ),
+                    "invalidated_registration_challenge_count": (
+                        invalidated_registration_challenge_count
+                    ),
+                },
+            )
     return {
         "ok": True,
         "credential": row_to_webauthn_credential(updated),
         "revoked_grant_count": revoked_grants.rowcount,
+        "revoked_control_plane_approval_count": revoked_control_plane_approvals.rowcount,
+        "invalidated_registration_challenge_count": (
+            invalidated_registration_challenge_count
+        ),
     }
 
 
@@ -9831,10 +10864,14 @@ def create_webauthn_challenge(
     ttl_seconds: int = 300,
 ) -> dict[str, Any]:
     item_id = str(uuid.uuid4())
-    now = utcnow()
-    now_s = now.isoformat()
-    expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
     with connect() as conn:
+        if challenge_type == "registration":
+            _lock_webauthn_authority(conn)
+            now = _metadata_utcnow(conn)
+        else:
+            now = utcnow()
+        now_s = now.isoformat()
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
         conn.execute(
             """
             INSERT INTO webauthn_challenges (
@@ -9866,15 +10903,25 @@ def row_to_webauthn_challenge(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
-def get_unused_webauthn_challenge(challenge: str) -> dict[str, Any] | None:
+def get_unused_webauthn_challenge(
+    challenge: str,
+    *,
+    challenge_type: str | None = None,
+    user_id: str | None = None,
+) -> dict[str, Any] | None:
     now_s = iso_now()
+    clauses = ["challenge = ?", "used_at IS NULL", "expires_at > ?"]
+    params: list[Any] = [challenge, now_s]
+    if challenge_type is not None:
+        clauses.append("challenge_type = ?")
+        params.append(challenge_type)
+    if user_id is not None:
+        clauses.append("user_id = ?")
+        params.append(user_id)
     with connect() as conn:
         row = conn.execute(
-            """
-            SELECT * FROM webauthn_challenges
-            WHERE challenge = ? AND used_at IS NULL AND expires_at > ?
-            """,
-            (challenge, now_s),
+            f"SELECT * FROM webauthn_challenges WHERE {' AND '.join(clauses)}",
+            params,
         ).fetchone()
     return row_to_webauthn_challenge(row) if row else None
 
@@ -10661,6 +11708,8 @@ def metadata_store_status() -> dict[str, Any]:
         "setup_sessions",
         "setup_session_evidence",
         "setup_session_events",
+        "metadata_audit_outbox",
+        "webauthn_trust_publications",
         "oidc_login_states",
         "oauth_revocation_work",
         "routes",

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import base64
 import copy
+import fcntl
 import hashlib
 import json
 import os
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,29 @@ from serverware.config import (
 
 class WebAuthnTrustError(ValueError):
     pass
+
+
+@contextmanager
+def trust_bundle_lock(*, exclusive: bool):
+    lock_path = WEBAUTHN_TRUST_BUNDLE_PATH.with_name(
+        WEBAUTHN_TRUST_BUNDLE_PATH.name + ".lock"
+    )
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def trust_read_locked(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with trust_bundle_lock(exclusive=False):
+            return function(*args, **kwargs)
+
+    return wrapped
 
 
 @dataclass(frozen=True)
@@ -217,11 +244,42 @@ def _state() -> dict[str, Any]:
 
 def _write_state(state: dict[str, Any]) -> None:
     ensure_data_dirs()
-    WEBAUTHN_TRUST_BUNDLE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = WEBAUTHN_TRUST_BUNDLE_STATE_PATH.with_name(f".{WEBAUTHN_TRUST_BUNDLE_STATE_PATH.name}.tmp")
-    tmp.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, WEBAUTHN_TRUST_BUNDLE_STATE_PATH)
+    _durable_replace(
+        WEBAUTHN_TRUST_BUNDLE_STATE_PATH,
+        (json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+        mode=0o600,
+    )
+
+
+def _durable_replace(path: Path, content: bytes, *, mode: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    descriptor = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            mode,
+        )
+        with os.fdopen(descriptor, "wb", closefd=True) as handle:
+            descriptor = None
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_descriptor = os.open(path.parent, directory_flags)
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _enforce_rollback(bundle: dict[str, Any], digest: str) -> None:
@@ -345,17 +403,88 @@ def trust_roots_from_bundle(
 def write_trust_bundle(bundle: dict[str, Any]) -> dict[str, Any]:
     roots = trust_roots_from_bundle(bundle)
     info = verify_trust_bundle(bundle, update_state=False)
-    WEBAUTHN_TRUST_BUNDLE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    tmp = WEBAUTHN_TRUST_BUNDLE_PATH.with_name(f".{WEBAUTHN_TRUST_BUNDLE_PATH.name}.tmp")
-    tmp.write_text(json.dumps(bundle, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, WEBAUTHN_TRUST_BUNDLE_PATH)
+    _durable_replace(
+        WEBAUTHN_TRUST_BUNDLE_PATH,
+        (json.dumps(bundle, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+        mode=0o600,
+    )
     return {
         "ok": True,
         **info,
         "root_count": len(roots),
         "root_certificate_sha256": sorted(root.certificate_sha256 for root in roots),
     }
+
+
+def reconcile_trust_publications(
+    *, expected_publication_id: str | None = None
+) -> dict[str, Any]:
+    from serverware import db
+
+    publication = db.get_pending_webauthn_trust_publication()
+    if publication is None:
+        return {"ok": True, "reconciled": False}
+    if (
+        expected_publication_id is not None
+        and publication["id"] != expected_publication_id
+    ):
+        raise WebAuthnTrustError("a different WebAuthn trust publication is pending")
+    try:
+        with trust_bundle_lock(exclusive=True):
+            bundle = publication["bundle"]
+            info = verify_trust_bundle(bundle, update_state=False)
+            if (
+                info["digest"] != publication["bundle_digest"]
+                or info["sequence"] != publication["sequence"]
+                or info["rollback_epoch"] != publication["rollback_epoch"]
+                or info["signing_key_id"] != publication["signing_key_id"]
+            ):
+                raise WebAuthnTrustError(
+                    "pending WebAuthn trust publication does not match its journal"
+                )
+            for record_id in publication["withdrawn_credential_ids"]:
+                credential = db.get_webauthn_credential_by_record_id(
+                    record_id, include_revoked=True
+                )
+                if credential is None or credential.get("revoked_at") is None:
+                    raise WebAuthnTrustError(
+                        "pending WebAuthn trust publication has an active withdrawn credential"
+                    )
+            disk_digest = None
+            if WEBAUTHN_TRUST_BUNDLE_PATH.exists():
+                try:
+                    disk_bundle = json.loads(
+                        WEBAUTHN_TRUST_BUNDLE_PATH.read_text(encoding="utf-8")
+                    )
+                    disk_digest = verify_trust_bundle(
+                        disk_bundle, update_state=False
+                    )["digest"]
+                except (OSError, json.JSONDecodeError, WebAuthnTrustError) as exc:
+                    raise WebAuthnTrustError(
+                        "installed WebAuthn trust bundle is not recoverable"
+                    ) from exc
+            if disk_digest not in {
+                publication["previous_bundle_digest"],
+                publication["bundle_digest"],
+            }:
+                raise WebAuthnTrustError(
+                    "installed WebAuthn trust bundle does not match publication history"
+                )
+            result = write_trust_bundle(bundle)
+            completed = db.complete_webauthn_trust_publication(publication["id"])
+            return {
+                **result,
+                "reconciled": True,
+                "publication_id": completed["id"],
+            }
+    except Exception as exc:
+        try:
+            db.record_webauthn_trust_publication_error(
+                publication["id"], f"{type(exc).__name__}: {exc}"
+            )
+        except Exception:
+            pass
+        raise
 
 
 def status() -> dict[str, Any]:

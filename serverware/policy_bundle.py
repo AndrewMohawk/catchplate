@@ -163,6 +163,8 @@ SAFE_RESPONSE_HEADERS = frozenset(
 MAX_PROVIDER_RESPONSE_BODY_BYTES = 1024 * 1024
 MAX_PROVIDER_ERROR_BODY_BYTES = 64 * 1024
 RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
+OPERATION_FIELD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
+JSON_OPERATION_FIELD_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 HTTP_HEADER_NAME_RE = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 CREDENTIAL_FIELD_PATH_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*$")
 CREDENTIAL_INJECTION_FIELDS = {
@@ -1502,10 +1504,117 @@ def _validate_credential_request_body_constraint(
     )
 
 
+def _validate_generic_operation_sources(
+    route_id: str,
+    adapter_type: str,
+    adapter_config: dict[str, Any],
+    paths: tuple[str, ...],
+) -> dict[str, str]:
+    if adapter_type != "generic.rest":
+        return {}
+    request = adapter_config.get("request") or {}
+    operation = request.get("operation")
+    if operation is None:
+        return {}
+    if not isinstance(operation, dict):
+        raise PolicyBundleError(f"route {route_id} generic.rest request.operation must be an object")
+    operation_name = operation.get("name")
+    if not isinstance(operation_name, str) or not 1 <= len(operation_name) <= 128:
+        raise PolicyBundleError(
+            f"route {route_id} generic.rest request.operation.name must contain 1-128 characters"
+        )
+
+    source_kinds: dict[str, str] = {}
+    body_mode = request.get("bodyMode")
+    for config_key, source_kind, required_mode in (
+        ("formFields", "form", "formUrlencoded"),
+        ("jsonFields", "json", "json"),
+        ("pathParams", "path", None),
+    ):
+        configured = operation.get(config_key, [])
+        source_name_re = (
+            JSON_OPERATION_FIELD_NAME_RE
+            if config_key == "jsonFields"
+            else OPERATION_FIELD_NAME_RE
+        )
+        if (
+            not isinstance(configured, list)
+            or len(configured) > 16
+            or any(
+                not isinstance(source_name, str)
+                or source_name_re.fullmatch(source_name) is None
+                for source_name in configured
+            )
+            or len(configured) != len(set(configured))
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest request.operation.{config_key} must define "
+                "at most 16 unique operation field names"
+            )
+        if configured and required_mode is not None and body_mode != required_mode:
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest request.operation.{config_key} requires "
+                f"bodyMode {required_mode}"
+            )
+        for source_name in configured:
+            if source_name == "operation" or source_name in source_kinds:
+                raise PolicyBundleError(
+                    f"route {route_id} generic.rest request.operation source {source_name} "
+                    "is reserved or duplicated"
+                )
+            source_kinds[source_name] = source_kind
+
+    configured_path_params = {
+        source_name
+        for source_name, source_kind in source_kinds.items()
+        if source_kind == "path"
+    }
+    path_source_positions: list[dict[str, int]] = []
+    for path in paths:
+        positions: dict[str, int] = {}
+        for index, segment in enumerate(path.strip("/").split("/")):
+            if not (segment.startswith("{") and segment.endswith("}")):
+                continue
+            placeholder = segment[1:-1]
+            if placeholder in positions:
+                raise PolicyBundleError(
+                    f"route {route_id} path {path} repeats placeholder {placeholder}"
+                )
+            positions[placeholder] = index
+        for path_param in configured_path_params:
+            if path_param not in positions:
+                raise PolicyBundleError(
+                    f"route {route_id} generic.rest request.operation.pathParams source {path_param} "
+                    "must be a placeholder in every matched path"
+                )
+        path_source_positions.append(positions)
+
+    for left_index, left_path in enumerate(paths):
+        for right_index in range(left_index + 1, len(paths)):
+            right_path = paths[right_index]
+            if (
+                _path_specificity(left_path) != _path_specificity(right_path)
+                or _path_shape(left_path) != _path_shape(right_path)
+            ):
+                continue
+            for path_param in configured_path_params:
+                if (
+                    path_source_positions[left_index][path_param]
+                    != path_source_positions[right_index][path_param]
+                ):
+                    raise PolicyBundleError(
+                        f"route {route_id} generic.rest request.operation.pathParams source "
+                        f"{path_param} maps to different segments in ambiguous path templates "
+                        f"{left_path} and {right_path}"
+                    )
+    return source_kinds
+
+
 def _validate_response_binding_sources(
     route_id: str,
     adapter_type: str,
     adapter_config: dict[str, Any],
+    source_kinds: dict[str, str],
     constraints: tuple[dict[str, Any], ...],
 ) -> None:
     response_bindings = [
@@ -1519,10 +1628,6 @@ def _validate_response_binding_sources(
         )
     request = adapter_config.get("request") or {}
     response = adapter_config.get("response") or {}
-    if request.get("bodyMode") != "formUrlencoded":
-        raise PolicyBundleError(
-            f"route {route_id} responseBinding currently requires generic.rest formUrlencoded requests"
-        )
     if (
         response.get("mode") != "json"
         or not 1 <= int(response.get("maxBodyBytes") or 0) <= 65536
@@ -1532,20 +1637,19 @@ def _validate_response_binding_sources(
         )
     operation = request.get("operation") or {}
     operation_name = operation.get("name")
+    if not isinstance(operation_name, str) or not operation_name:
+        raise PolicyBundleError(
+            f"route {route_id} responseBinding requires generic.rest request.operation.name"
+        )
     available_fields = {"operation"}
-    available_fields.update(str(item) for item in operation.get("formFields") or [])
-    form_constraints = [
-        constraint for constraint in constraints if constraint.get("type") == "formBody"
-    ]
-    required_fields = {
-        str(field)
-        for constraint in form_constraints
-        for field in constraint.get("requiredFields") or []
-    }
-    field_rules = {
-        str(field): rule
-        for constraint in form_constraints
-        for field, rule in (constraint.get("fields") or {}).items()
+    available_fields.update(source_kinds)
+    body_constraints: dict[str, list[dict[str, Any]]] = {
+        source_kind: [
+            constraint
+            for constraint in constraints
+            if constraint.get("type") == constraint_type
+        ]
+        for source_kind, constraint_type in (("form", "formBody"), ("json", "jsonBody"))
     }
     for constraint in response_bindings:
         constraint_id = str(constraint.get("id") or "unnamed")
@@ -1563,11 +1667,30 @@ def _validate_response_binding_sources(
                 )
             if source == "operation":
                 continue
+            source_kind = source_kinds[source]
+            if source_kind == "path":
+                if binding.get("comparison") != "exactString":
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} path source {source} "
+                        "must use exactString"
+                    )
+                continue
+            source_constraints = body_constraints[source_kind]
+            required_fields = {
+                str(field)
+                for source_constraint in source_constraints
+                for field in source_constraint.get("requiredFields") or []
+            }
             if source not in required_fields:
                 raise PolicyBundleError(
                     f"route {route_id} responseBinding {constraint_id} source {source} "
-                    "must be required by formBody"
+                    f"must be required by {source_kind}Body"
                 )
+            field_rules = {
+                str(field): rule
+                for source_constraint in source_constraints
+                for field, rule in (source_constraint.get("fields") or {}).items()
+            }
             expected_type = (
                 "integer"
                 if binding.get("comparison") == "canonicalInteger"
@@ -1576,7 +1699,7 @@ def _validate_response_binding_sources(
             if (field_rules.get(source) or {}).get("type") != expected_type:
                 raise PolicyBundleError(
                     f"route {route_id} responseBinding {constraint_id} source {source} "
-                    f"must use formBody type {expected_type}"
+                    f"must use {source_kind}Body type {expected_type}"
                 )
 
 
@@ -2076,7 +2199,19 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             credential_ref,
             constraints,
         )
-        _validate_response_binding_sources(route_id, adapter_type, adapter_config, constraints)
+        operation_source_kinds = _validate_generic_operation_sources(
+            route_id,
+            adapter_type,
+            adapter_config,
+            paths,
+        )
+        _validate_response_binding_sources(
+            route_id,
+            adapter_type,
+            adapter_config,
+            operation_source_kinds,
+            constraints,
+        )
         _validate_provider_account_rate_limits(
             route_id,
             constraints,

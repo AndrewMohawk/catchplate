@@ -60,6 +60,7 @@ const POLICY_TRUST_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const POLICY_TRUST_MAX_AGE: Duration = Duration::from_secs(90);
 const CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT: Duration = Duration::from_secs(15);
 const CREDENTIAL_LEASE_RENEW_BEFORE: Duration = Duration::from_secs(4);
+const CREDENTIAL_LEASE_HOT_WINDOW: Duration = Duration::from_secs(30);
 const CREDENTIAL_LEASE_RECIPIENT_ATTESTATION_TIMEOUT: Duration = Duration::from_secs(2);
 const SAFE_RESPONSE_HEADERS: [&str; 6] = [
     "cache-control",
@@ -175,10 +176,47 @@ impl<'de> Visitor<'de> for DuplicateRejectingJsonValueVisitor {
 }
 
 fn strict_json_value_from_slice(input: &[u8]) -> Result<Value, serde_json::Error> {
+    if contains_integer_negative_zero(input) {
+        return Err(<serde_json::Error as de::Error>::custom(
+            "integer -0 is not permitted in strict JSON",
+        ));
+    }
     let mut deserializer = serde_json::Deserializer::from_slice(input);
     let value = DuplicateRejectingJsonValue::deserialize(&mut deserializer)?.0;
     deserializer.end()?;
     Ok(value)
+}
+
+fn contains_integer_negative_zero(input: &[u8]) -> bool {
+    let mut in_string = false;
+    let mut escaped = false;
+
+    for (index, byte) in input.iter().copied().enumerate() {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        if byte == b'"' {
+            in_string = true;
+            continue;
+        }
+        if byte != b'-' || input.get(index + 1) != Some(&b'0') {
+            continue;
+        }
+        if input
+            .get(index + 2)
+            .is_none_or(|next| matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b',' | b']' | b'}'))
+        {
+            return true;
+        }
+    }
+    false
 }
 
 fn strict_json_value_from_str(input: &str) -> Result<Value, serde_json::Error> {
@@ -271,12 +309,26 @@ struct PathTemplate {
     segments: Vec<PathSegment>,
 }
 
+struct PathSourceLayout<'a> {
+    path: &'a str,
+    shape: Vec<String>,
+    specificity: Vec<u8>,
+    source_positions: Vec<usize>,
+}
+
 #[derive(Clone)]
 enum PathSegment {
     Literal(String),
     Variable(String),
     Wildcard,
     Glob,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum GenericOperationSource {
+    Form,
+    Json,
+    Path,
 }
 
 #[derive(Deserialize)]
@@ -306,6 +358,13 @@ struct DecisionRequest {
 struct RouteMatch<'a> {
     route: &'a Route,
     params: BTreeMap<String, String>,
+}
+
+struct RequestOperationContext {
+    forwarded_headers: BTreeMap<String, String>,
+    client_request_digest: Option<String>,
+    operation: Value,
+    rewrite: Value,
 }
 
 struct IncomingRequest {
@@ -388,6 +447,7 @@ struct GateState {
     constraint_rate_counters: Mutex<HashMap<String, ConstraintRateCounter>>,
     credential_leases: Mutex<HashMap<CredentialLeaseScope, SecretLease>>,
     credential_generations: Mutex<HashMap<CredentialLeaseScope, CredentialLeaseGeneration>>,
+    credential_lease_activity: Mutex<HashMap<CredentialLeaseScope, Instant>>,
     credential_lease_flights:
         Mutex<HashMap<CredentialLeaseGenerationKey, Arc<CredentialLeaseFlight>>>,
     credential_lease_url: Option<String>,
@@ -2307,6 +2367,67 @@ fn valid_operation_field(path: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-'))
 }
 
+fn generic_operation_sources<'a>(
+    operation: &'a Map<String, Value>,
+    body_mode: &str,
+) -> Result<HashMap<&'a str, GenericOperationSource>, String> {
+    const MAX_SOURCE_FIELDS: usize = 16;
+    const SOURCE_LISTS: [(&str, GenericOperationSource, Option<&str>); 3] = [
+        (
+            "formFields",
+            GenericOperationSource::Form,
+            Some("formUrlencoded"),
+        ),
+        ("jsonFields", GenericOperationSource::Json, Some("json")),
+        ("pathParams", GenericOperationSource::Path, None),
+    ];
+
+    if let Some(field) = operation.keys().find(|field| {
+        field.as_str() != "name"
+            && !SOURCE_LISTS
+                .iter()
+                .any(|(supported, _, _)| field.as_str() == *supported)
+    }) {
+        return Err(format!("request.operation has unsupported field {field}"));
+    }
+
+    let mut sources = HashMap::new();
+    for (list_name, source_kind, required_body_mode) in SOURCE_LISTS {
+        let Some(raw_fields) = operation.get(list_name) else {
+            continue;
+        };
+        let fields = raw_fields
+            .as_array()
+            .ok_or_else(|| format!("request.operation.{list_name} must be an array"))?;
+        if fields.len() > MAX_SOURCE_FIELDS {
+            return Err(format!(
+                "request.operation.{list_name} must contain at most {MAX_SOURCE_FIELDS} fields"
+            ));
+        }
+        if !fields.is_empty() && required_body_mode.is_some_and(|required| body_mode != required) {
+            return Err(format!(
+                "request.operation.{list_name} requires bodyMode {}",
+                required_body_mode.unwrap_or_default()
+            ));
+        }
+        let mut unique = HashSet::new();
+        for raw_field in fields {
+            let field = raw_field.as_str().unwrap_or_default();
+            if field == "operation" || !valid_operation_field(field) || !unique.insert(field) {
+                return Err(format!(
+                    "request.operation.{list_name} has an invalid or duplicate field"
+                ));
+            }
+            if sources.insert(field, source_kind).is_some() {
+                return Err(format!(
+                    "request.operation source {field} is declared in more than one source list"
+                ));
+            }
+        }
+    }
+    Ok(sources)
+}
+
 fn validate_response_binding_constraint(
     route_id: &str,
     constraint_id: &str,
@@ -3500,32 +3621,79 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 if operation
                     .get("name")
                     .and_then(Value::as_str)
-                    .is_none_or(str::is_empty)
+                    .is_none_or(|name| name.is_empty() || name.chars().count() > 128)
                 {
                     return Err(format!(
-                        "route {route_id} generic.rest request.operation.name must be non-empty"
+                        "route {route_id} generic.rest request.operation.name must contain 1-128 characters"
                     ));
                 }
-                if let Some(form_fields) = operation.get("formFields") {
-                    let form_fields = form_fields.as_array().ok_or_else(|| {
-                        format!(
-                            "route {route_id} generic.rest request.operation.formFields must be an array"
-                        )
-                    })?;
-                    if body_mode != "formUrlencoded" && !form_fields.is_empty() {
-                        return Err(format!(
-                            "route {route_id} generic.rest operation formFields require bodyMode formUrlencoded"
-                        ));
-                    }
-                    if form_fields.iter().any(|field| {
-                        field
-                            .as_str()
-                            .and_then(normalized_form_key)
-                            .is_none_or(|normalized| field.as_str() != Some(normalized.as_str()))
-                    }) {
-                        return Err(format!(
-                            "route {route_id} generic.rest operation has invalid formFields"
-                        ));
+                let operation_sources = generic_operation_sources(operation, body_mode)
+                    .map_err(|error| format!("route {route_id} generic.rest {error}"))?;
+                let path_params = operation_sources
+                    .iter()
+                    .filter_map(|(field, source)| {
+                        (*source == GenericOperationSource::Path).then_some(*field)
+                    })
+                    .collect::<Vec<_>>();
+                if !path_params.is_empty() {
+                    let paths = route
+                        .get("match")
+                        .and_then(Value::as_object)
+                        .and_then(|matcher| matcher.get("paths"))
+                        .and_then(Value::as_array)
+                        .ok_or_else(|| format!("route {route_id} paths missing"))?;
+                    let mut source_layouts: Vec<PathSourceLayout<'_>> =
+                        Vec::with_capacity(paths.len());
+                    for path in paths {
+                        let path = path.as_str().ok_or_else(|| {
+                            format!("route {route_id} paths must contain strings")
+                        })?;
+                        let template = compile_template(path)
+                            .map_err(|error| format!("route {route_id} {error}"))?;
+                        let mut placeholders = HashMap::new();
+                        for (index, segment) in template.segments.iter().enumerate() {
+                            if let PathSegment::Variable(name) = segment {
+                                if placeholders.insert(name.as_str(), index).is_some() {
+                                    return Err(format!(
+                                        "route {route_id} path {path} repeats placeholder {name}"
+                                    ));
+                                }
+                            }
+                        }
+                        if let Some(path_param) = path_params
+                            .iter()
+                            .find(|path_param| !placeholders.contains_key(**path_param))
+                        {
+                            return Err(format!(
+                                "route {route_id} generic.rest request.operation.pathParams field {path_param} is not declared by path {path}"
+                            ));
+                        }
+                        let source_positions = path_params
+                            .iter()
+                            .map(|path_param| {
+                                *placeholders
+                                    .get(*path_param)
+                                    .expect("validated path source position")
+                            })
+                            .collect::<Vec<_>>();
+                        let shape = template.shape();
+                        let specificity = template.specificity();
+                        if let Some(previous_path) = source_layouts.iter().find_map(|previous| {
+                            (previous.shape == shape
+                                && previous.specificity == specificity
+                                && previous.source_positions != source_positions)
+                                .then_some(previous.path)
+                        }) {
+                            return Err(format!(
+                                "route {route_id} paths {previous_path} and {path} ambiguously bind operation pathParams"
+                            ));
+                        }
+                        source_layouts.push(PathSourceLayout {
+                            path,
+                            shape,
+                            specificity,
+                            source_positions,
+                        });
                     }
                 }
             }
@@ -4081,12 +4249,6 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                             "route {route_id} responseBinding requires generic.rest request configuration"
                         )
                     })?;
-                if request_config.get("bodyMode").and_then(Value::as_str) != Some("formUrlencoded")
-                {
-                    return Err(format!(
-                        "route {route_id} responseBinding currently requires generic.rest formUrlencoded requests"
-                    ));
-                }
                 let response_config = route
                     .get("adapter")
                     .and_then(|adapter| adapter.get("config"))
@@ -4132,32 +4294,12 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                         "route {route_id} responseBinding {constraint_id} does not include its configured operation"
                     ));
                 }
-                let mut available = HashSet::from(["operation"]);
-                if let Some(fields) = operation.get("formFields").and_then(Value::as_array) {
-                    available.extend(fields.iter().filter_map(Value::as_str));
-                }
-                let form_constraint = constraints
-                    .iter()
-                    .find(|candidate| {
-                        candidate.get("type").and_then(Value::as_str) == Some("formBody")
-                    })
-                    .and_then(Value::as_object)
-                    .ok_or_else(|| {
-                        format!("route {route_id} responseBinding requires a formBody constraint")
-                    })?;
-                let required_fields = form_constraint
-                    .get("requiredFields")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .collect::<HashSet<_>>();
-                let field_rules = form_constraint
-                    .get("fields")
-                    .and_then(Value::as_object)
-                    .ok_or_else(|| {
-                        format!("route {route_id} responseBinding requires typed formBody fields")
-                    })?;
+                let body_mode = request_config
+                    .get("bodyMode")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let available = generic_operation_sources(operation, body_mode)
+                    .map_err(|error| format!("route {route_id} generic.rest {error}"))?;
                 for binding in constraint
                     .get("bindings")
                     .and_then(Value::as_array)
@@ -4168,19 +4310,66 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                         .get("operationField")
                         .and_then(Value::as_str)
                         .unwrap_or("");
-                    if !available.contains(source) {
-                        return Err(format!(
-                            "route {route_id} responseBinding {constraint_id} source {source} is not captured by generic.rest request.operation"
-                        ));
-                    }
                     if source == "operation" {
                         continue;
                     }
+                    let Some(source_kind) = available.get(source) else {
+                        return Err(format!(
+                            "route {route_id} responseBinding {constraint_id} source {source} is not captured by generic.rest request.operation"
+                        ));
+                    };
+                    if *source_kind == GenericOperationSource::Path {
+                        if binding.get("comparison").and_then(Value::as_str) != Some("exactString")
+                        {
+                            return Err(format!(
+                                "route {route_id} responseBinding {constraint_id} path source {source} supports only exactString"
+                            ));
+                        }
+                        continue;
+                    }
+                    let body_constraint_type = match source_kind {
+                        GenericOperationSource::Form => "formBody",
+                        GenericOperationSource::Json => "jsonBody",
+                        GenericOperationSource::Path => unreachable!(),
+                    };
+                    let body_constraints = constraints
+                        .iter()
+                        .filter(|candidate| {
+                            candidate.get("type").and_then(Value::as_str)
+                                == Some(body_constraint_type)
+                        })
+                        .filter_map(Value::as_object)
+                        .collect::<Vec<_>>();
+                    if body_constraints.is_empty() {
+                        return Err(
+                            format!(
+                                "route {route_id} responseBinding requires a {body_constraint_type} constraint for source {source}"
+                            ),
+                        );
+                    }
+                    let required_fields = body_constraints
+                        .iter()
+                        .flat_map(|body_constraint| {
+                            body_constraint
+                                .get("requiredFields")
+                                .and_then(Value::as_array)
+                                .into_iter()
+                                .flatten()
+                                .filter_map(Value::as_str)
+                        })
+                        .collect::<HashSet<_>>();
                     if !required_fields.contains(source) {
                         return Err(format!(
-                            "route {route_id} responseBinding {constraint_id} source {source} must be required by formBody"
+                            "route {route_id} responseBinding {constraint_id} source {source} must be required by {body_constraint_type}"
                         ));
                     }
+                    let field_rule = body_constraints.iter().fold(None, |found, constraint| {
+                        constraint
+                            .get("fields")
+                            .and_then(Value::as_object)
+                            .and_then(|fields| fields.get(source))
+                            .or(found)
+                    });
                     let expected_type = if binding.get("comparison").and_then(Value::as_str)
                         == Some("canonicalInteger")
                     {
@@ -4188,14 +4377,13 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     } else {
                         "string"
                     };
-                    if field_rules
-                        .get(source)
+                    if field_rule
                         .and_then(|rule| rule.get("type"))
                         .and_then(Value::as_str)
                         != Some(expected_type)
                     {
                         return Err(format!(
-                            "route {route_id} responseBinding {constraint_id} source {source} must use formBody type {expected_type}"
+                            "route {route_id} responseBinding {constraint_id} source {source} must use {body_constraint_type} type {expected_type}"
                         ));
                     }
                 }
@@ -6595,11 +6783,20 @@ fn cached_credential_lease_info(
     }
 }
 
+fn mark_credential_lease_activity(state: &GateState, scope: &CredentialLeaseScope) {
+    state
+        .credential_lease_activity
+        .lock()
+        .expect("credential lease activity mutex poisoned")
+        .insert(scope.clone(), Instant::now());
+}
+
 fn peek_cached_credential_lease_info(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
 ) -> Option<CredentialLeaseInfo> {
+    mark_credential_lease_activity(state, scope);
     state
         .credential_generations
         .lock()
@@ -6776,6 +6973,7 @@ fn ensure_scoped_credential_lease(
     if !snapshot_is_active(state, snapshot) {
         return Err("policy snapshot was revoked before credential lease lookup".to_string());
     }
+    mark_credential_lease_activity(state, scope);
     if let Some(info) = cached_credential_lease_info(state, snapshot, scope) {
         return Ok(info);
     }
@@ -6792,7 +6990,7 @@ fn credential_generation(
     snapshot: &Arc<Snapshot>,
     scope: &CredentialLeaseScope,
 ) -> Option<u64> {
-    cached_credential_lease_info(state, snapshot, scope).map(|info| info.version)
+    peek_cached_credential_lease_info(state, snapshot, scope).map(|info| info.version)
 }
 
 fn credential_lease_for_release(
@@ -6947,21 +7145,49 @@ fn credential_lease_background_candidates(
     snapshot: &Arc<Snapshot>,
     renew_before: Duration,
 ) -> Vec<CredentialLeaseScope> {
-    let deadline = Instant::now()
-        .checked_add(renew_before)
-        .unwrap_or_else(Instant::now);
-    let leases = state
+    let now = Instant::now();
+    let deadline = now.checked_add(renew_before).unwrap_or_else(Instant::now);
+    let scopes = policy_credential_lease_scopes(snapshot);
+    let policy_scopes = scopes.iter().cloned().collect::<HashSet<_>>();
+    let mut leases = state
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
-    policy_credential_lease_scopes(snapshot)
-        .into_iter()
-        .filter(|scope| {
-            !leases.get(scope).is_some_and(|lease| {
+    let generations = state
+        .credential_generations
+        .lock()
+        .expect("credential generation mutex poisoned");
+    let mut activity = state
+        .credential_lease_activity
+        .lock()
+        .expect("credential lease activity mutex poisoned");
+    activity.retain(|scope, last_used| {
+        policy_scopes.contains(scope)
+            && now.saturating_duration_since(*last_used) <= CREDENTIAL_LEASE_HOT_WINDOW
+    });
+    let mut candidates = Vec::new();
+    for scope in scopes {
+        let generation_ready = generations
+            .get(&scope)
+            .is_some_and(|generation| generation.policy_hash == snapshot.hash);
+        if !generation_ready {
+            candidates.push(scope);
+            continue;
+        }
+        if activity.contains_key(&scope) {
+            if !leases.get(&scope).is_some_and(|lease| {
                 lease.policy_hash == snapshot.hash && lease.expires_at_monotonic > deadline
-            })
-        })
-        .collect()
+            }) {
+                candidates.push(scope);
+            }
+        } else if leases
+            .get(&scope)
+            .is_some_and(|lease| lease.expires_at_monotonic <= now)
+        {
+            leases.remove(&scope);
+        }
+    }
+    candidates
 }
 
 fn credential_generations_ready(state: &GateState, snapshot: &Arc<Snapshot>) -> bool {
@@ -9372,6 +9598,7 @@ fn request_content_type(headers: &BTreeMap<String, String>) -> String {
 fn generic_operation_fields(
     req: &DecisionRequest,
     request_config: &Map<String, Value>,
+    route_params: &BTreeMap<String, String>,
 ) -> Result<Value, Value> {
     let Some(operation) = request_config.get("operation") else {
         return Ok(json!({}));
@@ -9382,37 +9609,71 @@ fn generic_operation_fields(
     let name = operation
         .get("name")
         .and_then(Value::as_str)
-        .filter(|name| !name.is_empty())
+        .filter(|name| !name.is_empty() && name.chars().count() <= 128)
         .ok_or_else(|| json!({"error":"generic_operation_name_invalid","status_code":500}))?;
     let mut fields = Map::from_iter([("operation".to_string(), Value::String(name.to_string()))]);
-    let configured = match operation.get("formFields") {
-        Some(Value::Array(items)) if items.iter().all(Value::is_string) => items
-            .iter()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect::<HashSet<_>>(),
-        Some(_) => {
-            return Err(json!({
-                "error":"generic_operation_form_fields_invalid",
-                "status_code":500,
-            }))
-        }
-        None => HashSet::new(),
-    };
-    if configured.is_empty() {
-        return Ok(Value::Object(fields));
-    }
-    let mut values = BTreeMap::<String, Vec<String>>::new();
-    for (key, value) in parse_form_urlencoded(req)
-        .map_err(|detail| json!({"error":"request_form_invalid","detail":detail}))?
-    {
-        if configured.contains(&key) {
-            values.entry(key).or_default().push(value);
+    let body_mode = request_config
+        .get("bodyMode")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let configured = generic_operation_sources(operation, body_mode).map_err(|detail| {
+        json!({
+            "error":"generic_operation_sources_invalid",
+            "detail":detail,
+            "status_code":500,
+        })
+    })?;
+
+    for (field, source) in &configured {
+        if *source == GenericOperationSource::Path {
+            if let Some(value) = route_params.get(*field) {
+                fields.insert((*field).to_string(), Value::String(value.clone()));
+            }
         }
     }
-    for (field, found) in values {
-        if found.len() == 1 {
-            fields.insert(field, Value::String(found[0].clone()));
+
+    let json_fields = configured
+        .iter()
+        .filter_map(|(field, source)| (*source == GenericOperationSource::Json).then_some(*field))
+        .collect::<HashSet<_>>();
+    if !json_fields.is_empty() {
+        let payload = strict_json_value_from_str(&req.body).map_err(|_| {
+            json!({
+                "error":"request_json_invalid",
+                "status_code":400,
+            })
+        })?;
+        if let Some(payload) = payload.as_object() {
+            for field in json_fields {
+                let value = match payload.get(field) {
+                    Some(Value::String(value)) => Some(value.clone()),
+                    Some(Value::Number(value)) => value.as_i64().map(|value| value.to_string()),
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    fields.insert(field.to_string(), Value::String(value));
+                }
+            }
+        }
+    }
+
+    let form_fields = configured
+        .iter()
+        .filter_map(|(field, source)| (*source == GenericOperationSource::Form).then_some(*field))
+        .collect::<HashSet<_>>();
+    if !form_fields.is_empty() {
+        let mut values = BTreeMap::<String, Vec<String>>::new();
+        for (key, value) in parse_form_urlencoded(req)
+            .map_err(|detail| json!({"error":"request_form_invalid","detail":detail}))?
+        {
+            if form_fields.contains(key.as_str()) {
+                values.entry(key).or_default().push(value);
+            }
+        }
+        for (field, found) in values {
+            if found.len() == 1 {
+                fields.insert(field, Value::String(found[0].clone()));
+            }
         }
     }
     Ok(Value::Object(fields))
@@ -9580,7 +9841,10 @@ fn validate_adapter(
                         json!({"error":"request_form_invalid","detail":detail,"status_code":400})
                     })?;
                 }
-                return Ok((generic_operation_fields(req, request_config)?, json!({})));
+                return Ok((
+                    generic_operation_fields(req, request_config, &route_match.params)?,
+                    json!({}),
+                ));
             }
             Err(json!({
                 "error":"generic_request_policy_missing",
@@ -9724,6 +9988,46 @@ fn validate_adapter(
         }
         other => Err(json!({"error":"unsupported_adapter","adapter":other})),
     }
+}
+
+fn prepare_request_operation_context(
+    req: &DecisionRequest,
+    normalized_headers: &BTreeMap<String, String>,
+    url: &Url,
+    route_match: &RouteMatch<'_>,
+    injection: &Value,
+) -> Result<RequestOperationContext, Value> {
+    let body_length = decision_request_body_length(req).map_err(|detail| {
+        json!({
+            "error":"invalid_request_framing",
+            "detail":detail,
+            "status_code":400,
+        })
+    })?;
+    let forwarded_headers =
+        canonical_forwarded_request_headers(&req.headers, url, body_length, injection).map_err(
+            |detail| {
+                json!({
+                    "error":"invalid_forwarding_headers",
+                    "detail":detail,
+                    "status_code":400,
+                })
+            },
+        )?;
+    let proof_requested = normalized_headers.contains_key(RESPONSE_PROOF_NONCE_HEADER);
+    if proof_requested != req.client_request_digest.is_some() {
+        return Err(json!({
+            "error":"invalid_response_proof_request_binding",
+            "status_code":400,
+        }));
+    }
+    let (operation, rewrite) = validate_adapter(req, &forwarded_headers, url, route_match)?;
+    Ok(RequestOperationContext {
+        forwarded_headers,
+        client_request_digest: req.client_request_digest.clone(),
+        operation,
+        rewrite,
+    })
 }
 
 fn constraint_phase_includes(constraint: &Value, phase: &str) -> bool {
@@ -11874,6 +12178,33 @@ fn evaluate_request_constraints(
     Ok(())
 }
 
+fn evaluate_request_semantic_constraints(
+    route: &Route,
+    req: &DecisionRequest,
+    headers: &BTreeMap<String, String>,
+    url: &Url,
+    operation: &Value,
+) -> Result<(), Value> {
+    for constraint in &route.constraints {
+        let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        if !constraint_phase_includes(constraint, "request") || kind == "rateLimit" {
+            continue;
+        }
+        match kind {
+            "operationPolicy" => enforce_operation_policy(constraint, operation)?,
+            "queryDateWindow" => enforce_query_date_window(constraint, url)?,
+            "queryNumericBounds" => enforce_query_numeric_bounds(constraint, url)?,
+            "requestTimeWindow" => enforce_request_time_window(constraint)?,
+            "jsonBody" => enforce_json_body(constraint, req, headers)?,
+            "formBody" => enforce_form_body(constraint, req, headers)?,
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn enforce_response_date_window(constraint: &Value, body: &[u8]) -> Result<(), Value> {
     let payload = strict_json_value_from_slice(body).map_err(|_| {
         let mut extra = Map::new();
@@ -12421,6 +12752,9 @@ fn decide_internal_with_mode(
     } else {
         json!(null)
     };
+    let credential_policy = credential_ref
+        .as_ref()
+        .and_then(|credential_id| snapshot.credentials.get(credential_id));
     if credential_ref.is_some() {
         if let Err(payload) = reject_credential_injection_collision(&req.headers, &url, &injection)
         {
@@ -12436,6 +12770,72 @@ fn decide_internal_with_mode(
             return deny(status, &reason, payload, started);
         }
     }
+    let has_response_binding = route.adapter_type == "generic.rest"
+        && route.constraints.iter().any(|constraint| {
+            constraint.get("type").and_then(Value::as_str) == Some("responseBinding")
+        });
+    let response_binding_preflight = if has_response_binding {
+        let mut context =
+            match prepare_request_operation_context(&req, &headers, &url, &route_match, &injection)
+            {
+                Ok(context) => context,
+                Err(payload) => {
+                    let status = payload
+                        .get("status_code")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(403) as u16;
+                    let reason = payload
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("adapter denied")
+                        .to_string();
+                    return deny_for_route(status, &reason, payload, route, started);
+                }
+            };
+        if let Err(payload) =
+            bind_provider_account_scope(route, credential_policy, &mut context.operation)
+        {
+            let status = payload
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .unwrap_or(500) as u16;
+            let reason = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("provider account identity unavailable")
+                .to_string();
+            return deny_for_route(status, &reason, payload, route, started);
+        }
+        if let Err(payload) =
+            evaluate_request_semantic_constraints(route, &req, &headers, &url, &context.operation)
+        {
+            let status = payload
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .unwrap_or(403) as u16;
+            let reason = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("credential_constraint_denied")
+                .to_string();
+            return deny_for_route(status, &reason, payload, route, started);
+        }
+        if let Err(payload) = validate_response_binding_sources(route, &context.operation) {
+            let status = payload
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .unwrap_or(403) as u16;
+            let reason = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("response_binding_source_invalid")
+                .to_string();
+            return deny_for_route(status, &reason, payload, route, started);
+        }
+        Some(context)
+    } else {
+        None
+    };
     let atomic_release = state.atomic_release_authorization_enabled && !preview;
     let credential_scope = credential_ref
         .as_ref()
@@ -12493,70 +12893,46 @@ fn decide_internal_with_mode(
         );
     }
 
-    let body_length = match decision_request_body_length(&req) {
-        Ok(length) => length,
-        Err(err) => {
-            return deny(
-                400,
-                "invalid request framing",
-                json!({"error":"invalid_request_framing","detail":err}),
-                started,
-            )
+    let RequestOperationContext {
+        forwarded_headers,
+        client_request_digest,
+        mut operation,
+        rewrite,
+    } = match response_binding_preflight {
+        Some(context) => context,
+        None => {
+            match prepare_request_operation_context(&req, &headers, &url, &route_match, &injection)
+            {
+                Ok(context) => context,
+                Err(payload) => {
+                    let status = payload
+                        .get("status_code")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(403) as u16;
+                    let reason = payload
+                        .get("error")
+                        .and_then(Value::as_str)
+                        .unwrap_or("adapter denied")
+                        .to_string();
+                    return deny_for_route(status, &reason, payload, route, started);
+                }
+            }
         }
     };
-    let forwarded_headers =
-        match canonical_forwarded_request_headers(&req.headers, &url, body_length, &injection) {
-            Ok(headers) => headers,
-            Err(err) => {
-                return deny(
-                    400,
-                    "invalid forwarding headers",
-                    json!({"error":"invalid_forwarding_headers","detail":err}),
-                    started,
-                )
-            }
-        };
-    let proof_requested = headers.contains_key(RESPONSE_PROOF_NONCE_HEADER);
-    if proof_requested != req.client_request_digest.is_some() {
-        return deny(
-            400,
-            "invalid response proof request binding",
-            json!({"error":"invalid_response_proof_request_binding"}),
-            started,
-        );
-    }
-    let client_request_digest = req.client_request_digest.clone();
-
-    let (mut operation, rewrite) =
-        match validate_adapter(&req, &forwarded_headers, &url, &route_match) {
-            Ok(value) => value,
-            Err(payload) => {
-                let status = payload
-                    .get("status_code")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(403) as u16;
-                let reason = payload
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("adapter denied")
-                    .to_string();
-                return deny(status, &reason, payload, started);
-            }
-        };
-    let credential_policy = credential_ref
-        .as_ref()
-        .and_then(|credential_id| snapshot.credentials.get(credential_id));
-    if let Err(payload) = bind_provider_account_scope(route, credential_policy, &mut operation) {
-        let status = payload
-            .get("status_code")
-            .and_then(Value::as_u64)
-            .unwrap_or(500) as u16;
-        let reason = payload
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("provider account identity unavailable")
-            .to_string();
-        return deny_for_route(status, &reason, payload, route, started);
+    if !has_response_binding {
+        if let Err(payload) = bind_provider_account_scope(route, credential_policy, &mut operation)
+        {
+            let status = payload
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .unwrap_or(500) as u16;
+            let reason = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("provider account identity unavailable")
+                .to_string();
+            return deny_for_route(status, &reason, payload, route, started);
+        }
     }
     if let Err(payload) = evaluate_request_constraints(
         state,
@@ -12570,7 +12946,7 @@ fn decide_internal_with_mode(
         &snapshot.hash,
         &operation,
         false,
-        false,
+        has_response_binding,
         preview || atomic_release,
     ) {
         let status = payload
@@ -12584,17 +12960,19 @@ fn decide_internal_with_mode(
             .to_string();
         return deny_for_route(status, &reason, payload, route, started);
     }
-    if let Err(payload) = validate_response_binding_sources(route, &operation) {
-        let status = payload
-            .get("status_code")
-            .and_then(Value::as_u64)
-            .unwrap_or(403) as u16;
-        let reason = payload
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or("response_binding_source_invalid")
-            .to_string();
-        return deny_for_route(status, &reason, payload, route, started);
+    if !has_response_binding {
+        if let Err(payload) = validate_response_binding_sources(route, &operation) {
+            let status = payload
+                .get("status_code")
+                .and_then(Value::as_u64)
+                .unwrap_or(403) as u16;
+            let reason = payload
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("response_binding_source_invalid")
+                .to_string();
+            return deny_for_route(status, &reason, payload, route, started);
+        }
     }
 
     let canonical = canonical_request(
@@ -17360,6 +17738,19 @@ fn validate_forward_response(
     }
 }
 
+fn response_content_encoding_is_identity_or_absent(headers: &HeaderMap) -> bool {
+    let mut values = headers.get_all("content-encoding").iter();
+    let Some(value) = values.next() else {
+        return true;
+    };
+    if values.next().is_some() {
+        return false;
+    }
+    value
+        .to_str()
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("identity"))
+}
+
 fn finalize_upstream_response(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -17378,12 +17769,6 @@ fn finalize_upstream_response(
         .get("content-type")
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
-    let content_encoding = response
-        .headers()
-        .get("content-encoding")
-        .and_then(|value| value.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.eq_ignore_ascii_case("identity"));
     let content_length = response_content_length(response.headers());
     if let Err(payload) =
         validate_response_release_context(state, snapshot, decision, request_method, upstream_url)
@@ -17397,7 +17782,7 @@ fn finalize_upstream_response(
             payload,
         ));
     }
-    if content_encoding.is_some() {
+    if !response_content_encoding_is_identity_or_absent(response.headers()) {
         return ForwardResult::Buffered(block_forward_response(
             state,
             decision,
@@ -20695,6 +21080,7 @@ fn main() -> Result<(), String> {
         constraint_rate_counters: Mutex::new(HashMap::new()),
         credential_leases: Mutex::new(HashMap::new()),
         credential_generations: Mutex::new(HashMap::new()),
+        credential_lease_activity: Mutex::new(HashMap::new()),
         credential_lease_flights: Mutex::new(HashMap::new()),
         credential_lease_url,
         credential_lease_recipient_attestation_command,
@@ -20891,6 +21277,7 @@ mod tests {
             constraint_rate_counters: Mutex::new(HashMap::new()),
             credential_leases: Mutex::new(HashMap::new()),
             credential_generations: Mutex::new(HashMap::new()),
+            credential_lease_activity: Mutex::new(HashMap::new()),
             credential_lease_flights: Mutex::new(HashMap::new()),
             credential_lease_url: None,
             credential_lease_recipient_attestation_command: None,
@@ -21024,6 +21411,15 @@ mod tests {
             .lock()
             .expect("credential leases")
             .is_empty());
+        assert!(state
+            .credential_lease_activity
+            .lock()
+            .expect("credential lease activity")
+            .contains_key(&CredentialLeaseScope::new(
+                "agent:test",
+                "route:test",
+                "credential:test",
+            )));
         assert_eq!(
             state
                 .credential_lease_refresh_success
@@ -21043,6 +21439,63 @@ mod tests {
             .expect("rate counters")
             .is_empty());
         assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+    }
+
+    #[test]
+    fn grant_creation_uses_generation_floor_after_cold_lease_is_zeroized() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "demo".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer","header":"Authorization"}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.routes[0].jit = json!({"required":true});
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope,
+                CredentialLeaseGeneration {
+                    policy_hash: snapshot.hash.clone(),
+                    version: 7,
+                    secret_fingerprint: credential_secret_fingerprint("cold-secret"),
+                    metadata: BTreeMap::new(),
+                },
+            );
+
+        let grant = create_grant(
+            &state,
+            GrantCreate {
+                grant_id: Some("grant:cold-scope".to_string()),
+                approval_id: Some("approval:cold-scope".to_string()),
+                principal_id: "agent:test".to_string(),
+                route_id: "route:test".to_string(),
+                credential_ref: "credential:test".to_string(),
+                credential_version: 7,
+                policy_hash: snapshot.hash.clone(),
+                request_digest: sha256_prefixed(b"request"),
+                operation_digest: sha256_prefixed(b"operation"),
+                max_uses: 1,
+                ttl_seconds: 30,
+            },
+        );
+
+        assert_eq!(grant["ok"], true);
+        assert_eq!(grant["grant_id"], "grant:cold-scope");
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+        assert_eq!(state.grants.lock().expect("grant cache").len(), 1);
     }
 
     #[test]
@@ -22942,6 +23395,30 @@ mod tests {
     }
 
     #[test]
+    fn strict_json_rejects_integer_negative_zero_lexically() {
+        for input in [
+            br#"-0"#.as_slice(),
+            br#"[-0]"#.as_slice(),
+            br#"{"nested":{"value":-0}}"#.as_slice(),
+            br#"{"unrelated":true,"value":-0}"#.as_slice(),
+        ] {
+            let error = strict_json_value_from_slice(input)
+                .expect_err("integer negative zero must fail strict JSON parsing");
+            assert!(error.to_string().contains("integer -0"), "{error}");
+        }
+
+        for input in [
+            br#""-0""#.as_slice(),
+            br#"-0.0"#.as_slice(),
+            br#"-0e0"#.as_slice(),
+            br#"{"text":"value -0 is data","value":0}"#.as_slice(),
+        ] {
+            strict_json_value_from_slice(input)
+                .expect("strings, floating negative zero, and integer zero remain valid");
+        }
+    }
+
+    #[test]
     fn missing_response_binding_source_is_denied_before_upstream_contact() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("test upstream listener");
         listener
@@ -23039,6 +23516,143 @@ mod tests {
             !server.join().expect("test upstream thread"),
             "request with a missing response-binding source contacted the upstream"
         );
+    }
+
+    #[test]
+    fn request_semantics_precede_binding_source_and_credential_access() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking upstream listener");
+        let upstream = listener.local_addr().expect("test upstream address");
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok(_) => return true,
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("accept test upstream request: {err}"),
+                }
+            }
+            false
+        });
+
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer"}),
+            },
+        );
+        let route = &mut snapshot.routes[0];
+        route.scheme = "http".to_string();
+        route.host = upstream.ip().to_string();
+        route.port = upstream.port();
+        route.methods = HashSet::from(["POST".to_string()]);
+        route.paths = vec![compile_template("/artifacts/{artifact_id}").expect("template")];
+        route.credential_ref = Some("credential:test".to_string());
+        route.adapter_config = json!({
+            "request":{
+                "allowedHeaders":["content-type"],
+                "allowedQueryKeys":[],
+                "bodyMode":"json",
+                "maxBodyBytes":1024,
+                "operation":{
+                    "name":"artifacts.put",
+                    "jsonFields":["amount"],
+                    "pathParams":["artifact_id"]
+                }
+            },
+            "response":{"mode":"json","maxBodyBytes":1024,"allowedFields":["id","amount"]}
+        });
+        route.constraints = vec![
+            json!({
+                "id":"artifact-json",
+                "type":"jsonBody",
+                "phase":"request",
+                "allowedFields":["amount"],
+                "requiredFields":["amount"],
+                "fields":{"amount":{"type":"string"}}
+            }),
+            json!({
+                "id":"artifact-response",
+                "type":"responseBinding",
+                "phase":"response",
+                "successStatusCodes":[200],
+                "contentTypes":["application/json"],
+                "operations":["artifacts.put"],
+                "bindings":[
+                    {"id":"id","operationField":"artifact_id","responseField":"id","comparison":"exactString"},
+                    {"id":"amount","operationField":"amount","responseField":"amount","comparison":"exactString"}
+                ]
+            }),
+        ];
+        let snapshot = Arc::new(snapshot);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let result = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "POST".to_string(),
+                target: format!("http://{upstream}/artifacts/item-123"),
+                headers: BTreeMap::from([(
+                    "content-type".to_string(),
+                    "application/json".to_string(),
+                )]),
+                body: br#"{"amount":true}"#.to_vec(),
+                client_ip: Some("127.0.0.1".to_string()),
+            },
+            Some("agent:test"),
+            None,
+            None,
+            false,
+        );
+        let response = match result {
+            ForwardResult::Buffered(response) => {
+                String::from_utf8(response).expect("buffered HTTP denial")
+            }
+            ForwardResult::Streamed => panic!("invalid JSON body unexpectedly streamed"),
+        };
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(
+            response.contains("json_body_field_type_denied"),
+            "{response}"
+        );
+        assert!(
+            !server.join().expect("test upstream thread"),
+            "request denied by JSON semantics contacted the upstream"
+        );
+        assert_eq!(
+            state
+                .credential_lease_refresh_success
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state
+                .credential_lease_refresh_failed
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("lease cache")
+            .is_empty());
+        assert!(state
+            .credential_generations
+            .lock()
+            .expect("generation cache")
+            .is_empty());
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
     }
 
     #[test]
@@ -23794,6 +24408,46 @@ mod tests {
         let denied = validate_response_binding_sources(&route, &noncanonical)
             .expect_err("noncanonical integer source must deny before release");
         assert_eq!(denied["error"], "response_binding_source_invalid");
+    }
+
+    #[test]
+    fn response_content_encoding_requires_one_identity_value_or_absence() {
+        let mut headers = HeaderMap::new();
+        assert!(response_content_encoding_is_identity_or_absent(&headers));
+
+        headers.append("content-encoding", HeaderValue::from_static(" identity "));
+        assert!(response_content_encoding_is_identity_or_absent(&headers));
+
+        headers.append("content-encoding", HeaderValue::from_static("gzip"));
+        assert!(!response_content_encoding_is_identity_or_absent(&headers));
+
+        let mut reordered = HeaderMap::new();
+        reordered.append("content-encoding", HeaderValue::from_static("gzip"));
+        reordered.append("content-encoding", HeaderValue::from_static("identity"));
+        assert!(!response_content_encoding_is_identity_or_absent(&reordered));
+
+        let mut duplicate_identity = HeaderMap::new();
+        duplicate_identity.append("content-encoding", HeaderValue::from_static("identity"));
+        duplicate_identity.append("content-encoding", HeaderValue::from_static("identity"));
+        assert!(!response_content_encoding_is_identity_or_absent(
+            &duplicate_identity
+        ));
+
+        let mut combined = HeaderMap::new();
+        combined.append(
+            "content-encoding",
+            HeaderValue::from_static("identity, gzip"),
+        );
+        assert!(!response_content_encoding_is_identity_or_absent(&combined));
+
+        let mut invalid_bytes = HeaderMap::new();
+        invalid_bytes.append(
+            "content-encoding",
+            HeaderValue::from_bytes(&[0x80]).expect("opaque header bytes"),
+        );
+        assert!(!response_content_encoding_is_identity_or_absent(
+            &invalid_bytes
+        ));
     }
 
     #[test]
@@ -25048,6 +25702,131 @@ mod tests {
     }
 
     #[test]
+    fn generic_json_and_path_operation_sources_are_captured_strictly() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.host = "example.test".to_string();
+        route.paths = vec![compile_template("/artifacts/{artifact_id}").expect("template")];
+        route.adapter_config = json!({
+            "request":{
+                "allowedHeaders":["content-type"],
+                "allowedQueryKeys":[],
+                "bodyMode":"json",
+                "maxBodyBytes":4096,
+                "operation":{
+                    "name":"artifacts.put",
+                    "jsonFields":[
+                        "text","unicode_text","minimum","maximum","zero","negative_zero",
+                        "metadata.id","float_value","boolean_value","object_value","array_value",
+                        "null_value","too_large","missing"
+                    ],
+                    "pathParams":["artifact_id"]
+                }
+            },
+            "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["id","text","size"]}
+        });
+        route.constraints = vec![json!({
+            "id":"artifact-response",
+            "type":"responseBinding",
+            "phase":"response",
+            "successStatusCodes":[200],
+            "contentTypes":["application/json"],
+            "operations":["artifacts.put"],
+            "bindings":[
+                {"id":"id","operationField":"artifact_id","responseField":"id","comparison":"exactString"},
+                {"id":"text","operationField":"text","responseField":"text","comparison":"exactString"},
+                {"id":"size","operationField":"minimum","responseField":"size","comparison":"canonicalInteger"}
+            ]
+        })];
+        let url = Url::parse("https://example.test/artifacts/item:123").expect("URL");
+        let params = route.paths[0].matches(url.path()).expect("route match");
+        let route_match = RouteMatch {
+            route: &route,
+            params,
+        };
+        let body = r#"{
+            "text":"hello",
+            "unicode_text":"snowman \u2603",
+            "minimum":-9223372036854775808,
+            "maximum":9223372036854775807,
+            "zero":0,
+            "metadata.id":"literal-id",
+            "metadata":{"id":"nested-id"},
+            "float_value":1.0,
+            "boolean_value":true,
+            "object_value":{"nested":"value"},
+            "array_value":[1],
+            "null_value":null,
+            "too_large":9223372036854775808
+        }"#;
+        let mut request = decision_request_with_body(body);
+        request.url = url.to_string();
+        request.headers =
+            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
+        let headers = canonical_forwarded_request_headers(
+            &request.headers,
+            &url,
+            Some(body.len() as u64),
+            &Value::Null,
+        )
+        .expect("forwarded headers");
+        let (operation, _) = validate_adapter(&request, &headers, &url, &route_match)
+            .expect("valid JSON and path operation sources");
+        assert_eq!(operation["operation"], "artifacts.put");
+        assert_eq!(operation["artifact_id"], "item:123");
+        assert_eq!(operation["text"], "hello");
+        assert_eq!(operation["unicode_text"], "snowman \u{2603}");
+        assert_eq!(operation["minimum"], i64::MIN.to_string());
+        assert_eq!(operation["maximum"], i64::MAX.to_string());
+        assert_eq!(operation["zero"], "0");
+        assert_eq!(operation["metadata.id"], "literal-id");
+        for omitted in [
+            "negative_zero",
+            "float_value",
+            "boolean_value",
+            "object_value",
+            "array_value",
+            "null_value",
+            "too_large",
+            "missing",
+        ] {
+            assert_eq!(
+                operation.get(omitted),
+                None,
+                "unexpected capture: {omitted}"
+            );
+        }
+        validate_response_binding_sources(&route, &operation)
+            .expect("captured sources must pass preflight");
+        validate_response_constraints(
+            &route,
+            br#"{"id":"item:123","text":"hello","size":-9223372036854775808}"#,
+            Some(&operation),
+        )
+        .expect("matching response must satisfy JSON and path bindings");
+
+        let mut invalid_type_route = route.clone();
+        invalid_type_route.constraints[0]["bindings"][1]["operationField"] = json!("boolean_value");
+        let denied = validate_response_binding_sources(&invalid_type_route, &operation)
+            .expect_err("non-scalar JSON source must be absent at preflight");
+        assert_eq!(denied["error"], "response_binding_source_missing");
+
+        let mut duplicate = decision_request_with_body(r#"{"text":"first","text":"second"}"#);
+        duplicate.url = url.to_string();
+        duplicate.headers = request.headers;
+        let denied = validate_adapter(&duplicate, &headers, &url, &route_match)
+            .expect_err("duplicate JSON keys must fail consistently");
+        assert_eq!(denied["error"], "request_json_invalid");
+
+        let mut negative_zero = decision_request_with_body(r#"{"negative_zero":-0}"#);
+        negative_zero.url = url.to_string();
+        negative_zero.headers =
+            BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
+        let denied = validate_adapter(&negative_zero, &headers, &url, &route_match)
+            .expect_err("integer negative zero must fail generic JSON parsing");
+        assert_eq!(denied["error"], "request_json_invalid");
+    }
+
+    #[test]
     fn generic_form_operation_and_constraints_match_stripe_policy() {
         let mut route = test_snapshot(1).routes[0].clone();
         route.host = "api.stripe.com".to_string();
@@ -25308,6 +26087,208 @@ mod tests {
             error.contains("requires a buffered JSON response"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn generic_operation_source_declarations_are_bounded_and_disjoint() {
+        let json_path_route = || {
+            let mut route = generic_policy_route("json", json!(65_536));
+            route["match"]["paths"] = json!([
+                "/artifacts/{artifact_id}",
+                "/namespaces/{namespace}/artifacts/{artifact_id}"
+            ]);
+            route["adapter"]["config"]["request"]["operation"] = json!({
+                "name":"artifacts.put",
+                "jsonFields":["amount","label"],
+                "pathParams":["artifact_id"]
+            });
+            route
+        };
+
+        validate_policy_capabilities(&policy_with_route(json_path_route()))
+            .expect("bounded JSON and path sources must load");
+
+        for (operation, expected) in [
+            (
+                json!({"name":"artifacts.put","jsonFields":"amount"}),
+                "must be an array",
+            ),
+            (
+                json!({"name":"artifacts.put","jsonFields":["amount",7]}),
+                "invalid or duplicate",
+            ),
+            (
+                json!({"name":"artifacts.put","jsonFields":["amount","amount"]}),
+                "invalid or duplicate",
+            ),
+            (
+                json!({"name":"artifacts.put","jsonFields":["operation"]}),
+                "invalid or duplicate",
+            ),
+            (
+                json!({
+                    "name":"artifacts.put",
+                    "jsonFields":["artifact_id"],
+                    "pathParams":["artifact_id"]
+                }),
+                "more than one source list",
+            ),
+            (
+                json!({
+                    "name":"artifacts.put",
+                    "jsonFields":(0..17).map(|index| format!("field_{index}")).collect::<Vec<_>>()
+                }),
+                "at most 16",
+            ),
+        ] {
+            let mut route = json_path_route();
+            route["adapter"]["config"]["request"]["operation"] = operation;
+            let error = validate_policy_capabilities(&policy_with_route(route))
+                .expect_err("invalid generic operation sources must fail admission");
+            assert!(error.contains(expected), "{error}");
+        }
+
+        let mut undeclared = json_path_route();
+        undeclared["adapter"]["config"]["request"]["operation"]["pathParams"] =
+            json!(["missing_id"]);
+        let error = validate_policy_capabilities(&policy_with_route(undeclared))
+            .expect_err("undeclared path source must fail admission");
+        assert!(error.contains("not declared by path"), "{error}");
+
+        let mut absent_from_one_path = json_path_route();
+        absent_from_one_path["adapter"]["config"]["request"]["operation"]["pathParams"] =
+            json!(["namespace"]);
+        let error = validate_policy_capabilities(&policy_with_route(absent_from_one_path))
+            .expect_err("path source absent from one matched path must fail admission");
+        assert!(error.contains("not declared by path"), "{error}");
+
+        let mut swapped_source_positions = json_path_route();
+        swapped_source_positions["match"]["paths"] =
+            json!(["/v1/{artifact_id}/{other}", "/v1/{other}/{artifact_id}"]);
+        swapped_source_positions["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"artifacts.put",
+            "pathParams":["artifact_id"]
+        });
+        let error = validate_policy_capabilities(&policy_with_route(swapped_source_positions))
+            .expect_err("swapped path source positions must fail admission");
+        assert!(
+            error.contains("ambiguously bind operation pathParams"),
+            "{error}"
+        );
+
+        let mut repeated_source = json_path_route();
+        repeated_source["match"]["paths"] = json!(["/v1/{artifact_id}/{artifact_id}"]);
+        repeated_source["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"artifacts.put",
+            "pathParams":["artifact_id"]
+        });
+        let error = validate_policy_capabilities(&policy_with_route(repeated_source))
+            .expect_err("repeated path source placeholders must fail admission");
+        assert!(error.contains("repeats placeholder artifact_id"), "{error}");
+
+        let mut stable_source_position = json_path_route();
+        stable_source_position["match"]["paths"] =
+            json!(["/v1/{artifact_id}/{left}", "/v1/{artifact_id}/{right}"]);
+        stable_source_position["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"artifacts.put",
+            "pathParams":["artifact_id"]
+        });
+        validate_policy_capabilities(&policy_with_route(stable_source_position))
+            .expect("equal-specificity paths with one stable source position may load");
+
+        let mut wrong_body_mode = json_path_route();
+        wrong_body_mode["adapter"]["config"]["request"]["bodyMode"] = json!("none");
+        let error = validate_policy_capabilities(&policy_with_route(wrong_body_mode))
+            .expect_err("JSON operation sources require JSON body mode");
+        assert!(
+            error.contains("jsonFields requires bodyMode json"),
+            "{error}"
+        );
+
+        let mut form_path_collision = generic_policy_route("formUrlencoded", json!(65_536));
+        form_path_collision["match"]["paths"] = json!(["/artifacts/{artifact_id}"]);
+        form_path_collision["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"artifacts.put",
+            "formFields":["artifact_id"],
+            "pathParams":["artifact_id"]
+        });
+        let error = validate_policy_capabilities(&policy_with_route(form_path_collision))
+            .expect_err("form and path sources must be globally disjoint");
+        assert!(error.contains("more than one source list"), "{error}");
+
+        let mut path_only = generic_policy_route("none", json!(65_536));
+        path_only["match"]["paths"] = json!(["/artifacts/{artifact_id}"]);
+        path_only["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"artifacts.get",
+            "pathParams":["artifact_id"]
+        });
+        validate_policy_capabilities(&policy_with_route(path_only))
+            .expect("path-only operation sources must not require a request body");
+    }
+
+    #[test]
+    fn response_binding_policy_proves_json_and_path_source_semantics() {
+        let mut route = generic_policy_route("json", json!(65_536));
+        route["match"]["paths"] = json!(["/artifacts/{artifact_id}"]);
+        route["adapter"]["config"]["request"]["allowedFields"] = json!(["amount", "label"]);
+        route["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"artifacts.put",
+            "jsonFields":["amount","label"],
+            "pathParams":["artifact_id"]
+        });
+        route["constraints"] = json!([
+            {
+                "id":"artifact-json",
+                "type":"jsonBody",
+                "phase":"request",
+                "allowedFields":["amount","label"],
+                "requiredFields":["amount","label"],
+                "fields":{
+                    "amount":{"type":"integer","min":0,"max":1048576},
+                    "label":{"type":"string","maxLength":128}
+                }
+            },
+            {
+                "id":"artifact-response",
+                "type":"responseBinding",
+                "phase":"response",
+                "successStatusCodes":[200],
+                "contentTypes":["application/json"],
+                "operations":["artifacts.put"],
+                "bindings":[
+                    {"id":"id","operationField":"artifact_id","responseField":"id","comparison":"exactString"},
+                    {"id":"amount","operationField":"amount","responseField":"amount","comparison":"canonicalInteger"},
+                    {"id":"label","operationField":"label","responseField":"label","comparison":"exactString"}
+                ]
+            }
+        ]);
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("JSON and path response bindings must load");
+
+        let mut optional = route.clone();
+        optional["constraints"][0]["requiredFields"] = json!(["label"]);
+        let error = validate_policy_capabilities(&policy_with_route(optional))
+            .expect_err("optional JSON binding source must fail admission");
+        assert!(error.contains("must be required by jsonBody"), "{error}");
+
+        let mut integer_as_string = route.clone();
+        integer_as_string["constraints"][0]["fields"]["amount"] =
+            json!({"type":"string","maxLength":32});
+        let error = validate_policy_capabilities(&policy_with_route(integer_as_string))
+            .expect_err("canonical integer source requires an integer body rule");
+        assert!(error.contains("must use jsonBody type integer"), "{error}");
+
+        let mut string_as_integer = route.clone();
+        string_as_integer["constraints"][0]["fields"]["label"] = json!({"type":"integer","min":0});
+        let error = validate_policy_capabilities(&policy_with_route(string_as_integer))
+            .expect_err("exact string source requires a string body rule");
+        assert!(error.contains("must use jsonBody type string"), "{error}");
+
+        let mut numeric_path = route;
+        numeric_path["constraints"][1]["bindings"][0]["comparison"] = json!("canonicalInteger");
+        let error = validate_policy_capabilities(&policy_with_route(numeric_path))
+            .expect_err("path sources support exact strings only");
+        assert!(error.contains("supports only exactString"), "{error}");
     }
 
     #[test]
@@ -26791,6 +27772,74 @@ mod tests {
                 .into_iter()
                 .collect::<HashSet<_>>();
         assert_eq!(candidates, HashSet::from([due]));
+    }
+
+    #[test]
+    fn credential_lease_background_prefetches_once_and_renews_only_hot_scopes() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential".to_string());
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential");
+
+        assert_eq!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1)),
+            vec![scope.clone()]
+        );
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                scope.clone(),
+                CredentialLeaseGeneration {
+                    policy_hash: snapshot.hash.clone(),
+                    version: 1,
+                    secret_fingerprint: credential_secret_fingerprint("secret"),
+                    metadata: BTreeMap::new(),
+                },
+            );
+        state.credential_leases.lock().expect("lease cache").insert(
+            scope.clone(),
+            SecretLease {
+                scope: scope.clone(),
+                version: 1,
+                secret: Zeroizing::new("secret".to_string()),
+                metadata: BTreeMap::new(),
+                policy_hash: snapshot.hash.clone(),
+                expires_at_epoch_ms: now_epoch_ms().saturating_sub(1),
+                expires_at_monotonic: Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("past instant"),
+            },
+        );
+        assert!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1))
+                .is_empty()
+        );
+        assert!(!state
+            .credential_leases
+            .lock()
+            .expect("lease cache")
+            .contains_key(&scope));
+
+        state
+            .credential_lease_activity
+            .lock()
+            .expect("credential lease activity")
+            .insert(scope.clone(), Instant::now());
+        assert_eq!(
+            credential_lease_background_candidates(&state, &snapshot, Duration::from_secs(1)),
+            vec![scope]
+        );
     }
 
     #[test]

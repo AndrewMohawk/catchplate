@@ -73,6 +73,9 @@ def main() -> None:
         )
         if denied["status"] != "denied" or denied["decision_note"] != reason:
             raise AssertionError(f"denial reason was not stored on the approval: {denied}")
+        delivery = db.drain_metadata_audit_outbox_fully()
+        if delivery["failed"] or delivery["pending"]:
+            raise AssertionError(f"denial audit outbox did not drain: {delivery}")
         audit = next(item for item in db.list_audit_events(limit=20) if item["event_type"] == "approval.denied")
         if audit["event"].get("note") != reason:
             raise AssertionError(f"denial reason missing from audit event: {audit}")

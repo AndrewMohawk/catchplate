@@ -23,7 +23,12 @@ from serverware.config import (
     WEBAUTHN_RP_NAME,
 )
 from serverware.policy_bundle import canonical_json
-from serverware.webauthn_trust import TrustRoot, WebAuthnTrustError, load_trust_roots
+from serverware.webauthn_trust import (
+    TrustRoot,
+    WebAuthnTrustError,
+    load_trust_roots,
+    trust_read_locked,
+)
 
 
 UP_FLAG = 0x01
@@ -473,6 +478,7 @@ def registration_options(
     }
 
 
+@trust_read_locked
 def verify_registration(
     user_id: str,
     label: str,
@@ -485,14 +491,24 @@ def verify_registration(
         raise WebAuthnError("registration response missing credential id")
     attestation = cbor2.loads(b64ud(response["response"]["attestationObject"]))
     client_data, client_data_raw = _parse_client_data(response["response"]["clientDataJSON"], "webauthn.create")
-    challenge = db.claim_webauthn_challenge(
-        client_data["challenge"],
+    challenge_value = client_data.get("challenge")
+    if not isinstance(challenge_value, str):
+        raise WebAuthnError("registration challenge is invalid")
+    challenge = db.get_unused_webauthn_challenge(
+        challenge_value,
         challenge_type="registration",
         user_id=user_id,
     )
-    if not challenge:
+    if not challenge or challenge.get("approval_request_id") is not None:
         raise WebAuthnError("registration challenge not found or expired")
-    authorization = challenge.get("payload", {}).get("authorization")
+    challenge_payload = challenge.get("payload", {})
+    if (
+        challenge_payload.get("type") != "registration"
+        or challenge_payload.get("user_id") != user_id
+        or challenge_payload.get("label") != label
+    ):
+        raise WebAuthnError("registration challenge scope mismatch")
+    authorization = challenge_payload.get("authorization")
     if require_authorization:
         if not isinstance(authorization, dict) or authorization.get("mode") not in {
             "bootstrap-token",
@@ -536,7 +552,8 @@ def verify_registration(
     )
     attestation_trusted = bool(attestation_result["trusted"])
     try:
-        stored = db.create_webauthn_credential(
+        finalized = db.finalize_webauthn_registration(
+            challenge=challenge_value,
             credential_id=registered_credential_id,
             user_id=user_id,
             label=label,
@@ -556,6 +573,9 @@ def verify_registration(
         )
     except ValueError as exc:
         raise WebAuthnError(str(exc)) from exc
+    if finalized is None:
+        raise WebAuthnError("registration challenge not found or expired")
+    stored = finalized["credential"]
     redacted = _redact_credential(stored)
     if require_authorization:
         redacted["_registration_authorization"] = authorization
@@ -631,9 +651,10 @@ def control_plane_mutation_options(
     resource_id: str | None,
     payload_digest: str,
     authn_policy: dict[str, Any],
+    approval_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload = {
-        "v": 1,
+        "v": 2 if approval_context else 1,
         "type": "serverware.control_plane_mutation",
         "user_id": user_id,
         "action": action,
@@ -641,6 +662,15 @@ def control_plane_mutation_options(
         "payload_digest": payload_digest,
         "nonce": b64u(os.urandom(24)),
     }
+    if approval_context:
+        payload.update(
+            {
+                "control_plane_approval_id": approval_context["id"],
+                "approval_requester_id": approval_context["requester_id"],
+                "approval_expires_at": approval_context["expires_at"],
+                "decision": "approve",
+            }
+        )
     challenge = b64u(_sha256(canonical_json(payload).encode("utf-8")))
     challenge_row = db.create_webauthn_challenge(
         challenge=challenge,
@@ -823,6 +853,7 @@ def _verify_assertion_signature(credential: dict[str, Any], response: dict[str, 
     return {"client_data": client_data, "parsed": parsed}
 
 
+@trust_read_locked
 def verify_approval_assertion(
     approval: dict[str, Any],
     user_id: str,
@@ -915,6 +946,7 @@ def verify_approval_assertion(
     }
 
 
+@trust_read_locked
 def verify_control_plane_mutation_assertion(
     *,
     user_id: str,
@@ -923,6 +955,7 @@ def verify_control_plane_mutation_assertion(
     payload_digest: str,
     authn_policy: dict[str, Any],
     assertion: dict[str, Any],
+    approval_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     credential_id = assertion.get("id") or assertion.get("rawId")
     credential = db.get_webauthn_credential(credential_id)
@@ -951,6 +984,15 @@ def verify_control_plane_mutation_assertion(
         "resource_id": resource_id,
         "payload_digest": payload_digest,
     }
+    if approval_context:
+        expected.update(
+            {
+                "control_plane_approval_id": approval_context["id"],
+                "approval_requester_id": approval_context["requester_id"],
+                "approval_expires_at": approval_context["expires_at"],
+                "decision": "approve",
+            }
+        )
     for field, expected_value in expected.items():
         if payload.get(field) != expected_value:
             raise WebAuthnError(f"control-plane mutation challenge {field} mismatch")
@@ -961,7 +1003,7 @@ def verify_control_plane_mutation_assertion(
         new_sign_count=parsed["sign_count"],
     ):
         raise WebAuthnError("authenticator sign counter changed concurrently")
-    return {
+    evidence = {
         "method": "webauthn",
         "user_id": user_id,
         "credential_id": credential_id,
@@ -983,6 +1025,16 @@ def verify_control_plane_mutation_assertion(
         "resource_id": resource_id,
         "payload_digest": payload_digest,
     }
+    if approval_context:
+        evidence.update(
+            {
+                "control_plane_approval_id": approval_context["id"],
+                "approval_requester_id": approval_context["requester_id"],
+                "approval_expires_at": approval_context["expires_at"],
+                "decision": "approve",
+            }
+        )
+    return evidence
 
 
 def create_dev_credential(user_id: str, label: str = "Docker dev authenticator") -> dict[str, Any]:

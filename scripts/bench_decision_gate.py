@@ -110,6 +110,44 @@ def create_grant(base: str, payload: dict[str, Any]) -> dict[str, Any]:
     return request_json(f"{base.rstrip('/')}/v1/grants", payload, headers=MANAGEMENT_HEADERS)
 
 
+def wait_for_generation_ready(
+    base: str,
+    *,
+    timeout_seconds: float = 30.0,
+    stable_snapshots: int = 3,
+) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout_seconds
+    last_health: dict[str, Any] | None = None
+    last_error: Exception | None = None
+    last_policy_hash = ""
+    stable = 0
+    while time.monotonic() < deadline:
+        try:
+            health = request_json(f"{base.rstrip('/')}/healthz")
+            last_health = health
+            policy_hash = health.get("policy_hash")
+            if (
+                health.get("ok") is True
+                and health.get("credential_generations_ready") is True
+                and isinstance(policy_hash, str)
+                and policy_hash
+            ):
+                stable = stable + 1 if policy_hash == last_policy_hash else 1
+                last_policy_hash = policy_hash
+                if stable >= stable_snapshots:
+                    return health
+            else:
+                stable = 0
+                last_policy_hash = ""
+        except (OSError, urllib.error.URLError, ValueError) as exc:
+            last_error = exc
+            stable = 0
+            last_policy_hash = ""
+        time.sleep(0.1)
+    detail = last_health if last_health is not None else repr(last_error)
+    raise AssertionError(f"decision gate credential generations did not become stable and ready: {detail}")
+
+
 def measured_attestation(base: str) -> dict[str, str]:
     nonce = secrets.token_urlsafe(24)
     attestation = request_json(f"{base.rstrip('/')}/attestation?nonce={nonce}")
@@ -156,6 +194,7 @@ def main() -> None:
         os.getenv("SERVERWARE_BENCH_CREDENTIAL_RESTORE_SECRET", "").strip()
         or "demo-token-from-vault"
     )
+    wait_for_generation_ready(args.gate)
     attestation_before = measured_attestation(args.gate)
     base_payload: dict[str, Any] = {
         "clientIp": "127.0.0.1",

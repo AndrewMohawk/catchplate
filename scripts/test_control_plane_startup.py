@@ -39,6 +39,22 @@ _PRODUCTION_CONFIGURATION = {
 
 
 class ControlPlaneStartupTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.trust_reconcile = patch.object(
+            control_plane_startup,
+            "reconcile_trust_publications",
+            return_value={"ok": True, "reconciled": False},
+        )
+        self.audit_outbox_drain = patch.object(
+            control_plane_startup.db,
+            "drain_metadata_audit_outbox_fully",
+            return_value={"claimed": 0, "audited": 0, "failed": 0, "pending": 0},
+        )
+        self.trust_reconcile.start()
+        self.audit_outbox_drain.start()
+        self.addCleanup(self.trust_reconcile.stop)
+        self.addCleanup(self.audit_outbox_drain.stop)
+
     def test_production_configuration_requires_every_runner_invariant(self) -> None:
         cases = {
             "tls": {"WEB_TLS_CERT_FILE": "", "WEB_TLS_KEY_FILE": ""},

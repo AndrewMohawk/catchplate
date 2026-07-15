@@ -55,6 +55,8 @@ METADATA_TABLES = (
     "control_plane_approvals",
     "webauthn_credentials",
     "webauthn_challenges",
+    "webauthn_trust_publications",
+    "metadata_audit_outbox",
     "gmail_message_cache",
     "request_logs",
     "rate_limit_counters",

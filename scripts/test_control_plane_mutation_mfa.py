@@ -34,12 +34,15 @@ def main() -> None:
         from fastapi import HTTPException
 
         from serverware import app as app_module
-        from serverware import db, webauthn
+        from serverware import db, grants, webauthn
         from serverware.auth import AdminIdentity
 
         db.init_db()
         user_id = "user:demo"
         dev_credential = webauthn.create_dev_credential(user_id)
+        run_suffix = hashlib.sha256(
+            dev_credential["credential_id"].encode("utf-8")
+        ).hexdigest()[:16]
 
         mutation_payload = {
             "credential_id": "cred-demo-bearer",
@@ -144,9 +147,195 @@ def main() -> None:
         if not app_verified or app_verified.get("method") != "webauthn":
             raise AssertionError(f"mutation MFA helper did not verify assertion: {app_verified}")
 
+        legacy_digest = sha256_prefixed_json({"legacy": True})
+        legacy_resource = f"cred-legacy-approval-{run_suffix}"
+        legacy_approval = db.ensure_control_plane_approval(
+            action="credential.update",
+            resource_id=legacy_resource,
+            payload_digest=legacy_digest,
+            requester_id="user:legacy-requester",
+            request={"legacy": True},
+            ttl_seconds=300,
+        )
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE control_plane_approvals "
+                "SET status = 'approved', approved_by = 'user:legacy-approver' "
+                "WHERE id = ?",
+                (legacy_approval["id"],),
+            )
+        replacement = db.ensure_control_plane_approval(
+            action="credential.update",
+            resource_id=legacy_resource,
+            payload_digest=legacy_digest,
+            requester_id="user:legacy-requester",
+            request={"legacy": True},
+            ttl_seconds=300,
+            require_webauthn=True,
+        )
+        if replacement["id"] == legacy_approval["id"] or replacement["status"] != "pending":
+            raise AssertionError(
+                f"WebAuthn enforcement reused an unusable legacy approval: {replacement}"
+            )
+        invalidated_legacy = db.get_control_plane_approval(legacy_approval["id"])
+        if invalidated_legacy is None or invalidated_legacy["status"] != "invalidated":
+            raise AssertionError(
+                f"legacy approval was not invalidated under WebAuthn enforcement: {invalidated_legacy}"
+            )
+
+        approval_action = "credential.update"
+        approval_resource = f"cred-approved-with-webauthn-{run_suffix}"
+        approval_payload_digest = sha256_prefixed_json(
+            {"credential_id": approval_resource, "changes": {"status": "active"}}
+        )
+        control_plane_approval = db.ensure_control_plane_approval(
+            action=approval_action,
+            resource_id=approval_resource,
+            payload_digest=approval_payload_digest,
+            requester_id="user:requester",
+            request={"credential_id": approval_resource},
+            ttl_seconds=300,
+        )
+        try:
+            app_module.control_plane_approval_approve(
+                control_plane_approval["id"],
+                payload=app_module.ControlPlaneApprovalDecision(note="reviewed"),
+                identity=identity,
+            )
+        except HTTPException as exc:
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if (
+                exc.status_code != 412
+                or detail.get("error") != "control_plane_webauthn_required"
+                or detail.get("action") != approval_action
+                or detail.get("resourceId") != approval_resource
+                or detail.get("payloadDigest") != approval_payload_digest
+                or detail.get("approvalId") != control_plane_approval["id"]
+            ):
+                raise AssertionError(
+                    f"control-plane approval returned the wrong WebAuthn challenge: {exc.status_code} {exc.detail}"
+                ) from exc
+        else:
+            raise AssertionError("control-plane approval accepted no WebAuthn assertion")
+
+        wrong_binding_options = webauthn.control_plane_mutation_options(
+            user_id=user_id,
+            action=approval_action,
+            resource_id=f"different-credential-{run_suffix}",
+            payload_digest=approval_payload_digest,
+            authn_policy={"userVerification": "required"},
+        )
+        wrong_binding_assertion = webauthn.dev_assertion(
+            wrong_binding_options["publicKey"]["challenge"]
+        )
+        try:
+            app_module.control_plane_approval_approve(
+                control_plane_approval["id"],
+                payload=app_module.ControlPlaneApprovalDecision(
+                    note="wrong binding",
+                    mfa={"assertion": wrong_binding_assertion},
+                ),
+                identity=identity,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 403 or "resource_id mismatch" not in str(exc.detail):
+                raise AssertionError(
+                    f"control-plane approval rejected a mismatched assertion incorrectly: {exc.status_code} {exc.detail}"
+                ) from exc
+        else:
+            raise AssertionError("control-plane approval accepted a mismatched WebAuthn binding")
+
+        sibling_approval = db.ensure_control_plane_approval(
+            action=approval_action,
+            resource_id=approval_resource,
+            payload_digest=approval_payload_digest,
+            requester_id="user:other-requester",
+            request={"credential_id": approval_resource},
+            ttl_seconds=300,
+        )
+        replay_options = webauthn.control_plane_mutation_options(
+            user_id=user_id,
+            action=approval_action,
+            resource_id=approval_resource,
+            payload_digest=approval_payload_digest,
+            authn_policy={"userVerification": "required"},
+            approval_context=control_plane_approval,
+        )
+        replay_assertion = webauthn.dev_assertion(
+            replay_options["publicKey"]["challenge"]
+        )
+        try:
+            app_module.control_plane_approval_approve(
+                sibling_approval["id"],
+                payload=app_module.ControlPlaneApprovalDecision(
+                    note="cross-record replay",
+                    mfa={"assertion": replay_assertion},
+                ),
+                identity=identity,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 403 or "control_plane_approval_id mismatch" not in str(
+                exc.detail
+            ):
+                raise AssertionError(
+                    "approval-record replay was rejected for the wrong reason: "
+                    f"{exc.status_code} {exc.detail}"
+                ) from exc
+        else:
+            raise AssertionError(
+                "an assertion for one control-plane approval authorized a sibling record"
+            )
+
+        approval_options = webauthn.control_plane_mutation_options(
+            user_id=user_id,
+            action=approval_action,
+            resource_id=approval_resource,
+            payload_digest=approval_payload_digest,
+            authn_policy={"userVerification": "required"},
+            approval_context=control_plane_approval,
+        )
+        approval_assertion = webauthn.dev_assertion(
+            approval_options["publicKey"]["challenge"]
+        )
+        approved_control_plane = app_module.control_plane_approval_approve(
+            control_plane_approval["id"],
+            payload=app_module.ControlPlaneApprovalDecision(
+                note="reviewed with passkey",
+                mfa={"assertion": approval_assertion},
+            ),
+            identity=identity,
+        )
+        if approved_control_plane.get("status") != "approved":
+            raise AssertionError(
+                f"WebAuthn-bound control-plane approval was not approved: {approved_control_plane}"
+            )
+        if "approval_authn" in approved_control_plane:
+            raise AssertionError("control-plane approval API exposed persisted WebAuthn evidence")
+        with db.connect() as conn:
+            stored_authn = json.loads(
+                conn.execute(
+                    "SELECT approval_authn FROM control_plane_approvals WHERE id = ?",
+                    (control_plane_approval["id"],),
+                ).fetchone()["approval_authn"]
+            )
+        forbidden_evidence = {"credential_id", "aaguid", "sign_count", "challenge_id"}
+        if forbidden_evidence.intersection(stored_authn):
+            raise AssertionError(
+                f"control-plane approval persisted unnecessary authenticator identifiers: {stored_authn}"
+            )
+
         active_credential = db.get_webauthn_credential(dev_credential["credential_id"])
         if active_credential is None:
             raise AssertionError("dev WebAuthn credential disappeared before explicit revocation")
+        if (
+            approved_control_plane.get("approver_webauthn_credential_id")
+            != active_credential["id"]
+        ):
+            raise AssertionError(
+                "control-plane approval did not persist its verified WebAuthn credential record"
+            )
+        revocation_approval_id = f"approval-revocation-{active_credential['id']}"
+        revocation_grant_id = f"grant-revocation-{active_credential['id']}"
         now_s = db.iso_now()
         with db.connect() as conn:
             conn.execute(
@@ -156,35 +345,57 @@ def main() -> None:
                     approver_webauthn_credential_id
                 ) VALUES (?, 'POST', 'https://example.test/write', 'approved', ?, ?, ?)
                 """,
-                ("approval-revocation-test", now_s, now_s, active_credential["id"]),
+                (revocation_approval_id, now_s, now_s, active_credential["id"]),
             )
-            conn.execute(
-                """
-                INSERT INTO approval_grants (
-                    id, approval_request_id, state, principal_id, route_id,
-                    credential_id, credential_version, policy_hash,
-                    request_digest, operation_digest, uses_remaining, valid_from,
-                    expires_at, created_at, updated_at,
-                    approver_webauthn_credential_id
-                ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?)
-                """,
-                (
-                    "grant-revocation-test",
-                    "approval-revocation-test",
-                    "agent:revocation-test",
-                    "route-revocation-test",
-                    "credential-revocation-test",
-                    1,
-                    "sha256:" + "1" * 64,
-                    "sha256:" + "2" * 64,
-                    "sha256:" + "3" * 64,
-                    now_s,
-                    now_s,
-                    now_s,
-                    now_s,
-                    active_credential["id"],
-                ),
-            )
+            grant_fields = {
+                "grant_id": revocation_grant_id,
+                "approval_request_id": revocation_approval_id,
+                "principal_id": "agent:revocation-test",
+                "route_id": "route-revocation-test",
+                "credential_id": "credential-revocation-test",
+                "credential_version": 1,
+                "policy_hash": "sha256:" + "1" * 64,
+                "request_digest": "sha256:" + "2" * 64,
+                "operation_digest": "sha256:" + "3" * 64,
+                "approver_webauthn_credential_id": active_credential["id"],
+                "uses_remaining": 1,
+                "valid_from": now_s,
+                "expires_at": now_s,
+                "created_at": now_s,
+            }
+            if grants.uses_postgres():
+                grants.create_grant(
+                    **grant_fields,
+                    connection=conn.raw_connection,
+                    require_created=True,
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO approval_grants (
+                        id, approval_request_id, state, principal_id, route_id,
+                        credential_id, credential_version, policy_hash,
+                        request_digest, operation_digest, uses_remaining, valid_from,
+                        expires_at, created_at,
+                        approver_webauthn_credential_id
+                    ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
+                    """,
+                    (
+                        revocation_grant_id,
+                        revocation_approval_id,
+                        "agent:revocation-test",
+                        "route-revocation-test",
+                        "credential-revocation-test",
+                        1,
+                        "sha256:" + "1" * 64,
+                        "sha256:" + "2" * 64,
+                        "sha256:" + "3" * 64,
+                        now_s,
+                        now_s,
+                        now_s,
+                        active_credential["id"],
+                    ),
+                )
         revocation_reason = "operator requested credential retirement"
         try:
             app_module.webauthn_credential_revoke(
@@ -229,13 +440,41 @@ def main() -> None:
             raise AssertionError(
                 f"credential revocation did not cancel its active JIT grant: {revoked_result}"
             )
+        if revoked_result.get("revokedControlPlaneApprovalCount") != 1:
+            raise AssertionError(
+                "credential revocation did not invalidate its approved control-plane authority: "
+                f"{revoked_result}"
+            )
         with db.connect() as conn:
             grant = conn.execute(
                 "SELECT state, uses_remaining FROM approval_grants WHERE id = ?",
-                ("grant-revocation-test",),
+                (revocation_grant_id,),
             ).fetchone()
         if grant is None or grant["state"] != "revoked" or grant["uses_remaining"] != 0:
             raise AssertionError(f"revoked authenticator left a usable JIT grant: {dict(grant or {})}")
+        invalidated_approval = db.get_control_plane_approval(
+            control_plane_approval["id"]
+        )
+        if invalidated_approval is None or invalidated_approval["status"] != "invalidated":
+            raise AssertionError(
+                "revoked authenticator left a control-plane approval usable: "
+                f"{invalidated_approval}"
+            )
+        invalidated_consumption = db.consume_control_plane_approval(
+            control_plane_approval["id"],
+            action=approval_action,
+            resource_id=approval_resource,
+            payload_digest=approval_payload_digest,
+            actor_id="user:requester",
+        )
+        if invalidated_consumption != {
+            "ok": False,
+            "reason": "approval_invalidated",
+        }:
+            raise AssertionError(
+                "revoked authenticator approval did not fail closed at consumption: "
+                f"{invalidated_consumption}"
+            )
         revoked = revoked_result["credential"]
         expected_revocation = {
             "revoked_by": identity.user_id,

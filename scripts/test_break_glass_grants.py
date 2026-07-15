@@ -75,6 +75,9 @@ def main() -> None:
         if granted.get("ok") is not True or not granted.get("approvalId"):
             raise AssertionError(f"break-glass grant failed: {granted}")
 
+        delivery = db.drain_metadata_audit_outbox_fully()
+        if delivery["failed"] or delivery["pending"]:
+            raise AssertionError(f"break-glass audit outbox did not drain: {delivery}")
         audits = db.list_audit_events(limit=50)
         event_types = [item["event_type"] for item in audits]
         if "approval.break_glass_granted" not in event_types or "approval.approved" not in event_types:

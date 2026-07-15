@@ -123,6 +123,9 @@ def main() -> None:
         webauthn.create_dev_credential(user_id)
 
         app_module.bootstrap(identity=identity)
+        delivery = db.drain_metadata_audit_outbox_fully()
+        if delivery["failed"] or delivery["pending"]:
+            raise AssertionError(f"bootstrap audit outbox did not drain: {delivery}")
         audits = db.list_audit_events(limit=20)
         if "control_plane.bootstrap" not in [item["event_type"] for item in audits]:
             raise AssertionError(f"bootstrap did not write an audit event: {audits}")
@@ -357,6 +360,9 @@ def main() -> None:
         if auth.check_admin_token(old_token):
             raise AssertionError("old admin token still works after rotation")
 
+        delivery = db.drain_metadata_audit_outbox_fully()
+        if delivery["failed"] or delivery["pending"]:
+            raise AssertionError(f"RBAC audit outbox did not drain: {delivery}")
         audits = db.list_audit_events(limit=50)
         event_types = [item["event_type"] for item in audits]
         for expected in ("rbac.role_changed", "rbac.deprovisioned", "control_plane.token_rotated"):

@@ -133,7 +133,8 @@ while time.time() < deadline:
         item
         for item in last_events
         if item.get("event_type") == "data_plane.response.blocked"
-        and ((item.get("event") or {}).get("payload") or {}).get("error") == "gmail_response_too_old"
+        and ((item.get("event") or {}).get("response_validation") or {}).get("error")
+        == "gmail_response_too_old"
     ), None)
     blocked_attempt = (blocked_event or {}).get("event", {}).get("attempt_id")
     response_blocked = blocked_event is not None and isinstance(blocked_attempt, str)

@@ -185,6 +185,11 @@ def main() -> None:
         from serverware.auth import AdminIdentity
 
         db.init_db()
+        with db.connect() as conn:
+            latest_publication = conn.execute(
+                "SELECT MAX(rollback_epoch) AS rollback_epoch FROM webauthn_trust_publications"
+            ).fetchone()
+        test_rollback_epoch = int(latest_publication["rollback_epoch"] or 0) + 1
         trusted_root_key, trusted_root_cert = make_ca("trusted fido root")
         trusted_intermediate_key, trusted_intermediate_cert = make_ca(
             "trusted fido intermediate", trusted_root_cert, trusted_root_key
@@ -195,7 +200,7 @@ def main() -> None:
         first_bundle = publish_bundle(
             webauthn_trust,
             sequence=1,
-            rollback_epoch=1,
+            rollback_epoch=test_rollback_epoch,
             root_cert=trusted_root_cert,
             root_id="trusted-root-v1",
         )
@@ -203,7 +208,7 @@ def main() -> None:
             publish_bundle(
                 webauthn_trust,
                 sequence=1,
-                rollback_epoch=1,
+                rollback_epoch=test_rollback_epoch,
                 root_cert=trusted_root_cert,
                 root_id="conflicting-root-v1",
             )
@@ -281,6 +286,76 @@ def main() -> None:
             {"allowedAuthenticatorClasses": ["hardware"], "requireHardwareAttestation": True},
         )
 
+        scoped_options = webauthn.registration_options(
+            "user:challenge-owner", "challenge-scoped key"
+        )
+        scoped_response = registration_response(
+            webauthn,
+            scoped_options["publicKey"]["challenge"],
+            leaf_key=trusted_leaf_key,
+            leaf_cert=trusted_leaf_cert,
+            intermediate_cert=trusted_intermediate_cert,
+        )
+        try:
+            register(
+                webauthn,
+                "user:wrong-challenge-owner",
+                "challenge-scoped key",
+                scoped_response,
+            )
+        except webauthn.WebAuthnError as exc:
+            if "challenge not found or expired" not in str(exc):
+                raise
+        else:
+            raise SystemExit("registration challenge was accepted for the wrong user")
+        scoped_credential = register(
+            webauthn,
+            "user:challenge-owner",
+            "challenge-scoped key",
+            scoped_response,
+        )
+
+        pending_options = webauthn.registration_options(
+            "user:pending-registration", "must be invalidated"
+        )
+        pending_response = registration_response(
+            webauthn,
+            pending_options["publicKey"]["challenge"],
+            leaf_key=trusted_leaf_key,
+            leaf_cert=trusted_leaf_cert,
+            intermediate_cert=trusted_intermediate_cert,
+        )
+        scoped_record = db.get_webauthn_credential(scoped_credential["credential_id"])
+        if scoped_record is None:
+            raise SystemExit("challenge-scoped credential disappeared before revocation")
+        revoked = db.revoke_webauthn_credential(
+            scoped_record["id"],
+            actor_id="user:challenge-owner",
+            reason="registration challenge invalidation regression test",
+            source="explicit",
+        )
+        if not revoked.get("ok") or revoked.get(
+            "invalidated_registration_challenge_count", 0
+        ) < 1:
+            raise SystemExit(
+                "explicit credential revocation did not invalidate live registration "
+                f"challenges: {revoked}"
+            )
+        try:
+            register(
+                webauthn,
+                "user:pending-registration",
+                "must be invalidated",
+                pending_response,
+            )
+        except webauthn.WebAuthnError as exc:
+            if "challenge not found or expired" not in str(exc):
+                raise
+        else:
+            raise SystemExit("registration succeeded with a pre-revocation challenge")
+        if db.get_webauthn_credential(pending_response["id"]) is not None:
+            raise SystemExit("invalidated registration challenge inserted a credential")
+
         untrusted_root_key, untrusted_root_cert = make_ca("untrusted fido root")
         untrusted_intermediate_key, untrusted_intermediate_cert = make_ca(
             "untrusted fido intermediate", untrusted_root_cert, untrusted_root_key
@@ -320,7 +395,7 @@ def main() -> None:
         publish_bundle(
             webauthn_trust,
             sequence=2,
-            rollback_epoch=1,
+            rollback_epoch=test_rollback_epoch,
             root_cert=rotated_root_cert,
             root_id="trusted-root-v2",
         )
@@ -390,24 +465,103 @@ def main() -> None:
         else:
             raise SystemExit("registration accepted a mismatched attestation certificate AAGUID")
 
+        rotated_record = db.get_webauthn_credential(rotated["credential_id"])
+        if rotated_record is None:
+            raise SystemExit("rotated credential disappeared before trust withdrawal")
+        withdrawal_resource = (
+            f"credential:trust-withdrawal-test:{test_rollback_epoch}"
+        )
+        withdrawal_approval = db.ensure_control_plane_approval(
+            action="credential.update",
+            resource_id=withdrawal_resource,
+            payload_digest="sha256:" + "7" * 64,
+            requester_id="user:withdrawal-requester",
+            request={"credential_id": withdrawal_resource},
+            ttl_seconds=300,
+        )
+        withdrawal_approval = db.approve_control_plane_approval(
+            withdrawal_approval["id"],
+            actor_id="user:test",
+            authn={
+                "method": "webauthn",
+                "user_id": "user:test",
+                "credential_record_id": rotated_record["id"],
+                "control_plane_action": "credential.update",
+                "resource_id": withdrawal_resource,
+                "payload_digest": "sha256:" + "7" * 64,
+                "control_plane_approval_id": withdrawal_approval["id"],
+                "approval_requester_id": withdrawal_approval["requester_id"],
+                "approval_expires_at": withdrawal_approval["expires_at"],
+                "decision": "approve",
+            },
+        )
+        if not withdrawal_approval or withdrawal_approval["status"] != "approved":
+            raise SystemExit(
+                f"trust-withdrawal approval fixture was not approved: {withdrawal_approval}"
+            )
+
         emergency_bundle = publish_bundle(
             webauthn_trust,
             sequence=3,
-            rollback_epoch=1,
+            rollback_epoch=test_rollback_epoch,
             root_cert=None,
             write=False,
         )
-        emergency_result = app_module.webauthn_trust_publish(
-            app_module.WebAuthnTrustPublish(
-                bundle=emergency_bundle["bundle"],
-                reason="emergency withdrawal regression test",
-            ),
-            identity=AdminIdentity(
-                "user:security-admin",
-                frozenset({"admin"}),
-                "test",
-            ),
+        pre_publication_digest = (
+            webauthn_trust.status().get("state") or {}
+        ).get("bundle_digest")
+        pending_trust_options = webauthn.registration_options(
+            "user:pending-trust-registration", "trust transition invalidates this"
         )
+        original_reconcile = app_module.reconcile_trust_publications
+        reconcile_calls = 0
+
+        def interrupt_after_metadata_commit(**_: object) -> dict[str, object]:
+            nonlocal reconcile_calls
+            reconcile_calls += 1
+            if reconcile_calls == 1:
+                return original_reconcile()
+            raise webauthn_trust.WebAuthnTrustError("simulated post-commit interruption")
+
+        app_module.reconcile_trust_publications = interrupt_after_metadata_commit
+        try:
+            app_module.webauthn_trust_publish(
+                app_module.WebAuthnTrustPublish(
+                    bundle=emergency_bundle["bundle"],
+                    reason="emergency withdrawal regression test",
+                ),
+                identity=AdminIdentity(
+                    "user:security-admin",
+                    frozenset({"admin"}),
+                    "test",
+                ),
+            )
+        except app_module.HTTPException as exc:
+            if exc.status_code != 503:
+                raise
+        else:
+            raise SystemExit("interrupted trust publication unexpectedly succeeded")
+        finally:
+            app_module.reconcile_trust_publications = original_reconcile
+        pending_publication = db.get_pending_webauthn_trust_publication()
+        if pending_publication is None:
+            raise SystemExit("interrupted trust publication did not retain its journal")
+        if (
+            (webauthn_trust.status().get("state") or {}).get("bundle_digest")
+            != pre_publication_digest
+        ):
+            raise SystemExit("trust files changed before the journaled projection ran")
+        if db.get_unused_webauthn_challenge(
+            pending_trust_options["publicKey"]["challenge"],
+            challenge_type="registration",
+            user_id="user:pending-trust-registration",
+        ) is not None:
+            raise SystemExit("trust transition left a pre-transition registration challenge live")
+        emergency_result = webauthn_trust.reconcile_trust_publications(
+            expected_publication_id=pending_publication["id"]
+        )
+        if db.get_pending_webauthn_trust_publication() is not None:
+            raise SystemExit("trust publication reconciliation left pending journal state")
         emergency_bundle["result"] = emergency_result
         if emergency_result.get("root_count") != 0:
             raise SystemExit(f"empty-root emergency bundle reported roots: {emergency_bundle}")
@@ -415,6 +569,17 @@ def main() -> None:
             raise SystemExit(f"empty-root emergency bundle reported root digests: {emergency_bundle}")
         if webauthn_trust.load_trust_roots() != []:
             raise SystemExit("empty-root emergency bundle did not withdraw every trust root")
+        invalidated_withdrawal_approval = db.get_control_plane_approval(
+            withdrawal_approval["id"]
+        )
+        if (
+            invalidated_withdrawal_approval is None
+            or invalidated_withdrawal_approval["status"] != "invalidated"
+        ):
+            raise SystemExit(
+                "trust-root withdrawal left passkey-derived control-plane authority usable: "
+                f"{invalidated_withdrawal_approval}"
+            )
         for credential in (trusted, rotated):
             if db.get_webauthn_credential(credential["credential_id"]) is not None:
                 raise SystemExit("trust-root withdrawal left an affected credential active")
@@ -439,7 +604,7 @@ def main() -> None:
         restored_bundle = publish_bundle(
             webauthn_trust,
             sequence=4,
-            rollback_epoch=1,
+            rollback_epoch=test_rollback_epoch,
             root_cert=rotated_root_cert,
             root_id="trusted-root-v2-restored",
             write=False,

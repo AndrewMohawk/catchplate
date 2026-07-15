@@ -159,6 +159,9 @@ def main() -> None:
             lambda: policy_bundle.enforce_policy_high_water(changed_id_snapshot),
             "policy id changed",
         )
+        delivery = db.drain_metadata_audit_outbox_fully()
+        if delivery["failed"] or delivery["pending"]:
+            raise AssertionError(f"policy publish audit outbox did not drain: {delivery}")
         audits = db.list_audit_events(limit=20)
         policy_events = [item for item in audits if item["event_type"] == "policy.published"]
         if not policy_events:

@@ -185,6 +185,9 @@ def main() -> None:
         if not active_after or active_after.hash != candidate_hash:
             raise AssertionError("active policy snapshot was not updated after canary activation")
 
+        delivery = db.drain_metadata_audit_outbox_fully()
+        if delivery["failed"] or delivery["pending"]:
+            raise AssertionError(f"policy canary audit outbox did not drain: {delivery}")
         audits = db.list_audit_events(limit=50)
         event_types = [item["event_type"] for item in audits]
         for expected in ("policy.canary.started", "policy.canary.activated", "policy.published"):

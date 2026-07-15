@@ -21,6 +21,18 @@
       "uniqueItems": true,
       "items": {"enum": ["cache-control", "content-language", "etag", "last-modified", "retry-after", "www-authenticate"]}
     },
+    "operationFields": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
+    },
+    "jsonOperationFields": {
+      "type": "array",
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_-]{0,127}$"}
+    },
     "errorResponse": {
       "type": "object",
       "additionalProperties": false,
@@ -51,6 +63,38 @@
             "required": ["bodyMode"]
           },
           "then": {"required": ["allowedFields"]}
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "type": "object",
+                "properties": {"formFields": {"minItems": 1}},
+                "required": ["formFields"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": {"bodyMode": {"const": "formUrlencoded"}},
+            "required": ["bodyMode"]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "type": "object",
+                "properties": {"jsonFields": {"minItems": 1}},
+                "required": ["jsonFields"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": {"bodyMode": {"const": "json"}},
+            "required": ["bodyMode"]
+          }
         }
       ],
       "properties": {
@@ -77,12 +121,9 @@
           "additionalProperties": false,
           "properties": {
             "name": {"type": "string", "minLength": 1, "maxLength": 128},
-            "formFields": {
-              "type": "array",
-              "maxItems": 16,
-              "uniqueItems": true,
-              "items": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
-            }
+            "formFields": {"$ref": "#/$defs/operationFields"},
+            "jsonFields": {"$ref": "#/$defs/jsonOperationFields"},
+            "pathParams": {"$ref": "#/$defs/operationFields"}
           }
         }
       }

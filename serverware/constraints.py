@@ -110,6 +110,25 @@ def evaluate_response_constraints(
     constraint_types: set[str] | None = None,
 ) -> PolicyDecision:
     binding_evidence: list[dict[str, str]] = []
+    raw_operation_fields = flow.metadata.get("serverware_operation") or {}
+    operation_fields = (
+        raw_operation_fields if isinstance(raw_operation_fields, dict) else {}
+    )
+    for constraint in route.constraints:
+        if constraint.get("type") != "responseBinding":
+            continue
+        if constraint_types is not None and "responseBinding" not in constraint_types:
+            continue
+        if not _phase_includes(constraint, "response"):
+            continue
+        applies, denial = _constraint_matches_operation(constraint, operation_fields)
+        if denial is not None:
+            return denial
+        if not applies:
+            continue
+        envelope = _validate_response_binding_envelope(constraint, flow)
+        if not envelope.allowed:
+            return envelope
     for constraint in route.constraints:
         constraint_type = str(constraint.get("type") or "")
         if constraint_type not in SUPPORTED_RESPONSE_CONSTRAINTS:
@@ -136,10 +155,7 @@ def evaluate_response_constraints(
         elif constraint_type == "responseJson":
             decision = _enforce_response_json(constraint, flow)
         elif constraint_type == "responseBinding":
-            operation_fields = flow.metadata.get("serverware_operation") or {}
-            decision = _validate_response_binding_envelope(constraint, flow)
-            if decision.allowed:
-                decision = _enforce_response_binding(constraint, flow, operation_fields)
+            decision = _enforce_response_binding(constraint, flow, operation_fields)
         else:
             decision = PolicyDecision(True)
         if not decision.allowed:

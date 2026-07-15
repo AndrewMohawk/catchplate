@@ -254,6 +254,8 @@ def main() -> None:
             "delete mfa.assertion",
             "approvalId: detail.approvalId",
             "async function continuePendingMutation()",
+            "kind: 'control-plane-approval'",
+            "label: `Approve control-plane request ${id}`",
             "Continue approved request",
             "approval.status !== 'approved'",
             "sessionStorage.setItem(pendingMutationKey",
@@ -448,13 +450,18 @@ def main() -> None:
             "x-one-post-per-day",
             "npm.publish.yubikey-jit",
             "'query', 'selectedHeaders', 'bodySha256'",
-            "stripe.customers.read-only",
-            "stripe.payment-intent.tokenized-jit",
+            "example.slack.chat_post.hourly",
+            "slack-response-binding",
+            "example.stripe.customers.list",
+            "example.stripe.customers.get",
+            "stripe-customer-get-binding",
+            "example.stripe.payment_intent.tokenized_jit",
             "payment-intent-tokenized-only",
+            "example.object_store.small_puts",
+            "object-store-response-binding",
             "function storedCredentialInjection(credential)",
             "function normalizedInjectionShape(injection)",
             "function injectionShapesCompatible(actual, required)",
-            "function bearerInjectionCompatible(actual, required)",
             "function oauthCredentialGrantedScopes(credential)",
             "function oauthCredentialProviderSubject(credential)",
             "function policyCredentialInjection(credential, activeCredential, template)",
@@ -831,6 +838,13 @@ if(policyCredentialInjection(xWriter,null,xWriteTemplate).type!=='bearer')proces
 const stripeTemplate={provider:'stripe',injection:{type:'bearer'}};
 const stripeCredential={id:'cred-stripe',kind:'bearer',metadata:{provider:'stripe'}};
 if(policyCredentialInjection(stripeCredential,null,stripeTemplate).type!=='bearer')process.exit(34);
+const objectTemplate={provider:'object-store',injection:{type:'header',name:'X-Api-Key'}};
+const objectCredential={id:'cred-object',kind:'header',metadata:{provider:'object-store',injection_name:'X-Api-Key'}};
+const objectInjection=policyCredentialInjection(objectCredential,null,objectTemplate);
+if(objectInjection.type!=='header'||objectInjection.name!=='X-Api-Key')process.exit(36);
+let bearerObjectAccepted=false;
+try{policyCredentialInjection({id:'wrong-object',kind:'bearer',metadata:{provider:'object-store'}},null,objectTemplate);bearerObjectAccepted=true}catch(_){}
+if(bearerObjectAccepted)process.exit(37);
 for(const credential of [
   {id:'unbound-stripe',kind:'bearer',metadata:{}},
   {id:'wrong-stripe',kind:'bearer',metadata:{provider:'github'}}
@@ -938,8 +952,11 @@ function credentialToJson(value){return value;}
                 "x_read_recent",
                 "x_one_post_daily",
                 "npm_write_mfa",
-                "stripe_readonly",
+                "slack_chat_post",
+                "stripe_customers_list",
+                "stripe_customer_get",
                 "stripe_payment_intent_jit",
+                "object_store_put",
                 "custom_json",
             }:
                 raise AssertionError(f"unexpected common PolicyBundle template set: {sorted(templates)}")
@@ -960,6 +977,172 @@ function credentialToJson(value){return value;}
                 raise AssertionError(
                     "X one-post template quota is not stable across principal and credential rotation"
                 )
+
+            def template_constraint(template_id: str, constraint_id: str) -> dict | None:
+                return next(
+                    (
+                        item
+                        for item in templates[template_id].get("constraints", [])
+                        if item.get("id") == constraint_id
+                    ),
+                    None,
+                )
+
+            slack_request = templates["slack_chat_post"]["adapter"]["config"]["request"]
+            if slack_request.get("operation") != {
+                "name": "slack.chat.postMessage",
+                "jsonFields": ["channel", "text"],
+            }:
+                raise AssertionError("Slack template does not capture its bounded request identity")
+            if template_constraint("slack_chat_post", "slack-response-ok") != {
+                "id": "slack-response-ok",
+                "type": "responseJson",
+                "phase": "response",
+                "operations": ["slack.chat.postMessage"],
+                "fields": {"ok": {"required": True, "type": "boolean", "equals": True}},
+            }:
+                raise AssertionError("Slack template does not require an explicit successful response")
+            if template_constraint("slack_chat_post", "slack-response-binding") != {
+                "id": "slack-response-binding",
+                "type": "responseBinding",
+                "phase": "response",
+                "operations": ["slack.chat.postMessage"],
+                "successStatusCodes": [200],
+                "contentTypes": ["application/json"],
+                "bindings": [
+                    {
+                        "id": "channel",
+                        "operationField": "channel",
+                        "responseField": "channel",
+                        "comparison": "exactString",
+                    },
+                ],
+            }:
+                raise AssertionError("Slack template does not bind the response to the requested channel")
+
+            stripe_list_request = templates["stripe_customers_list"]["adapter"]["config"]["request"]
+            if stripe_list_request.get("operation") != {"name": "stripe.customers.list"}:
+                raise AssertionError("Stripe customer-list template has no stable operation identity")
+            if template_constraint("stripe_customers_list", "stripe-customer-list-shape") != {
+                "id": "stripe-customer-list-shape",
+                "type": "responseJson",
+                "phase": "response",
+                "operations": ["stripe.customers.list"],
+                "fields": {
+                    "object": {"required": True, "type": "string", "equals": "list"},
+                    "has_more": {"required": True, "type": "boolean"},
+                },
+            }:
+                raise AssertionError("Stripe customer-list template does not prove the list envelope")
+            if template_constraint("stripe_customers_list", "stripe-customer-list-items") != {
+                "id": "stripe-customer-list-items",
+                "type": "responseJson",
+                "phase": "response",
+                "operations": ["stripe.customers.list"],
+                "items": ["data"],
+                "fields": {
+                    "id": {
+                        "required": True,
+                        "type": "string",
+                        "minLength": 5,
+                        "maxLength": 255,
+                        "pattern": "^cus_[A-Za-z0-9]{1,251}$",
+                    },
+                    "object": {"required": True, "type": "string", "equals": "customer"},
+                    "deleted": {"required": False, "type": "boolean"},
+                },
+            }:
+                raise AssertionError("Stripe customer-list template does not validate customer items")
+
+            stripe_get_request = templates["stripe_customer_get"]["adapter"]["config"]["request"]
+            if stripe_get_request.get("operation") != {
+                "name": "stripe.customers.get",
+                "pathParams": ["customer_id"],
+            }:
+                raise AssertionError("Stripe customer-get template does not capture the requested customer")
+            if template_constraint("stripe_customer_get", "stripe-customer-get-binding") != {
+                "id": "stripe-customer-get-binding",
+                "type": "responseBinding",
+                "phase": "response",
+                "operations": ["stripe.customers.get"],
+                "successStatusCodes": [200],
+                "contentTypes": ["application/json"],
+                "bindings": [
+                    {
+                        "id": "customer-id",
+                        "operationField": "customer_id",
+                        "responseField": "id",
+                        "comparison": "exactString",
+                    }
+                ],
+            }:
+                raise AssertionError("Stripe customer-get template does not bind the returned customer")
+
+            object_store_request = templates["object_store_put"]["adapter"]["config"]["request"]
+            if object_store_request.get("operation") != {
+                "name": "object_store.objects.put",
+                "jsonFields": ["sha256"],
+                "pathParams": ["artifact_id"],
+            }:
+                raise AssertionError("Object-store template does not capture artifact identity and digest")
+            if templates["object_store_put"]["match"]["paths"] != ["/v1/objects/{artifact_id}"]:
+                raise AssertionError("Object-store template is not scoped to the bounded object PUT route")
+            if template_constraint("object_store_put", "object-store-response-binding") != {
+                "id": "object-store-response-binding",
+                "type": "responseBinding",
+                "phase": "response",
+                "operations": ["object_store.objects.put"],
+                "successStatusCodes": [200],
+                "contentTypes": ["application/json"],
+                "bindings": [
+                    {
+                        "id": "artifact-id",
+                        "operationField": "artifact_id",
+                        "responseField": "id",
+                        "comparison": "exactString",
+                    },
+                    {
+                        "id": "sha256",
+                        "operationField": "sha256",
+                        "responseField": "sha256",
+                        "comparison": "exactString",
+                    },
+                ],
+            }:
+                raise AssertionError("Object-store template does not bind the returned object identity")
+
+            canonical_examples = json.loads(
+                (ROOT / "policies" / "credential-limits.examples.json").read_text()
+            )
+            canonical_routes = {route["id"]: route for route in canonical_examples["routes"]}
+            synchronized_examples = {
+                "slack_chat_post": "example.slack.chat_post.hourly",
+                "stripe_customers_list": "example.stripe.customers.list",
+                "stripe_customer_get": "example.stripe.customers.get",
+                "stripe_payment_intent_jit": "example.stripe.payment_intent.tokenized_jit",
+                "object_store_put": "example.object_store.small_puts",
+            }
+            for template_id, route_id in synchronized_examples.items():
+                template = templates[template_id]
+                canonical_route = canonical_routes.get(route_id)
+                if canonical_route is None:
+                    raise AssertionError(f"canonical example is missing: {route_id}")
+                if template["match"] != canonical_route["match"]:
+                    raise AssertionError(f"portal and canonical route match drifted: {template_id}")
+                template_config = template["adapter"]["config"]
+                canonical_config = canonical_route["adapter"]["config"]
+                if template_config["request"].get("operation") != canonical_config["request"].get("operation"):
+                    raise AssertionError(f"portal and canonical operation capture drifted: {template_id}")
+                for response_field in ("mode", "maxBodyBytes", "allowedFields", "allowedHeaders", "error"):
+                    if template_config["response"].get(response_field) != canonical_config["response"].get(
+                        response_field
+                    ):
+                        raise AssertionError(
+                            f"portal and canonical success response {response_field} drifted: {template_id}"
+                        )
+                if template.get("constraints", []) != canonical_route.get("constraints", []):
+                    raise AssertionError(f"portal and canonical constraints drifted: {template_id}")
+
             stripe_required_headers = (
                 templates["stripe_payment_intent_jit"]["adapter"]["config"]["request"].get("requiredHeaders")
                 or {}
@@ -1028,6 +1211,19 @@ function credentialToJson(value){return value;}
                         "required": True,
                         "type": "string",
                         "equals": "payment_intent",
+                    },
+                    "status": {
+                        "required": True,
+                        "type": "string",
+                        "enum": [
+                            "requires_payment_method",
+                            "requires_confirmation",
+                            "requires_action",
+                            "processing",
+                            "requires_capture",
+                            "canceled",
+                            "succeeded",
+                        ],
                     },
                 },
             }:

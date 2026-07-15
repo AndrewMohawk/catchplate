@@ -197,10 +197,11 @@ from serverware.webauthn import (
 )
 from serverware.webauthn_trust import (
     WebAuthnTrustError,
+    reconcile_trust_publications,
     status as webauthn_trust_status,
+    trust_bundle_lock,
     trust_roots_from_bundle,
     verify_trust_bundle,
-    write_trust_bundle,
 )
 
 
@@ -251,7 +252,13 @@ async def csrf_middleware(request: Request, call_next):
             content={"detail": exc.detail},
             headers=exc.headers,
         )
-    return await call_next(request)
+    response = await call_next(request)
+    if request.method not in {"GET", "HEAD", "OPTIONS"}:
+        try:
+            db.drain_metadata_audit_outbox(limit=100)
+        except Exception:
+            pass
+    return response
 
 
 @app.middleware("http")
@@ -504,6 +511,7 @@ class ControlPlaneMutationWebAuthnOptions(BaseModel):
     action: str = Field(min_length=1, max_length=128)
     resource_id: str | None = Field(default=None, alias="resourceId")
     payload_digest: str = Field(alias="payloadDigest", min_length=71, max_length=71)
+    approval_id: str | None = Field(default=None, alias="approvalId", max_length=64)
 
 
 class PolicyDryRunCase(BaseModel):
@@ -1400,6 +1408,7 @@ def _require_control_plane_mutation_mfa(
     payload_digest: str,
     mfa: dict[str, Any] | None,
     identity: AdminIdentity,
+    approval_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     if not CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED:
         return None
@@ -1413,6 +1422,11 @@ def _require_control_plane_mutation_mfa(
                 "action": action,
                 "resourceId": resource_id,
                 "payloadDigest": payload_digest,
+                **(
+                    {"approvalId": approval_context["id"]}
+                    if approval_context
+                    else {}
+                ),
             },
         )
     try:
@@ -1423,6 +1437,7 @@ def _require_control_plane_mutation_mfa(
             payload_digest=payload_digest,
             authn_policy=_control_plane_mutation_authn_policy(),
             assertion=assertion,
+            approval_context=approval_context,
         )
     except WebAuthnError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
@@ -1486,6 +1501,7 @@ def _require_control_plane_two_person(
             resource_id=resource_id,
             payload_digest=payload_digest,
             actor_id=identity.user_id,
+            require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
             _connection=connection,
         )
         if not result.get("ok"):
@@ -1512,6 +1528,7 @@ def _require_control_plane_two_person(
         requester_id=identity.user_id,
         request=request,
         ttl_seconds=CONTROL_PLANE_TWO_PERSON_TTL_SECONDS,
+        require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
     )
     raise HTTPException(
         status_code=428,
@@ -3315,12 +3332,30 @@ def control_plane_mutation_webauthn_options(
         )
     ),
 ) -> dict[str, Any]:
+    approval_context = None
+    if payload.approval_id:
+        approval_context = db.get_control_plane_approval(payload.approval_id)
+        if not approval_context:
+            raise HTTPException(status_code=404, detail="control-plane approval not found")
+        if approval_context["status"] != "pending":
+            raise HTTPException(status_code=409, detail="control-plane approval is not pending")
+        if approval_context["requester_id"] == identity.user_id:
+            raise HTTPException(status_code=403, detail="requester cannot approve own mutation")
+        _assert_control_plane_approval_role(identity, approval_context["action"])
+        expected = (
+            approval_context["action"],
+            approval_context["resource_id"],
+            approval_context["payload_digest"],
+        )
+        if expected != (payload.action, payload.resource_id, payload.payload_digest):
+            raise HTTPException(status_code=409, detail="approval challenge binding mismatch")
     return control_plane_mutation_options(
         user_id=identity.user_id,
         action=payload.action,
         resource_id=payload.resource_id,
         payload_digest=payload.payload_digest,
         authn_policy=_control_plane_mutation_authn_policy(),
+        approval_context=approval_context,
     )
 
 
@@ -3522,14 +3557,27 @@ def control_plane_approval_approve(
         raise HTTPException(
             status_code=403,
             detail="requester cannot approve their own control-plane mutation",
-        )
-    _assert_control_plane_approval_role(identity, approval["action"])
-    updated = db.approve_control_plane_approval(
-        approval_id,
-        actor_id=identity.user_id,
-        note=decision.note if decision else None,
-        authn={"method": identity.auth_method, "user_id": identity.user_id},
     )
+    _assert_control_plane_approval_role(identity, approval["action"])
+    mfa = _require_control_plane_mutation_mfa(
+        action=approval["action"],
+        resource_id=approval["resource_id"],
+        payload_digest=approval["payload_digest"],
+        mfa=decision.mfa if decision else None,
+        identity=identity,
+        approval_context=approval,
+    )
+    try:
+        updated = db.approve_control_plane_approval(
+            approval_id,
+            actor_id=identity.user_id,
+            note=decision.note if decision else None,
+            authn=mfa
+            or {"method": identity.auth_method, "user_id": identity.user_id},
+            require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+        )
+    except db.MetadataStoreError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(
             status_code=409,
@@ -7333,6 +7381,7 @@ def oauth_pending_credential_activate(
             requester_id=identity.user_id,
             request=pending["review"],
             ttl_seconds=CONTROL_PLANE_TWO_PERSON_TTL_SECONDS,
+            require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
         )
         raise HTTPException(
             status_code=428,
@@ -7352,6 +7401,7 @@ def oauth_pending_credential_activate(
             pending_credential_id,
             approval_id=approval_id,
             actor_id=identity.user_id,
+            require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
             setup_session_id=setup_session["id"] if setup_session is not None else None,
             setup_expected_revision=(
                 int(payload.setup_revision) if setup_session is not None else None
@@ -8325,22 +8375,7 @@ def webauthn_register_verify(
         )
     except WebAuthnError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    db.record_audit_event(
-        "webauthn.credential_registered",
-        {
-            "user_id": identity.user_id,
-            "credential_id": credential["credential_id"],
-            "authenticator_class": credential["authenticator_class"],
-            "aaguid": credential.get("aaguid"),
-            "attestation_fmt": credential.get("attestation_fmt"),
-            "attestation_trusted": credential.get("attestation_trusted"),
-            "attestation_root_sha256": credential.get("attestation_root_sha256"),
-            "registration_authorization": credential.pop(
-                "_registration_authorization", None
-            ),
-        },
-        actor_id=identity.user_id,
-    )
+    credential.pop("_registration_authorization", None)
     return credential
 
 
@@ -8412,6 +8447,12 @@ def webauthn_credential_revoke(
             actor_id=identity.user_id,
             reason=payload.reason,
             source="explicit",
+            audit_event={
+                **mutation_payload,
+                "payload_digest": payload_digest,
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+            },
             _connection=conn,
         )
         if not result.get("ok"):
@@ -8423,23 +8464,13 @@ def webauthn_credential_revoke(
                 },
             )
     revoked = result["credential"]
-    db.record_audit_event(
-        "webauthn.credential_revoked",
-        {
-            **mutation_payload,
-            "revoked_at": revoked["revoked_at"],
-            "revoked_by": revoked["revoked_by"],
-            "revoked_grant_count": result.get("revoked_grant_count", 0),
-            "payload_digest": payload_digest,
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-        },
-        actor_id=identity.user_id,
-    )
     return {
         "ok": True,
         "credential": _redacted_webauthn_credential(revoked),
         "revokedGrantCount": result.get("revoked_grant_count", 0),
+        "revokedControlPlaneApprovalCount": result.get(
+            "revoked_control_plane_approval_count", 0
+        ),
     }
 
 
@@ -8458,6 +8489,13 @@ def webauthn_trust_publish(
     payload: WebAuthnTrustPublish,
     identity: AdminIdentity = Depends(require_role("admin")),
 ) -> dict[str, Any]:
+    try:
+        reconcile_trust_publications()
+    except (WebAuthnTrustError, db.MetadataStoreError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "webauthn_trust_publication_pending"},
+        ) from exc
     try:
         candidate_info = verify_trust_bundle(payload.bundle, update_state=False)
         candidate_roots = trust_roots_from_bundle(
@@ -8491,79 +8529,140 @@ def webauthn_trust_publish(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action=action,
-        resource_id="webauthn-trust-bundle",
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request=mutation_payload,
-    )
     withdrawal_reason = payload.reason or (
         "Attestation trust withdrawn by signed bundle "
         + candidate_info["digest"]
     )
+    if _control_plane_two_person_required(action) and not _control_plane_approval_id(
+        payload.mfa
+    ):
+        _require_control_plane_two_person(
+            action=action,
+            resource_id="webauthn-trust-bundle",
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request=mutation_payload,
+        )
     revoked_by_withdrawal: list[dict[str, Any]] = []
-    with db.connect() as conn:
-        for item in affected:
-            revoked = db.revoke_webauthn_credential(
-                item["credential_record_id"],
+    with trust_bundle_lock(exclusive=True):
+        try:
+            locked_status = webauthn_trust_status()
+        except WebAuthnTrustError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        locked_digest = (locked_status.get("state") or {}).get("bundle_digest")
+        if locked_digest != mutation_payload["current_bundle_digest"]:
+            raise HTTPException(
+                status_code=409,
+                detail="WebAuthn trust state changed; review and approve the new transition",
+            )
+        locked_affected = _webauthn_trust_withdrawal_impact(candidate_roots)
+        if sorted(item["credential_record_id"] for item in locked_affected) != mutation_payload[
+            "withdrawn_credential_record_ids"
+        ]:
+            raise HTTPException(
+                status_code=409,
+                detail="WebAuthn credential set changed; review and approve the new transition",
+            )
+        affected = locked_affected
+        with db.connect() as conn:
+            two_person = _require_control_plane_two_person(
+                action=action,
+                resource_id="webauthn-trust-bundle",
+                payload_digest=payload_digest,
+                mfa=payload.mfa,
+                identity=identity,
+                request=mutation_payload,
+                connection=conn,
+            )
+            invalidated_registration_challenge_count = (
+                db.invalidate_webauthn_registration_challenges(_connection=conn)
+            )
+            for item in affected:
+                revoked = db.revoke_webauthn_credential(
+                    item["credential_record_id"],
+                    actor_id=identity.user_id,
+                    reason=withdrawal_reason,
+                    source="trust-root-withdrawal",
+                    _connection=conn,
+                )
+                if not revoked.get("ok"):
+                    raise HTTPException(
+                        status_code=409,
+                        detail={
+                            "error": "webauthn_trust_withdrawal_revocation_failed",
+                            "credentialRecordId": item["credential_record_id"],
+                            "reason": revoked.get("reason"),
+                        },
+                    )
+                redacted_revoked = _redacted_webauthn_credential(revoked["credential"])
+                redacted_revoked["revoked_grant_count"] = revoked.get(
+                    "revoked_grant_count", 0
+                )
+                redacted_revoked["revoked_control_plane_approval_count"] = revoked.get(
+                    "revoked_control_plane_approval_count", 0
+                )
+                revoked_by_withdrawal.append(redacted_revoked)
+            audit_event = {
+                "bundle_digest": candidate_info["digest"],
+                "sequence": candidate_info["sequence"],
+                "rollback_epoch": candidate_info["rollback_epoch"],
+                "signing_key_id": candidate_info["signing_key_id"],
+                "root_certificate_sha256": sorted(
+                    root.certificate_sha256 for root in candidate_roots
+                ),
+                "withdrawn_credentials": affected,
+                "revoked_credentials": [
+                    {
+                        "credential_record_id": item["id"],
+                        "credential_id_sha256": item["credential_id_sha256"],
+                        "user_id": item["user_id"],
+                        "revoked_at": item["revoked_at"],
+                        "revocation_source": item["revocation_source"],
+                        "revoked_grant_count": item.get(
+                            "revoked_grant_count", 0
+                        ),
+                        "revoked_control_plane_approval_count": item.get(
+                            "revoked_control_plane_approval_count", 0
+                        ),
+                    }
+                    for item in revoked_by_withdrawal
+                ],
+                "invalidated_registration_challenge_count": (
+                    invalidated_registration_challenge_count
+                ),
+                "reason": payload.reason,
+                "payload_digest": payload_digest,
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+            }
+            publication = db.stage_webauthn_trust_publication(
+                previous_bundle_digest=mutation_payload["current_bundle_digest"],
+                bundle_digest=candidate_info["digest"],
+                sequence=candidate_info["sequence"],
+                rollback_epoch=candidate_info["rollback_epoch"],
+                signing_key_id=candidate_info["signing_key_id"],
+                bundle=payload.bundle,
+                payload_digest=payload_digest,
                 actor_id=identity.user_id,
-                reason=withdrawal_reason,
-                source="trust-root-withdrawal",
+                withdrawn_credential_ids=[
+                    item["credential_record_id"] for item in affected
+                ],
+                audit_event=audit_event,
                 _connection=conn,
             )
-            if not revoked.get("ok"):
-                raise HTTPException(
-                    status_code=409,
-                    detail={
-                        "error": "webauthn_trust_withdrawal_revocation_failed",
-                        "credentialRecordId": item["credential_record_id"],
-                        "reason": revoked.get("reason"),
-                    },
-                )
-            redacted_revoked = _redacted_webauthn_credential(
-                revoked["credential"]
-            )
-            redacted_revoked["revoked_grant_count"] = revoked.get(
-                "revoked_grant_count", 0
-            )
-            revoked_by_withdrawal.append(redacted_revoked)
     try:
-        result = write_trust_bundle(payload.bundle)
-    except WebAuthnTrustError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    db.record_audit_event(
-        "webauthn.trust_bundle.published",
-        {
-            "bundle_digest": result.get("digest"),
-            "sequence": result.get("sequence"),
-            "rollback_epoch": result.get("rollback_epoch"),
-            "signing_key_id": result.get("signing_key_id"),
-            "root_certificate_sha256": result.get(
-                "root_certificate_sha256"
-            ),
-            "withdrawn_credentials": affected,
-            "revoked_credentials": [
-                {
-                    "credential_record_id": item["id"],
-                    "credential_id_sha256": item["credential_id_sha256"],
-                    "user_id": item["user_id"],
-                    "revoked_at": item["revoked_at"],
-                    "revocation_source": item["revocation_source"],
-                    "revoked_grant_count": item.get(
-                        "revoked_grant_count", 0
-                    ),
-                }
-                for item in revoked_by_withdrawal
-            ],
-            "reason": payload.reason,
-            "payload_digest": payload_digest,
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-        },
-        actor_id=identity.user_id,
-    )
+        result = reconcile_trust_publications(
+            expected_publication_id=publication["id"]
+        )
+    except (WebAuthnTrustError, db.MetadataStoreError) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": "webauthn_trust_publication_pending",
+                "publicationId": publication["id"],
+            },
+        ) from exc
     return result
 
 
@@ -8575,11 +8674,6 @@ def dev_webauthn_credential(
         credential = create_dev_credential(identity.user_id)
     except WebAuthnError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
-    db.record_audit_event(
-        "webauthn.dev_credential_created",
-        {"user_id": identity.user_id, "credential_id": credential["credential_id"]},
-        actor_id=identity.user_id,
-    )
     return credential
 
 
@@ -11355,29 +11449,74 @@ UI_HTML = r"""
         constraints: [{id: 'npm-only-publish-or-dist-tag', type: 'operationPolicy', allowedOperations: ['npm.publish', 'npm.distTagWrite'], deniedOperations: ['npm.tokenWrite', 'npm.metadataWrite']}],
         jit: {required: true, mode: 'perOperation', ttlSeconds: 30, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'operationDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256', 'packageName', 'packageVersion', 'tarballIntegrity']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
       },
-      stripe_readonly: {
-        label: 'Stripe customers read-only',
-        routeId: 'stripe.customers.read-only',
+      slack_chat_post: {
+        label: 'Slack bounded message post',
+        routeId: 'example.slack.chat_post.hourly',
+        provider: 'slack',
+        injection: {type: 'bearer'},
+        match: {scheme: 'https', host: 'slack.com', port: 443, methods: ['POST'], paths: ['/api/chat.postMessage']},
+        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'json', maxBodyBytes: 32768, operation: {name: 'slack.chat.postMessage', jsonFields: ['channel', 'text']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'channel', 'ts', 'message.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'error', 'needed', 'provided'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        constraints: [
+          {id: 'five-slack-posts-per-assignment-hour', type: 'rateLimit', max: 5, windowSeconds: 3600, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
+          {id: 'slack-weekday-utc-hours', type: 'requestTimeWindow', timezone: 'UTC', weekdays: ['mon', 'tue', 'wed', 'thu', 'fri'], dailyWindows: [{start: '13:00', end: '23:00'}]},
+          {id: 'slack-message-body', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['channel', 'text', 'thread_ts'], requiredFields: ['channel', 'text'], fields: {channel: {type: 'string', minLength: 1, maxLength: 80}, text: {type: 'string', minLength: 1, maxLength: 4000}}},
+          {id: 'slack-response-ok', type: 'responseJson', phase: 'response', operations: ['slack.chat.postMessage'], fields: {ok: {required: true, type: 'boolean', equals: true}}},
+          {id: 'slack-response-binding', type: 'responseBinding', phase: 'response', operations: ['slack.chat.postMessage'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'channel', operationField: 'channel', responseField: 'channel', comparison: 'exactString'}]}
+        ]
+      },
+      stripe_customers_list: {
+        label: 'Stripe customer list read-only',
+        routeId: 'example.stripe.customers.list',
         provider: 'stripe',
         injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['GET'], paths: ['/v1/customers', '/v1/customers/{customer_id}']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: ['limit', 'starting_after', 'ending_before'], bodyMode: 'none', maxBodyBytes: 0}, response: {mode: 'json', maxBodyBytes: 1048576, allowedFields: ['id', 'object', 'email', 'name', 'created', 'data.id', 'data.email', 'data.name', 'has_more'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
-        constraints: [{id: 'stripe-page-cap', type: 'queryNumericBounds', parameters: ['limit'], min: 1, max: 25, integer: true}]
+        match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['GET'], paths: ['/v1/customers']},
+        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: ['limit', 'starting_after', 'ending_before'], bodyMode: 'none', maxBodyBytes: 0, operation: {name: 'stripe.customers.list'}}, response: {mode: 'json', maxBodyBytes: 1048576, allowedFields: ['object', 'data.id', 'data.object', 'data.email', 'data.name', 'data.created', 'data.deleted', 'has_more'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        constraints: [
+          {id: 'stripe-customer-page-cap', type: 'queryNumericBounds', parameters: ['limit'], min: 1, max: 25, integer: true},
+          {id: 'stripe-customer-list-shape', type: 'responseJson', phase: 'response', operations: ['stripe.customers.list'], fields: {object: {required: true, type: 'string', equals: 'list'}, has_more: {required: true, type: 'boolean'}}},
+          {id: 'stripe-customer-list-items', type: 'responseJson', phase: 'response', operations: ['stripe.customers.list'], items: ['data'], fields: {id: {required: true, type: 'string', minLength: 5, maxLength: 255, pattern: '^cus_[A-Za-z0-9]{1,251}$'}, object: {required: true, type: 'string', equals: 'customer'}, deleted: {required: false, type: 'boolean'}}}
+        ]
+      },
+      stripe_customer_get: {
+        label: 'Stripe customer get read-only',
+        routeId: 'example.stripe.customers.get',
+        provider: 'stripe',
+        injection: {type: 'bearer'},
+        match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['GET'], paths: ['/v1/customers/{customer_id}']},
+        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'none', maxBodyBytes: 0, operation: {name: 'stripe.customers.get', pathParams: ['customer_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'email', 'name', 'created', 'deleted'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        constraints: [
+          {id: 'stripe-customer-get-shape', type: 'responseJson', phase: 'response', operations: ['stripe.customers.get'], fields: {id: {required: true, type: 'string', minLength: 5, maxLength: 255, pattern: '^cus_[A-Za-z0-9]{1,251}$'}, object: {required: true, type: 'string', equals: 'customer'}, deleted: {required: false, type: 'boolean'}}},
+          {id: 'stripe-customer-get-binding', type: 'responseBinding', phase: 'response', operations: ['stripe.customers.get'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'customer-id', operationField: 'customer_id', responseField: 'id', comparison: 'exactString'}]}
+        ]
       },
       stripe_payment_intent_jit: {
         label: 'Tokenized PaymentIntent create + hardware JIT',
-        routeId: 'stripe.payment-intent.tokenized-jit',
+        routeId: 'example.stripe.payment_intent.tokenized_jit',
         provider: 'stripe',
         injection: {type: 'bearer'},
         match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['POST'], paths: ['/v1/payment_intents']},
         adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'idempotency-key', 'user-agent'], requiredHeaders: {'idempotency-key': {type: 'string', minLength: 1, maxLength: 255, pattern: '^[-A-Za-z0-9._:]{1,255}$'}}, allowedQueryKeys: [], bodyMode: 'formUrlencoded', maxBodyBytes: 16384, operation: {name: 'stripe.payment_intents.create', formFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'amount', 'currency', 'status', 'payment_method', 'created'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
-          {id: 'payment-intent-five-per-day', type: 'rateLimit', max: 5, windowSeconds: 86400, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
+          {id: 'payment-intent-five-per-assignment-day', type: 'rateLimit', max: 5, windowSeconds: 86400, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
           {id: 'payment-intent-tokenized-only', type: 'formBody', contentTypes: ['application/x-www-form-urlencoded'], allowedFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id'], requiredFields: ['amount', 'currency', 'payment_method', 'confirm'], deniedFields: ['payment_method_data.card.number', 'payment_method_data.card.cvc', 'source', 'card'], fields: {amount: {type: 'integer', min: 50, max: 50000}, currency: {type: 'string', equals: 'usd'}, payment_method: {type: 'string', pattern: '^pm_[A-Za-z0-9]{8,64}$', maxLength: 67}, confirm: {type: 'string', equals: 'true'}, 'metadata.agent_request_id': {type: 'string', maxLength: 128}}},
-          {id: 'payment-intent-response-shape', type: 'responseJson', phase: 'response', operations: ['stripe.payment_intents.create'], fields: {id: {required: true, type: 'string', minLength: 4, maxLength: 255, pattern: '^pi_[A-Za-z0-9]{1,252}$'}, object: {required: true, type: 'string', equals: 'payment_intent'}}},
+          {id: 'payment-intent-response-shape', type: 'responseJson', phase: 'response', operations: ['stripe.payment_intents.create'], fields: {id: {required: true, type: 'string', minLength: 4, maxLength: 255, pattern: '^pi_[A-Za-z0-9]{1,252}$'}, object: {required: true, type: 'string', equals: 'payment_intent'}, status: {required: true, type: 'string', enum: ['requires_payment_method', 'requires_confirmation', 'requires_action', 'processing', 'requires_capture', 'canceled', 'succeeded']}}},
           {id: 'payment-intent-response-binding', type: 'responseBinding', phase: 'response', operations: ['stripe.payment_intents.create'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'amount', operationField: 'amount', responseField: 'amount', comparison: 'canonicalInteger'}, {id: 'currency', operationField: 'currency', responseField: 'currency', comparison: 'exactString'}, {id: 'payment-method', operationField: 'payment_method', responseField: 'payment_method', comparison: 'exactString'}]}
         ],
         jit: {required: true, mode: 'perOperation', ttlSeconds: 60, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'requestDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
+      },
+      object_store_put: {
+        label: 'Object store bounded PUT with echoed client digest',
+        routeId: 'example.object_store.small_puts',
+        provider: 'object-store',
+        injection: {type: 'header', name: 'X-Api-Key'},
+        match: {scheme: 'https', host: 'objects.example.com', port: 443, methods: ['PUT'], paths: ['/v1/objects/{artifact_id}']},
+        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'json', maxBodyBytes: 65536, operation: {name: 'object_store.objects.put', jsonFields: ['sha256'], pathParams: ['artifact_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'id', 'sha256'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'code', 'message'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        constraints: [
+          {id: 'object-store-json-payload', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['content', 'contentType', 'sha256'], requiredFields: ['content', 'sha256'], fields: {content: {type: 'string', minLength: 1, maxLength: 4096}, contentType: {type: 'string', maxLength: 128}, sha256: {type: 'string', maxLength: 71, pattern: '^sha256:[0-9a-f]{64,64}$'}}},
+          {id: 'object-store-ten-puts-per-assignment-hour', type: 'rateLimit', max: 10, windowSeconds: 3600, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
+          {id: 'object-store-response-contract', type: 'responseJson', phase: 'response', operations: ['object_store.objects.put'], fields: {ok: {required: true, type: 'boolean', equals: true}, id: {required: true, type: 'string', maxLength: 128, pattern: '^[A-Za-z0-9._-]{1,128}$'}, sha256: {required: true, type: 'string', maxLength: 71, pattern: '^sha256:[0-9a-f]{64,64}$'}}},
+          {id: 'object-store-response-binding', type: 'responseBinding', phase: 'response', operations: ['object_store.objects.put'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'artifact-id', operationField: 'artifact_id', responseField: 'id', comparison: 'exactString'}, {id: 'sha256', operationField: 'sha256', responseField: 'sha256', comparison: 'exactString'}]}
+        ]
       },
       custom_json: {
         label: 'Custom route policy JSON',
@@ -11659,7 +11798,8 @@ UI_HTML = r"""
         body: JSON.stringify({
           action: challengeDetail.action,
           resourceId: challengeDetail.resourceId ?? null,
-          payloadDigest: challengeDetail.payloadDigest
+          payloadDigest: challengeDetail.payloadDigest,
+          approvalId: challengeDetail.approvalId ?? null
         })
       });
       if (!(options.publicKey.allowCredentials || []).length) throw new Error('No registered passkey is available for this operator');
@@ -11679,7 +11819,7 @@ UI_HTML = r"""
       while (true) {
         try {
           const result = await api(mutation.path, mutationOptions(mutation));
-          if (pendingMutation && (!mutation.approvalId || pendingMutation.approvalId === mutation.approvalId)) {
+          if (pendingMutation && mutation.approvalId && pendingMutation.approvalId === mutation.approvalId) {
             pendingMutation = null;
             persistPendingMutation();
             renderPendingMutation();
@@ -12479,10 +12619,21 @@ UI_HTML = r"""
 
     async function decideControlPlaneApproval(id, decision) {
       const note = $(`control-plane-note-${id}`)?.value.trim() || null;
-      await api(`/api/control-plane/approvals/${id}/${decision}`, {
-        method: 'POST',
-        body: JSON.stringify({note})
-      });
+      if (decision === 'approve') {
+        await runControlPlaneMutation({
+          kind: 'control-plane-approval',
+          label: `Approve control-plane request ${id}`,
+          persist: false,
+          path: `/api/control-plane/approvals/${id}/approve`,
+          method: 'POST',
+          body: {note}
+        });
+      } else {
+        await api(`/api/control-plane/approvals/${id}/${decision}`, {
+          method: 'POST',
+          body: JSON.stringify({note})
+        });
+      }
       await refresh();
     }
 
@@ -12576,10 +12727,6 @@ UI_HTML = r"""
       return Boolean(actualShape && requiredShape && JSON.stringify(actualShape) === JSON.stringify(requiredShape));
     }
 
-    function bearerInjectionCompatible(actual, required) {
-      return actual?.type === 'bearer' && required?.type === 'bearer' && injectionShapesCompatible(actual, required);
-    }
-
     function oauthCredentialGrantedScopes(credential) {
       if (credential?.kind !== 'oauth2') return null;
       const rawScopes = credential.metadata?.scopes;
@@ -12632,7 +12779,7 @@ UI_HTML = r"""
         }
         return JSON.parse(JSON.stringify(candidateInjection));
       }
-      if (!candidateInjection || !bearerInjectionCompatible(candidateInjection, template.injection)) {
+      if (!candidateInjection || !injectionShapesCompatible(candidateInjection, template.injection)) {
         throw new Error(`Credential ${credential?.id || activeCredential?.id || 'unknown'} uses an injection shape that is incompatible with this template`);
       }
       if (storedInjection && activeInjection && !injectionShapesCompatible(activeInjection, storedInjection)) {
@@ -12936,9 +13083,12 @@ UI_HTML = r"""
       const provider = (state.oauthProviders || []).find((item) => item.id === template.provider);
       if (!provider) {
         $('credential-name').value = `${template.label} credential`;
-        $('credential-kind').value = 'bearer';
+        $('credential-kind').value = template.injection?.type || 'bearer';
         $('credential-metadata').value = JSON.stringify({provider: template.provider}, null, 2);
         syncCredentialKindFields(true);
+        if (template.injection?.type === 'header') $('credential-injection-name').value = template.injection.name || 'x-api-key';
+        if (['query', 'cookie'].includes(template.injection?.type)) $('credential-injection-name').value = template.injection.name || '';
+        if (template.injection?.type === 'basic') $('credential-injection-name').value = template.injection.username || '';
         focusPortalForm('credential-form');
         return {mode: 'static-credential'};
       }

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# ruff: noqa: E402
+
 import base64
 import copy
 import hashlib
@@ -749,6 +751,55 @@ def main() -> None:
         )
         return candidate, binding_constraint
 
+    def json_path_response_binding_candidate() -> tuple[dict, dict, dict]:
+        candidate, binding_constraint = response_binding_candidate()
+        route_candidate = next(
+            item
+            for item in candidate["routes"]
+            if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+        )
+        route_candidate["match"]["paths"] = ["/v1/payment_intents/{payment_intent_id}"]
+        request = route_candidate["adapter"]["config"]["request"]
+        request["bodyMode"] = "json"
+        request["operation"] = {
+            "name": "stripe.payment_intents.create",
+            "jsonFields": ["amount", "currency", "payment_method"],
+            "pathParams": ["payment_intent_id"],
+        }
+        form_constraint = next(
+            constraint
+            for constraint in route_candidate["constraints"]
+            if constraint["type"] == "formBody"
+        )
+        form_constraint.clear()
+        form_constraint.update(
+            {
+                "id": "payment-intent-json",
+                "type": "jsonBody",
+                "contentTypes": ["application/json"],
+                "allowedFields": ["amount", "currency", "payment_method"],
+                "requiredFields": ["amount", "currency", "payment_method"],
+                "fields": {
+                    "amount": {"type": "integer", "min": 50, "max": 50000},
+                    "currency": {"type": "string", "equals": "usd"},
+                    "payment_method": {
+                        "type": "string",
+                        "pattern": "^pm_[A-Za-z0-9]{8,64}$",
+                        "maxLength": 67,
+                    },
+                },
+            }
+        )
+        binding_constraint["bindings"].append(
+            {
+                "id": "payment-intent-id",
+                "operationField": "payment_intent_id",
+                "responseField": "id",
+                "comparison": "exactString",
+            }
+        )
+        return candidate, route_candidate, binding_constraint
+
     def generated_response_bindings(count: int) -> list[dict]:
         return [
             {
@@ -772,6 +823,129 @@ def main() -> None:
             f"compiler accepted {binding_count} response bindings",
             validate_schema=validate_schema,
         )
+
+    valid_json_path, _, _ = json_path_response_binding_candidate()
+    json_path_snapshot = compile_policy_bundle(valid_json_path, validate_schema=validate_schema)
+
+    valid_path_only, path_only_route, path_only_binding = json_path_response_binding_candidate()
+    path_only_request = path_only_route["adapter"]["config"]["request"]
+    path_only_request["bodyMode"] = "none"
+    path_only_request["maxBodyBytes"] = 0
+    path_only_request["operation"].pop("jsonFields")
+    path_only_route["constraints"] = [
+        constraint
+        for constraint in path_only_route["constraints"]
+        if constraint["type"] != "jsonBody"
+    ]
+    path_only_binding["bindings"] = [
+        {
+            "id": "payment-intent-id",
+            "operationField": "payment_intent_id",
+            "responseField": "id",
+            "comparison": "exactString",
+        }
+    ]
+    compile_policy_bundle(valid_path_only, validate_schema=validate_schema)
+
+    valid_stable_path_source, stable_path_route, _ = json_path_response_binding_candidate()
+    stable_path_route["match"]["paths"] = [
+        "/v1/payment_intents/{payment_intent_id}/{left}",
+        "/v1/payment_intents/{payment_intent_id}/{right}",
+    ]
+    compile_policy_bundle(valid_stable_path_source, validate_schema=validate_schema)
+
+    for operation_update, description in (
+        ({"jsonFields": ["operation"]}, "the reserved operation field as a JSON source"),
+        ({"formFields": ["currency"]}, "mixed form and JSON source kinds"),
+        ({"pathParams": ["currency"]}, "a source duplicated across JSON and path sources"),
+        ({"jsonFields": ["amount", "amount"]}, "duplicate JSON sources"),
+        ({"jsonFields": ["metadata.id"]}, "a dotted JSON source"),
+        ({"jsonFields": None}, "a null JSON source declaration"),
+        ({"jsonFields": ["amount", []]}, "a non-string JSON source"),
+        ({"jsonFields": [f"field_{index}" for index in range(17)]}, "more than 16 JSON sources"),
+    ):
+        invalid, route_candidate, _ = json_path_response_binding_candidate()
+        route_candidate["adapter"]["config"]["request"]["operation"].update(operation_update)
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted {description}",
+            validate_schema=validate_schema,
+        )
+
+    invalid, route_candidate, _ = json_path_response_binding_candidate()
+    route_candidate["adapter"]["config"]["request"]["bodyMode"] = "formUrlencoded"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted JSON operation sources for a form request",
+        validate_schema=validate_schema,
+    )
+
+    invalid, route_candidate, _ = json_path_response_binding_candidate()
+    route_candidate["adapter"]["config"]["request"]["operation"]["pathParams"] = ["missing_id"]
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a path source absent from the matched path",
+        validate_schema=validate_schema,
+    )
+
+    invalid, route_candidate, _ = json_path_response_binding_candidate()
+    route_candidate["match"]["paths"].append("/v1/payment_intents/static")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a path source absent from one matched path",
+        validate_schema=validate_schema,
+    )
+
+    invalid, route_candidate, _ = json_path_response_binding_candidate()
+    route_candidate["match"]["paths"] = [
+        "/v1/payment_intents/{payment_intent_id}/{other}",
+        "/v1/payment_intents/{other}/{payment_intent_id}",
+    ]
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a path source mapped to different positions in ambiguous templates",
+        validate_schema=validate_schema,
+    )
+
+    invalid, route_candidate, _ = json_path_response_binding_candidate()
+    route_candidate["match"]["paths"] = [
+        "/v1/payment_intents/{payment_intent_id}/{payment_intent_id}"
+    ]
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a repeated path placeholder",
+        validate_schema=validate_schema,
+    )
+
+    invalid, _, binding_constraint = json_path_response_binding_candidate()
+    binding_constraint["bindings"][-1]["comparison"] = "canonicalInteger"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted canonicalInteger for a path source",
+        validate_schema=validate_schema,
+    )
+
+    invalid, route_candidate, _ = json_path_response_binding_candidate()
+    json_constraint = next(
+        constraint for constraint in route_candidate["constraints"] if constraint["type"] == "jsonBody"
+    )
+    json_constraint["requiredFields"].remove("amount")
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted an optional JSON response binding source",
+        validate_schema=validate_schema,
+    )
+
+    invalid, route_candidate, _ = json_path_response_binding_candidate()
+    json_constraint = next(
+        constraint for constraint in route_candidate["constraints"] if constraint["type"] == "jsonBody"
+    )
+    json_constraint["fields"]["amount"] = {"type": "string", "maxLength": 20}
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted a mistyped JSON response binding source",
+        validate_schema=validate_schema,
+    )
 
     invalid, response_binding = response_binding_candidate()
     response_binding["phase"] = "request"
@@ -1601,7 +1775,7 @@ def main() -> None:
     ]
     assert_policy_rejected(invalid, "compiler accepted whole-response validation on a stream", validate_schema=validate_schema)
 
-    generic_route = route(example_snapshot, "example.stripe.readonly_customers")
+    generic_route = route(example_snapshot, "example.stripe.customers.list")
     generic_adapter = get_adapter(generic_route.adapter_type)
     generic_request = flow("GET", "https://api.stripe.com/v1/customers?limit=5")
     assert generic_adapter.validate_request(generic_request, generic_route, {}).allowed
@@ -1856,9 +2030,14 @@ def main() -> None:
     object_store_route = route(example_snapshot, "example.object_store.small_puts")
     object_store_response = flow(
         "PUT",
-        "https://objects.example.com/agent-artifacts/report-1",
+        "https://objects.example.com/v1/objects/report-1",
         response={"ok": True, "id": "report-1", "sha256": "sha256:" + "a" * 64},
     )
+    object_store_response.metadata["serverware_operation"] = {
+        "operation": "object_store.objects.put",
+        "artifact_id": "report-1",
+        "sha256": "sha256:" + "a" * 64,
+    }
     assert evaluate_response_constraints(object_store_response, object_store_route).allowed
     wrong_object_store_status = copy.deepcopy(object_store_response)
     wrong_object_store_status.response.raw_content = json.dumps(
@@ -1979,6 +2158,160 @@ def main() -> None:
     assert evaluate_response_binding_sources(stripe_route, stripe_operation).allowed
     assert request_decision(stripe_route, stripe_request, "stripe.payment_intents.create").allowed
 
+    json_source_route = SimpleNamespace(
+        adapter_config={
+            "request": {
+                "bodyMode": "json",
+                "operation": {
+                    "name": "example.json.capture",
+                    "jsonFields": [
+                        "text",
+                        "minimum",
+                        "maximum",
+                        "boolean",
+                        "floating",
+                        "null_value",
+                        "array_value",
+                        "object_value",
+                        "too_large",
+                        "lone_surrogate",
+                    ],
+                    "pathParams": ["artifact_id"],
+                },
+            }
+        }
+    )
+    json_source_request = flow(
+        "PUT",
+        "https://api.example.test/artifacts/artifact-123",
+        body={
+            "text": "Gr\u00fc\u00dfe",
+            "minimum": -(2**63),
+            "maximum": 2**63 - 1,
+            "metadata.id": "literal-top-level",
+            "metadata": {"id": "must-not-traverse"},
+            "boolean": True,
+            "floating": 1.0,
+            "null_value": None,
+            "array_value": ["value"],
+            "object_value": {"value": "nested"},
+            "too_large": 2**63,
+        },
+    )
+    json_source_fields = stripe_adapter.operation_fields(
+        json_source_request,
+        json_source_route,
+        {"artifact_id": "artifact-123"},
+    )
+    assert json_source_fields == {
+        "operation": "example.json.capture",
+        "artifact_id": "artifact-123",
+        "text": "Gr\u00fc\u00dfe",
+        "minimum": str(-(2**63)),
+        "maximum": str(2**63 - 1),
+    }, json_source_fields
+
+    dotted_json_source_route = copy.deepcopy(json_source_route)
+    dotted_json_source_route.adapter_config["request"]["operation"]["jsonFields"] = ["metadata.id"]
+    assert stripe_adapter.operation_fields(
+        json_source_request,
+        dotted_json_source_route,
+        {"artifact_id": "artifact-123"},
+    ) == {
+        "operation": "example.json.capture",
+        "artifact_id": "artifact-123",
+    }
+
+    invalid_json_source_bodies = (
+        b'{"text":"first-secret","text":"second-secret"}',
+        b'{"text":',
+        b'["not-an-object"]',
+        b'{"text":"\\ud800"}',
+        b'{"minimum":-0}',
+    )
+    for invalid_body in invalid_json_source_bodies:
+        invalid_json_source = copy.deepcopy(json_source_request)
+        invalid_json_source.request.raw_content = invalid_body
+        assert stripe_adapter.operation_fields(
+            invalid_json_source,
+            json_source_route,
+            {"artifact_id": "artifact-123"},
+        ) == {
+            "operation": "example.json.capture",
+            "artifact_id": "artifact-123",
+        }
+
+    json_binding_route = route(
+        json_path_snapshot,
+        "example.stripe.payment_intent.tokenized_jit",
+    )
+    malformed_bound_json = flow(
+        "POST",
+        "https://api.stripe.com/v1/payment_intents/pi_12345678",
+        body={"amount": 5000, "currency": "usd", "payment_method": "pm_12345678"},
+    )
+    malformed_bound_json.request.headers["idempotency-key"] = "agent-payment:req-json"
+    malformed_bound_json.request.raw_content = (
+        b'{"amount":5000,"amount":5001,"currency":"usd",'
+        b'"payment_method":"pm_12345678"}'
+    )
+    malformed_operation_fields = stripe_adapter.operation_fields(
+        malformed_bound_json,
+        json_binding_route,
+        {"payment_intent_id": "pi_12345678"},
+    )
+    assert malformed_operation_fields == {
+        "operation": "stripe.payment_intents.create",
+        "payment_intent_id": "pi_12345678",
+    }
+    assert_denied(
+        request_decision(
+            json_binding_route,
+            malformed_bound_json,
+            "stripe.payment_intents.create",
+            operation_fields=malformed_operation_fields,
+        ),
+        "json_body_invalid",
+    )
+    assert_response_binding_denied(
+        evaluate_response_binding_sources(json_binding_route, malformed_operation_fields),
+        "response_binding_source_missing",
+        binding_id="amount",
+        evidence=False,
+    )
+
+    secret_path_source = "path-source-canary-never-disclose"
+    path_source_route = SimpleNamespace(
+        constraints=(
+            {
+                "id": "path-source-binding",
+                "type": "responseBinding",
+                "phase": "response",
+                "successStatusCodes": [200],
+                "contentTypes": ["application/json"],
+                "bindings": [
+                    {
+                        "id": "artifact-id",
+                        "operationField": "artifact_id",
+                        "responseField": "id",
+                        "comparison": "exactString",
+                    }
+                ],
+            },
+        )
+    )
+    path_source_denial = evaluate_response_binding_sources(
+        path_source_route,
+        {"artifact_id": secret_path_source + "x" * 4096},
+    )
+    assert_response_binding_denied(
+        path_source_denial,
+        "response_binding_source_missing",
+        binding_id="artifact-id",
+        evidence=False,
+        sensitive_values=(secret_path_source,),
+    )
+
     matching_stripe_response = flow(
         "POST",
         "https://api.stripe.com/v1/payment_intents",
@@ -2083,6 +2416,15 @@ def main() -> None:
             expected_error,
             binding_id=None,
         )
+
+    ordered_envelope_denial = copy.deepcopy(matching_stripe_response)
+    ordered_envelope_denial.response.status_code = 201
+    ordered_envelope_denial.response.raw_content = b"not-json"
+    assert_response_binding_denied(
+        evaluate_response_constraints(ordered_envelope_denial, stripe_route),
+        "response_binding_status_denied",
+        binding_id=None,
+    )
 
     for array_body in (
         b'[{"amount":5000,"currency":"usd","payment_method":"pm_12345678"}]',

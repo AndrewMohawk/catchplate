@@ -181,7 +181,7 @@ def main() -> None:
     release_payload = {
         "apiVersion": "serverware.releaseAuthorizationReserve/v1",
         "attemptId": "attempt:test",
-        "flowId": "flow:test",
+        "flowId": "attempt:test",
         "principalId": "agent:test",
         "routeId": "route:test",
         "credentialRef": "credential:test",

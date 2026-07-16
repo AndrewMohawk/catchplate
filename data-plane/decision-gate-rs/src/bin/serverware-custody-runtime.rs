@@ -427,11 +427,13 @@ impl Drop for SocketCleanup {
 mod tests {
     use super::*;
     use base64::{engine::general_purpose, Engine as _};
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::pkcs8::DecodePublicKey;
+    use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
     use serde_json::{json, Value};
     use serverware_decision_gate::{
         canonical_json_bytes, decode_canonical_json, read_frame, write_frame, HELLO_OPERATION,
         MAX_FRAME_BYTES, PROTOCOL_API_VERSION, RESPONSE_PROOF_SIGN_OPERATION,
+        STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
     };
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
@@ -727,6 +729,156 @@ mod tests {
         (request, statement_digest)
     }
 
+    fn streaming_response_proof_sign_request(
+        runtime: &CustodyRuntime,
+    ) -> (Vec<u8>, Vec<u8>, String) {
+        let (buffered_request, _) = response_proof_sign_request(runtime);
+        let buffered: Value =
+            decode_canonical_json(&buffered_request).expect("canonical buffered fixture");
+        let authorization_binding = buffered["params"]["authorization_binding"].clone();
+        let mut statement = buffered["params"]["statement"].clone();
+
+        let binding_digest = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                canonical_json_bytes(&authorization_binding).expect("authorization binding")
+            ))
+        );
+        let operation_context_digest = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                canonical_json_bytes(&authorization_binding["operation_context"])
+                    .expect("operation context")
+            ))
+        );
+        let binding_commitment = json!({
+            "attempt_id":authorization_binding["attempt_id"],
+            "flow_id":authorization_binding["flow_id"],
+            "principal_id":authorization_binding["principal_id"],
+            "route_id":authorization_binding["route_id"],
+            "credential_id":authorization_binding["credential_id"],
+            "credential_version":authorization_binding["credential_version"],
+            "policy_hash":authorization_binding["policy_hash"],
+            "request_digest":authorization_binding["request_digest"],
+            "operation_digest":authorization_binding["operation_digest"],
+            "operation_context_digest":operation_context_digest,
+            "require_jit_grant":authorization_binding["require_jit_grant"],
+            "shared_quotas":authorization_binding["shared_quotas"],
+        });
+        let receipt_digest = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                canonical_json_bytes(&statement["control_plane_authorization_receipt"])
+                    .expect("authorization receipt")
+            ))
+        );
+        let upstream_body_bytes = 17;
+        let upstream_canonical = json!({
+            "status":statement["upstream_response"]["status"],
+            "selected_raw_policy_headers_b64":statement["upstream_response"]["selected_raw_policy_headers_b64"],
+            "body_digest":statement["upstream_response"]["body_digest"],
+            "body_bytes":upstream_body_bytes,
+        });
+        let upstream_canonical_digest = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                canonical_json_bytes(&upstream_canonical).expect("streaming upstream response")
+            ))
+        );
+        let selected_wire_headers = json!({
+            "connection":"close",
+            "content-type":"application/json",
+            "trailer":"X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256",
+            "transfer-encoding":"chunked",
+        });
+        let selected_wire_headers_digest = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(
+                canonical_json_bytes(&selected_wire_headers).expect("streaming wire headers")
+            ))
+        );
+        let released_body_digest = statement["response"]["body_digest"].clone();
+
+        statement["apiVersion"] =
+            Value::String("serverware.streamingResponseStatement/v1".to_string());
+        statement["authorization_binding_validation"] = json!({
+            "status":"validated",
+            "binding_commitment":binding_commitment,
+            "binding_digest":binding_digest,
+        });
+        statement["control_plane_authorization_receipt_sha256"] = Value::String(receipt_digest);
+        statement["upstream_response"]["body_bytes"] = json!(upstream_body_bytes);
+        statement["upstream_response"]["canonical_digest"] =
+            Value::String(upstream_canonical_digest);
+        statement["released_response"] = json!({
+            "status":200,
+            "content_type":"application/json",
+            "selected_wire_headers":selected_wire_headers,
+            "selected_wire_headers_digest":selected_wire_headers_digest,
+            "body_digest":released_body_digest,
+            "body_bytes":17,
+            "framing":"http1.1-chunked-trailers",
+            "completion":"normal-eof",
+            "trailer_names":[
+                "X-Serverware-Stream-Proof-B64",
+                "X-Serverware-Stream-Proof-SHA256"
+            ],
+        });
+        statement["tls_channel_binding"]["exporter_label"] =
+            Value::String("EXPORTER-Serverware-Proxy-Stream-v1".to_string());
+        statement
+            .as_object_mut()
+            .expect("streaming statement object")
+            .remove("response");
+
+        let canonical_statement =
+            canonical_json_bytes(&statement).expect("canonical streaming statement");
+        let statement_digest = format!(
+            "sha256:{}",
+            hex::encode(Sha256::digest(&canonical_statement))
+        );
+        let request = canonical_json_bytes(&json!({
+            "apiVersion":PROTOCOL_API_VERSION,
+            "bootId":runtime.boot_id(),
+            "operation":STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+            "params":{
+                "statement":statement,
+                "authorization_binding":authorization_binding,
+            },
+            "requestId":request_id(3),
+        }))
+        .expect("streaming sign request");
+        (request, canonical_statement, statement_digest)
+    }
+
+    fn response_signing_key_over_a_unix_socket(runtime: &Arc<CustodyRuntime>) -> VerifyingKey {
+        let (mut client, server) = UnixStream::pair().expect("socket pair");
+        let server_runtime = Arc::clone(runtime);
+        let worker = thread::spawn(move || serve_connection(server, &server_runtime));
+        let request = canonical_json_bytes(&json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": null,
+            "operation": HELLO_OPERATION,
+            "params": {},
+            "requestId": request_id(4),
+        }))
+        .expect("hello request");
+        write_frame(&mut client, &request, Duration::from_secs(1)).expect("write hello request");
+        let response =
+            read_frame(&mut client, Duration::from_secs(1)).expect("read hello response");
+        worker
+            .join()
+            .expect("worker join")
+            .expect("serve hello connection");
+        let response: Value = decode_canonical_json(&response).expect("canonical hello response");
+        VerifyingKey::from_public_key_pem(
+            response["result"]["publicKeyPem"]
+                .as_str()
+                .expect("response signing public key PEM"),
+        )
+        .expect("Ed25519 response signing public key")
+    }
+
     #[test]
     fn serves_a_canonical_hello_frame_over_a_unix_socket() {
         let (runtime, ledger_directory) = test_runtime("hello");
@@ -831,6 +983,51 @@ mod tests {
             .starts_with("ed25519:"));
         drop(runtime);
         fs::remove_dir_all(ledger_directory).expect("remove sign ledger directory");
+    }
+
+    #[test]
+    fn serves_a_streaming_response_proof_sign_v1_round_trip_over_a_unix_socket() {
+        let (runtime, ledger_directory) = test_runtime("streaming-sign");
+        let runtime = Arc::new(runtime);
+        let verifying_key = response_signing_key_over_a_unix_socket(&runtime);
+        let (request, canonical_statement, expected_statement_digest) =
+            streaming_response_proof_sign_request(&runtime);
+        let (mut client, server) = UnixStream::pair().expect("socket pair");
+        let server_runtime = Arc::clone(&runtime);
+        let worker = thread::spawn(move || serve_connection(server, &server_runtime));
+
+        write_frame(&mut client, &request, Duration::from_secs(1))
+            .expect("write streaming sign request");
+        let response =
+            read_frame(&mut client, Duration::from_secs(1)).expect("read streaming sign response");
+        worker
+            .join()
+            .expect("worker join")
+            .expect("serve streaming sign connection");
+        let response: Value =
+            decode_canonical_json(&response).expect("canonical streaming sign response");
+        assert_eq!(response["ok"], true, "unexpected response: {response}");
+        assert_eq!(
+            response["operation"],
+            STREAMING_RESPONSE_PROOF_SIGN_OPERATION
+        );
+        assert_eq!(
+            response["result"]["statementDigest"],
+            expected_statement_digest
+        );
+        let encoded_signature = response["result"]["signature"]
+            .as_str()
+            .and_then(|value| value.strip_prefix("ed25519:"))
+            .expect("streaming statement signature");
+        let signature_bytes = general_purpose::URL_SAFE_NO_PAD
+            .decode(encoded_signature)
+            .expect("canonical signature base64url");
+        let signature = Signature::from_slice(&signature_bytes).expect("Ed25519 signature");
+        verifying_key
+            .verify_strict(&canonical_statement, &signature)
+            .expect("signature covers the exact canonical streaming statement");
+        drop(runtime);
+        fs::remove_dir_all(ledger_directory).expect("remove streaming sign ledger directory");
     }
 
     #[test]

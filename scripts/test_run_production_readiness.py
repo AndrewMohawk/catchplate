@@ -612,6 +612,7 @@ def main() -> None:
         expected_client_request_digest = "sha256:" + "a" * 64
         expected_request_digest = "sha256:" + "b" * 64
         expected_operation_digest = "sha256:" + "c" * 64
+        expected_operation_context_digest = "sha256:" + "d" * 64
         artifact_args = (
             "--policy-bundle",
             str(tmp / "policy-bundle.json"),
@@ -717,6 +718,7 @@ def main() -> None:
                 "SERVERWARE_ADMIN_TOKEN": "prod-admin-token-32-bytes-minimum-value",
                 "SERVERWARE_OIDC_JWKS_JSON": canonical_json({"keys": [{"kid": "prod key"}]}),
                 "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": str(tmp / "proxy-response-proof.json"),
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "buffered-v3",
                 "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/serverware/bin/serverware-proof-client",
                 "SERVERWARE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:9090",
                 "SERVERWARE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",
@@ -825,6 +827,13 @@ def main() -> None:
             or "--reproducible-build-signature" not in completion_argv
             or "/etc/serverware/kms-materials.json" not in completion_argv
             or "--proxy-response-proof" not in completion_argv
+            or completion_argv[completion_argv.index("--proxy-proof-contract") + 1]
+            != "buffered-v3"
+            or "--stream" in collector_argv
+            or "--body-out" in collector_argv
+            or "--max-stream-bytes" in collector_argv
+            or "--proxy-stream-body" in completion_argv
+            or "--proxy-max-stream-bytes" in completion_argv
             or completion_argv[
                 completion_argv.index("--control-plane-response-signing-public-key")
                 + 1
@@ -868,6 +877,182 @@ def main() -> None:
         if key_material in dry_run.stdout.decode("utf-8"):
             raise AssertionError(f"runner dry-run leaked trusted public-key material: {plan}")
 
+        streaming_body_path = tmp / "proxy-response-body.bin"
+        streaming_env = tmp / "streaming.env"
+        write_env(
+            streaming_env,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
+                "SERVERWARE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
+                "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
+                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+            },
+        )
+        streaming_dry_run = run_runner(
+            "--env-file",
+            str(streaming_env),
+            "--dry-run",
+            *security_args,
+        )
+        if streaming_dry_run.returncode != 0:
+            raise AssertionError(
+                f"runner rejected a complete streaming proof configuration: {detail(streaming_dry_run)}"
+            )
+        streaming_plan = json.loads(streaming_dry_run.stdout.decode("utf-8"))
+        streaming_collector_argv = streaming_plan["commands"][-2]["argv"]
+        streaming_completion_argv = streaming_plan["commands"][-1]["argv"]
+        if (
+            "--stream" not in streaming_collector_argv
+            or streaming_collector_argv[
+                streaming_collector_argv.index("--body-out") + 1
+            ]
+            != str(streaming_body_path)
+            or streaming_collector_argv[
+                streaming_collector_argv.index("--max-stream-bytes") + 1
+            ]
+            != "4096"
+            or streaming_completion_argv[
+                streaming_completion_argv.index("--proxy-proof-contract") + 1
+            ]
+            != "streaming-v1"
+            or streaming_completion_argv[
+                streaming_completion_argv.index("--proxy-stream-body") + 1
+            ]
+            != str(streaming_body_path)
+            or streaming_completion_argv[
+                streaming_completion_argv.index("--proxy-max-stream-bytes") + 1
+            ]
+            != "4096"
+            or streaming_completion_argv[
+                streaming_completion_argv.index("--proxy-operation-context-digest")
+                + 1
+            ]
+            != expected_operation_context_digest
+        ):
+            raise AssertionError(
+                "runner did not propagate the independently selected streaming proof contract: "
+                f"collector={streaming_collector_argv} completion={streaming_completion_argv}"
+            )
+        for missing_setting in (
+            "SERVERWARE_PROXY_STREAM_BODY_FILE",
+            "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES",
+            "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST",
+        ):
+            incomplete_streaming_env = tmp / f"missing-{missing_setting.lower()}.env"
+            incomplete_values = {
+                **minimal_values,
+                "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
+                "SERVERWARE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
+                "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": "4096",
+                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+            }
+            incomplete_values.pop(missing_setting)
+            write_env(incomplete_streaming_env, incomplete_values)
+            incomplete_streaming = run_runner(
+                "--env-file",
+                str(incomplete_streaming_env),
+                "--dry-run",
+                *security_args,
+            )
+            if (
+                incomplete_streaming.returncode == 0
+                or missing_setting not in detail(incomplete_streaming)
+            ):
+                raise AssertionError(
+                    f"runner accepted streaming-v1 without {missing_setting}: "
+                    + detail(incomplete_streaming)
+                )
+
+        for stream_limit, should_succeed in (
+            (run_production_readiness.MAX_PROXY_STREAM_BODY_BYTES, True),
+            (run_production_readiness.MAX_PROXY_STREAM_BODY_BYTES + 1, False),
+        ):
+            boundary_env = tmp / f"stream-limit-{stream_limit}.env"
+            write_env(
+                boundary_env,
+                {
+                    **minimal_values,
+                    "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
+                    "SERVERWARE_PROXY_STREAM_BODY_FILE": str(streaming_body_path),
+                    "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": str(stream_limit),
+                    "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+                },
+            )
+            boundary_result = run_runner(
+                "--env-file", str(boundary_env), "--dry-run", *security_args
+            )
+            if should_succeed and boundary_result.returncode != 0:
+                raise AssertionError(
+                    "runner rejected the exact stream body byte ceiling: "
+                    + detail(boundary_result)
+                )
+            if not should_succeed and (
+                boundary_result.returncode == 0
+                or "proxy proof max stream bytes" not in detail(boundary_result)
+            ):
+                raise AssertionError(
+                    "runner accepted a stream body ceiling above the fixed maximum: "
+                    + detail(boundary_result)
+                )
+
+        buffered_with_stream_setting = tmp / "buffered-with-stream-setting.env"
+        write_env(
+            buffered_with_stream_setting,
+            {
+                **minimal_values,
+                "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+            },
+        )
+        rejected_buffered_stream_setting = run_runner(
+            "--env-file",
+            str(buffered_with_stream_setting),
+            "--dry-run",
+            *security_args,
+        )
+        if (
+            rejected_buffered_stream_setting.returncode == 0
+            or "only valid with proxy proof contract streaming-v1"
+            not in detail(rejected_buffered_stream_setting)
+        ):
+            raise AssertionError(
+                "runner accepted a streaming-only operation context pin for buffered-v3: "
+                + detail(rejected_buffered_stream_setting)
+            )
+        rejected_buffered_stream_cli = run_runner(
+            "--env-file",
+            str(minimal_env),
+            "--dry-run",
+            "--proxy-operation-context-digest",
+            expected_operation_context_digest,
+            *security_args,
+        )
+        if (
+            rejected_buffered_stream_cli.returncode == 0
+            or "only valid with proxy proof contract streaming-v1"
+            not in detail(rejected_buffered_stream_cli)
+        ):
+            raise AssertionError(
+                "runner accepted a streaming-only CLI pin for buffered-v3: "
+                + detail(rejected_buffered_stream_cli)
+            )
+
+        invalid_contract_env = tmp / "invalid-proof-contract.env"
+        write_env(
+            invalid_contract_env,
+            {**minimal_values, "SERVERWARE_PROXY_PROOF_CONTRACT": "auto"},
+        )
+        invalid_contract = run_runner(
+            "--env-file", str(invalid_contract_env), "--dry-run", *security_args
+        )
+        if invalid_contract.returncode == 0 or "buffered-v3 or streaming-v1" not in detail(
+            invalid_contract
+        ):
+            raise AssertionError(
+                "runner accepted an untrusted or auto-selected proof contract: "
+                + detail(invalid_contract)
+            )
+
         collector_proof = tmp / "collector-proof.json"
         collector_proof.write_bytes(b'{"fixture":"proof"}\n')
         collector_summary_path = tmp / "collector-summary.json"
@@ -881,6 +1066,7 @@ def main() -> None:
             "server_instance_id": "spiffe://prod/instance",
             "proof_path": str(collector_proof),
             "proof_sha256": run_production_readiness.sha256_prefixed_file(collector_proof),
+            "proof_contract": "buffered-v3",
         }
         collector_args = SimpleNamespace(
             proxy_client_nonce="n" * 43,
@@ -889,6 +1075,9 @@ def main() -> None:
             proxy_operation_digest=expected_operation_digest,
             proxy_server_instance_id="spiffe://prod/instance",
             proxy_response_proof=str(collector_proof),
+            proxy_proof_contract="buffered-v3",
+            proxy_stream_body=None,
+            proxy_max_stream_bytes=None,
             proxy_proof_summary_out=str(collector_summary_path),
         )
         collector_command = {
@@ -906,6 +1095,99 @@ def main() -> None:
         )
         if accepted_summary != collector_summary or not collector_summary_path.is_file():
             raise AssertionError("runner rejected a collector summary matching every independent digest pin")
+
+        stream_body = tmp / "collector-stream-body.bin"
+        stream_body.write_bytes(b"body")
+        stream_body_digest = run_production_readiness.sha256_prefixed_file(stream_body)
+        collector_args.proxy_proof_contract = "streaming-v1"
+        collector_args.proxy_stream_body = str(stream_body)
+        collector_args.proxy_max_stream_bytes = 4
+        streaming_collector_summary = {
+            **collector_summary,
+            "proof_contract": "streaming-v1",
+            "stream_verified": True,
+            "body_path": str(stream_body),
+            "body_sha256": stream_body_digest,
+            "body_bytes": 4,
+        }
+
+        def streaming_collector_command(summary: dict[str, object]) -> dict[str, object]:
+            return {
+                "label": "fixture-streaming-collector",
+                "argv": [
+                    sys.executable,
+                    "-c",
+                    f"import json; print(json.dumps({summary!r}))",
+                ],
+            }
+
+        collector_args.proxy_proof_summary_out = str(tmp / "streaming-collector-summary.json")
+        accepted_streaming_summary = run_production_readiness.run_collector(
+            streaming_collector_command(streaming_collector_summary),
+            collector_args,
+            clean_subprocess_env(),
+        )
+        if (
+            accepted_streaming_summary != streaming_collector_summary
+            or collector_args.collected_proxy_stream_body_sha256 != stream_body_digest
+            or collector_args.collected_proxy_stream_body_bytes != 4
+            or collector_args.collected_proxy_proof_contract != "streaming-v1"
+        ):
+            raise AssertionError(
+                "runner did not retain the verified streaming body and selected contract"
+            )
+
+        stream_summary_mutations = {
+            "missing verification": {**streaming_collector_summary, "stream_verified": False},
+            "body path swap": {
+                **streaming_collector_summary,
+                "body_path": str(tmp / "different-body.bin"),
+            },
+            "body digest swap": {
+                **streaming_collector_summary,
+                "body_sha256": "sha256:" + "0" * 64,
+            },
+            "body truncation count": {**streaming_collector_summary, "body_bytes": 3},
+            "contract downgrade": {
+                **streaming_collector_summary,
+                "proof_contract": "buffered-v3",
+            },
+        }
+        for label, mutated_summary in stream_summary_mutations.items():
+            rejected_summary_path = tmp / f"rejected-{label.replace(' ', '-')}.json"
+            collector_args.proxy_proof_summary_out = str(rejected_summary_path)
+            try:
+                run_production_readiness.run_collector(
+                    streaming_collector_command(mutated_summary),
+                    collector_args,
+                    clean_subprocess_env(),
+                )
+            except ValueError:
+                pass
+            else:
+                raise AssertionError(
+                    f"runner accepted streaming collector summary mutation: {label}"
+                )
+            if rejected_summary_path.exists():
+                raise AssertionError(
+                    f"runner persisted rejected streaming collector summary: {label}"
+                )
+
+        collector_args.proxy_max_stream_bytes = 3
+        collector_args.proxy_proof_summary_out = str(tmp / "oversized-stream-summary.json")
+        try:
+            run_production_readiness.run_collector(
+                streaming_collector_command(streaming_collector_summary),
+                collector_args,
+                clean_subprocess_env(),
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("runner accepted a stream body above the pinned byte ceiling")
+        collector_args.proxy_proof_contract = "buffered-v3"
+        collector_args.proxy_stream_body = None
+        collector_args.proxy_max_stream_bytes = None
 
         mismatched_collector_summary = {
             **collector_summary,
@@ -1322,6 +1604,104 @@ def main() -> None:
         )
         if final_run.returncode != 0:
             raise AssertionError(f"runner rejected env-pinned final authority inputs: {detail(final_run)}")
+        final_stream_body = tmp / "final-proxy-response-body.bin"
+        final_streaming_env_file = tmp / "final-streaming-authority.env"
+        final_streaming_values = {
+            **final_env_values,
+            "SERVERWARE_PROXY_PROOF_CONTRACT": "streaming-v1",
+            "SERVERWARE_PROXY_STREAM_BODY_FILE": str(final_stream_body),
+            "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES": "8192",
+            "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST": expected_operation_context_digest,
+        }
+        write_env(final_streaming_env_file, final_streaming_values)
+        final_streaming_run = run_runner(
+            "--env-file",
+            str(final_streaming_env_file),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if final_streaming_run.returncode != 0:
+            raise AssertionError(
+                "runner rejected env-pinned final streaming proof settings: "
+                + detail(final_streaming_run)
+            )
+        final_streaming_plan = json.loads(final_streaming_run.stdout.decode("utf-8"))
+        final_streaming_collector = final_streaming_plan["commands"][-2]["argv"]
+        final_streaming_completion = final_streaming_plan["commands"][-1]["argv"]
+        if (
+            final_streaming_collector[
+                final_streaming_collector.index("--body-out") + 1
+            ]
+            != str(final_stream_body)
+            or final_streaming_completion[
+                final_streaming_completion.index("--proxy-proof-contract") + 1
+            ]
+            != "streaming-v1"
+            or final_streaming_completion[
+                final_streaming_completion.index("--proxy-max-stream-bytes") + 1
+            ]
+            != "8192"
+            or final_streaming_completion[
+                final_streaming_completion.index("--proxy-operation-context-digest")
+                + 1
+            ]
+            != expected_operation_context_digest
+        ):
+            raise AssertionError(
+                "runner did not derive final streaming commands from the hashed environment"
+            )
+        final_streaming_overrides = {
+            "--proxy-proof-contract": "buffered-v3",
+            "--proxy-stream-body": str(tmp / "caller-stream-body.bin"),
+            "--proxy-max-stream-bytes": "8191",
+            "--proxy-operation-context-digest": "sha256:" + "e" * 64,
+        }
+        for option, value in final_streaming_overrides.items():
+            substituted_streaming = run_runner(
+                "--env-file",
+                str(final_streaming_env_file),
+                "--dry-run",
+                "--verification-mode",
+                "final",
+                option,
+                value,
+                *security_args,
+            )
+            if substituted_streaming.returncode == 0 or "must match" not in detail(
+                substituted_streaming
+            ):
+                raise AssertionError(
+                    f"runner accepted caller-selected final streaming setting {option}: "
+                    + detail(substituted_streaming)
+                )
+
+        missing_final_contract_env = tmp / "missing-final-proof-contract.env"
+        write_env(
+            missing_final_contract_env,
+            {
+                key: value
+                for key, value in final_env_values.items()
+                if key != "SERVERWARE_PROXY_PROOF_CONTRACT"
+            },
+        )
+        missing_final_contract = run_runner(
+            "--env-file",
+            str(missing_final_contract_env),
+            "--dry-run",
+            "--verification-mode",
+            "final",
+            *security_args,
+        )
+        if (
+            missing_final_contract.returncode == 0
+            or "SERVERWARE_PROXY_PROOF_CONTRACT" not in detail(missing_final_contract)
+        ):
+            raise AssertionError(
+                "runner accepted final verification without an env-pinned proof contract: "
+                + detail(missing_final_contract)
+            )
         alternate_policy_args = list(security_args)
         alternate_policy_args[
             alternate_policy_args.index("--policy-trusted-public-key") + 1
@@ -1552,6 +1932,7 @@ def main() -> None:
         final_proxy_overrides = {
             "--python": str(tmp / "caller-python"),
             "--proxy-response-proof": str(tmp / "caller-proof.json"),
+            "--proxy-proof-contract": "streaming-v1",
             "--proxy-proof-collector-command": str(tmp / "caller-collector"),
             "--proxy-address": "caller.proxy.internal:9443",
             "--proxy-proof-url": "https://caller-proof.internal/health",

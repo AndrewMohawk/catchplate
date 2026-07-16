@@ -46,6 +46,17 @@ ATTESTATION_HELPER_COMMAND_SETTINGS = (
     "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND",
 )
 PROOF_COLLECTOR_COMMAND_SETTING = "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND"
+PROXY_PROOF_CONTRACT_ENV = "SERVERWARE_PROXY_PROOF_CONTRACT"
+PROXY_STREAM_BODY_FILE_ENV = "SERVERWARE_PROXY_STREAM_BODY_FILE"
+PROXY_PROOF_MAX_STREAM_BYTES_ENV = "SERVERWARE_PROXY_PROOF_MAX_STREAM_BYTES"
+PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV = (
+    "SERVERWARE_PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST"
+)
+BUFFERED_PROXY_PROOF_CONTRACT = "buffered-v3"
+STREAMING_PROXY_PROOF_CONTRACT = "streaming-v1"
+PROXY_PROOF_CONTRACTS = frozenset(
+    (BUFFERED_PROXY_PROOF_CONTRACT, STREAMING_PROXY_PROOF_CONTRACT)
+)
 PRODUCTION_DOCKER_EXECUTABLE_ENV = "SERVERWARE_DOCKER_EXECUTABLE"
 DOCKER_COMPOSE_PLUGIN_EXECUTABLE_ENV = "SERVERWARE_DOCKER_COMPOSE_PLUGIN_EXECUTABLE"
 DOCKER_COMPOSE_PLUGIN_SHA256_ENV = "SERVERWARE_DOCKER_COMPOSE_PLUGIN_SHA256"
@@ -190,6 +201,7 @@ PROXY_DIGEST_ENV_SETTINGS = {
 }
 COMPLETION_P99_LIMIT_ENV = "SERVERWARE_COMPLETION_P99_LIMIT_MS"
 MAX_COMPLETION_PROOF_BYTES = 64 * 1024 * 1024
+MAX_PROXY_STREAM_BODY_BYTES = 64 * 1024 * 1024
 MAX_EXECUTABLE_BYTES = 256 * 1024 * 1024
 MAX_PRODUCTION_ENV_BYTES = 8 * 1024 * 1024
 MAX_BOOTSTRAP_RECEIPT_BYTES = 4 * 1024 * 1024
@@ -1980,6 +1992,18 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
     if not isinstance(binding, dict) or not isinstance(proxy, dict):
         raise ValueError("completion proof proxy/env binding contract is missing")
     if expected is not None:
+        expected_proof_contract = getattr(
+            expected, "proxy_proof_contract", BUFFERED_PROXY_PROOF_CONTRACT
+        )
+        if proxy.get("proof_contract") != expected_proof_contract:
+            raise ValueError("completion proof proxy contract does not match the independently selected contract")
+        if binding.get("proxy_proof_contract") != expected_proof_contract:
+            raise ValueError("completion proof production env binding changed the selected proxy proof contract")
+        if (
+            getattr(expected, "collected_proxy_proof_contract", expected_proof_contract)
+            != expected_proof_contract
+        ):
+            raise ValueError("runner did not retain the independently selected collector proof contract")
         for attribute, env_name in PROXY_DIGEST_ENV_SETTINGS.items():
             value = getattr(expected, attribute)
             if binding.get(env_name) != value:
@@ -1991,6 +2015,38 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         ):
             if proxy.get(field) != getattr(expected, attribute):
                 raise ValueError(f"completion proof proxy response {field} mismatch")
+        if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+            authorization_binding_commitment = proxy.get(
+                "authorization_binding_commitment"
+            )
+            if (
+                not isinstance(authorization_binding_commitment, dict)
+                or authorization_binding_commitment.get("operation_context_digest")
+                != expected.proxy_operation_context_digest
+            ):
+                raise ValueError(
+                    "completion proof proxy response operation_context_digest mismatch"
+                )
+            if (
+                binding.get("proxy_operation_context_digest")
+                != expected.proxy_operation_context_digest
+                or binding.get("proxy_stream_body")
+                != str(expected.proxy_stream_body)
+                or binding.get("proxy_max_stream_bytes")
+                != expected.proxy_max_stream_bytes
+            ):
+                raise ValueError(
+                    "completion proof production env binding omitted streaming proof settings"
+                )
+        elif any(
+            binding.get(field) is not None
+            for field in (
+                "proxy_stream_body",
+                "proxy_max_stream_bytes",
+                "proxy_operation_context_digest",
+            )
+        ):
+            raise ValueError("buffered completion proof retained streaming-only env settings")
         if proxy.get("server_instance_id") != expected.proxy_server_instance_id:
             raise ValueError("completion proof proxy server instance mismatch")
         if proxy.get("principal_id") != expected.proxy_principal_id:
@@ -2055,6 +2111,8 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             "proxy_collector_public_key": expected.proxy_collector_public_key,
             "compose_file": expected.compose_file,
         }
+        if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+            expected_artifact_paths["proxy_stream_body"] = expected.proxy_stream_body
         if expected.hardware_assurance:
             expected_artifact_paths["hardware_assurance"] = expected.hardware_assurance
             expected_artifact_paths["hardware_assurance_trusted_public_key"] = (
@@ -2424,10 +2482,16 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         )
         if proxy.get("client_nonce_sha256") != expected_nonce_digest:
             raise ValueError("completion proof proxy nonce does not bind the current runner challenge")
+        expected_channel_binding = {
+            "type": "tls-exporter",
+            "value": expected.proxy_tls_channel_binding,
+        }
+        if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+            expected_channel_binding["exporter_label"] = (
+                "EXPORTER-Serverware-Proxy-Stream-v1"
+            )
         expected_channel_digest = "sha256:" + hashlib.sha256(
-            canonical_json(
-                {"type": "tls-exporter", "value": expected.proxy_tls_channel_binding}
-            ).encode("utf-8")
+            canonical_json(expected_channel_binding).encode("utf-8")
         ).hexdigest()
         if proxy.get("tls_channel_binding_sha256") != expected_channel_digest:
             raise ValueError("completion proof TLS channel binding does not match the current collector result")
@@ -2435,11 +2499,30 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
         proxy_artifact = artifacts.get("proxy_response_proof")
         if collector_proof_digest is None or proxy_artifact.get("sha256") != collector_proof_digest:
             raise ValueError("completion proof does not bind the exact collector proof bytes")
+        if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+            stream_body_artifact = artifacts.get("proxy_stream_body")
+            retained_stream_digest = getattr(
+                expected, "collected_proxy_stream_body_sha256", None
+            )
+            retained_stream_bytes = getattr(
+                expected, "collected_proxy_stream_body_bytes", None
+            )
+            if (
+                not isinstance(stream_body_artifact, dict)
+                or retained_stream_digest is None
+                or stream_body_artifact.get("sha256") != retained_stream_digest
+                or proxy.get("streamed_body_artifact_sha256")
+                != retained_stream_digest
+                or proxy.get("emitted_body_digest") != retained_stream_digest
+                or proxy.get("emitted_body_bytes") != retained_stream_bytes
+            ):
+                raise ValueError("completion proof does not bind the exact collected streaming body")
         collector_contract = getattr(expected, "collector_proof_contract", None)
         if is_final:
             if not isinstance(collector_contract, dict):
                 raise ValueError("runner did not retain the current collector proof contract")
             for field in (
+                "proof_contract",
                 "server_statement_sha256",
                 "captured_at_unix",
                 "issued_at_unix",
@@ -2448,6 +2531,16 @@ def verify_completion_output(path: Path, expected: argparse.Namespace | None = N
             ):
                 if proxy.get(field) != collector_contract.get(field):
                     raise ValueError(f"completion proof {field} differs from the current collector proof")
+            if expected_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+                for field in (
+                    "streamed_body_artifact_sha256",
+                    "emitted_body_digest",
+                    "emitted_body_bytes",
+                ):
+                    if proxy.get(field) != collector_contract.get(field):
+                        raise ValueError(
+                            f"completion proof {field} differs from the current collector proof"
+                        )
         maximum_age = expected.proxy_proof_max_age_seconds
         now = int(time.time())
         for timestamp_field in ("captured_at_unix", "issued_at_unix"):
@@ -2623,6 +2716,16 @@ def collector_command(args: argparse.Namespace) -> dict[str, Any]:
     if args.proxy_agent_id:
         agent_header = f"X-Serverware-Agent: {args.proxy_agent_id}"
         argv.extend(["--proxy-header", agent_header, "--header", agent_header])
+    if args.proxy_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+        argv.extend(
+            [
+                "--stream",
+                "--body-out",
+                args.proxy_stream_body,
+                "--max-stream-bytes",
+                str(args.proxy_max_stream_bytes),
+            ]
+        )
     return {"label": "collect-production-proxy-response-proof", "argv": argv}
 
 
@@ -2722,6 +2825,8 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
             args.control_plane_response_signing_public_key_id,
             "--proxy-response-proof",
             args.proxy_response_proof,
+            "--proxy-proof-contract",
+            args.proxy_proof_contract,
             "--proxy-proof-verifier-public-key",
             args.proxy_proof_verifier_public_key,
             "--proxy-collector-public-key",
@@ -2746,6 +2851,17 @@ def completion_command(args: argparse.Namespace) -> dict[str, Any]:
             str(Path(args.completion_proof_out)),
         ],
     }
+    if args.proxy_proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+        command["argv"].extend(
+            [
+                "--proxy-stream-body",
+                args.proxy_stream_body,
+                "--proxy-max-stream-bytes",
+                str(args.proxy_max_stream_bytes),
+                "--proxy-operation-context-digest",
+                args.proxy_operation_context_digest,
+            ]
+        )
     if args.verification_mode == "final":
         command["argv"].extend(
             [
@@ -3013,14 +3129,55 @@ def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[s
     if summary.get("proof_sha256") != proof_digest:
         raise ValueError("production proxy response proof collector summary does not bind the proof artifact")
     args.collected_proxy_proof_sha256 = proof_digest
+    proof_contract = getattr(args, "proxy_proof_contract", BUFFERED_PROXY_PROOF_CONTRACT)
+    if proof_contract not in PROXY_PROOF_CONTRACTS:
+        raise ValueError("production proxy proof contract is invalid before collection")
+    claimed_contract = summary.get("proof_contract")
+    if claimed_contract is not None and claimed_contract != proof_contract:
+        raise ValueError("production proxy response proof collector returned a conflicting proof contract")
+    args.collected_proxy_proof_contract = proof_contract
+    args.collected_proxy_stream_body_sha256 = None
+    args.collected_proxy_stream_body_bytes = None
+    if proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+        if summary.get("stream_verified") is not True:
+            raise ValueError("production streaming proxy proof collector did not return stream_verified=true")
+        expected_body_path = str(Path(args.proxy_stream_body))
+        if summary.get("body_path") != expected_body_path:
+            raise ValueError("production streaming proxy proof collector wrote an unexpected body path")
+        body_bytes, _ = read_regular_file_once(
+            Path(args.proxy_stream_body),
+            "production proxy stream body",
+            max_bytes=args.proxy_max_stream_bytes,
+        )
+        actual_body_bytes = len(body_bytes)
+        actual_body_digest = "sha256:" + hashlib.sha256(body_bytes).hexdigest()
+        summary_body_bytes = summary.get("body_bytes")
+        if type(summary_body_bytes) is not int or summary_body_bytes != actual_body_bytes:
+            raise ValueError("production streaming proxy proof collector body byte count does not match the artifact")
+        summary_body_digest = summary.get("body_sha256")
+        if (
+            not isinstance(summary_body_digest, str)
+            or SHA256_RE.fullmatch(summary_body_digest) is None
+            or not hmac.compare_digest(summary_body_digest, actual_body_digest)
+        ):
+            raise ValueError("production streaming proxy proof collector body digest does not match the artifact")
+        args.collected_proxy_stream_body_sha256 = actual_body_digest
+        args.collected_proxy_stream_body_bytes = actual_body_bytes
+    summary["proof_contract"] = proof_contract
     if getattr(args, "verification_mode", None) == "final":
         try:
             proof_document = json.loads(proof_bytes.decode("utf-8"))
             external_capture = proof_document["external_capture"]
-            server_statement = proof_document["server_statement"]
+            statement_field = (
+                "streaming_response_statement"
+                if proof_contract == STREAMING_PROXY_PROOF_CONTRACT
+                else "server_statement"
+            )
+            server_statement = proof_document[statement_field]
             tls_channel_binding = external_capture["tls_channel_binding"]
             nonce = external_capture["client_nonce"]
             args.collector_proof_contract = {
+                "proof_contract": proof_contract,
                 "server_statement_sha256": "sha256:"
                 + hashlib.sha256(canonical_json(server_statement).encode("utf-8")).hexdigest(),
                 "captured_at_unix": external_capture["captured_at_unix"],
@@ -3029,6 +3186,14 @@ def run_collector(command: dict[str, Any], args: argparse.Namespace, env: dict[s
                 "tls_channel_binding_sha256": "sha256:"
                 + hashlib.sha256(canonical_json(tls_channel_binding).encode("utf-8")).hexdigest(),
             }
+            if proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+                args.collector_proof_contract.update(
+                    {
+                        "streamed_body_artifact_sha256": args.collected_proxy_stream_body_sha256,
+                        "emitted_body_digest": args.collected_proxy_stream_body_sha256,
+                        "emitted_body_bytes": args.collected_proxy_stream_body_bytes,
+                    }
+                )
         except (KeyError, TypeError, UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise ValueError("production proxy response proof does not contain the final collector contract") from exc
     args.collector_summary = summary
@@ -3109,6 +3274,9 @@ def main() -> None:
         default=None,
     )
     parser.add_argument("--proxy-response-proof", default=None)
+    parser.add_argument("--proxy-proof-contract", choices=sorted(PROXY_PROOF_CONTRACTS), default=None)
+    parser.add_argument("--proxy-stream-body", default=None)
+    parser.add_argument("--proxy-max-stream-bytes", type=int, default=None)
     parser.add_argument("--proxy-proof-summary-out", default=".tmp/proxy-response-proof-summary.json")
     parser.add_argument("--proxy-proof-collector-command", default=None)
     parser.add_argument("--proxy-address", default=None)
@@ -3123,6 +3291,7 @@ def main() -> None:
     parser.add_argument("--proxy-client-request-digest", default=None)
     parser.add_argument("--proxy-request-digest", default=None)
     parser.add_argument("--proxy-operation-digest", default=None)
+    parser.add_argument("--proxy-operation-context-digest", default=None)
     parser.add_argument("--proxy-proof-max-age-seconds", type=int, default=None)
     parser.add_argument("--p99-limit-ms", type=float, default=None)
     parser.add_argument("--control-plane-base", default=None)
@@ -3681,6 +3850,170 @@ def main() -> None:
             raise SystemExit(1)
     env["SERVERWARE_COMPLETION_VERIFICATION_MODE"] = args.verification_mode
     if not args.config_only:
+        missing = []
+        env_proof_contract = loaded.get(PROXY_PROOF_CONTRACT_ENV)
+        if (
+            args.verification_mode == "final"
+            and args.proxy_proof_contract is not None
+            and args.proxy_proof_contract != env_proof_contract
+        ):
+            print(
+                f"production readiness env error: --proxy-proof-contract must match {PROXY_PROOF_CONTRACT_ENV} "
+                "in final verification mode",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        proof_contract = (
+            env_proof_contract
+            if args.verification_mode == "final"
+            else args.proxy_proof_contract
+            or env_proof_contract
+            or BUFFERED_PROXY_PROOF_CONTRACT
+        )
+        if args.verification_mode == "final" and not proof_contract:
+            missing.append(
+                f"{PROXY_PROOF_CONTRACT_ENV} (must be pinned in the production readiness env file)"
+            )
+        elif proof_contract not in PROXY_PROOF_CONTRACTS:
+            print(
+                f"production readiness env error: {PROXY_PROOF_CONTRACT_ENV} must be buffered-v3 or streaming-v1",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        args.proxy_proof_contract = proof_contract
+
+        if proof_contract == STREAMING_PROXY_PROOF_CONTRACT:
+            env_operation_context_digest = loaded.get(
+                PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV
+            )
+            if (
+                args.verification_mode == "final"
+                and args.proxy_operation_context_digest is not None
+                and args.proxy_operation_context_digest
+                != env_operation_context_digest
+            ):
+                print(
+                    "production readiness env error: --proxy-operation-context-digest must match "
+                    f"{PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV} in final verification mode",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            operation_context_digest = (
+                env_operation_context_digest
+                if args.verification_mode == "final"
+                else args.proxy_operation_context_digest
+                or env_operation_context_digest
+            )
+            if not operation_context_digest:
+                missing.append(
+                    f"{PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV} "
+                    "(must be pinned in the production readiness env file)"
+                    if args.verification_mode == "final"
+                    else "--proxy-operation-context-digest or "
+                    f"{PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV}"
+                )
+            elif SHA256_RE.fullmatch(operation_context_digest) is None:
+                print(
+                    "production readiness env error: expected proxy operation context digest must be "
+                    "sha256:<64 lowercase hex>",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            else:
+                args.proxy_operation_context_digest = operation_context_digest
+
+            env_stream_body = loaded.get(PROXY_STREAM_BODY_FILE_ENV)
+            if (
+                args.verification_mode == "final"
+                and args.proxy_stream_body is not None
+                and args.proxy_stream_body != env_stream_body
+            ):
+                print(
+                    f"production readiness env error: --proxy-stream-body must match {PROXY_STREAM_BODY_FILE_ENV} "
+                    "in final verification mode",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            stream_body = (
+                env_stream_body
+                if args.verification_mode == "final"
+                else args.proxy_stream_body or env_stream_body
+            )
+            if not stream_body:
+                missing.append(
+                    f"{PROXY_STREAM_BODY_FILE_ENV} (must be pinned in the production readiness env file)"
+                    if args.verification_mode == "final"
+                    else f"--proxy-stream-body or {PROXY_STREAM_BODY_FILE_ENV}"
+                )
+            elif not Path(stream_body).is_absolute():
+                print(
+                    f"production readiness env error: {PROXY_STREAM_BODY_FILE_ENV} must be an absolute path",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            else:
+                args.proxy_stream_body = stream_body
+
+            env_max_stream_bytes = loaded.get(PROXY_PROOF_MAX_STREAM_BYTES_ENV)
+            parsed_env_max_stream_bytes = None
+            if env_max_stream_bytes is not None:
+                try:
+                    parsed_env_max_stream_bytes = int(env_max_stream_bytes)
+                except ValueError as exc:
+                    print(
+                        f"production readiness env error: {PROXY_PROOF_MAX_STREAM_BYTES_ENV} must be an integer",
+                        file=sys.stderr,
+                    )
+                    raise SystemExit(1) from exc
+            if (
+                args.verification_mode == "final"
+                and args.proxy_max_stream_bytes is not None
+                and args.proxy_max_stream_bytes != parsed_env_max_stream_bytes
+            ):
+                print(
+                    f"production readiness env error: --proxy-max-stream-bytes must match "
+                    f"{PROXY_PROOF_MAX_STREAM_BYTES_ENV} in final verification mode",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            max_stream_bytes = (
+                parsed_env_max_stream_bytes
+                if args.verification_mode == "final"
+                else args.proxy_max_stream_bytes or parsed_env_max_stream_bytes
+            )
+            if max_stream_bytes is None:
+                missing.append(
+                    f"{PROXY_PROOF_MAX_STREAM_BYTES_ENV} (must be pinned in the production readiness env file)"
+                    if args.verification_mode == "final"
+                    else f"--proxy-max-stream-bytes or {PROXY_PROOF_MAX_STREAM_BYTES_ENV}"
+                )
+            elif not 1 <= max_stream_bytes <= MAX_PROXY_STREAM_BODY_BYTES:
+                print(
+                    "production readiness env error: proxy proof max stream bytes must be between 1 and "
+                    f"{MAX_PROXY_STREAM_BODY_BYTES}",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            else:
+                args.proxy_max_stream_bytes = max_stream_bytes
+        elif any(
+            value is not None
+            for value in (
+                args.proxy_stream_body,
+                args.proxy_max_stream_bytes,
+                args.proxy_operation_context_digest,
+                loaded.get(PROXY_STREAM_BODY_FILE_ENV),
+                loaded.get(PROXY_PROOF_MAX_STREAM_BYTES_ENV),
+                loaded.get(PROXY_EXPECTED_OPERATION_CONTEXT_DIGEST_ENV),
+            )
+        ):
+            print(
+                "production readiness env error: stream body, max stream bytes, and operation context digest "
+                "settings are only valid with proxy proof contract streaming-v1",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+
         proof_settings = {
             "proxy_response_proof": "SERVERWARE_PROXY_RESPONSE_PROOF_FILE",
             "proxy_proof_collector_command": "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND",
@@ -3691,7 +4024,6 @@ def main() -> None:
             "proxy_collector_public_key": "SERVERWARE_PROXY_PROOF_COLLECTOR_PUBLIC_KEY",
             "proxy_proof_verifier_public_key": "SERVERWARE_PROXY_PROOF_VERIFIER_PUBLIC_KEY",
         }
-        missing = []
         for attribute, env_name in proof_settings.items():
             argument_value = getattr(args, attribute)
             env_value = loaded.get(env_name)
@@ -3711,6 +4043,17 @@ def main() -> None:
                 )
             else:
                 setattr(args, attribute, value)
+        if (
+            proof_contract == STREAMING_PROXY_PROOF_CONTRACT
+            and args.proxy_response_proof
+            and args.proxy_stream_body
+            and Path(args.proxy_response_proof) == Path(args.proxy_stream_body)
+        ):
+            print(
+                "production readiness env error: proxy proof and streaming body outputs must use different paths",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
         explicit_server_instance = loaded.get("SERVERWARE_PROXY_SERVER_INSTANCE_ID")
         data_plane_instance = loaded.get("SERVERWARE_DATA_PLANE_INSTANCE_ID")
         if explicit_server_instance and data_plane_instance and explicit_server_instance != data_plane_instance:

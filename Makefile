@@ -549,6 +549,7 @@ run-production-readiness-final:
 
 production-release-proof:
 	$(MAKE) verify-credential-policy-contracts
+	$(MAKE) verify-custody-response-proof
 	$(MAKE) verify-control-plane-startup
 	$(MAKE) verify-control-plane-oidc
 	$(MAKE) verify-webauthn-recovery
@@ -653,7 +654,7 @@ verify-launch-authorization:
 	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_launch_authorization.py
 	uvx --with cryptography==48.0.1 python scripts/test_launch_authority_service.py
 
-verify-production-release-proof: verify-production-launch-assets verify-launch-authorization verify-production-image-builds verify-production-release-input-preflight verify-production-host-preflight verify-production-readiness-runner verify-release-completion
+verify-production-release-proof: verify-production-launch-assets verify-launch-authorization verify-production-image-builds verify-production-release-input-preflight verify-production-host-preflight verify-production-readiness-runner verify-release-completion verify-custody-response-proof
 	python3 scripts/test_production_release_proof_target.py
 
 verify-credential-policy-contracts:

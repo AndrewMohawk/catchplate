@@ -25,6 +25,9 @@ pub const PROTOCOL_API_VERSION: &str = "serverware.custodyProtocol/v1";
 pub const RESPONSE_STATEMENT_API_VERSION: &str = "serverware.proxyResponseStatement/v2";
 pub const HELLO_OPERATION: &str = "hello/v1";
 pub const RESPONSE_PROOF_SIGN_OPERATION: &str = "responseProof.sign/v2";
+pub const STREAMING_RESPONSE_PROOF_SIGN_OPERATION: &str = "streamingResponseProof.sign/v1";
+pub const STREAMING_RESPONSE_STATEMENT_API_VERSION: &str =
+    "serverware.streamingResponseStatement/v1";
 pub const MAX_FRAME_BYTES: usize = 256 * 1024;
 pub const IO_DEADLINE: Duration = Duration::from_secs(2);
 pub const MAX_CONCURRENT_CONNECTIONS: usize = 32;
@@ -146,6 +149,13 @@ struct SignParams {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
+struct StreamingSignParams {
+    statement: StreamingResponseStatement,
+    authorization_binding: ReleaseAuthorizationBinding,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProxyResponseStatement {
     #[serde(rename = "apiVersion")]
     pub api_version: String,
@@ -166,6 +176,146 @@ pub struct ProxyResponseStatement {
     pub release_digest: String,
     pub server_instance: ServerInstance,
     pub tls_channel_binding: TlsChannelBinding,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct StreamingResponseStatement {
+    #[serde(rename = "apiVersion")]
+    api_version: String,
+    issued_at_unix: u64,
+    client_nonce: String,
+    client_request_digest: String,
+    principal_id: String,
+    route_id: String,
+    request_digest: String,
+    operation_digest: String,
+    release_authority: ReleaseAuthority,
+    authorization_binding_validation: AuthorizationBindingValidation,
+    control_plane_authorization_receipt: ControlPlaneAuthorizationReceipt,
+    control_plane_authorization_receipt_sha256: String,
+    upstream_response: StreamingUpstreamResponse,
+    released_response: StreamingReleasedResponse,
+    policy_digest: String,
+    runtime_manifest_digest: String,
+    data_plane_binary_digest: String,
+    release_digest: String,
+    server_instance: ServerInstance,
+    tls_channel_binding: StreamingTlsChannelBinding,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct AuthorizationBindingValidation {
+    status: String,
+    binding_commitment: AuthorizationBindingCommitment,
+    binding_digest: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct AuthorizationBindingCommitment {
+    attempt_id: String,
+    flow_id: String,
+    principal_id: String,
+    route_id: String,
+    credential_id: String,
+    credential_version: u64,
+    policy_hash: String,
+    request_digest: String,
+    operation_digest: String,
+    operation_context_digest: String,
+    require_jit_grant: bool,
+    shared_quotas: Vec<ReleaseAuthorizationBindingQuota>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct StreamingUpstreamResponse {
+    status: u16,
+    selected_raw_policy_headers_b64: BTreeMap<String, Vec<String>>,
+    body_digest: String,
+    body_bytes: u64,
+    canonical_digest: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct StreamingReleasedResponse {
+    status: u16,
+    content_type: String,
+    selected_wire_headers: StreamingWireHeaders,
+    selected_wire_headers_digest: String,
+    body_digest: String,
+    body_bytes: u64,
+    framing: String,
+    completion: String,
+    trailer_names: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct StreamingWireHeaders {
+    connection: String,
+    #[serde(rename = "content-type")]
+    content_type: String,
+    trailer: String,
+    #[serde(rename = "transfer-encoding")]
+    transfer_encoding: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct StreamingTlsChannelBinding {
+    #[serde(rename = "type")]
+    binding_type: String,
+    exporter_label: String,
+    value: String,
+}
+
+#[derive(Clone, Copy)]
+struct ResponseStatementAuthorityView<'a> {
+    issued_at_unix: u64,
+    principal_id: &'a str,
+    route_id: &'a str,
+    request_digest: &'a str,
+    operation_digest: &'a str,
+    release_authority: &'a ReleaseAuthority,
+    control_plane_authorization_receipt: &'a ControlPlaneAuthorizationReceipt,
+    policy_digest: &'a str,
+    release_digest: &'a str,
+}
+
+impl<'a> From<&'a ProxyResponseStatement> for ResponseStatementAuthorityView<'a> {
+    fn from(statement: &'a ProxyResponseStatement) -> Self {
+        Self {
+            issued_at_unix: statement.issued_at_unix,
+            principal_id: &statement.principal_id,
+            route_id: &statement.route_id,
+            request_digest: &statement.request_digest,
+            operation_digest: &statement.operation_digest,
+            release_authority: &statement.release_authority,
+            control_plane_authorization_receipt: &statement.control_plane_authorization_receipt,
+            policy_digest: &statement.policy_digest,
+            release_digest: &statement.release_digest,
+        }
+    }
+}
+
+impl<'a> From<&'a StreamingResponseStatement> for ResponseStatementAuthorityView<'a> {
+    fn from(statement: &'a StreamingResponseStatement) -> Self {
+        Self {
+            issued_at_unix: statement.issued_at_unix,
+            principal_id: &statement.principal_id,
+            route_id: &statement.route_id,
+            request_digest: &statement.request_digest,
+            operation_digest: &statement.operation_digest,
+            release_authority: &statement.release_authority,
+            control_plane_authorization_receipt: &statement.control_plane_authorization_receipt,
+            policy_digest: &statement.policy_digest,
+            release_digest: &statement.release_digest,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -422,7 +572,7 @@ struct HelloResult<'a> {
     public_key_pem: &'a str,
     key_id: &'a str,
     control_plane_response_signing_key_id: Option<&'a str>,
-    capabilities: [&'static str; 2],
+    capabilities: [&'static str; 3],
     limits: RuntimeLimits,
     hardware_proof: bool,
 }
@@ -674,7 +824,11 @@ impl CustodyRuntime {
                     control_plane_response_signing_key_id: self
                         .control_plane_response_signing_key_id
                         .as_deref(),
-                    capabilities: [HELLO_OPERATION, RESPONSE_PROOF_SIGN_OPERATION],
+                    capabilities: [
+                        HELLO_OPERATION,
+                        RESPONSE_PROOF_SIGN_OPERATION,
+                        STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+                    ],
                     limits: RuntimeLimits {
                         max_frame_bytes: MAX_FRAME_BYTES,
                         io_deadline_ms: IO_DEADLINE.as_millis(),
@@ -692,20 +846,7 @@ impl CustodyRuntime {
                 })
             }
             RESPONSE_PROOF_SIGN_OPERATION => {
-                self.claim_request_id(&request.request_id)?;
-                let Some(boot_id) = request.boot_id.as_deref() else {
-                    return Err(ProtocolError::new(
-                        "missing_boot_id",
-                        "responseProof.sign/v2 requires the current bootId",
-                    ));
-                };
-                validate_boot_id(boot_id)?;
-                if boot_id != self.boot_id {
-                    return Err(ProtocolError::new(
-                        "cross_boot_request",
-                        "request bootId does not match the current custody runtime boot",
-                    ));
-                }
+                self.validate_sign_request_envelope(request, RESPONSE_PROOF_SIGN_OPERATION)?;
                 let params = from_value_strict::<SignParams>(
                     request.params.clone(),
                     "responseProof.sign/v2 params",
@@ -732,8 +873,9 @@ impl CustodyRuntime {
                         control_plane_response_verifying_key,
                         validation_epoch_ms,
                     )?;
+                    let authority_view = ResponseStatementAuthorityView::from(&params.statement);
                     validate_release_authorization_binding(
-                        &params.statement,
+                        &authority_view,
                         &params.authorization_binding,
                     )?;
                     let canonical_statement = canonical_json_bytes(&params.statement)?;
@@ -756,33 +898,128 @@ impl CustodyRuntime {
                         return Err(error);
                     }
                 };
-                self.claim_attempt_statement_digest(
+                self.sign_canonical_statement(
                     &params.statement.release_authority.attempt_id,
-                    &statement_digest,
+                    canonical_statement,
+                    statement_digest,
                     retain_until_epoch_ms,
                     validation_epoch_ms,
+                )
+            }
+            STREAMING_RESPONSE_PROOF_SIGN_OPERATION => {
+                self.validate_sign_request_envelope(
+                    request,
+                    STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
                 )?;
-                let signature = self.signing_key.sign(&canonical_statement);
-                serde_json::to_value(SignResult {
-                    statement_digest,
-                    signature: format!(
-                        "ed25519:{}",
-                        general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
-                    ),
-                    key_id: &self.key_id,
-                })
-                .map_err(|error| {
+                let params = from_value_strict::<StreamingSignParams>(
+                    request.params.clone(),
+                    "streamingResponseProof.sign/v1 params",
+                )?;
+                let control_plane_response_verifying_key = self
+                    .control_plane_response_verifying_key
+                    .as_ref()
+                    .ok_or_else(|| {
+                        ProtocolError::new(
+                            "control_plane_response_key_unavailable",
+                            "streamingResponseProof.sign/v1 requires a pinned control-plane response public key",
+                        )
+                    })?;
+                let _validation = self.response_proof_validation.lock().map_err(|_| {
                     ProtocolError::new(
-                        "internal_serialization_error",
-                        format!("serialize signing response: {error}"),
+                        "internal_state_error",
+                        "response proof validation serialization is unavailable",
                     )
-                })
+                })?;
+                let validation_epoch_ms = current_epoch_ms()?;
+                let validated = (|| {
+                    validate_streaming_response_statement_with_control_plane_response_key_at(
+                        &params.statement,
+                        &params.authorization_binding,
+                        control_plane_response_verifying_key,
+                        validation_epoch_ms,
+                    )?;
+                    let canonical_statement = canonical_json_bytes(&params.statement)?;
+                    let statement_digest = sha256_prefixed(&canonical_statement);
+                    Ok::<_, ProtocolError>((
+                        canonical_statement,
+                        statement_digest,
+                        params.statement.release_authority.dispatch_expires_at_epoch_ms,
+                    ))
+                })();
+                let (canonical_statement, statement_digest, retain_until_epoch_ms) =
+                    match validated {
+                        Ok(validated) => validated,
+                        Err(error) => {
+                            self.observe_attempt_ledger_clock(validation_epoch_ms)?;
+                            return Err(error);
+                        }
+                    };
+                self.sign_canonical_statement(
+                    &params.statement.release_authority.attempt_id,
+                    canonical_statement,
+                    statement_digest,
+                    retain_until_epoch_ms,
+                    validation_epoch_ms,
+                )
             }
             _ => Err(ProtocolError::new(
                 "unknown_operation",
-                "operation must be hello/v1 or responseProof.sign/v2",
+                "operation must be hello/v1, responseProof.sign/v2, or streamingResponseProof.sign/v1",
             )),
         }
+    }
+
+    fn validate_sign_request_envelope(
+        &self,
+        request: &CustodyRequest,
+        operation: &str,
+    ) -> Result<(), ProtocolError> {
+        self.claim_request_id(&request.request_id)?;
+        let Some(boot_id) = request.boot_id.as_deref() else {
+            return Err(ProtocolError::new(
+                "missing_boot_id",
+                format!("{operation} requires the current bootId"),
+            ));
+        };
+        validate_boot_id(boot_id)?;
+        if boot_id != self.boot_id {
+            return Err(ProtocolError::new(
+                "cross_boot_request",
+                "request bootId does not match the current custody runtime boot",
+            ));
+        }
+        Ok(())
+    }
+
+    fn sign_canonical_statement(
+        &self,
+        attempt_id: &str,
+        canonical_statement: Vec<u8>,
+        statement_digest: String,
+        retain_until_epoch_ms: u64,
+        validation_epoch_ms: u64,
+    ) -> Result<Value, ProtocolError> {
+        self.claim_attempt_statement_digest(
+            attempt_id,
+            &statement_digest,
+            retain_until_epoch_ms,
+            validation_epoch_ms,
+        )?;
+        let signature = self.signing_key.sign(&canonical_statement);
+        serde_json::to_value(SignResult {
+            statement_digest,
+            signature: format!(
+                "ed25519:{}",
+                general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+            ),
+            key_id: &self.key_id,
+        })
+        .map_err(|error| {
+            ProtocolError::new(
+                "internal_serialization_error",
+                format!("serialize signing response: {error}"),
+            )
+        })
     }
 
     fn claim_request_id(&self, request_id: &str) -> Result<(), ProtocolError> {
@@ -2302,6 +2539,18 @@ fn validate_response_statement_inner(
             &statement.release_authority.consumption_identity_digest,
         ),
         (
+            "release_authority.request_digest",
+            &statement.release_authority.request_digest,
+        ),
+        (
+            "release_authority.operation_digest",
+            &statement.release_authority.operation_digest,
+        ),
+        (
+            "release_authority.consumption_identity_digest",
+            &statement.release_authority.consumption_identity_digest,
+        ),
+        (
             "upstream_response.body_digest",
             &statement.upstream_response.body_digest,
         ),
@@ -2336,9 +2585,10 @@ fn validate_response_statement_inner(
             "response.status must be a successful HTTP status",
         ));
     }
-    validate_release_authority(statement)?;
+    let authority_view = ResponseStatementAuthorityView::from(statement);
+    validate_release_authority(&authority_view)?;
     validate_control_plane_authorization_receipt(
-        statement,
+        &authority_view,
         control_plane_response_verifying_key,
         now_epoch_ms,
     )?;
@@ -2364,7 +2614,303 @@ fn validate_response_statement_inner(
     Ok(())
 }
 
-fn validate_release_authority(statement: &ProxyResponseStatement) -> Result<(), ProtocolError> {
+fn validate_streaming_response_statement_with_control_plane_response_key_at(
+    statement: &StreamingResponseStatement,
+    authorization_binding: &ReleaseAuthorizationBinding,
+    control_plane_response_verifying_key: &VerifyingKey,
+    now_epoch_ms: u64,
+) -> Result<(), ProtocolError> {
+    if statement.api_version != STREAMING_RESPONSE_STATEMENT_API_VERSION {
+        return Err(invalid_statement(
+            "apiVersion must be serverware.streamingResponseStatement/v1",
+        ));
+    }
+    let now = now_epoch_ms / 1000;
+    if statement.issued_at_unix == 0
+        || statement.issued_at_unix > now.saturating_add(30)
+        || now.saturating_sub(statement.issued_at_unix) > MAX_STATEMENT_AGE_SECONDS
+    {
+        return Err(invalid_statement(
+            "issued_at_unix is outside the allowed clock window",
+        ));
+    }
+    validate_base64url("client_nonce", &statement.client_nonce, 32, 32)?;
+    validate_streaming_identifier("principal_id", &statement.principal_id)?;
+    validate_streaming_identifier("route_id", &statement.route_id)?;
+    for (name, digest) in [
+        ("client_request_digest", &statement.client_request_digest),
+        ("request_digest", &statement.request_digest),
+        ("operation_digest", &statement.operation_digest),
+        (
+            "control_plane_authorization_receipt_sha256",
+            &statement.control_plane_authorization_receipt_sha256,
+        ),
+        (
+            "authorization_binding_validation.binding_digest",
+            &statement.authorization_binding_validation.binding_digest,
+        ),
+        (
+            "upstream_response.body_digest",
+            &statement.upstream_response.body_digest,
+        ),
+        (
+            "upstream_response.canonical_digest",
+            &statement.upstream_response.canonical_digest,
+        ),
+        (
+            "released_response.selected_wire_headers_digest",
+            &statement.released_response.selected_wire_headers_digest,
+        ),
+        (
+            "released_response.body_digest",
+            &statement.released_response.body_digest,
+        ),
+        ("policy_digest", &statement.policy_digest),
+        (
+            "runtime_manifest_digest",
+            &statement.runtime_manifest_digest,
+        ),
+        (
+            "data_plane_binary_digest",
+            &statement.data_plane_binary_digest,
+        ),
+        ("release_digest", &statement.release_digest),
+        (
+            "server_instance.identity_digest",
+            &statement.server_instance.identity_digest,
+        ),
+    ] {
+        validate_sha256_digest(name, digest)?;
+    }
+
+    let authority_view = ResponseStatementAuthorityView::from(statement);
+    validate_release_authority(&authority_view)?;
+    validate_streaming_release_identifiers(statement, authorization_binding)?;
+    validate_control_plane_authorization_receipt(
+        &authority_view,
+        Some(control_plane_response_verifying_key),
+        now_epoch_ms,
+    )?;
+    let receipt_digest = sha256_prefixed(&canonical_json_bytes(
+        &statement.control_plane_authorization_receipt,
+    )?);
+    if statement.control_plane_authorization_receipt_sha256 != receipt_digest {
+        return Err(invalid_statement(
+            "control_plane_authorization_receipt_sha256 does not match the receipt",
+        ));
+    }
+    validate_release_authorization_binding(&authority_view, authorization_binding)?;
+    validate_streaming_authorization_binding(statement, authorization_binding)?;
+    validate_streaming_upstream_response(&statement.upstream_response)?;
+    validate_streaming_released_response(&statement.released_response)?;
+    if statement.upstream_response.status != statement.released_response.status {
+        return Err(invalid_statement(
+            "upstream_response.status must match released_response.status",
+        ));
+    }
+    validate_streaming_server_instance(&statement.server_instance)?;
+    if statement.tls_channel_binding.binding_type != "tls-exporter"
+        || statement.tls_channel_binding.exporter_label != "EXPORTER-Serverware-Proxy-Stream-v1"
+    {
+        return Err(invalid_statement(
+            "tls_channel_binding must use the streaming TLS exporter domain",
+        ));
+    }
+    validate_base64url(
+        "tls_channel_binding.value",
+        &statement.tls_channel_binding.value,
+        TLS_EXPORTER_BYTES,
+        TLS_EXPORTER_BYTES,
+    )?;
+    Ok(())
+}
+
+fn validate_streaming_identifier(name: &str, value: &str) -> Result<(), ProtocolError> {
+    validate_bounded_identity(name, value)?;
+    let mut bytes = value.bytes();
+    if !bytes
+        .next()
+        .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        || !bytes.all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'/' | b'@' | b'-')
+        })
+    {
+        return Err(invalid_statement(format!(
+            "{name} is not a canonical streaming-proof identifier"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_streaming_release_identifiers(
+    statement: &StreamingResponseStatement,
+    binding: &ReleaseAuthorizationBinding,
+) -> Result<(), ProtocolError> {
+    for (name, value) in [
+        (
+            "release_authority.grant_id",
+            statement.release_authority.grant_id.as_deref(),
+        ),
+        (
+            "release_authority.approval_id",
+            statement.release_authority.approval_id.as_deref(),
+        ),
+        (
+            "release_authority.credential_ref",
+            statement.release_authority.credential_ref.as_deref(),
+        ),
+    ] {
+        if let Some(value) = value {
+            validate_streaming_identifier(name, value)?;
+        }
+    }
+    validate_streaming_identifier("binding.principal_id", &binding.principal_id)?;
+    validate_streaming_identifier("binding.route_id", &binding.route_id)?;
+    if !binding.credential_id.is_empty() {
+        validate_streaming_identifier("binding.credential_id", &binding.credential_id)?;
+    }
+    for quota in &binding.shared_quotas {
+        validate_streaming_identifier("binding.quota.constraint_id", &quota.constraint_id)?;
+        if let Some(operation) = quota.operation.as_deref() {
+            validate_streaming_identifier("binding.quota.operation", operation)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_streaming_authorization_binding(
+    statement: &StreamingResponseStatement,
+    binding: &ReleaseAuthorizationBinding,
+) -> Result<(), ProtocolError> {
+    let operation_digest = binding.operation_digest.clone().ok_or_else(|| {
+        invalid_statement("streaming authorization binding is missing operation_digest")
+    })?;
+    let operation_context_digest = sha256_prefixed(&canonical_json_ensure_ascii_bytes(
+        &binding.operation_context,
+    )?);
+    let expected_commitment = AuthorizationBindingCommitment {
+        attempt_id: binding.attempt_id.clone(),
+        flow_id: binding.flow_id.clone(),
+        principal_id: binding.principal_id.clone(),
+        route_id: binding.route_id.clone(),
+        credential_id: binding.credential_id.clone(),
+        credential_version: binding.credential_version,
+        policy_hash: binding.policy_hash.clone(),
+        request_digest: binding.request_digest.clone(),
+        operation_digest,
+        operation_context_digest,
+        require_jit_grant: binding.require_jit_grant,
+        shared_quotas: binding.shared_quotas.clone(),
+    };
+    let binding_digest = sha256_prefixed(&canonical_json_ensure_ascii_bytes(binding)?);
+    let validation = &statement.authorization_binding_validation;
+    if validation.status != "validated"
+        || validation.binding_digest != binding_digest
+        || validation.binding_digest != statement.release_authority.consumption_identity_digest
+        || validation.binding_commitment != expected_commitment
+    {
+        return Err(invalid_statement(
+            "authorization_binding_validation does not match the release binding",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_streaming_upstream_response(
+    upstream: &StreamingUpstreamResponse,
+) -> Result<(), ProtocolError> {
+    if !(200..300).contains(&upstream.status) {
+        return Err(invalid_statement(
+            "upstream_response.status must be a successful HTTP status",
+        ));
+    }
+    validate_raw_policy_headers(&upstream.selected_raw_policy_headers_b64)?;
+    let canonical = canonical_json_bytes(&StreamingUpstreamResponseDigest {
+        status: upstream.status,
+        selected_raw_policy_headers_b64: &upstream.selected_raw_policy_headers_b64,
+        body_digest: &upstream.body_digest,
+        body_bytes: upstream.body_bytes,
+    })?;
+    if upstream.canonical_digest != sha256_prefixed(&canonical) {
+        return Err(invalid_statement(
+            "upstream_response.canonical_digest does not match the streaming upstream binding",
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct StreamingUpstreamResponseDigest<'a> {
+    status: u16,
+    selected_raw_policy_headers_b64: &'a BTreeMap<String, Vec<String>>,
+    body_digest: &'a str,
+    body_bytes: u64,
+}
+
+fn validate_streaming_released_response(
+    released: &StreamingReleasedResponse,
+) -> Result<(), ProtocolError> {
+    if !(200..300).contains(&released.status) {
+        return Err(invalid_statement(
+            "released_response.status must be a successful HTTP status",
+        ));
+    }
+    if released.content_type.is_empty()
+        || released.content_type.len() > 1024
+        || released
+            .content_type
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == 0x7f)
+    {
+        return Err(invalid_statement(
+            "released_response.content_type is invalid",
+        ));
+    }
+    let headers = &released.selected_wire_headers;
+    if headers.connection != "close"
+        || headers.content_type != released.content_type
+        || headers.trailer != "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256"
+        || headers.transfer_encoding != "chunked"
+    {
+        return Err(invalid_statement(
+            "released_response.selected_wire_headers are not the exact streaming proof framing",
+        ));
+    }
+    let selected_wire_headers_digest =
+        sha256_prefixed(&canonical_json_bytes(&released.selected_wire_headers)?);
+    if released.selected_wire_headers_digest != selected_wire_headers_digest {
+        return Err(invalid_statement(
+            "released_response.selected_wire_headers_digest does not match selected_wire_headers",
+        ));
+    }
+    if released.framing != "http1.1-chunked-trailers"
+        || released.completion != "normal-eof"
+        || released.trailer_names
+            != [
+                "X-Serverware-Stream-Proof-B64".to_string(),
+                "X-Serverware-Stream-Proof-SHA256".to_string(),
+            ]
+    {
+        return Err(invalid_statement(
+            "released_response completion framing is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_streaming_server_instance(instance: &ServerInstance) -> Result<(), ProtocolError> {
+    if !instance.id.starts_with("spiffe://") || !(10..=256).contains(&instance.id.len()) {
+        return Err(invalid_statement(
+            "server_instance.id must be a bounded SPIFFE ID",
+        ));
+    }
+    validate_streaming_identifier("server_instance.id", &instance.id)?;
+    validate_server_instance(instance)
+}
+
+fn validate_release_authority(
+    statement: &ResponseStatementAuthorityView<'_>,
+) -> Result<(), ProtocolError> {
     let authority = &statement.release_authority;
     if authority.authority_mode != "atomic" {
         return Err(invalid_statement(
@@ -2477,7 +3023,7 @@ fn canonical_json_ensure_ascii_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>,
 }
 
 fn validate_release_authorization_binding(
-    statement: &ProxyResponseStatement,
+    statement: &ResponseStatementAuthorityView<'_>,
     binding: &ReleaseAuthorizationBinding,
 ) -> Result<(), ProtocolError> {
     let authority = &statement.release_authority;
@@ -2490,7 +3036,7 @@ fn validate_release_authorization_binding(
         || binding.credential_version != authority.credential_version
         || binding.policy_hash != statement.policy_digest
         || binding.request_digest != statement.request_digest
-        || binding.operation_digest.as_deref() != Some(statement.operation_digest.as_str())
+        || binding.operation_digest.as_deref() != Some(statement.operation_digest)
     {
         return Err(invalid_statement(
             "release authorization binding claim substitution",
@@ -2612,7 +3158,7 @@ fn custody_calendar_window_bounds(
 }
 
 fn validate_dispatch_quotas_against_binding(
-    statement: &ProxyResponseStatement,
+    statement: &ResponseStatementAuthorityView<'_>,
     binding: &ReleaseAuthorizationBinding,
 ) -> Result<(), ProtocolError> {
     let response_body = decode_receipt_base64url(
@@ -2748,7 +3294,7 @@ fn decode_receipt_base64url(
 }
 
 fn validate_control_plane_authorization_receipt(
-    statement: &ProxyResponseStatement,
+    statement: &ResponseStatementAuthorityView<'_>,
     control_plane_response_verifying_key: Option<&VerifyingKey>,
     now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
@@ -2757,7 +3303,7 @@ fn validate_control_plane_authorization_receipt(
         || receipt.kind != "ControlPlaneAuthorizationReceipt"
         || receipt.principal_id != statement.principal_id
         || receipt.route_id != statement.route_id
-        || receipt.release_authority != statement.release_authority
+        || &receipt.release_authority != statement.release_authority
     {
         return Err(invalid_statement(
             "control-plane authorization receipt authority substitution",
@@ -2935,9 +3481,7 @@ fn validate_control_plane_authorization_receipt(
             "control-plane authorization receipt policy context mismatch",
         ));
     }
-    if signed_statement.context.provenance_digest.as_deref()
-        != Some(statement.release_digest.as_str())
-    {
+    if signed_statement.context.provenance_digest.as_deref() != Some(statement.release_digest) {
         return Err(invalid_statement(
             "control-plane authorization receipt provenance context mismatch",
         ));
@@ -2984,6 +3528,24 @@ fn validate_control_plane_authorization_receipt(
 }
 
 fn validate_upstream_response(upstream: &UpstreamResponse) -> Result<(), ProtocolError> {
+    validate_raw_policy_headers(&upstream.selected_raw_policy_headers_b64)?;
+    let canonical = CanonicalUpstreamResponse {
+        status: upstream.status,
+        selected_raw_policy_headers_b64: &upstream.selected_raw_policy_headers_b64,
+        body_digest: &upstream.body_digest,
+    };
+    let digest = sha256_prefixed(&canonical_json_bytes(&canonical)?);
+    if upstream.canonical_digest != digest {
+        return Err(invalid_statement(
+            "upstream_response.canonical_digest does not match the canonical upstream response binding",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_raw_policy_headers(
+    selected_raw_policy_headers_b64: &BTreeMap<String, Vec<String>>,
+) -> Result<(), ProtocolError> {
     const REQUIRED_HEADERS: [&str; 3] = ["content-encoding", "content-length", "content-type"];
     const ALLOWED_HEADERS: [&str; 9] = [
         "cache-control",
@@ -2998,13 +3560,13 @@ fn validate_upstream_response(upstream: &UpstreamResponse) -> Result<(), Protoco
     ];
     if REQUIRED_HEADERS
         .iter()
-        .any(|name| !upstream.selected_raw_policy_headers_b64.contains_key(*name))
+        .any(|name| !selected_raw_policy_headers_b64.contains_key(*name))
     {
         return Err(invalid_statement(
             "upstream_response.selected_raw_policy_headers_b64 is missing a required header",
         ));
     }
-    for (name, values) in &upstream.selected_raw_policy_headers_b64 {
+    for (name, values) in selected_raw_policy_headers_b64 {
         if !ALLOWED_HEADERS.contains(&name.as_str()) {
             return Err(invalid_statement(format!(
                 "upstream_response.selected_raw_policy_headers_b64 contains unsupported header {name}"
@@ -3023,17 +3585,6 @@ fn validate_upstream_response(upstream: &UpstreamResponse) -> Result<(), Protoco
                 MAX_HEADER_VALUE_BYTES,
             )?;
         }
-    }
-    let canonical = CanonicalUpstreamResponse {
-        status: upstream.status,
-        selected_raw_policy_headers_b64: &upstream.selected_raw_policy_headers_b64,
-        body_digest: &upstream.body_digest,
-    };
-    let digest = sha256_prefixed(&canonical_json_bytes(&canonical)?);
-    if upstream.canonical_digest != digest {
-        return Err(invalid_statement(
-            "upstream_response.canonical_digest does not match the canonical upstream response binding",
-        ));
     }
     Ok(())
 }
@@ -3709,6 +4260,130 @@ mod tests {
         }
     }
 
+    fn streaming_statement() -> (StreamingResponseStatement, ReleaseAuthorizationBinding) {
+        let buffered = statement();
+        let authorization_binding = authorization_binding_for_statement(&buffered);
+        let binding_digest = sha256_prefixed(
+            &canonical_json_ensure_ascii_bytes(&authorization_binding)
+                .expect("canonical streaming authorization binding"),
+        );
+        let binding_commitment = AuthorizationBindingCommitment {
+            attempt_id: authorization_binding.attempt_id.clone(),
+            flow_id: authorization_binding.flow_id.clone(),
+            principal_id: authorization_binding.principal_id.clone(),
+            route_id: authorization_binding.route_id.clone(),
+            credential_id: authorization_binding.credential_id.clone(),
+            credential_version: authorization_binding.credential_version,
+            policy_hash: authorization_binding.policy_hash.clone(),
+            request_digest: authorization_binding.request_digest.clone(),
+            operation_digest: authorization_binding
+                .operation_digest
+                .clone()
+                .expect("streaming operation digest"),
+            operation_context_digest: sha256_prefixed(
+                &canonical_json_ensure_ascii_bytes(&authorization_binding.operation_context)
+                    .expect("canonical streaming operation context"),
+            ),
+            require_jit_grant: authorization_binding.require_jit_grant,
+            shared_quotas: authorization_binding.shared_quotas.clone(),
+        };
+        let selected_raw_policy_headers_b64 = buffered
+            .upstream_response
+            .selected_raw_policy_headers_b64
+            .clone();
+        let upstream_body_digest = buffered.upstream_response.body_digest.clone();
+        let upstream_body_bytes = 23;
+        let upstream_canonical_digest = sha256_prefixed(
+            &canonical_json_bytes(&StreamingUpstreamResponseDigest {
+                status: buffered.upstream_response.status,
+                selected_raw_policy_headers_b64: &selected_raw_policy_headers_b64,
+                body_digest: &upstream_body_digest,
+                body_bytes: upstream_body_bytes,
+            })
+            .expect("canonical streaming upstream response"),
+        );
+        let content_type = "application/json".to_string();
+        let selected_wire_headers = StreamingWireHeaders {
+            connection: "close".to_string(),
+            content_type: content_type.clone(),
+            trailer: "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256".to_string(),
+            transfer_encoding: "chunked".to_string(),
+        };
+        let selected_wire_headers_digest = sha256_prefixed(
+            &canonical_json_bytes(&selected_wire_headers)
+                .expect("canonical streaming response wire headers"),
+        );
+        let control_plane_authorization_receipt_sha256 = sha256_prefixed(
+            &canonical_json_bytes(&buffered.control_plane_authorization_receipt)
+                .expect("canonical streaming authorization receipt"),
+        );
+
+        let streaming = StreamingResponseStatement {
+            api_version: STREAMING_RESPONSE_STATEMENT_API_VERSION.to_string(),
+            issued_at_unix: buffered.issued_at_unix,
+            client_nonce: buffered.client_nonce.clone(),
+            client_request_digest: buffered.client_request_digest.clone(),
+            principal_id: buffered.principal_id.clone(),
+            route_id: buffered.route_id.clone(),
+            request_digest: buffered.request_digest.clone(),
+            operation_digest: buffered.operation_digest.clone(),
+            release_authority: buffered.release_authority.clone(),
+            authorization_binding_validation: AuthorizationBindingValidation {
+                status: "validated".to_string(),
+                binding_commitment,
+                binding_digest,
+            },
+            control_plane_authorization_receipt: buffered
+                .control_plane_authorization_receipt
+                .clone(),
+            control_plane_authorization_receipt_sha256,
+            upstream_response: StreamingUpstreamResponse {
+                status: buffered.upstream_response.status,
+                selected_raw_policy_headers_b64,
+                body_digest: upstream_body_digest,
+                body_bytes: upstream_body_bytes,
+                canonical_digest: upstream_canonical_digest,
+            },
+            released_response: StreamingReleasedResponse {
+                status: buffered.response.status,
+                content_type,
+                selected_wire_headers,
+                selected_wire_headers_digest,
+                body_digest: buffered.response.body_digest.clone(),
+                body_bytes: 17,
+                framing: "http1.1-chunked-trailers".to_string(),
+                completion: "normal-eof".to_string(),
+                trailer_names: vec![
+                    "X-Serverware-Stream-Proof-B64".to_string(),
+                    "X-Serverware-Stream-Proof-SHA256".to_string(),
+                ],
+            },
+            policy_digest: buffered.policy_digest.clone(),
+            runtime_manifest_digest: buffered.runtime_manifest_digest.clone(),
+            data_plane_binary_digest: buffered.data_plane_binary_digest.clone(),
+            release_digest: buffered.release_digest.clone(),
+            server_instance: buffered.server_instance.clone(),
+            tls_channel_binding: StreamingTlsChannelBinding {
+                binding_type: "tls-exporter".to_string(),
+                exporter_label: "EXPORTER-Serverware-Proxy-Stream-v1".to_string(),
+                value: buffered.tls_channel_binding.value.clone(),
+            },
+        };
+        (streaming, authorization_binding)
+    }
+
+    fn validate_test_streaming_statement(
+        statement: &StreamingResponseStatement,
+        authorization_binding: &ReleaseAuthorizationBinding,
+    ) -> Result<(), ProtocolError> {
+        validate_streaming_response_statement_with_control_plane_response_key_at(
+            statement,
+            authorization_binding,
+            &pinned_control_plane_response_verifying_key(),
+            statement.issued_at_unix * 1000,
+        )
+    }
+
     #[test]
     fn custody_proof_binding_rejects_calendar_dispatch_quota_tampering() {
         let mut statement = statement();
@@ -3767,8 +4442,11 @@ mod tests {
             .control_plane_authorization_receipt
             .response
             .body_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&response_body);
-        validate_release_authorization_binding(&statement, &binding)
-            .expect("exact calendar dispatch quota proof binding");
+        validate_release_authorization_binding(
+            &ResponseStatementAuthorityView::from(&statement),
+            &binding,
+        )
+        .expect("exact calendar dispatch quota proof binding");
 
         let mut tampered: Value =
             parse_json_without_duplicate_keys(&response_body).expect("dispatch body JSON");
@@ -3781,10 +4459,13 @@ mod tests {
             .response
             .body_b64 = general_purpose::URL_SAFE_NO_PAD
             .encode(canonical_json_bytes(&tampered).expect("tampered dispatch body"));
-        assert!(validate_release_authorization_binding(&statement, &binding)
-            .expect_err("calendar proof must require the exact window end")
-            .message
-            .contains("window end is missing"));
+        assert!(validate_release_authorization_binding(
+            &ResponseStatementAuthorityView::from(&statement),
+            &binding,
+        )
+        .expect_err("calendar proof must require the exact window end")
+        .message
+        .contains("window end is missing"));
     }
 
     fn request_bytes(
@@ -3804,6 +4485,25 @@ mod tests {
             "requestId": request_id(id),
         }))
         .expect("canonical request")
+    }
+
+    fn streaming_request_bytes(
+        runtime: &CustodyRuntime,
+        id: u8,
+        statement: StreamingResponseStatement,
+        authorization_binding: ReleaseAuthorizationBinding,
+    ) -> Vec<u8> {
+        canonical_json_bytes(&json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": runtime.boot_id(),
+            "operation": STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+            "params": {
+                "statement": statement,
+                "authorization_binding": authorization_binding,
+            },
+            "requestId": request_id(id),
+        }))
+        .expect("canonical streaming request")
     }
 
     fn response_value(bytes: &[u8]) -> Value {
@@ -4166,6 +4866,371 @@ mod tests {
     }
 
     #[test]
+    fn streaming_sign_returns_a_verifiable_signature_and_exact_retry_is_idempotent() {
+        let runtime = runtime();
+        let (statement, authorization_binding) = streaming_statement();
+        validate_test_streaming_statement(&statement, &authorization_binding)
+            .expect("valid streaming statement fixture");
+        let canonical_statement =
+            canonical_json_bytes(&statement).expect("canonical streaming statement");
+        let expected_digest = sha256_prefixed(&canonical_statement);
+
+        let first = response_value(
+            &runtime
+                .handle_canonical_request(&streaming_request_bytes(
+                    &runtime,
+                    42,
+                    statement.clone(),
+                    authorization_binding.clone(),
+                ))
+                .expect("streaming sign response"),
+        );
+        assert_eq!(first["ok"], true, "unexpected response: {first}");
+        assert_eq!(first["result"]["statementDigest"], expected_digest);
+        let signature_bytes: [u8; 64] = general_purpose::URL_SAFE_NO_PAD
+            .decode(
+                first["result"]["signature"]
+                    .as_str()
+                    .expect("signature")
+                    .strip_prefix("ed25519:")
+                    .expect("signature prefix"),
+            )
+            .expect("base64url signature")
+            .try_into()
+            .expect("signature length");
+        VerifyingKey::from(&SigningKey::from_bytes(&[7u8; 32]))
+            .verify(
+                &canonical_statement,
+                &Signature::from_bytes(&signature_bytes),
+            )
+            .expect("valid streaming signature");
+
+        let retry = response_value(
+            &runtime
+                .handle_canonical_request(&streaming_request_bytes(
+                    &runtime,
+                    43,
+                    statement,
+                    authorization_binding,
+                ))
+                .expect("streaming retry response"),
+        );
+        assert_eq!(retry["ok"], true, "unexpected retry: {retry}");
+        assert_eq!(retry["result"], first["result"]);
+    }
+
+    #[test]
+    fn streaming_statement_rejects_derived_commitment_and_domain_mutations() {
+        let (valid, authorization_binding) = streaming_statement();
+        validate_test_streaming_statement(&valid, &authorization_binding)
+            .expect("valid streaming fixture");
+
+        let mut wrong_upstream_digest = valid.clone();
+        wrong_upstream_digest.upstream_response.body_bytes += 1;
+        assert!(
+            validate_test_streaming_statement(&wrong_upstream_digest, &authorization_binding,)
+                .expect_err("upstream byte-count substitution")
+                .message
+                .contains("canonical_digest")
+        );
+
+        let mut wrong_wire_headers = valid.clone();
+        wrong_wire_headers
+            .released_response
+            .selected_wire_headers
+            .transfer_encoding = "identity".to_string();
+        assert!(
+            validate_test_streaming_statement(&wrong_wire_headers, &authorization_binding)
+                .expect_err("wire-header substitution")
+                .message
+                .contains("exact streaming proof framing")
+        );
+
+        let mut wrong_trailers = valid.clone();
+        wrong_trailers.released_response.trailer_names.reverse();
+        assert!(
+            validate_test_streaming_statement(&wrong_trailers, &authorization_binding)
+                .expect_err("trailer-order substitution")
+                .message
+                .contains("completion framing")
+        );
+
+        let mut wrong_exporter_domain = valid.clone();
+        wrong_exporter_domain.tls_channel_binding.exporter_label =
+            "EXPORTER-Serverware-Proxy-v2".to_string();
+        assert!(
+            validate_test_streaming_statement(&wrong_exporter_domain, &authorization_binding,)
+                .expect_err("buffered exporter replay")
+                .message
+                .contains("streaming TLS exporter domain")
+        );
+
+        let mut wrong_binding_commitment = valid.clone();
+        wrong_binding_commitment
+            .authorization_binding_validation
+            .binding_commitment
+            .operation_context_digest = digest(99);
+        assert!(validate_test_streaming_statement(
+            &wrong_binding_commitment,
+            &authorization_binding,
+        )
+        .expect_err("authorization commitment substitution")
+        .message
+        .contains("does not match the release binding"));
+
+        let mut wrong_receipt_digest = valid;
+        wrong_receipt_digest.control_plane_authorization_receipt_sha256 = digest(98);
+        assert!(
+            validate_test_streaming_statement(&wrong_receipt_digest, &authorization_binding,)
+                .expect_err("authorization receipt digest substitution")
+                .message
+                .contains("does not match the receipt")
+        );
+    }
+
+    #[test]
+    fn shared_attempt_ledger_rejects_buffered_streaming_cross_domain_replay() {
+        let buffered_first_runtime = runtime();
+        let buffered = statement();
+        let (streaming, streaming_binding) = streaming_statement();
+        assert_eq!(
+            response_value(
+                &buffered_first_runtime
+                    .handle_canonical_request(
+                        &request_bytes(&buffered_first_runtime, 44, buffered,)
+                    )
+                    .expect("buffered-first response"),
+            )["ok"],
+            true
+        );
+        let rejected_streaming = response_value(
+            &buffered_first_runtime
+                .handle_canonical_request(&streaming_request_bytes(
+                    &buffered_first_runtime,
+                    45,
+                    streaming,
+                    streaming_binding,
+                ))
+                .expect("cross-domain response"),
+        );
+        assert_eq!(
+            rejected_streaming["error"]["code"],
+            "attempt_statement_substitution"
+        );
+
+        let streaming_first_runtime = runtime();
+        let (streaming, streaming_binding) = streaming_statement();
+        assert_eq!(
+            response_value(
+                &streaming_first_runtime
+                    .handle_canonical_request(&streaming_request_bytes(
+                        &streaming_first_runtime,
+                        46,
+                        streaming,
+                        streaming_binding,
+                    ))
+                    .expect("streaming-first response"),
+            )["ok"],
+            true
+        );
+        let rejected_buffered = response_value(
+            &streaming_first_runtime
+                .handle_canonical_request(&request_bytes(&streaming_first_runtime, 47, statement()))
+                .expect("reverse cross-domain response"),
+        );
+        assert_eq!(
+            rejected_buffered["error"]["code"],
+            "attempt_statement_substitution"
+        );
+    }
+
+    #[test]
+    fn concurrent_buffered_and_streaming_attempts_have_one_domain_winner() {
+        let runtime = std::sync::Arc::new(runtime());
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let buffered_runtime = std::sync::Arc::clone(&runtime);
+        let buffered_barrier = std::sync::Arc::clone(&barrier);
+        let buffered = std::thread::spawn(move || {
+            let request = request_bytes(&buffered_runtime, 51, statement());
+            buffered_barrier.wait();
+            response_value(
+                &buffered_runtime
+                    .handle_canonical_request(&request)
+                    .expect("concurrent buffered response"),
+            )
+        });
+        let streaming_runtime = std::sync::Arc::clone(&runtime);
+        let streaming = std::thread::spawn(move || {
+            let (statement, binding) = streaming_statement();
+            let request = streaming_request_bytes(&streaming_runtime, 52, statement, binding);
+            barrier.wait();
+            response_value(
+                &streaming_runtime
+                    .handle_canonical_request(&request)
+                    .expect("concurrent streaming response"),
+            )
+        });
+
+        let responses = [
+            buffered.join().expect("buffered worker"),
+            streaming.join().expect("streaming worker"),
+        ];
+        assert_eq!(
+            responses
+                .iter()
+                .filter(|response| response["ok"] == true)
+                .count(),
+            1
+        );
+        assert_eq!(
+            responses
+                .iter()
+                .filter(|response| {
+                    response["error"]["code"] == "attempt_statement_substitution"
+                })
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn buffered_and_streaming_operations_reject_each_others_statement_types_before_claim() {
+        let buffered_operation_runtime = runtime();
+        let (streaming, streaming_binding) = streaming_statement();
+        let wrong_buffered_request = canonical_json_bytes(&json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": buffered_operation_runtime.boot_id(),
+            "operation": RESPONSE_PROOF_SIGN_OPERATION,
+            "params": {
+                "statement": streaming.clone(),
+                "authorization_binding": streaming_binding.clone(),
+            },
+            "requestId": request_id(53),
+        }))
+        .expect("canonical cross-operation request");
+        let rejected = response_value(
+            &buffered_operation_runtime
+                .handle_canonical_request(&wrong_buffered_request)
+                .expect("buffered operation rejection"),
+        );
+        assert_eq!(rejected["error"]["code"], "invalid_operation_params");
+        assert_eq!(
+            response_value(
+                &buffered_operation_runtime
+                    .handle_canonical_request(&streaming_request_bytes(
+                        &buffered_operation_runtime,
+                        54,
+                        streaming,
+                        streaming_binding,
+                    ))
+                    .expect("valid streaming request after type rejection"),
+            )["ok"],
+            true,
+            "type rejection must not consume the attempt binding"
+        );
+
+        let streaming_operation_runtime = runtime();
+        let buffered = statement();
+        let buffered_binding = authorization_binding_for_statement(&buffered);
+        let wrong_streaming_request = canonical_json_bytes(&json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": streaming_operation_runtime.boot_id(),
+            "operation": STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+            "params": {
+                "statement": buffered.clone(),
+                "authorization_binding": buffered_binding,
+            },
+            "requestId": request_id(55),
+        }))
+        .expect("canonical reverse cross-operation request");
+        let rejected = response_value(
+            &streaming_operation_runtime
+                .handle_canonical_request(&wrong_streaming_request)
+                .expect("streaming operation rejection"),
+        );
+        assert_eq!(rejected["error"]["code"], "invalid_operation_params");
+        assert_eq!(
+            response_value(
+                &streaming_operation_runtime
+                    .handle_canonical_request(&request_bytes(
+                        &streaming_operation_runtime,
+                        56,
+                        buffered,
+                    ))
+                    .expect("valid buffered request after type rejection"),
+            )["ok"],
+            true,
+            "reverse type rejection must not consume the attempt binding"
+        );
+    }
+
+    #[test]
+    fn streaming_attempt_binding_survives_restart_and_invalid_input_does_not_claim_it() {
+        let directory = ledger_directory("streaming-restart");
+        let (statement, authorization_binding) = streaming_statement();
+        let expected_digest =
+            sha256_prefixed(&canonical_json_bytes(&statement).expect("canonical statement"));
+
+        let first_runtime = persistent_runtime(&directory, 51, 61);
+        let mut invalid = statement.clone();
+        invalid.control_plane_authorization_receipt_sha256 = digest(97);
+        let rejected = response_value(
+            &first_runtime
+                .handle_canonical_request(&streaming_request_bytes(
+                    &first_runtime,
+                    48,
+                    invalid,
+                    authorization_binding.clone(),
+                ))
+                .expect("invalid streaming response"),
+        );
+        assert_eq!(rejected["error"]["code"], "invalid_response_statement");
+
+        let accepted = response_value(
+            &first_runtime
+                .handle_canonical_request(&streaming_request_bytes(
+                    &first_runtime,
+                    49,
+                    statement.clone(),
+                    authorization_binding.clone(),
+                ))
+                .expect("valid streaming response"),
+        );
+        assert_eq!(accepted["result"]["statementDigest"], expected_digest);
+        drop(first_runtime);
+
+        let second_runtime = persistent_runtime(&directory, 52, 62);
+        let retry = response_value(
+            &second_runtime
+                .handle_canonical_request(&streaming_request_bytes(
+                    &second_runtime,
+                    49,
+                    statement.clone(),
+                    authorization_binding.clone(),
+                ))
+                .expect("restart retry response"),
+        );
+        assert_eq!(retry["result"]["statementDigest"], expected_digest);
+
+        let mut substituted = statement;
+        substituted.client_nonce = general_purpose::URL_SAFE_NO_PAD.encode([96u8; 32]);
+        let rejected = response_value(
+            &second_runtime
+                .handle_canonical_request(&streaming_request_bytes(
+                    &second_runtime,
+                    50,
+                    substituted,
+                    authorization_binding,
+                ))
+                .expect("restart substitution response"),
+        );
+        assert_eq!(rejected["error"]["code"], "attempt_statement_substitution");
+
+        drop(second_runtime);
+        fs::remove_dir_all(directory).expect("remove streaming restart ledger fixture");
+    }
+
+    #[test]
     fn receipt_context_distinguishes_control_plane_runtime_and_binds_provenance() {
         let valid = statement();
         let response = &valid.control_plane_authorization_receipt.response;
@@ -4524,7 +5589,7 @@ mod tests {
             .authorization_state_observed_at_epoch_ms
             .saturating_add(MAX_RELEASE_AUTHORIZATION_LIFETIME_MS)
             .saturating_add(1);
-        let error = validate_release_authority(&excessive)
+        let error = validate_release_authority(&ResponseStatementAuthorityView::from(&excessive))
             .expect_err("far-future dispatch receipt must not pin the ledger indefinitely");
         assert!(error.message.contains("bounded response-proof"));
     }
@@ -5034,7 +6099,7 @@ mod tests {
     }
 
     #[test]
-    fn custody_exposes_only_response_proof_sign_v2() {
+    fn custody_exposes_exact_buffered_and_streaming_signing_capabilities() {
         let runtime = runtime();
         let hello = json!({
             "apiVersion": PROTOCOL_API_VERSION,
@@ -5050,7 +6115,11 @@ mod tests {
         );
         assert_eq!(
             hello_response["result"]["capabilities"],
-            json!([HELLO_OPERATION, "responseProof.sign/v2"])
+            json!([
+                HELLO_OPERATION,
+                RESPONSE_PROOF_SIGN_OPERATION,
+                STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+            ])
         );
 
         let legacy = json!({

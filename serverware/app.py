@@ -957,6 +957,8 @@ class DataPlaneReleaseAuthorizationReserve(BaseModel):
     def validate_canonical_payload_sizes(
         self,
     ) -> DataPlaneReleaseAuthorizationReserve:
+        if not hmac.compare_digest(self.flow_id, self.attempt_id):
+            raise ValueError("flowId must equal attemptId for atomic release authorization")
         for name, value in (
             ("operationContext", self.operation_context),
             ("canonicalRequest", self.canonical_request),

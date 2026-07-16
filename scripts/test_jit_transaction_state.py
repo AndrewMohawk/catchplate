@@ -1263,7 +1263,7 @@ def exercise_release_policy_authority_race(db: Any, backend: str) -> None:
     }
     reserve_kwargs = {
         "attempt_id": f"attempt:{suffix}",
-        "flow_id": f"flow:{suffix}",
+        "flow_id": f"attempt:{suffix}",
         "principal_id": binding["principal_id"],
         "route_id": binding["route_id"],
         "credential_id": binding["credential_id"],
@@ -2537,7 +2537,7 @@ def release_reserve_kwargs(
 ) -> dict[str, Any]:
     return {
         "attempt_id": attempt_id,
-        "flow_id": f"flow:{attempt_id}",
+        "flow_id": attempt_id,
         **binding,
         "operation_context": {"operation": "test.forward", "account": "acct:test"},
         "shared_quotas": quotas,
@@ -4296,6 +4296,27 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
     if not writer.get("shared_transaction"):
         raise AssertionError(f"test stores cannot share an atomic writer: {writer}")
 
+    mismatched_flow = release_reserve_kwargs(
+        {
+            "principal_id": f"agent:{backend}:mismatched-flow",
+            "route_id": f"route:{backend}:mismatched-flow",
+            "credential_id": "",
+            "credential_version": 0,
+            "policy_hash": "sha256:" + "a" * 64,
+            "request_digest": "sha256:" + "b" * 64,
+            "operation_digest": None,
+        },
+        attempt_id=f"attempt:{backend}:mismatched-flow",
+        quotas=[],
+        require_jit_grant=False,
+    )
+    mismatched_flow["flow_id"] = f"flow:{mismatched_flow['attempt_id']}"
+    assert_raises(
+        db.ReleaseAuthorizationError,
+        lambda: db.reserve_release_authorization(**mismatched_flow),
+        "atomic release reserve accepted a flow ID distinct from its attempt ID",
+    )
+
     multi_credential = db.create_credential(
         name=f"{backend} atomic multi-grant credential",
         kind="bearer",
@@ -5192,7 +5213,7 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
         payload = {
             "apiVersion": "serverware.releaseAuthorizationReserve/v1",
             "attemptId": attempt_id,
-            "flowId": f"flow:{attempt_id}",
+            "flowId": attempt_id,
             "principalId": principal_id,
             "routeId": route_id,
             "credentialRef": credential_id,
@@ -5428,6 +5449,18 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
             ),
             409,
         )
+        mismatched_flow = reserve_payload(f"attempt:{backend}:mismatched-flow")
+        mismatched_flow["flowId"] = f"flow:{mismatched_flow['attemptId']}"
+        try:
+            app_module.DataPlaneReleaseAuthorizationReserve.model_validate(
+                mismatched_flow
+            )
+        except app_module.ValidationError:
+            pass
+        else:
+            raise AssertionError(
+                "reserve request model accepted a flow ID distinct from its attempt ID"
+            )
         try:
             app_module.DataPlaneReleaseAuthorizationReserve.model_validate(
                 {

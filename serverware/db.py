@@ -15262,6 +15262,10 @@ def reserve_release_authorization(
         maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
     )
     flow_id = _release_text("release authorization flow_id", flow_id)
+    if not hmac.compare_digest(flow_id, attempt_id):
+        raise ReleaseAuthorizationError(
+            "release authorization flow_id must equal attempt_id"
+        )
     principal_id = _release_text("release authorization principal_id", principal_id)
     route_id = _release_text("release authorization route_id", route_id)
     if credential_id:

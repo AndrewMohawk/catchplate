@@ -2788,11 +2788,19 @@ fn validate_streaming_authorization_binding(statement: &Value) -> Result<Value, 
         "require_jit_grant",
         "shared_quotas",
     ];
-    const QUOTA_FIELDS: [&str; 5] = [
+    const FIXED_QUOTA_FIELDS: [&str; 6] = [
         "counter_key",
         "constraint_id",
         "operation",
+        "window_kind",
         "window_seconds",
+        "max_count",
+    ];
+    const CALENDAR_QUOTA_FIELDS: [&str; 5] = [
+        "counter_key",
+        "constraint_id",
+        "operation",
+        "window_kind",
         "max_count",
     ];
     let validation = required_object(statement, "authorization_binding_validation")?;
@@ -2893,11 +2901,20 @@ fn validate_streaming_authorization_binding(statement: &Value) -> Result<Value, 
         let quota = quota
             .as_object()
             .ok_or("streaming authorization binding quota is not an object")?;
-        require_exact_fields(
-            quota,
-            &QUOTA_FIELDS,
-            "streaming authorization binding quota",
-        )?;
+        let window_kind = quota
+            .get("window_kind")
+            .and_then(Value::as_str)
+            .ok_or("streaming authorization binding quota window_kind is invalid")?;
+        let quota_fields = match window_kind {
+            "fixed" => &FIXED_QUOTA_FIELDS[..],
+            "utcDay" | "utcIsoWeek" | "utcMonth" => &CALENDAR_QUOTA_FIELDS[..],
+            _ => {
+                return Err(
+                    "streaming authorization binding quota window_kind is invalid".to_string(),
+                )
+            }
+        };
+        require_exact_fields(quota, quota_fields, "streaming authorization binding quota")?;
         let counter_key = quota
             .get("counter_key")
             .and_then(Value::as_str)
@@ -2916,13 +2933,17 @@ fn validate_streaming_authorization_binding(statement: &Value) -> Result<Value, 
                 return Err("streaming authorization binding quota operation is invalid".to_string())
             }
         }
-        if !(1..=31_536_000).contains(
-            &quota
+        let window_is_valid = match window_kind {
+            "fixed" => quota
                 .get("window_seconds")
                 .and_then(Value::as_u64)
-                .unwrap_or(0),
-        ) || !(1..=1_000_000_000)
-            .contains(&quota.get("max_count").and_then(Value::as_u64).unwrap_or(0))
+                .is_some_and(|value| (1..=31_536_000).contains(&value)),
+            "utcDay" | "utcIsoWeek" | "utcMonth" => !quota.contains_key("window_seconds"),
+            _ => false,
+        };
+        if !window_is_valid
+            || !(1..=1_000_000_000)
+                .contains(&quota.get("max_count").and_then(Value::as_u64).unwrap_or(0))
             || previous_counter_key.is_some_and(|previous| previous >= counter_key)
         {
             return Err("streaming authorization binding quota is invalid".to_string());
@@ -5253,6 +5274,94 @@ mod tests {
         });
         resign_streaming_attestation(&mut proof, verifier_key);
         (proof, nonce_bytes, response_key)
+    }
+
+    fn streaming_statement_with_quota(window_kind: &str, window_seconds: Option<u64>) -> Value {
+        let verifier_key = SigningKey::from_bytes(&[11u8; 32]);
+        let (proof, _, _) = streaming_proof(&verifier_key);
+        let mut statement = proof["streaming_response_statement"].clone();
+        let mut quota = json!({
+            "counter_key":digest(30),
+            "constraint_id":"quota:proof-test",
+            "operation":"tweets.create",
+            "window_kind":window_kind,
+            "max_count":1,
+        });
+        if let Some(window_seconds) = window_seconds {
+            quota
+                .as_object_mut()
+                .expect("quota commitment")
+                .insert("window_seconds".to_string(), json!(window_seconds));
+        }
+        statement["authorization_binding_validation"]["binding_commitment"]["shared_quotas"] =
+            json!([quota]);
+        statement
+    }
+
+    #[test]
+    fn streaming_authorization_binding_accepts_fixed_and_calendar_quota_commitments() {
+        for (window_kind, window_seconds) in [
+            ("fixed", Some(86_400)),
+            ("utcDay", None),
+            ("utcIsoWeek", None),
+            ("utcMonth", None),
+        ] {
+            let statement = streaming_statement_with_quota(window_kind, window_seconds);
+            let binding = validate_streaming_authorization_binding(&statement)
+                .unwrap_or_else(|error| panic!("valid {window_kind} quota: {error}"));
+            let quota = &binding["shared_quotas"][0];
+            assert_eq!(quota["window_kind"], window_kind);
+            assert_eq!(
+                quota.get("window_seconds").and_then(Value::as_u64),
+                window_seconds
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_authorization_binding_rejects_quota_shape_substitution() {
+        let fixed_without_seconds = streaming_statement_with_quota("fixed", None);
+        assert!(
+            validate_streaming_authorization_binding(&fixed_without_seconds)
+                .expect_err("fixed quota without window_seconds")
+                .contains("missing or unexpected fields")
+        );
+
+        let calendar_with_seconds = streaming_statement_with_quota("utcDay", Some(86_400));
+        assert!(
+            validate_streaming_authorization_binding(&calendar_with_seconds)
+                .expect_err("calendar quota with window_seconds")
+                .contains("missing or unexpected fields")
+        );
+
+        let mut missing_window_kind = streaming_statement_with_quota("fixed", Some(60));
+        missing_window_kind["authorization_binding_validation"]["binding_commitment"]
+            ["shared_quotas"][0]
+            .as_object_mut()
+            .expect("quota commitment")
+            .remove("window_kind");
+        assert!(
+            validate_streaming_authorization_binding(&missing_window_kind)
+                .expect_err("quota without window_kind")
+                .contains("window_kind is invalid")
+        );
+
+        let mut unexpected_field = streaming_statement_with_quota("utcMonth", None);
+        unexpected_field["authorization_binding_validation"]["binding_commitment"]["shared_quotas"]
+            [0]
+        .as_object_mut()
+        .expect("quota commitment")
+        .insert("calendar_window".to_string(), json!("utcMonth"));
+        assert!(validate_streaming_authorization_binding(&unexpected_field)
+            .expect_err("quota with unexpected field")
+            .contains("missing or unexpected fields"));
+
+        let unknown_window_kind = streaming_statement_with_quota("sliding", None);
+        assert!(
+            validate_streaming_authorization_binding(&unknown_window_kind)
+                .expect_err("quota with unknown window_kind")
+                .contains("window_kind is invalid")
+        );
     }
 
     fn captured_stream_response() -> StreamResponse {

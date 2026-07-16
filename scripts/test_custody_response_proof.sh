@@ -372,10 +372,15 @@ ARTIFACT_DIR="$(mktemp -d "$TMP_DIR/custody-response-proof.XXXXXX")"
 COLLECTOR_KEY="$ARTIFACT_DIR/collector-key.pem"
 FIRST_PROOF="$ARTIFACT_DIR/proof-before/response-proof.json"
 FIRST_SUMMARY="$ARTIFACT_DIR/proof-before-summary.json"
+STREAMING_PROOF="$ARTIFACT_DIR/stream-proof-before/response-proof.json"
+STREAMING_BODY="$ARTIFACT_DIR/stream-proof-before/response-body.bin"
+STREAMING_SUMMARY="$ARTIFACT_DIR/stream-proof-before-summary.json"
 RECOVERED_PROOF="$ARTIFACT_DIR/proof-after/response-proof.json"
 RECOVERED_SUMMARY="$ARTIFACT_DIR/proof-after-summary.json"
 OUTAGE_HEADERS="$ARTIFACT_DIR/outage-headers.txt"
 OUTAGE_BODY="$ARTIFACT_DIR/outage-body.json"
+STREAMING_OUTAGE_HEADERS="$ARTIFACT_DIR/streaming-outage-headers.txt"
+STREAMING_OUTAGE_BODY="$ARTIFACT_DIR/streaming-outage-body.json"
 RESTART_HEADERS="$ARTIFACT_DIR/restart-headers.txt"
 RESTART_BODY="$ARTIFACT_DIR/restart-body.json"
 LEDGER_BEFORE_RESTART="$ARTIFACT_DIR/ledger-before-restart.json"
@@ -430,7 +435,8 @@ wait_for_unhealthy_custody() {
   return 1
 }
 
-upstream_echo_request_count() {
+upstream_request_count() {
+  local path="$1"
   docker run --rm \
     --network "$CLIENT_NETWORK" \
     --user "$(id -u):$(id -g)" \
@@ -439,8 +445,16 @@ upstream_echo_request_count() {
     "$CLIENT_IMAGE" \
     -fsS \
     --cacert /proof/demo-upstream-ca.pem \
-    'https://demo-upstream:8443/_test/request-count?method=GET&path=/echo' \
+    "https://demo-upstream:8443/_test/request-count?method=GET&path=$path" \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["count"])'
+}
+
+upstream_echo_request_count() {
+  upstream_request_count /echo
+}
+
+upstream_stream_request_count() {
+  upstream_request_count /stream-bytes
 }
 
 wait_for_custody_gate() {
@@ -505,6 +519,40 @@ run_proof() {
     > "$summary_path"
 }
 
+run_stream_proof() {
+  local output_path="$1"
+  local body_path="$2"
+  local summary_path="$3"
+  local output_directory
+  output_directory="$(dirname "$output_path")"
+  if [[ "$(dirname "$body_path")" != "$output_directory" ]]; then
+    echo "streaming proof and body must share one publication directory" >&2
+    return 1
+  fi
+  mkdir -p "$output_directory"
+  chmod 0700 "$output_directory"
+  docker run --rm \
+    --network "$CLIENT_NETWORK" \
+    --user "$(id -u):$(id -g)" \
+    -v "$GATE_CA:/proof/decision-gate-ca-cert.pem:ro" \
+    -v "$COLLECTOR_KEY:/proof/collector-key.pem:ro" \
+    -v "$output_directory:/proof/output" \
+    --entrypoint /usr/local/bin/serverware-proof-client \
+    "$GATE_IMAGE" \
+    --stream \
+    --proxy decision-gate-rs:9090 \
+    --url 'https://demo-upstream:8443/stream-bytes?chunks=2&chunkSize=16' \
+    --ca /proof/decision-gate-ca-cert.pem \
+    --out "/proof/output/$(basename "$output_path")" \
+    --body-out "/proof/output/$(basename "$body_path")" \
+    --collector-key /proof/collector-key.pem \
+    --expected-principal-id agent:demo \
+    --proxy-header "X-Serverware-Agent: demo-agent" \
+    --header "X-Serverware-Agent: demo-agent" \
+    --max-stream-bytes 1048576 \
+    > "$summary_path"
+}
+
 run_failed_raw_proof() {
   local headers_path="$1"
   local body_path="$2"
@@ -530,6 +578,33 @@ run_failed_raw_proof() {
     -H "X-Serverware-Agent: demo-agent" \
     -H "X-Serverware-Proof-Nonce: $nonce" \
     https://demo-upstream:8443/echo
+}
+
+run_failed_raw_stream_proof() {
+  local headers_path="$1"
+  local body_path="$2"
+  local nonce
+  nonce="$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n')"
+  : > "$headers_path"
+  : > "$body_path"
+  docker run --rm \
+    --network "$CLIENT_NETWORK" \
+    --user "$(id -u):$(id -g)" \
+    -v "$GATE_CA:/proof/decision-gate-ca-cert.pem:ro" \
+    -v "$headers_path:/proof/headers.txt" \
+    -v "$body_path:/proof/body.json" \
+    --entrypoint curl \
+    "$CLIENT_IMAGE" \
+    -sS \
+    -D /proof/headers.txt \
+    -o /proof/body.json \
+    -w '%{http_code}' \
+    --proxy http://decision-gate-rs:9090 \
+    --proxy-header "X-Serverware-Agent: demo-agent" \
+    --cacert /proof/decision-gate-ca-cert.pem \
+    -H "X-Serverware-Agent: demo-agent" \
+    -H "X-Serverware-Stream-Proof-Nonce: $nonce" \
+    'https://demo-upstream:8443/stream-bytes?chunks=2&chunkSize=16'
 }
 
 assert_failed_wire_response() {
@@ -678,6 +753,52 @@ assert signature["key_id"] == attestation["response_proof_signing_key_id"], (sig
 assert signature["public_key_pem"] == attestation["response_proof_signing_public_key_pem"], (signature, attestation)
 assert proof["server_statement"]["apiVersion"] == "serverware.proxyResponseStatement/v2", proof
 PY
+run_stream_proof "$STREAMING_PROOF" "$STREAMING_BODY" "$STREAMING_SUMMARY"
+python3 - \
+  "$STREAMING_PROOF" \
+  "$STREAMING_BODY" \
+  "$STREAMING_SUMMARY" \
+  "$ATTESTATION_BEFORE" <<'PY'
+import hashlib
+import json
+import sys
+
+proof_path, body_path, summary_path, attestation_path = sys.argv[1:]
+proof_bytes = open(proof_path, "rb").read()
+proof = json.loads(proof_bytes)
+body = open(body_path, "rb").read()
+summary = json.load(open(summary_path, encoding="utf-8"))
+attestation = json.load(open(attestation_path, encoding="utf-8"))
+
+proof_digest = "sha256:" + hashlib.sha256(proof_bytes).hexdigest()
+body_digest = "sha256:" + hashlib.sha256(body).hexdigest()
+statement = proof["streaming_response_statement"]
+capture = proof["external_capture"]
+released = statement["released_response"]
+signature = proof["server_signature"]
+
+assert summary["ok"] is True and summary["stream_verified"] is True, summary
+assert summary["proof_sha256"] == proof_digest, (summary, proof_digest)
+assert summary["body_sha256"] == body_digest, (summary, body_digest)
+assert summary["body_bytes"] == len(body) == 32, (summary, len(body))
+assert proof["apiVersion"] == "serverware.streamingProxyResponseProof/v1", proof
+assert statement["apiVersion"] == "serverware.streamingResponseStatement/v1", statement
+assert capture["runtime_proof_sha256"].startswith("sha256:"), capture
+assert signature["key_id"] == attestation["response_proof_signing_key_id"], (signature, attestation)
+assert signature["public_key_pem"] == attestation["response_proof_signing_public_key_pem"], (signature, attestation)
+assert attestation["response_proof_signer_hardware_proof"] is False, attestation
+assert attestation["runtime_manifest"]["response_proof_signer_hardware_proof"] is False, attestation
+assert proof["vendor_tee"]["platform"] == "none-dev", proof["vendor_tee"]
+assert capture["released_response"] == released, (capture, statement)
+assert released["body_digest"] == body_digest, (released, body_digest)
+assert released["body_bytes"] == len(body), (released, len(body))
+assert released["framing"] == "http1.1-chunked-trailers", released
+assert released["completion"] == "normal-eof", released
+assert released["trailer_names"] == [
+    "X-Serverware-Stream-Proof-B64",
+    "X-Serverware-Stream-Proof-SHA256",
+], released
+PY
 docker exec "$custody_container" cat /var/lib/serverware-custody/manifest.json \
   > "$LEDGER_BEFORE_RESTART"
 
@@ -689,6 +810,17 @@ assert_failed_wire_response "$outage_http_status" "$OUTAGE_HEADERS" "$OUTAGE_BOD
 outage_upstream_after="$(upstream_echo_request_count)"
 if [[ "$outage_upstream_after" != "$outage_upstream_before" ]]; then
   echo "custody outage request reached the upstream before denial" >&2
+  exit 1
+fi
+streaming_outage_upstream_before="$(upstream_stream_request_count)"
+streaming_outage_http_status="$(run_failed_raw_stream_proof "$STREAMING_OUTAGE_HEADERS" "$STREAMING_OUTAGE_BODY")"
+assert_failed_wire_response \
+  "$streaming_outage_http_status" \
+  "$STREAMING_OUTAGE_HEADERS" \
+  "$STREAMING_OUTAGE_BODY"
+streaming_outage_upstream_after="$(upstream_stream_request_count)"
+if [[ "$streaming_outage_upstream_after" != "$streaming_outage_upstream_before" ]]; then
+  echo "custody outage streaming request reached the upstream before denial" >&2
   exit 1
 fi
 if [[ "$(health_status "$HEALTH_AFTER_OUTAGE")" != "503" ]]; then
@@ -777,4 +909,4 @@ assert proof["server_signature"]["key_id"] == after["response_proof_signing_key_
 PY
 
 restore_ordinary_gate
-echo '{"buffered_custody_response_proof":"pass","hardware_proof":false,"ok":true,"transport":"uds-development"}'
+echo '{"buffered_custody_response_proof":"pass","hardware_proof":false,"ok":true,"streaming_custody_response_proof":"pass","transport":"uds-development"}'

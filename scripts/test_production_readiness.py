@@ -577,6 +577,7 @@ def good_env() -> dict[str, str]:
             "SERVERWARE_POLICY_MIN_SEQUENCE": "1",
             "SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH": "1",
             "SERVERWARE_PROXY_RESPONSE_PROOF_FILE": "/opt/serverware/release/proxy-response-proof.json",
+            "SERVERWARE_PROXY_PROOF_CONTRACT": "buffered-v3",
             "SERVERWARE_PROXY_PROOF_COLLECTOR_COMMAND": "/opt/serverware/bin/serverware-proof-client",
             "SERVERWARE_PROXY_PROOF_ADDRESS": "proxy.prod.internal:8080",
             "SERVERWARE_PROXY_PROOF_URL": "https://proof-target.prod.internal/health",

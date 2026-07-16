@@ -1089,8 +1089,22 @@ PROXY_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
         "body_sha256": sha256_prefixed_bytes(b""),
     }
 )
+PROXY_STREAM_CLIENT_REQUEST_DIGEST = sha256_prefixed_json(
+    {
+        "apiVersion": "serverware.streamingClientProofRequest/v1",
+        "method": "GET",
+        "scheme": "https",
+        "authority": "demo-upstream:8443",
+        "path": "/echo",
+        "query": [],
+        "headers": {"accept": "application/json"},
+        "body_sha256": sha256_prefixed_bytes(b""),
+    }
+)
 PROXY_REQUEST_DIGEST = digest("1")
 PROXY_OPERATION_DIGEST = digest("2")
+PROXY_OPERATION_CONTEXT = {"operation": "demo.echo"}
+PROXY_OPERATION_CONTEXT_DIGEST = sha256_prefixed_json(PROXY_OPERATION_CONTEXT)
 PROXY_SERVER_INSTANCE_ID = "spiffe://prod.serverware.dev/decision-gate/instance-01"
 PROXY_TLS_PEER_LEAF_CERTIFICATE_DIGEST = digest("a")
 FIXTURE_HOST_A_MACHINE_ID = "0123456789abcdef0123456789abcdef"
@@ -1244,7 +1258,13 @@ def resign_proxy_response_proof(
     sign_proxy_vendor_verifier_statement(document, verifier_key_info)
 
 
-def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> dict[str, Any]:
+def proxy_response_proof(
+    provenance_digest: str,
+    *,
+    now: int | None = None,
+    shared_quotas: list[dict[str, Any]] | None = None,
+    dispatch_quotas: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     captured_at = int(time.time()) if now is None else now
     body = b'{"ok":true,"source":"production-proxy"}'
     body_digest = sha256_prefixed_bytes(body)
@@ -1278,6 +1298,21 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
         "type": "tls-exporter",
         "value": PROXY_TLS_CHANNEL_BINDING,
     }
+    attempt_id = digest("a")
+    authorization_binding = {
+        "attempt_id": attempt_id,
+        "flow_id": attempt_id,
+        "principal_id": PROXY_PRINCIPAL_ID,
+        "route_id": "demo.echo",
+        "credential_id": "credential:response-proof",
+        "credential_version": 7,
+        "policy_hash": POLICY_DIGEST,
+        "request_digest": PROXY_REQUEST_DIGEST,
+        "operation_digest": PROXY_OPERATION_DIGEST,
+        "operation_context": PROXY_OPERATION_CONTEXT,
+        "require_jit_grant": True,
+        "shared_quotas": clone_document(shared_quotas or []),
+    }
     release_authority = {
         "authority_mode": "atomic",
         "grant_id": "grant:response-proof",
@@ -1286,8 +1321,10 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
         "credential_version": 7,
         "request_digest": PROXY_REQUEST_DIGEST,
         "operation_digest": PROXY_OPERATION_DIGEST,
-        "attempt_id": digest("a"),
-        "consumption_identity_digest": digest("b"),
+        "attempt_id": attempt_id,
+        "consumption_identity_digest": sha256_prefixed_json(
+            authorization_binding
+        ),
         "authorization_state_at_upstream_dispatch": "dispatching",
         "authorization_state_observed_at_epoch_ms": captured_at * 1000,
         "reservation_expires_at_epoch_ms": captured_at * 1000 + 300_000,
@@ -1367,13 +1404,275 @@ def proxy_response_proof(provenance_digest: str, *, now: int | None = None) -> d
             },
         },
     }
-    receipt = control_plane_authorization_receipt(document)
+    receipt = control_plane_authorization_receipt(
+        document,
+        quotas=dispatch_quotas,
+    )
     document["external_capture"]["control_plane_authorization_receipt"] = clone_document(
         receipt
     )
     document["server_statement"]["control_plane_authorization_receipt"] = receipt
     resign_proxy_response_proof(document)
     return document
+
+
+def streaming_attested_claims(
+    document: dict[str, Any],
+    statement_digest: str,
+    response_signing_key_id: str,
+) -> dict[str, Any]:
+    statement = document["streaming_response_statement"]
+    upstream = statement["upstream_response"]
+    released = statement["released_response"]
+    tls_channel_binding = statement["tls_channel_binding"]
+    server_instance = statement["server_instance"]
+    authorization_validation = statement["authorization_binding_validation"]
+    return {
+        "streaming_response_statement_api_version": statement["apiVersion"],
+        "streaming_response_statement_sha256": statement_digest,
+        "issued_at_unix": statement["issued_at_unix"],
+        "client_nonce_sha256": sha256_prefixed_bytes(b64d(statement["client_nonce"])),
+        "client_request_digest": statement["client_request_digest"],
+        "principal_id": statement["principal_id"],
+        "route_id": statement["route_id"],
+        "request_digest": statement["request_digest"],
+        "operation_digest": statement["operation_digest"],
+        "release_authority": statement["release_authority"],
+        "authorization_binding_digest": authorization_validation["binding_digest"],
+        "control_plane_authorization_receipt_sha256": statement[
+            "control_plane_authorization_receipt_sha256"
+        ],
+        "upstream_status": upstream["status"],
+        "upstream_selected_raw_policy_headers_digest": sha256_prefixed_json(
+            upstream["selected_raw_policy_headers_b64"]
+        ),
+        "upstream_body_digest": upstream["body_digest"],
+        "upstream_body_bytes": upstream["body_bytes"],
+        "upstream_canonical_digest": upstream["canonical_digest"],
+        "released_response_status": released["status"],
+        "released_response_content_type": released["content_type"],
+        "selected_response_wire_headers_digest": released[
+            "selected_wire_headers_digest"
+        ],
+        "released_response_body_digest": released["body_digest"],
+        "released_response_body_bytes": released["body_bytes"],
+        "response_framing": released["framing"],
+        "response_completion": released["completion"],
+        "response_trailer_names": released["trailer_names"],
+        "policy_digest": statement["policy_digest"],
+        "runtime_manifest_digest": statement["runtime_manifest_digest"],
+        "data_plane_binary_digest": statement["data_plane_binary_digest"],
+        "release_digest": statement["release_digest"],
+        "server_instance_id": server_instance["id"],
+        "server_instance_identity_digest": server_instance["identity_digest"],
+        "tls_channel_binding_type": tls_channel_binding["type"],
+        "tls_exporter_label": tls_channel_binding["exporter_label"],
+        "tls_channel_binding_sha256": sha256_prefixed_json(tls_channel_binding),
+        "response_signing_key_id": response_signing_key_id,
+    }
+
+
+def resign_streaming_response_proof(
+    document: dict[str, Any],
+    *,
+    verifier_key_info: dict[str, Any] | None = None,
+    sync_attested_claims: bool = True,
+) -> None:
+    response_key = proxy_response_key_info()
+    statement = document["streaming_response_statement"]
+    statement_digest = sha256_prefixed_json(statement)
+    document["server_signature"] = {
+        "algorithm": "Ed25519",
+        "key_id": response_key["key_id"],
+        "public_key_pem": response_key["public_key_pem"],
+        "signature": "ed25519:"
+        + b64e(response_key["key"].sign(canonical_json(statement).encode("utf-8"))),
+    }
+    vendor_tee = document["vendor_tee"]
+    vendor_tee["quote_sha256"] = sha256_prefixed_json(vendor_tee["quote"])
+    verifier_statement = vendor_tee["trusted_verifier"]["statement"]
+    verifier_statement.update(
+        {
+            "tee_platform": vendor_tee["platform"],
+            "quote_provider": vendor_tee["provider"],
+            "vendor_quote_sha256": vendor_tee["quote_sha256"],
+            "streaming_response_statement_sha256": statement_digest,
+            "response_signing_key_id": response_key["key_id"],
+        }
+    )
+    if sync_attested_claims:
+        verifier_statement["attested_claims"] = streaming_attested_claims(
+            document,
+            statement_digest,
+            response_key["key_id"],
+        )
+    sign_proxy_vendor_verifier_statement(document, verifier_key_info)
+    runtime_proof = {
+        "apiVersion": "serverware.streamingResponseRuntimeProof/v1",
+        "kind": "ServerwareStreamingResponseRuntimeProof",
+        "streaming_response_statement": statement,
+        "streaming_response_statement_sha256": statement_digest,
+        "server_signature": document["server_signature"],
+        "vendor_tee": vendor_tee,
+    }
+    document["external_capture"][
+        "streaming_response_statement_sha256"
+    ] = statement_digest
+    document["external_capture"]["runtime_proof_sha256"] = sha256_prefixed_json(
+        runtime_proof
+    )
+    sign_proxy_external_capture(document)
+
+
+def streaming_response_proof(
+    provenance_digest: str,
+    *,
+    body: bytes | None = None,
+    now: int | None = None,
+) -> tuple[dict[str, Any], bytes]:
+    captured_at = int(time.time()) if now is None else now
+    released_body = body or b'{"ok":true,"source":"production-stream"}'
+    released_body_digest = sha256_prefixed_bytes(released_body)
+    buffered = proxy_response_proof(provenance_digest, now=captured_at)
+    release_authority = clone_document(buffered["server_statement"]["release_authority"])
+    receipt = clone_document(buffered["server_statement"]["control_plane_authorization_receipt"])
+    raw_headers = clone_document(
+        buffered["server_statement"]["upstream_response"][
+            "selected_raw_policy_headers_b64"
+        ]
+    )
+    raw_headers["content-length"] = [b64e(str(len(released_body)).encode("ascii"))]
+    upstream_response = {
+        "status": 200,
+        "selected_raw_policy_headers_b64": raw_headers,
+        "body_digest": released_body_digest,
+        "body_bytes": len(released_body),
+    }
+    upstream_response["canonical_digest"] = sha256_prefixed_json(upstream_response)
+    content_type = "application/json"
+    wire_headers = {
+        "connection": "close",
+        "content-type": content_type,
+        "trailer": "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256",
+        "transfer-encoding": "chunked",
+    }
+    released_response = {
+        "status": 200,
+        "content_type": content_type,
+        "selected_wire_headers": wire_headers,
+        "selected_wire_headers_digest": sha256_prefixed_json(wire_headers),
+        "body_digest": released_body_digest,
+        "body_bytes": len(released_body),
+        "framing": "http1.1-chunked-trailers",
+        "completion": "normal-eof",
+        "trailer_names": [
+            "X-Serverware-Stream-Proof-B64",
+            "X-Serverware-Stream-Proof-SHA256",
+        ],
+    }
+    binding_commitment = {
+        "attempt_id": release_authority["attempt_id"],
+        "flow_id": release_authority["attempt_id"],
+        "principal_id": PROXY_PRINCIPAL_ID,
+        "route_id": "demo.echo",
+        "credential_id": release_authority["credential_ref"],
+        "credential_version": release_authority["credential_version"],
+        "policy_hash": POLICY_DIGEST,
+        "request_digest": PROXY_REQUEST_DIGEST,
+        "operation_digest": PROXY_OPERATION_DIGEST,
+        "operation_context_digest": PROXY_OPERATION_CONTEXT_DIGEST,
+        "require_jit_grant": True,
+        "shared_quotas": [],
+    }
+    receipt_digest = sha256_prefixed_json(receipt)
+    tls_channel_binding = {
+        "type": "tls-exporter",
+        "exporter_label": verify_release_completion.STREAMING_TLS_EXPORTER_LABEL,
+        "value": PROXY_TLS_CHANNEL_BINDING,
+    }
+    statement = {
+        "apiVersion": "serverware.streamingResponseStatement/v1",
+        "issued_at_unix": captured_at,
+        "client_nonce": PROXY_CLIENT_NONCE,
+        "client_request_digest": PROXY_STREAM_CLIENT_REQUEST_DIGEST,
+        "principal_id": PROXY_PRINCIPAL_ID,
+        "route_id": "demo.echo",
+        "request_digest": PROXY_REQUEST_DIGEST,
+        "operation_digest": PROXY_OPERATION_DIGEST,
+        "release_authority": clone_document(release_authority),
+        "authorization_binding_validation": {
+            "status": "validated",
+            "binding_commitment": clone_document(binding_commitment),
+            "binding_digest": release_authority["consumption_identity_digest"],
+        },
+        "control_plane_authorization_receipt": clone_document(receipt),
+        "control_plane_authorization_receipt_sha256": receipt_digest,
+        "upstream_response": clone_document(upstream_response),
+        "released_response": clone_document(released_response),
+        "policy_digest": POLICY_DIGEST,
+        "runtime_manifest_digest": digest("7"),
+        "data_plane_binary_digest": digest("9"),
+        "release_digest": provenance_digest,
+        "server_instance": {
+            "id": PROXY_SERVER_INSTANCE_ID,
+            "identity_digest": sha256_prefixed_bytes(
+                PROXY_SERVER_INSTANCE_ID.encode("utf-8")
+            ),
+        },
+        "tls_channel_binding": clone_document(tls_channel_binding),
+    }
+    verifier_statement = clone_document(
+        buffered["vendor_tee"]["trusted_verifier"]["statement"]
+    )
+    verifier_statement.pop("server_statement_sha256", None)
+    verifier_statement.pop("attested_claims", None)
+    document = {
+        "apiVersion": "serverware.streamingProxyResponseProof/v1",
+        "kind": "ServerwareStreamingProxyResponseProof",
+        "external_capture": {
+            "apiVersion": "serverware.streamingProxyResponseCapture/v1",
+            "environment": "production",
+            "collection_mode": "strict-incremental-stream-capture",
+            "classification": "verified-complete-stream",
+            "captured_at_unix": captured_at,
+            "client_nonce": PROXY_CLIENT_NONCE,
+            "client_request_digest": PROXY_STREAM_CLIENT_REQUEST_DIGEST,
+            "principal_id": PROXY_PRINCIPAL_ID,
+            "route_id": "demo.echo",
+            "request_digest": PROXY_REQUEST_DIGEST,
+            "operation_digest": PROXY_OPERATION_DIGEST,
+            "release_authority": clone_document(release_authority),
+            "authorization_binding_commitment": clone_document(binding_commitment),
+            "control_plane_authorization_receipt": clone_document(receipt),
+            "control_plane_authorization_receipt_sha256": receipt_digest,
+            "upstream_response": clone_document(upstream_response),
+            "released_response": clone_document(released_response),
+            "tls_channel_binding": clone_document(tls_channel_binding),
+            "tls_peer": {
+                "spiffe_id": PROXY_SERVER_INSTANCE_ID,
+                "leaf_certificate_sha256": PROXY_TLS_PEER_LEAF_CERTIFICATE_DIGEST,
+            },
+            "streaming_response_statement_sha256": digest("0"),
+            "runtime_proof_sha256": digest("0"),
+        },
+        "collector_signature": {},
+        "streaming_response_statement": statement,
+        "server_signature": {},
+        "vendor_tee": {
+            "platform": buffered["vendor_tee"]["platform"],
+            "provider": buffered["vendor_tee"]["provider"],
+            "quote_sha256": buffered["vendor_tee"]["quote_sha256"],
+            "quote": clone_document(buffered["vendor_tee"]["quote"]),
+            "trusted_verifier": {
+                "apiVersion": "serverware.vendorTeeVerification/v1",
+                "kind": "ServerwareVendorTeeVerification",
+                "statement": verifier_statement,
+                "signature": "",
+            },
+        },
+    }
+    resign_streaming_response_proof(document)
+    return document, released_body
 
 
 def resign_control_plane_authorization_receipt(
@@ -1416,6 +1715,8 @@ def replace_control_plane_receipt_response_body(
 
 def control_plane_authorization_receipt(
     proxy_proof: dict[str, Any],
+    *,
+    quotas: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     release_authority = proxy_proof["server_statement"]["release_authority"]
     observed_at_epoch_ms = release_authority[
@@ -1447,7 +1748,7 @@ def control_plane_authorization_receipt(
         ],
         "completionOutcome": None,
         "retryAfterSeconds": 0,
-        "quotas": [],
+        "quotas": clone_document(quotas or []),
         "store": {"backend": "postgres", "ha": True},
     }
     response_body_bytes = canonical_json(response_body).encode("utf-8")
@@ -1507,7 +1808,7 @@ def control_plane_authorization_receipt(
     return document
 
 
-def clone_document(value: dict[str, Any]) -> dict[str, Any]:
+def clone_document(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
@@ -1556,6 +1857,10 @@ def write_production_env_files(
     *,
     readiness_value: str | None = None,
     images_value: str | None = None,
+    proxy_proof_contract: str = "buffered-v3",
+    proxy_client_request_digest: str = PROXY_CLIENT_REQUEST_DIGEST,
+    proxy_stream_body: Path | None = None,
+    proxy_max_stream_bytes: int | None = None,
 ) -> None:
     selected_images_value = images_value or production_images_env_value()
     selected_readiness_value = readiness_value or selected_images_value
@@ -1618,16 +1923,28 @@ def write_production_env_files(
             production_host_preflight_module.PRODUCTION_DOCKER_EXECUTABLE_SETTING,
         }
     )
+    stream_settings = ""
+    if proxy_proof_contract == "streaming-v1":
+        if proxy_stream_body is None or proxy_max_stream_bytes is None:
+            raise AssertionError("streaming fixture env requires a body path and byte limit")
+        stream_settings = (
+            f"{verify_release_completion.PROXY_STREAM_BODY_ENV_KEY}={proxy_stream_body}\n"
+            f"{verify_release_completion.PROXY_STREAM_MAX_BYTES_ENV_KEY}={proxy_max_stream_bytes}\n"
+            f"{verify_release_completion.PROXY_STREAM_OPERATION_CONTEXT_DIGEST_ENV_KEY}="
+            f"{PROXY_OPERATION_CONTEXT_DIGEST}\n"
+        )
     (tmp / "production.env").write_text(
         f"SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST={digest('9')}\n"
         f"SERVERWARE_DATA_PLANE_INSTANCE_ID={PROXY_SERVER_INSTANCE_ID}\n"
         f"{verify_release_completion.PROXY_PRINCIPAL_ENV_KEY}={PROXY_PRINCIPAL_ID}\n"
         f"SERVERWARE_PROXY_PROOF_COLLECTOR_KEY_ID={proxy_collector_key_info()['key_id']}\n"
         f"SERVERWARE_PROXY_PROOF_VERIFIER_KEY_ID={proxy_vendor_verifier_key_info()['key_id']}\n"
-        f"SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST={PROXY_CLIENT_REQUEST_DIGEST}\n"
+        f"SERVERWARE_PROXY_EXPECTED_CLIENT_REQUEST_DIGEST={proxy_client_request_digest}\n"
         f"SERVERWARE_PROXY_EXPECTED_REQUEST_DIGEST={PROXY_REQUEST_DIGEST}\n"
         f"SERVERWARE_PROXY_EXPECTED_OPERATION_DIGEST={PROXY_OPERATION_DIGEST}\n"
         f"SERVERWARE_PROXY_PROOF_MAX_AGE_SECONDS=300\n"
+        f"{verify_release_completion.PROXY_PROOF_CONTRACT_ENV_KEY}={proxy_proof_contract}\n"
+        f"{stream_settings}"
         f"SERVERWARE_COMPLETION_P99_LIMIT_MS=20.0\n"
         f"{run_production_readiness.FINAL_LAUNCHER_CONTRACT_ENV}={run_production_readiness.FINAL_LAUNCHER_CONTRACT}\n"
         f"SERVERWARE_ATTESTATION_HELPER_DIR={helper_dir}\n"
@@ -1934,6 +2251,7 @@ def test_final_production_env_binding() -> None:
                     ),
                 },
                 proxy_proof_max_age_seconds=selected_proxy_max_age,
+                proxy_proof_contract="buffered-v3",
                 p99_limit_ms=selected_p99_limit,
                 docker_executable=selected_docker_executable
                 or configured[
@@ -3780,14 +4098,20 @@ def run_verifier(
     include_control_plane_response_signing_trust_root: bool = True,
     include_hardware_assurance: bool = False,
     hardware_expected_challenge_mode: str | None = "nonce",
+    proxy_proof_contract: str = "buffered-v3",
+    proxy_stream_body: Path | None = None,
+    proxy_max_stream_bytes: int | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     env = clean_subprocess_env()
     if allow_host_bypass:
         env["SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"] = "1"
-    proxy_proof_args = (
-        [
+    proxy_proof_args = []
+    if include_proxy_proof:
+        proxy_proof_args = [
             "--proxy-response-proof",
             str(tmp / "proxy-response-proof.json"),
+            "--proxy-proof-contract",
+            proxy_proof_contract,
             "--proxy-proof-verifier-public-key",
             str(tmp / "proxy-vendor-verifier-public-key.pem"),
             "--proxy-collector-public-key",
@@ -3797,7 +4121,11 @@ def run_verifier(
             "--proxy-client-nonce",
             PROXY_CLIENT_NONCE,
             "--proxy-client-request-digest",
-            PROXY_CLIENT_REQUEST_DIGEST,
+            (
+                PROXY_STREAM_CLIENT_REQUEST_DIGEST
+                if proxy_proof_contract == "streaming-v1"
+                else PROXY_CLIENT_REQUEST_DIGEST
+            ),
             "--proxy-request-digest",
             PROXY_REQUEST_DIGEST,
             "--proxy-operation-digest",
@@ -3805,9 +4133,19 @@ def run_verifier(
             "--proxy-tls-channel-binding",
             PROXY_TLS_CHANNEL_BINDING,
         ]
-        if include_proxy_proof
-        else []
-    )
+        if proxy_proof_contract == "streaming-v1":
+            if proxy_stream_body is None or proxy_max_stream_bytes is None:
+                raise AssertionError("streaming verifier fixture requires body path and byte limit")
+            proxy_proof_args.extend(
+                [
+                    "--proxy-stream-body",
+                    str(proxy_stream_body),
+                    "--proxy-max-stream-bytes",
+                    str(proxy_max_stream_bytes),
+                    "--proxy-operation-context-digest",
+                    PROXY_OPERATION_CONTEXT_DIGEST,
+                ]
+            )
     hardware_expected_challenge_args: list[str] = []
     if hardware_expected_challenge_mode == "nonce":
         hardware_expected_challenge_args = [
@@ -3987,6 +4325,307 @@ def expect_proxy_proof_failure(
         raise AssertionError(f"completion verifier accepted {label}: {detail(rejected)}")
 
 
+def verify_streaming_proxy_fixture(
+    tmp: Path,
+    document: dict[str, Any],
+    body: bytes,
+    *,
+    proof_contract: str = "streaming-v1",
+) -> dict[str, Any]:
+    body_path = tmp / "proxy-stream-body.bin"
+    body_path.write_bytes(body)
+    body_snapshot = verify_release_completion.snapshot_regular_file(
+        body_path,
+        "streaming fixture body",
+        max_bytes=verify_release_completion.MAX_PROXY_STREAM_BODY_BYTES,
+    )
+    policy_snapshot = verify_release_completion.verify_and_compile_policy_snapshot(
+        verify_release_completion.snapshot_regular_file(
+            tmp / "policy-bundle.json",
+            "streaming fixture policy bundle",
+            max_bytes=verify_release_completion.POLICY_BUNDLE_MAX_BYTES,
+        ),
+        verify_release_completion.snapshot_regular_file(
+            tmp / "policy-signing.pub.pem",
+            "streaming fixture policy trust root",
+            max_bytes=verify_release_completion.FINAL_TRUST_ROOT_MAX_BYTES,
+        ),
+        expected_policy_digest=POLICY_DIGEST,
+    )
+    return verify_release_completion.verify_production_proxy_response_proof(
+        document,
+        proof_contract=proof_contract,
+        streamed_body_snapshot=body_snapshot if proof_contract == "streaming-v1" else None,
+        expected_operation_context_digest=(
+            PROXY_OPERATION_CONTEXT_DIGEST
+            if proof_contract == "streaming-v1"
+            else None
+        ),
+        trusted_verifier_public_key_pem=proxy_vendor_verifier_key_info()[
+            "public_key_pem"
+        ],
+        trusted_collector_public_key_pem=proxy_collector_key_info()[
+            "public_key_pem"
+        ],
+        trusted_control_plane_response_signing_public_key_pem=(
+            control_plane_response_signing_key_info()["public_key_pem"]
+        ),
+        expected_control_plane_response_signing_public_key_id=(
+            control_plane_response_signing_key_info()["key_id"]
+        ),
+        policy_snapshot=policy_snapshot,
+        expected_principal_id=PROXY_PRINCIPAL_ID,
+        expected_server_instance_id=PROXY_SERVER_INSTANCE_ID,
+        expected_client_nonce=PROXY_CLIENT_NONCE,
+        expected_client_request_digest=(
+            PROXY_STREAM_CLIENT_REQUEST_DIGEST
+            if proof_contract == "streaming-v1"
+            else PROXY_CLIENT_REQUEST_DIGEST
+        ),
+        expected_request_digest=PROXY_REQUEST_DIGEST,
+        expected_operation_digest=PROXY_OPERATION_DIGEST,
+        expected_tls_channel_binding=PROXY_TLS_CHANNEL_BINDING,
+        expected_policy_digest=POLICY_DIGEST,
+        expected_runtime_manifest_digest=digest("7"),
+        expected_binary_digest=digest("9"),
+        expected_release_digest=document[
+            "streaming_response_statement"
+            if "streaming_response_statement" in document
+            else "server_statement"
+        ]["release_digest"],
+        expected_image_signatures_digest=IMAGE_SIGNATURES_DIGEST,
+        expected_source_tree_digest=SOURCE_TREE_DIGEST,
+        expected_response_signing_key_id=proxy_response_key_info()["key_id"],
+        expected_tee_platform="aws-nitro",
+        expected_quote_provider="aws-nitro-enclaves",
+        max_age_seconds=300,
+    )
+
+
+def test_streaming_proxy_response_proof_requirements(
+    tmp: Path,
+    provenance_digest: str,
+) -> None:
+    valid_document, body = streaming_response_proof(provenance_digest)
+    summary = verify_streaming_proxy_fixture(tmp, valid_document, body)
+    if (
+        summary.get("proof_contract") != "streaming-v1"
+        or summary.get("emitted_body_digest") != sha256_prefixed_bytes(body)
+        or summary.get("emitted_body_bytes") != len(body)
+        or summary.get("released_body_artifact_bound") is not True
+    ):
+        raise AssertionError(f"streaming completion summary is incomplete: {summary}")
+
+    def reject_streaming(label: str, document: dict[str, Any], candidate_body: bytes, expected: str) -> None:
+        try:
+            verify_streaming_proxy_fixture(tmp, document, candidate_body)
+        except ValueError as exc:
+            if expected not in str(exc):
+                raise AssertionError(f"streaming rejection for {label} was imprecise: {exc}") from exc
+        else:
+            raise AssertionError(f"streaming verifier accepted {label}")
+
+    reject_streaming("mutated published body", valid_document, body + b"!", "body digest")
+    swapped_body = b"x" * len(body)
+    reject_streaming("same-length swapped body", valid_document, swapped_body, "body digest")
+    reject_streaming("truncated published body", valid_document, body[:-1], "body digest")
+
+    body_path = tmp / "oversize-stream-body.bin"
+    body_path.write_bytes(body)
+    try:
+        verify_release_completion.snapshot_regular_file(
+            body_path,
+            "oversize streaming fixture body",
+            max_bytes=len(body) - 1,
+        )
+    except ValueError as exc:
+        if "exceeds" not in str(exc):
+            raise
+    else:
+        raise AssertionError("streaming body snapshot accepted bytes above its independent limit")
+    symlink_path = tmp / "symlink-stream-body.bin"
+    symlink_path.unlink(missing_ok=True)
+    symlink_path.symlink_to(body_path)
+    try:
+        verify_release_completion.snapshot_regular_file(
+            symlink_path,
+            "symlink streaming fixture body",
+            max_bytes=verify_release_completion.MAX_PROXY_STREAM_BODY_BYTES,
+        )
+    except ValueError as exc:
+        if "symlink" not in str(exc) and "without following" not in str(exc):
+            raise
+    else:
+        raise AssertionError("streaming body snapshot followed a substituted symlink")
+
+    try:
+        verify_streaming_proxy_fixture(tmp, valid_document, body, proof_contract="buffered-v3")
+    except ValueError as exc:
+        if "wrong apiVersion" not in str(exc):
+            raise
+    else:
+        raise AssertionError("buffered-v3 contract accepted a streaming-v1 proof downgrade")
+
+    stale_document, stale_body = streaming_response_proof(
+        provenance_digest,
+        now=int(time.time()) - 600,
+    )
+    reject_streaming("stale capture", stale_document, stale_body, "stale")
+
+    wrong_identity = clone_document(valid_document)
+    wrong_identity["streaming_response_statement"]["server_instance"]["id"] = (
+        "spiffe://prod.serverware.dev/decision-gate/substituted"
+    )
+    wrong_identity["streaming_response_statement"]["server_instance"][
+        "identity_digest"
+    ] = sha256_prefixed_bytes(
+        wrong_identity["streaming_response_statement"]["server_instance"]["id"].encode("utf-8")
+    )
+    wrong_identity["external_capture"]["tls_peer"]["spiffe_id"] = wrong_identity[
+        "streaming_response_statement"
+    ]["server_instance"]["id"]
+    resign_streaming_response_proof(wrong_identity)
+    reject_streaming("server identity substitution", wrong_identity, body, "SPIFFE ID mismatch")
+
+    bad_signature = clone_document(valid_document)
+    bad_signature["server_signature"]["signature"] = "ed25519:" + b64e(b"s" * 64)
+    bad_signature["external_capture"]["runtime_proof_sha256"] = sha256_prefixed_json(
+        {
+            "apiVersion": "serverware.streamingResponseRuntimeProof/v1",
+            "kind": "ServerwareStreamingResponseRuntimeProof",
+            "streaming_response_statement": bad_signature[
+                "streaming_response_statement"
+            ],
+            "streaming_response_statement_sha256": bad_signature[
+                "external_capture"
+            ]["streaming_response_statement_sha256"],
+            "server_signature": bad_signature["server_signature"],
+            "vendor_tee": bad_signature["vendor_tee"],
+        }
+    )
+    sign_proxy_external_capture(bad_signature)
+    reject_streaming(
+        "server signature substitution",
+        bad_signature,
+        body,
+        "signature verification failed",
+    )
+
+    for field, replacement, expected_error in (
+        ("flow_id", digest("f"), "flow_id claim substitution"),
+        (
+            "operation_context_digest",
+            digest("e"),
+            "operation_context_digest claim substitution",
+        ),
+    ):
+        substituted = clone_document(valid_document)
+        commitment = substituted["streaming_response_statement"][
+            "authorization_binding_validation"
+        ]["binding_commitment"]
+        commitment[field] = replacement
+        substituted["external_capture"]["authorization_binding_commitment"][
+            field
+        ] = replacement
+        resign_streaming_response_proof(substituted)
+        reject_streaming(f"authorization binding {field}", substituted, body, expected_error)
+
+    forged_claim = clone_document(valid_document)
+    forged_claim["vendor_tee"]["trusted_verifier"]["statement"]["attested_claims"][
+        "released_response_body_bytes"
+    ] += 1
+    sign_proxy_vendor_verifier_statement(forged_claim)
+    forged_claim["external_capture"]["runtime_proof_sha256"] = sha256_prefixed_json(
+        {
+            "apiVersion": "serverware.streamingResponseRuntimeProof/v1",
+            "kind": "ServerwareStreamingResponseRuntimeProof",
+            "streaming_response_statement": forged_claim[
+                "streaming_response_statement"
+            ],
+            "streaming_response_statement_sha256": forged_claim["external_capture"][
+                "streaming_response_statement_sha256"
+            ],
+            "server_signature": forged_claim["server_signature"],
+            "vendor_tee": forged_claim["vendor_tee"],
+        }
+    )
+    sign_proxy_external_capture(forged_claim)
+    reject_streaming("vendor attested body binding", forged_claim, body, "attested claims")
+
+
+def test_streaming_release_completion_cli(
+    tmp: Path,
+    nitro: dict[str, Any],
+    provenance_digest: str,
+    buffered_document: dict[str, Any],
+) -> None:
+    streaming_document, body = streaming_response_proof(provenance_digest)
+    body_path = tmp / "proxy-stream-body.bin"
+    body_path.write_bytes(body)
+    write(tmp / "proxy-response-proof.json", streaming_document)
+    write_production_env_files(
+        tmp,
+        proxy_proof_contract="streaming-v1",
+        proxy_client_request_digest=PROXY_STREAM_CLIENT_REQUEST_DIGEST,
+        proxy_stream_body=body_path,
+        proxy_max_stream_bytes=len(body),
+    )
+    write_production_config_files(tmp)
+    write(tmp / "production-readiness.json", production_readiness(nitro, tmp))
+    write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+    accepted = run_verifier(
+        tmp,
+        proxy_proof_contract="streaming-v1",
+        proxy_stream_body=body_path,
+        proxy_max_stream_bytes=len(body),
+    )
+    if accepted.returncode != 0:
+        raise AssertionError(
+            f"release completion rejected a valid pinned streaming proof: {detail(accepted)}"
+        )
+    completion = json.loads(accepted.stdout.decode("utf-8"))
+    proxy_summary = completion.get("production_proxy_response_proof") or {}
+    body_artifact = (completion.get("artifacts") or {}).get("proxy_stream_body") or {}
+    if (
+        proxy_summary.get("proof_contract") != "streaming-v1"
+        or proxy_summary.get("streamed_body_artifact_sha256") != sha256_file(body_path)
+        or body_artifact.get("path") != str(body_path)
+        or body_artifact.get("sha256") != sha256_file(body_path)
+        or completion.get("production_env_binding", {}).get("proxy_proof_contract")
+        != "streaming-v1"
+    ):
+        raise AssertionError(
+            f"release completion omitted streaming proof/body/env bindings: {completion}"
+        )
+
+    downgraded = run_verifier(tmp)
+    if downgraded.returncode == 0 or "proxy proof contract" not in detail(downgraded):
+        raise AssertionError(
+            "release completion accepted a buffered-v3 CLI downgrade against a streaming-v1 env: "
+            + detail(downgraded)
+        )
+    body_path.write_bytes(body + b"tampered")
+    mutated_body = run_verifier(
+        tmp,
+        proxy_proof_contract="streaming-v1",
+        proxy_stream_body=body_path,
+        proxy_max_stream_bytes=len(body),
+    )
+    if mutated_body.returncode == 0 or not any(
+        marker in detail(mutated_body) for marker in ("exceeds", "body digest")
+    ):
+        raise AssertionError(
+            "release completion accepted a mutated separately published stream body: "
+            + detail(mutated_body)
+        )
+
+    write_production_env_files(tmp)
+    write_production_config_files(tmp)
+    write(tmp / "production-readiness.json", production_readiness(nitro, tmp))
+    write(tmp / "production-host-preflight.json", production_host_preflight(tmp))
+    write(tmp / "proxy-response-proof.json", buffered_document)
+
+
 def test_proxy_response_proof_requirements(
     tmp: Path,
     valid_document: dict[str, Any],
@@ -4027,6 +4666,48 @@ def test_proxy_response_proof_requirements(
     valid_receipt = clone_document(
         valid_document["server_statement"]["control_plane_authorization_receipt"]
     )
+    quota_window_start = (int(time.time()) // 3600) * 3_600_000
+    shared_quota = {
+        "counter_key": digest("c"),
+        "constraint_id": "quota:test",
+        "operation": "demo.echo",
+        "window_kind": "fixed",
+        "window_seconds": 3600,
+        "max_count": 5,
+    }
+    dispatch_quota = {
+        "counterKey": shared_quota["counter_key"],
+        "constraintId": shared_quota["constraint_id"],
+        "operation": shared_quota["operation"],
+        "windowStartEpochMs": quota_window_start,
+        "windowSeconds": shared_quota["window_seconds"],
+        "max": shared_quota["max_count"],
+        "count": 1,
+        "remaining": 4,
+        "reservationState": "reserved",
+    }
+    current_dispatch_quota = {
+        **dispatch_quota,
+        "windowKind": "fixed",
+        "windowEndEpochMs": quota_window_start + 3_600_000,
+    }
+    for quota_label, quota in (
+        ("legacy fixed", dispatch_quota),
+        ("current fixed", current_dispatch_quota),
+    ):
+        quota_document = proxy_response_proof(
+            provenance_digest,
+            shared_quotas=[shared_quota],
+            dispatch_quotas=[quota],
+        )
+        write(tmp / "proxy-response-proof.json", quota_document)
+        accepted_quota = run_verifier(tmp)
+        if accepted_quota.returncode != 0:
+            raise AssertionError(
+                f"completion verifier rejected a valid {quota_label} quota receipt: "
+                + detail(accepted_quota)
+            )
+
     forged_receipt = clone_document(valid_receipt)
     forged_receipt["response"]["signature"] = "ed25519:" + b64e(b"x" * 64)
     forged_receipt_proof = clone_document(valid_document)
@@ -5452,6 +6133,16 @@ def main() -> None:
         (tmp / "proxy-collector-public-key.pem").write_text(
             proxy_collector_key_info()["public_key_pem"],
             encoding="ascii",
+        )
+        test_streaming_proxy_response_proof_requirements(
+            tmp,
+            provenance_summary["provenance_digest"],
+        )
+        test_streaming_release_completion_cli(
+            tmp,
+            nitro,
+            provenance_summary["provenance_digest"],
+            valid_proxy_response_proof,
         )
         out_path = tmp / "completion-proof.json"
         result = run_verifier(tmp, "--out", str(out_path))

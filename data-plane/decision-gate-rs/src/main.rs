@@ -32,6 +32,7 @@ use serverware_decision_gate::{
     MAX_STATEMENT_AGE_SECONDS as CUSTODY_MAX_STATEMENT_AGE_SECONDS,
     PROTOCOL_API_VERSION as CUSTODY_PROTOCOL_API_VERSION,
     RESPONSE_PROOF_SIGN_OPERATION as CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+    STREAMING_RESPONSE_PROOF_SIGN_OPERATION as CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
 };
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -835,14 +836,14 @@ impl ResponseProofSigner {
         }
     }
 
-    fn buffered_dispatch_ready(&self) -> bool {
+    fn proof_dispatch_ready(&self) -> bool {
         match self {
             Self::LocalEphemeral(_) => true,
             Self::Custody(signer) => signer.health.transport_dispatch_ready(),
         }
     }
 
-    fn with_buffered_dispatch_permit<T>(&self, operation: impl FnOnce() -> T) -> Result<T, ()> {
+    fn with_proof_dispatch_permit<T>(&self, operation: impl FnOnce() -> T) -> Result<T, ()> {
         match self {
             Self::LocalEphemeral(_) => Ok(operation()),
             Self::Custody(signer) => signer.health.with_dispatch_permit(operation),
@@ -915,19 +916,29 @@ impl ResponseProofSigner {
         }
     }
 
-    fn sign_streaming(&self, canonical_statement: &[u8]) -> Result<String, String> {
+    fn sign_streaming(
+        &self,
+        statement: &Value,
+        authorization_binding: &ReleaseAuthorizationBinding,
+    ) -> Result<String, String> {
         match self {
-            Self::LocalEphemeral(signing_key) => Ok(format!(
-                "ed25519:{}",
-                general_purpose::URL_SAFE_NO_PAD
-                    .encode(signing_key.sign(canonical_statement).to_bytes())
-            )),
+            Self::LocalEphemeral(signing_key) => {
+                let canonical_statement = custody_canonical_json_bytes(statement)
+                    .map_err(|err| format!("canonicalize streaming response proof: {err}"))?;
+                Ok(format!(
+                    "ed25519:{}",
+                    general_purpose::URL_SAFE_NO_PAD
+                        .encode(signing_key.sign(&canonical_statement).to_bytes())
+                ))
+            }
             Self::Custody(signer) => {
-                let error = "streaming response proof signing is unavailable in custody mode; custody supports buffered responseProof.sign/v2 only"
-                    .to_string();
                 let operation = signer.health.begin_sign();
-                signer.health.record_sign_failure(operation, &error);
-                Err(error)
+                let result = signer.sign_streaming(statement, authorization_binding);
+                match &result {
+                    Ok(_) => signer.health.record_sign_success(operation),
+                    Err(error) => signer.health.record_sign_failure(operation, error),
+                }
+                result
             }
         }
     }
@@ -1350,6 +1361,7 @@ impl CustodyResponseProofSigner {
             "operations":{
                 "startup":CUSTODY_HELLO_OPERATION,
                 "sign":CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+                "streaming_sign":CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
             },
             "limits":{
                 "max_frame_bytes":CUSTODY_MAX_FRAME_BYTES,
@@ -8728,6 +8740,7 @@ fn validate_custody_hello_response(
     let expected_capabilities = [
         CUSTODY_HELLO_OPERATION.to_string(),
         CUSTODY_RESPONSE_PROOF_SIGN_OPERATION.to_string(),
+        CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION.to_string(),
     ];
     if result.capabilities != expected_capabilities {
         return Err("custody hello capabilities mismatch".to_string());
@@ -8979,6 +8992,31 @@ impl CustodyResponseProofSigner {
         statement: &Value,
         authorization_binding: &ReleaseAuthorizationBinding,
     ) -> Result<String, String> {
+        self.sign_operation(
+            CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+            statement,
+            authorization_binding,
+        )
+    }
+
+    fn sign_streaming(
+        &self,
+        statement: &Value,
+        authorization_binding: &ReleaseAuthorizationBinding,
+    ) -> Result<String, String> {
+        self.sign_operation(
+            CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+            statement,
+            authorization_binding,
+        )
+    }
+
+    fn sign_operation(
+        &self,
+        operation: &str,
+        statement: &Value,
+        authorization_binding: &ReleaseAuthorizationBinding,
+    ) -> Result<String, String> {
         let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
         let mut stream = connect_custody_socket(&self.socket_path, self.expected_uid, deadline)
             .map_err(|err| match err {
@@ -8991,7 +9029,7 @@ impl CustodyResponseProofSigner {
             api_version: CUSTODY_PROTOCOL_API_VERSION.to_string(),
             request_id: request_id.clone(),
             boot_id: Some(self.boot_id.clone()),
-            operation: CUSTODY_RESPONSE_PROOF_SIGN_OPERATION.to_string(),
+            operation: operation.to_string(),
             params: json!({
                 "statement":statement,
                 "authorization_binding":authorization_binding,
@@ -9005,6 +9043,7 @@ impl CustodyResponseProofSigner {
         validate_custody_sign_response(
             &response,
             &request_id,
+            operation,
             &self.boot_id,
             &self.key_id,
             &self.verifying_key,
@@ -9017,6 +9056,7 @@ impl CustodyResponseProofSigner {
 fn validate_custody_sign_response(
     response_bytes: &[u8],
     expected_request_id: &str,
+    expected_operation: &str,
     expected_boot_id: &str,
     expected_key_id: &str,
     verifying_key: &VerifyingKey,
@@ -9026,7 +9066,7 @@ fn validate_custody_sign_response(
     let (_, result): (String, CustodySignResult) = decode_successful_custody_response(
         response_bytes,
         expected_request_id,
-        CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+        expected_operation,
         Some(expected_boot_id),
         deadline,
     )?;
@@ -9131,15 +9171,6 @@ fn streaming_response_proof_context(
     let Some(client_nonce) = lowered.get(STREAM_RESPONSE_PROOF_NONCE_HEADER) else {
         return Ok(None);
     };
-    if matches!(
-        &state.response_proof_signer,
-        ResponseProofSigner::Custody(_)
-    ) {
-        return Err(
-            "streaming response proof signing is unavailable in custody mode; custody supports buffered responseProof.sign/v2 only"
-                .to_string(),
-        );
-    }
     if state.response_proof_attestation_command.is_none() || state.server_instance_id.is_none() {
         return Err("streaming response proof service is not configured".to_string());
     }
@@ -9896,15 +9927,6 @@ fn build_streaming_response_runtime_proof(
     selected_wire_headers: &BTreeMap<String, String>,
     stats: &StreamingResponseStats,
 ) -> Result<(String, String), String> {
-    if matches!(
-        &state.response_proof_signer,
-        ResponseProofSigner::Custody(_)
-    ) {
-        return Err(
-            "streaming response proof signing is unavailable in custody mode; custody supports buffered responseProof.sign/v2 only"
-                .to_string(),
-        );
-    }
     if !status.is_success() {
         return Err(
             "streaming response proof is unavailable for non-success responses".to_string(),
@@ -10035,7 +10057,7 @@ fn build_streaming_response_runtime_proof(
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
     let signature = state
         .response_proof_signer
-        .sign_streaming(canonical_statement.as_bytes())?;
+        .sign_streaming(&statement, &authorization_context.authorization_binding)?;
     let raw_headers_digest = digest_json(
         &serde_json::to_value(&upstream_response.selected_raw_policy_headers_b64)
             .map_err(|err| format!("serialize streaming raw response headers: {err}"))?,
@@ -11303,7 +11325,7 @@ fn send_upstream_request_with_current_lease(
     snapshot: &Arc<Snapshot>,
     binding: Option<&CredentialLeaseReleaseBinding>,
     builder: reqwest::blocking::RequestBuilder,
-    require_buffered_response_proof: bool,
+    require_response_proof: bool,
 ) -> Result<reqwest::blocking::Response, UpstreamSendError> {
     send_upstream_request_with_current_lease_and_timeout(
         state,
@@ -11311,7 +11333,7 @@ fn send_upstream_request_with_current_lease(
         binding,
         builder,
         None,
-        require_buffered_response_proof,
+        require_response_proof,
     )
 }
 
@@ -11321,7 +11343,7 @@ fn send_upstream_request_with_current_lease_and_timeout(
     binding: Option<&CredentialLeaseReleaseBinding>,
     builder: reqwest::blocking::RequestBuilder,
     maximum_timeout: Option<Duration>,
-    require_buffered_response_proof: bool,
+    require_response_proof: bool,
 ) -> Result<reqwest::blocking::Response, UpstreamSendError> {
     let send = || {
         let (client, request) = builder.build_split();
@@ -11353,10 +11375,10 @@ fn send_upstream_request_with_current_lease_and_timeout(
         drop(authority);
         result
     };
-    if require_buffered_response_proof {
+    if require_response_proof {
         state
             .response_proof_signer
-            .with_buffered_dispatch_permit(send)
+            .with_proof_dispatch_permit(send)
             .map_err(|()| UpstreamSendError::CredentialAuthority("response_proof_unavailable"))?
     } else {
         send()
@@ -24137,30 +24159,50 @@ fn stream_forward_response(
             ..upstream_response
         };
         let selected_wire_headers = streaming_response_proof_wire_headers(released_content_type);
-        let (runtime_proof_b64, runtime_proof_digest) = build_streaming_response_runtime_proof(
-            state,
-            snapshot,
-            decision,
-            method,
-            url,
-            proof.context,
-            proof.authorization_context,
-            proof.expected_client_request_digest,
-            &upstream_response,
-            status,
-            released_content_type,
-            &selected_wire_headers,
-            &stats,
-        )?;
-        validate_response_release_context(state, snapshot, decision, method, url).map_err(
-            |payload| format!("streaming response proof final release context invalid: {payload}"),
-        )?;
-        validate_streaming_response_proof_snapshot(state, snapshot)?;
-        write_streaming_response_proof_terminal_for_active_snapshot(
-            &mut guarded_writer,
-            &runtime_proof_b64,
-            &runtime_proof_digest,
-        )?;
+        let assembly_operation = state.response_proof_signer.begin_proof_assembly();
+        let assembly_result = (|| {
+            let runtime_proof = build_streaming_response_runtime_proof(
+                state,
+                snapshot,
+                decision,
+                method,
+                url,
+                proof.context,
+                proof.authorization_context,
+                proof.expected_client_request_digest,
+                &upstream_response,
+                status,
+                released_content_type,
+                &selected_wire_headers,
+                &stats,
+            )?;
+            validate_response_release_context(state, snapshot, decision, method, url).map_err(
+                |payload| {
+                    format!("streaming response proof final release context invalid: {payload}")
+                },
+            )?;
+            validate_streaming_response_proof_snapshot(state, snapshot)?;
+            write_streaming_response_proof_terminal_for_active_snapshot(
+                &mut guarded_writer,
+                &runtime_proof.0,
+                &runtime_proof.1,
+            )?;
+            Ok::<_, String>(runtime_proof.1)
+        })();
+        let runtime_proof_digest = match assembly_result {
+            Ok(runtime_proof_digest) => {
+                state
+                    .response_proof_signer
+                    .record_proof_assembly_success(assembly_operation);
+                runtime_proof_digest
+            }
+            Err(error) => {
+                state
+                    .response_proof_signer
+                    .record_proof_assembly_failure(assembly_operation, &error);
+                return Err(error);
+            }
+        };
         enqueue_audit(
             state,
             "data_plane.streaming_response_proof.emitted",
@@ -27442,9 +27484,7 @@ fn handle_connect_request(
             let _ = tls.flush();
             break;
         }
-        if proof_kind == Some(ResponseProofKind::Buffered)
-            && !state.response_proof_signer.buffered_dispatch_ready()
-        {
+        if proof_kind.is_some() && !state.response_proof_signer.proof_dispatch_ready() {
             enqueue_audit(
                 &state,
                 "data_plane.response_proof.denied",
@@ -29042,6 +29082,7 @@ mod tests {
                 "capabilities":[
                     CUSTODY_HELLO_OPERATION,
                     CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+                    CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
                 ],
                 "limits":{
                     "maxFrameBytes":CUSTODY_MAX_FRAME_BYTES,
@@ -29062,11 +29103,29 @@ mod tests {
         signing_key: &SigningKey,
         canonical_statement: &[u8],
     ) -> Value {
+        test_custody_sign_response_for_operation(
+            request_id,
+            boot_id,
+            CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+            key_id,
+            signing_key,
+            canonical_statement,
+        )
+    }
+
+    fn test_custody_sign_response_for_operation(
+        request_id: &str,
+        boot_id: &str,
+        operation: &str,
+        key_id: &str,
+        signing_key: &SigningKey,
+        canonical_statement: &[u8],
+    ) -> Value {
         json!({
             "apiVersion":CUSTODY_PROTOCOL_API_VERSION,
             "requestId":request_id,
             "bootId":boot_id,
-            "operation":CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+            "operation":operation,
             "ok":true,
             "result":{
                 "statementDigest":sha256_prefixed(canonical_statement),
@@ -29210,6 +29269,7 @@ mod tests {
         validate_custody_sign_response(
             &canonical_test_custody_response(&response),
             &request_id,
+            CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
             &boot_id,
             &key_id,
             &verifying_key,
@@ -29281,6 +29341,7 @@ mod tests {
             let error = validate_custody_sign_response(
                 &canonical_test_custody_response(&substituted),
                 &request_id,
+                CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
                 &boot_id,
                 &key_id,
                 &verifying_key,
@@ -29293,6 +29354,7 @@ mod tests {
             assert!(validate_custody_sign_response(
                 &canonical_test_custody_response(&substituted),
                 &request_id,
+                CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
                 &boot_id,
                 &key_id,
                 &verifying_key,
@@ -29301,27 +29363,6 @@ mod tests {
             )
             .is_err());
         }
-    }
-
-    #[test]
-    fn custody_signer_rejects_streaming_without_local_fallback() {
-        let (signing_key, public_key_pem, key_id) =
-            response_proof_signing_material().expect("custody streaming identity");
-        let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
-            socket_path: PathBuf::from("/unused/custody.sock"),
-            expected_uid: 123,
-            boot_id: test_custody_boot_id(15),
-            boot_digest: sha256_prefixed(&[15u8; 32]),
-            verifying_key: signing_key.verifying_key(),
-            public_key_pem,
-            key_id,
-            control_plane_response_signing_key_id: sha256_prefixed(b"control-plane-response-spki"),
-            health: Arc::new(CustodyPassiveHealth::startup_verified()),
-        });
-        let error = signer
-            .sign_streaming(br#"{"streaming":"statement"}"#)
-            .expect_err("custody streaming proof must be unsupported");
-        assert!(error.contains("buffered responseProof.sign/v2 only"));
     }
 
     #[test]
@@ -29459,30 +29500,37 @@ mod tests {
         fs::set_permissions(&sign_server_path, fs::Permissions::from_mode(0o660))
             .expect("secure custody sign fixture");
         let sign_server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("accept custody sign request");
-            let request_bytes = read_custody_frame(&mut stream, CUSTODY_IO_DEADLINE)
-                .expect("read custody sign request");
-            let request: CustodyRequest =
-                decode_canonical_custody_json(&request_bytes).expect("decode custody sign request");
-            assert_eq!(request.operation, CUSTODY_RESPONSE_PROOF_SIGN_OPERATION);
-            assert_eq!(request.boot_id.as_deref(), Some(sign_boot_id.as_str()));
-            assert_eq!(request.params["statement"], expected_statement);
-            assert_eq!(request.params["authorization_binding"], expected_binding);
-            let canonical_statement = custody_canonical_json_bytes(&request.params["statement"])
-                .expect("canonical requested statement");
-            let response = test_custody_sign_response(
-                &request.request_id,
-                &sign_boot_id,
-                &sign_key_id,
-                &signing_key,
-                &canonical_statement,
-            );
-            write_custody_frame(
-                &mut stream,
-                &canonical_test_custody_response(&response),
-                CUSTODY_IO_DEADLINE,
-            )
-            .expect("write custody sign response");
+            for expected_operation in [
+                CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+                CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION,
+            ] {
+                let (mut stream, _) = listener.accept().expect("accept custody sign request");
+                let request_bytes = read_custody_frame(&mut stream, CUSTODY_IO_DEADLINE)
+                    .expect("read custody sign request");
+                let request: CustodyRequest = decode_canonical_custody_json(&request_bytes)
+                    .expect("decode custody sign request");
+                assert_eq!(request.operation, expected_operation);
+                assert_eq!(request.boot_id.as_deref(), Some(sign_boot_id.as_str()));
+                assert_eq!(request.params["statement"], expected_statement);
+                assert_eq!(request.params["authorization_binding"], expected_binding);
+                let canonical_statement =
+                    custody_canonical_json_bytes(&request.params["statement"])
+                        .expect("canonical requested statement");
+                let response = test_custody_sign_response_for_operation(
+                    &request.request_id,
+                    &sign_boot_id,
+                    expected_operation,
+                    &sign_key_id,
+                    &signing_key,
+                    &canonical_statement,
+                );
+                write_custody_frame(
+                    &mut stream,
+                    &canonical_test_custody_response(&response),
+                    CUSTODY_IO_DEADLINE,
+                )
+                .expect("write custody sign response");
+            }
         });
         let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
             socket_path: sign_path.clone(),
@@ -29498,9 +29546,12 @@ mod tests {
         signer
             .sign_buffered(&statement, &binding)
             .expect("exact custody sign exchange");
+        signer
+            .sign_streaming(&statement, &binding)
+            .expect("exact streaming custody sign exchange");
         let status = signer.custody_status().expect("custody status");
         assert_eq!(status["healthy"], true);
-        assert_eq!(status["sign_success_count"], 1);
+        assert_eq!(status["sign_success_count"], 2);
         assert_eq!(status["sign_failure_count"], 0);
         sign_server.join().expect("join custody sign fixture");
         remove_test_custody_socket_path(&sign_path);
@@ -30234,6 +30285,10 @@ mod tests {
         let mut state = test_gate_state(Arc::clone(&snapshot));
         state.response_proof_signer =
             test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
+        assert_eq!(
+            state.response_proof_signer.custody_runtime_manifest()["operations"]["streaming_sign"],
+            CUSTODY_STREAMING_RESPONSE_PROOF_SIGN_OPERATION
+        );
         let manifest_before =
             build_runtime_manifest(&state, &snapshot, &Value::Null, &Value::Null, &Value::Null);
         assert!(String::from_utf8(health_response(&state))
@@ -30251,13 +30306,13 @@ mod tests {
             .last_liveness_success = Instant::now()
             .checked_sub(RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS + Duration::from_millis(1))
             .expect("stale custody health instant");
-        assert!(!state.response_proof_signer.buffered_dispatch_ready());
+        assert!(!state.response_proof_signer.proof_dispatch_ready());
         assert!(String::from_utf8(health_response(&state))
             .expect("stale health response")
             .starts_with("HTTP/1.1 503 Service Unavailable"));
         let operation = signer.health.begin_probe();
         signer.health.record_probe_success(operation);
-        assert!(state.response_proof_signer.buffered_dispatch_ready());
+        assert!(state.response_proof_signer.proof_dispatch_ready());
         assert!(String::from_utf8(health_response(&state))
             .expect("fresh health response")
             .starts_with("HTTP/1.1 200 OK"));
@@ -30290,7 +30345,7 @@ mod tests {
         signer
             .health
             .record_proof_assembly_failure(operation, assembly_error);
-        assert!(state.response_proof_signer.buffered_dispatch_ready());
+        assert!(state.response_proof_signer.proof_dispatch_ready());
         let assembly_failed =
             String::from_utf8(health_response(&state)).expect("assembly failure response");
         assert!(assembly_failed.starts_with("HTTP/1.1 503 Service Unavailable"));
@@ -30317,7 +30372,7 @@ mod tests {
             .record_sign_failure(sign_operation, "custody runtime restarted during signing");
         let probe_operation = signer.health.begin_probe();
         signer.health.record_probe_success(probe_operation);
-        assert!(state.response_proof_signer.buffered_dispatch_ready());
+        assert!(state.response_proof_signer.proof_dispatch_ready());
         assert!(String::from_utf8(health_response(&state))
             .expect("identity failure remains unhealthy")
             .starts_with("HTTP/1.1 503 Service Unavailable"));
@@ -30483,6 +30538,7 @@ mod tests {
         let error = validate_custody_sign_response(
             &response,
             &request_id,
+            CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
             &boot_id,
             &key_id,
             &signing_key.verifying_key(),

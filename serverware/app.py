@@ -12720,7 +12720,6 @@ UI_HTML = r"""
         render();
         return;
       }
-      const controlState = captureControlState();
       refreshInFlight = (async () => {
         const retained = {
           enrollmentPacket: state.enrollmentPacket,
@@ -12792,7 +12791,7 @@ UI_HTML = r"""
             directApprovalError = error;
           }
         }
-        render(controlState);
+        render(captureControlState());
         if (directApprovalError) {
           setStatus(`Approval link could not be loaded: ${directApprovalError.message}`, 'error');
         } else if (directApprovalId && state.approvalReview?.id === directApprovalId) {

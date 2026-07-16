@@ -270,14 +270,15 @@ def main() -> None:
         preservation_markers = (
             "function captureControlState()",
             "function restoreControlState(values)",
-            "const controlState = captureControlState();",
-            "render(controlState);",
+            "render(captureControlState());",
             "restoreControlState(controlState);",
             "let refreshInFlight = null",
         )
         for marker in preservation_markers:
             if marker not in ui_html:
                 raise AssertionError(f"portal refresh preservation marker missing: {marker}")
+        if "const controlState = captureControlState();" in ui_html:
+            raise AssertionError("portal refresh must not restore a stale pre-request form snapshot")
 
         mutation_markers = (
             "class ApiError extends Error",

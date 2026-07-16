@@ -375,6 +375,83 @@ def _wait_for_portal(
     )
 
 
+def _assert_refresh_preserves_live_oauth_form(page: Any) -> None:
+    original = page.evaluate(
+        """
+        () => ({
+          provider: document.querySelector('#oauth-provider')?.value || '',
+          name: document.querySelector('#oauth-credential-name')?.value || '',
+          scopes: document.querySelector('#oauth-scopes')?.value || '',
+          metadata: document.querySelector('#oauth-metadata')?.value || '{}'
+        })
+        """
+    )
+    page.evaluate(
+        """
+        () => {
+          const originalFetch = window.fetch.bind(window);
+          let release;
+          const barrier = new Promise((resolve) => { release = resolve; });
+          window.__oauthRefreshRaceStarted = false;
+          window.__oauthRefreshRaceDone = false;
+          window.__oauthRefreshRaceRelease = release;
+          window.fetch = (input, init) => {
+            const raw = typeof input === 'string' ? input : input.url;
+            const url = new URL(raw, window.location.href);
+            if (!window.__oauthRefreshRaceStarted && url.pathname === '/api/bootstrap') {
+              window.__oauthRefreshRaceStarted = true;
+              return barrier.then(() => originalFetch(input, init));
+            }
+            return originalFetch(input, init);
+          };
+          window.__oauthRefreshRacePromise = (async () => {
+            if (refreshInFlight) await refreshInFlight;
+            await refresh();
+          })().finally(() => {
+            window.fetch = originalFetch;
+            window.__oauthRefreshRaceDone = true;
+          });
+        }
+        """
+    )
+    try:
+        page.wait_for_function(
+            "() => window.__oauthRefreshRaceStarted === true",
+            timeout=DEFAULT_TIMEOUT_MS,
+        )
+        page.locator("#oauth-provider").select_option("x")
+        page.locator("#oauth-credential-name").fill("Refresh race probe")
+        page.locator("#oauth-scopes").fill("\n".join(X_SCOPES))
+        page.locator("#oauth-metadata").fill('{"probe":"refresh-race"}')
+        page.evaluate("window.__oauthRefreshRaceRelease()")
+        page.wait_for_function(
+            "() => window.__oauthRefreshRaceDone === true",
+            timeout=DEFAULT_TIMEOUT_MS,
+        )
+        submitted = page.evaluate(
+            """
+            () => {
+              const form = new FormData(document.querySelector('#oauth-form'));
+              return {provider: form.get('provider'), scopes: form.get('scopes')};
+            }
+            """
+        )
+        _require(
+            submitted == {"provider": "x", "scopes": "\n".join(X_SCOPES)},
+            f"in-flight refresh replaced live OAuth form values: {submitted}",
+        )
+    finally:
+        page.evaluate("window.__oauthRefreshRaceRelease?.()")
+        page.wait_for_function(
+            "() => window.__oauthRefreshRaceDone === true",
+            timeout=DEFAULT_TIMEOUT_MS,
+        )
+        page.locator("#oauth-provider").select_option(original["provider"])
+        page.locator("#oauth-credential-name").fill(original["name"])
+        page.locator("#oauth-scopes").fill(original["scopes"])
+        page.locator("#oauth-metadata").fill(original["metadata"])
+
+
 def _assert_no_oauth_cookies(context: Any) -> None:
     cookies = context.cookies()
     residue = [
@@ -1082,6 +1159,7 @@ def _run_browser_journey(
                 """,
                 timeout=DEFAULT_TIMEOUT_MS,
             )
+            _assert_refresh_preserves_live_oauth_form(page)
             seed_status = page.locator("#operator-status").inner_text()
             if "failed:" in seed_status.lower():
                 refresh_stack = page.evaluate(

@@ -415,6 +415,50 @@ def make_approval(db, snapshot, *, digest_suffix: str, redacted_display: dict, c
     )
 
 
+def exercise_grant_publish_acknowledgement_binding(runtime) -> None:
+    approval = {
+        "id": "approval:ack-binding",
+        "principal_id": "agent:demo",
+        "route_id": "demo.npm.publish.jit",
+        "credential_id": "cred-demo-bearer",
+        "credential_version": 2,
+        "policy_hash": "sha256:" + "a" * 64,
+        "request_digest": "sha256:" + "b" * 64,
+        "operation_digest": "sha256:" + "c" * 64,
+        "grant_max_uses": 1,
+        "grant_ttl_seconds": 30,
+    }
+    acknowledgement = {
+        "ok": True,
+        "grant_id": "approval:approval:ack-binding",
+        "approval_id": "approval:ack-binding",
+        "policy_hash": approval["policy_hash"],
+    }
+
+    def publish(response: dict) -> dict:
+        with (
+            patch.object(runtime, "DECISION_GATE_BASE", "https://gate.test"),
+            patch.object(
+                runtime,
+                "request_bytes",
+                return_value=SimpleNamespace(body=json.dumps(response).encode("utf-8")),
+            ),
+        ):
+            return runtime.publish_decision_gate_grant(approval)
+
+    accepted = publish(acknowledgement)
+    if accepted.get("ok") is not True or accepted.get("error") is not None:
+        raise AssertionError(f"matching grant acknowledgement was rejected: {accepted}")
+    for field in ("grant_id", "approval_id", "policy_hash"):
+        mismatched = dict(acknowledgement)
+        mismatched[field] = "sha256:" + "d" * 64
+        rejected = publish(mismatched)
+        if rejected.get("ok") is not False or field not in str(rejected.get("error")):
+            raise AssertionError(
+                f"mismatched {field} grant acknowledgement was accepted: {rejected}"
+            )
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
@@ -430,6 +474,8 @@ def main() -> None:
 
         from serverware import app as app_module
         from serverware import db, policy_bundle, runtime, webauthn
+
+        exercise_grant_publish_acknowledgement_binding(runtime)
         from serverware.auth import AdminIdentity
 
         exercise_python_release_lifecycle_contracts(

@@ -450,9 +450,28 @@ def publish_decision_gate_grant(approval: dict[str, Any]) -> dict[str, Any]:
     except (HttpClientError, urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
         _inc("decision_gate_grant_publish_failure")
         return {"enabled": True, "ok": False, "error": str(exc), "payload": payload}
-    ok = bool(body.get("ok"))
+    expected_ack = {
+        "grant_id": payload["grantId"],
+        "approval_id": payload["approvalId"],
+        "policy_hash": payload["policyHash"],
+    }
+    mismatched = [
+        field for field, expected in expected_ack.items() if body.get(field) != expected
+    ]
+    ok = bool(body.get("ok")) and not mismatched
+    error = str(body.get("error") or "")[:500] or None
+    if body.get("ok") and mismatched:
+        error = "decision gate grant acknowledgement binding mismatch: " + ", ".join(
+            mismatched
+        )
     _inc("decision_gate_grant_publish_success" if ok else "decision_gate_grant_publish_failure")
-    return {"enabled": True, "ok": ok, "response": body, "payload": payload}
+    return {
+        "enabled": True,
+        "ok": ok,
+        "error": error,
+        "response": body,
+        "payload": payload,
+    }
 
 
 def flush_audit_queue(timeout_seconds: float = 5.0) -> bool:

@@ -9306,6 +9306,32 @@ fn grant_key(
     }))
 }
 
+fn insert_grant_for_snapshot<F>(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    key: String,
+    grant: Grant,
+    linearized: F,
+) -> Result<(), String>
+where
+    F: FnOnce(),
+{
+    let active_snapshot = state
+        .snapshot
+        .read()
+        .expect("policy snapshot lock poisoned");
+    if active_snapshot.epoch != snapshot.epoch || !Arc::ptr_eq(&active_snapshot, snapshot) {
+        return Err(active_snapshot.hash.clone());
+    }
+    linearized();
+    state
+        .grants
+        .lock()
+        .expect("grant cache mutex poisoned")
+        .insert(key, grant);
+    Ok(())
+}
+
 fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
     let started = Instant::now();
     let snapshot = current_snapshot(state);
@@ -9393,8 +9419,16 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
         uses_remaining: payload.max_uses,
         expires_at_ms,
     };
-    let mut grants = state.grants.lock().expect("grant cache mutex poisoned");
-    grants.insert(key.clone(), grant);
+    if let Err(active_policy_hash) =
+        insert_grant_for_snapshot(state, &snapshot, key.clone(), grant, || {})
+    {
+        return deny(
+            409,
+            "grant policy changed during admission",
+            json!({"error":"grant_policy_hash_inactive","active_policy_hash":active_policy_hash}),
+            started,
+        );
+    }
     enqueue_audit(
         state,
         "data_plane.grant.received",
@@ -24185,6 +24219,87 @@ mod tests {
             .expect("credential leases")
             .is_empty());
         assert_eq!(state.grants.lock().expect("grant cache").len(), 1);
+    }
+
+    #[test]
+    fn grant_admission_linearizes_with_policy_reload() {
+        let snapshot = test_snapshot(1);
+        let state = Arc::new(test_gate_state(Arc::clone(&snapshot)));
+        let (admission_entered_tx, admission_entered_rx) = mpsc::sync_channel(0);
+        let (admission_release_tx, admission_release_rx) = mpsc::sync_channel(0);
+        let admission_state = Arc::clone(&state);
+        let admission_snapshot = Arc::clone(&snapshot);
+        let admission = thread::spawn(move || {
+            insert_grant_for_snapshot(
+                &admission_state,
+                &admission_snapshot,
+                "grant-key".to_string(),
+                Grant {
+                    id: "grant:before-reload".to_string(),
+                    approval_id: Some("approval:before-reload".to_string()),
+                    uses_remaining: 1,
+                    expires_at_ms: now_epoch_ms() + 30_000,
+                },
+                || {
+                    admission_entered_tx
+                        .send(())
+                        .expect("announce grant admission");
+                    admission_release_rx
+                        .recv()
+                        .expect("release grant admission");
+                },
+            )
+        });
+        admission_entered_rx
+            .recv()
+            .expect("grant admission reached linearization point");
+
+        let (reload_started_tx, reload_started_rx) = mpsc::sync_channel(0);
+        let (reload_done_tx, reload_done_rx) = mpsc::sync_channel(0);
+        let reload_state = Arc::clone(&state);
+        let reloader = thread::spawn(move || {
+            reload_started_tx.send(()).expect("announce policy reload");
+            *reload_state.snapshot.write().expect("snapshot lock") = test_snapshot(2);
+            reload_state.grants.lock().expect("grant cache").clear();
+            reload_done_tx.send(()).expect("announce reload completion");
+        });
+        reload_started_rx.recv().expect("policy reload started");
+        assert!(
+            reload_done_rx
+                .recv_timeout(Duration::from_millis(100))
+                .is_err(),
+            "policy replacement must not split grant admission"
+        );
+
+        admission_release_tx
+            .send(())
+            .expect("release grant admission");
+        admission
+            .join()
+            .expect("grant admission thread")
+            .expect("grant admitted before reload");
+        reload_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("policy reload completed after grant admission");
+        reloader.join().expect("policy reloader");
+        assert_eq!(current_snapshot(&state).policy_sequence, 2);
+        assert!(state.grants.lock().expect("grant cache").is_empty());
+
+        let stale = insert_grant_for_snapshot(
+            &state,
+            &snapshot,
+            "stale-grant-key".to_string(),
+            Grant {
+                id: "grant:after-reload".to_string(),
+                approval_id: Some("approval:after-reload".to_string()),
+                uses_remaining: 1,
+                expires_at_ms: now_epoch_ms() + 30_000,
+            },
+            || panic!("stale admission must not reach its linearization callback"),
+        )
+        .expect_err("stale policy grant must be rejected");
+        assert_eq!(stale, "sha256:policy-2");
+        assert!(state.grants.lock().expect("grant cache").is_empty());
     }
 
     #[test]

@@ -1465,11 +1465,11 @@ def _pending_approval_key(
     return "sha256:" + hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
-def _pending_approval_key_from_row(row: Any) -> str:
+def _pending_approval_key_from_row(row: Any, *, url: str | None = None) -> str:
     return _pending_approval_key(
         route_id=str(row["route_id"]),
         method=str(row["method"]),
-        url=str(row["url"]),
+        url=str(row["url"] if url is None else url),
         principal_id=row["principal_id"],
         credential_id=row["credential_id"],
         credential_version=(
@@ -1489,6 +1489,25 @@ def _pending_approval_key_from_row(row: Any) -> str:
             int(row["grant_max_uses"]) if row["grant_max_uses"] is not None else None
         ),
     )
+
+
+def _legacy_jit_pending_approval_key_from_row(row: Any) -> str | None:
+    stored_url = str(row["url"] or "")
+    if re.fullmatch(r"sha256:[0-9a-f]{64}", stored_url) is None:
+        return None
+    stored_display = row["redacted_display"]
+    if not isinstance(stored_display, str) or not stored_display:
+        return None
+    try:
+        display = loads(_decrypt_approval_json(stored_display), None)
+    except (TypeError, ValueError) as exc:
+        raise MetadataStoreError(
+            "pending approval legacy URL recovery value is invalid"
+        ) from exc
+    legacy_url = display.get("url") if isinstance(display, dict) else None
+    if not isinstance(legacy_url, str) or _approval_url_commitment(legacy_url) != stored_url:
+        raise MetadataStoreError("pending approval URL commitment is invalid")
+    return _pending_approval_key_from_row(row, url=legacy_url)
 
 
 def _validate_pending_approval_payload(*values: str) -> None:
@@ -1542,26 +1561,33 @@ def _backfill_pending_approval_keys(conn: Any) -> None:
         "SELECT * FROM approval_requests WHERE status = 'pending' "
         "ORDER BY requested_at ASC, id ASC"
     ).fetchall()
-    seen: set[str] = set()
+    validated: list[tuple[Any, str, bool]] = []
     for row in rows:
         expected_key = _pending_approval_key_from_row(row)
         current_key = row["pending_key"]
         if current_key is not None and current_key != expected_key:
-            raise MetadataStoreError(
-                f"pending approval has a non-deterministic immutable key: {row['id']}"
-            )
-        if expected_key in seen:
+            legacy_key = _legacy_jit_pending_approval_key_from_row(row)
+            if current_key != legacy_key:
+                raise MetadataStoreError(
+                    f"pending approval has a non-deterministic immutable key: {row['id']}"
+                )
+        validated.append((row, expected_key, current_key != expected_key))
+
+    grouped: dict[str, list[tuple[Any, bool]]] = {}
+    for row, expected_key, needs_update in validated:
+        grouped.setdefault(expected_key, []).append((row, needs_update))
+    for expected_key, group in grouped.items():
+        survivor, survivor_needs_update = group[0]
+        for row, _ in group[1:]:
             conn.execute(
                 "UPDATE approval_requests SET status = 'superseded', pending_key = ? "
                 "WHERE id = ? AND status = 'pending'",
                 (expected_key, row["id"]),
             )
-            continue
-        seen.add(expected_key)
-        if current_key is None:
+        if survivor_needs_update:
             conn.execute(
                 "UPDATE approval_requests SET pending_key = ? WHERE id = ?",
-                (expected_key, row["id"]),
+                (expected_key, survivor["id"]),
             )
 
 
@@ -11409,7 +11435,7 @@ def _ensure_jit_approval_request_on_connection(
     pending_key = _pending_approval_key(
         route_id=route_id,
         method=method,
-        url=url,
+        url=_approval_url_commitment(url),
         principal_id=principal_id,
         credential_id=credential_id,
         credential_version=credential_version,

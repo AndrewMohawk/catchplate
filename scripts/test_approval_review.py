@@ -459,6 +459,75 @@ def exercise_grant_publish_acknowledgement_binding(runtime) -> None:
             )
 
 
+def exercise_pending_approval_restart_migration(db, snapshot) -> None:
+    url = "https://registry.npmjs.org/@scope%2frestart-test"
+    approval = db.ensure_jit_approval_request(
+        route_id="demo.npm.publish.jit",
+        method="PUT",
+        url=url,
+        principal_id="agent:restart-test",
+        credential_id="cred-demo-bearer",
+        credential_version=2,
+        policy_hash=snapshot.hash,
+        request_digest="sha256:" + "e" * 64,
+        operation_digest="sha256:" + "f" * 64,
+        canonical_request={"operation": {"packageName": "@scope/restart-test"}},
+        redacted_display={"url": url, "package": "@scope/restart-test"},
+        pending_ttl_seconds=300,
+        grant_ttl_seconds=30,
+        grant_max_uses=1,
+    )
+    key_args = {
+        "route_id": approval["route_id"],
+        "method": approval["method"],
+        "principal_id": approval["principal_id"],
+        "credential_id": approval["credential_id"],
+        "credential_version": approval["credential_version"],
+        "policy_hash": approval["policy_hash"],
+        "request_digest": approval["request_digest"],
+        "operation_digest": approval["operation_digest"],
+        "grant_ttl_seconds": approval["grant_ttl_seconds"],
+        "grant_max_uses": approval["grant_max_uses"],
+    }
+    expected_key = db._pending_approval_key(
+        **key_args, url=db._approval_url_commitment(url)
+    )
+    legacy_key = db._pending_approval_key(**key_args, url=url)
+    if approval.get("pending_key") != expected_key or legacy_key == expected_key:
+        raise AssertionError(f"new pending approval key is not restart-stable: {approval}")
+    db.init_db()
+
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE approval_requests SET pending_key = ? WHERE id = ?",
+            (legacy_key, approval["id"]),
+        )
+    db.init_db()
+    migrated = db.get_approval_request(approval["id"])
+    if migrated is None or migrated.get("pending_key") != expected_key:
+        raise AssertionError(f"legacy pending approval key was not migrated: {migrated}")
+
+    tampered_key = "sha256:" + "0" * 64
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE approval_requests SET pending_key = ? WHERE id = ?",
+            (tampered_key, approval["id"]),
+        )
+    try:
+        db.init_db()
+    except db.MetadataStoreError as exc:
+        if "non-deterministic immutable key" not in str(exc):
+            raise AssertionError(f"tampered pending key failed unclearly: {exc}") from exc
+    else:
+        raise AssertionError("tampered pending approval key was accepted")
+    with db.connect() as conn:
+        conn.execute(
+            "UPDATE approval_requests SET pending_key = ? WHERE id = ?",
+            (expected_key, approval["id"]),
+        )
+    db.init_db()
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
@@ -498,6 +567,7 @@ def main() -> None:
                 "policies": [{"type": "approval", "scope": "request_digest"}],
             },
         )
+        exercise_pending_approval_restart_migration(db, snapshot)
         previous = make_approval(
             db,
             snapshot,

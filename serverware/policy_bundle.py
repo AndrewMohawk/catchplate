@@ -2889,6 +2889,42 @@ def write_policy_bundle(
 def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any]:
     proxy_token_sha256 = "sha256:" + hashlib.sha256(b"demo-agent-proxy-token").hexdigest()
     bound_proxy_token_sha256 = "sha256:" + hashlib.sha256(b"demo-bound-proxy-token").hexdigest()
+
+    def structured_proof_route(
+        slug: str,
+        response_mode: str,
+        allowed_fields: list[str],
+        response_limits: dict[str, int],
+    ) -> dict[str, Any]:
+        return {
+            "id": f"demo.proof.stream.{slug}",
+            "principals": ["agent:demo"],
+            "match": {
+                "scheme": "https",
+                "host": "demo-upstream",
+                "port": 8443,
+                "methods": ["GET"],
+                "paths": [f"/proof-stream/{slug}"],
+            },
+            "adapter": {
+                "type": "generic.rest",
+                "config": {
+                    "request": {
+                        "allowedQueryKeys": [],
+                        "allowedHeaders": ["accept", "user-agent"],
+                        "bodyMode": "none",
+                        "maxBodyBytes": 0,
+                    },
+                    "response": {
+                        "mode": response_mode,
+                        "maxBodyBytes": 1048576,
+                        **response_limits,
+                        "allowedFields": allowed_fields,
+                    },
+                },
+            },
+        }
+
     return {
         "apiVersion": "serverware.policy/v1",
         "kind": "PolicyBundle",
@@ -3287,6 +3323,50 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     },
                 },
             },
+            structured_proof_route(
+                "jsonl",
+                "jsonlStream",
+                ["index", "kept", "nested.safe", "sawSecret"],
+                {"maxLineBytes": 8192},
+            ),
+            structured_proof_route(
+                "json-array",
+                "jsonArrayStream",
+                ["index", "kept", "nested.safe", "sawSecret"],
+                {"maxItemBytes": 8192},
+            ),
+            structured_proof_route(
+                "json-sse",
+                "jsonSseStream",
+                ["index", "kept", "nested.safe", "sawSecret"],
+                {"maxEventBytes": 8192, "maxLineBytes": 8192},
+            ),
+            structured_proof_route(
+                "json-nested",
+                "jsonNestedStream",
+                [
+                    "requestId",
+                    "profile.email",
+                    "profile.settings.theme",
+                    "items.id",
+                    "items.details.safe",
+                    "audit.trace",
+                    "sawSecret",
+                ],
+                {"maxNestedBytes": 262144},
+            ),
+            structured_proof_route(
+                "form",
+                "formUrlencodedStream",
+                ["kept", "safe", "sawSecret"],
+                {"maxPairBytes": 8192},
+            ),
+            structured_proof_route(
+                "csv",
+                "csvStream",
+                ["id", "public", "safe_note", "sawSecret"],
+                {"maxRecordBytes": 8192},
+            ),
             {
                 "id": "demo.gmail.recent",
                 "principals": ["agent:demo"],

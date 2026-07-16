@@ -114,7 +114,6 @@
         },
         "type": "generic.rest"
       },
-      "credentialRef": "cred-demo-bearer",
       "constraints": [
         {
           "allowedFields": [
@@ -133,6 +132,7 @@
           "type": "jsonBody"
         }
       ],
+      "credentialRef": "cred-demo-bearer",
       "id": "demo.echo",
       "match": {
         "host": "demo-upstream",
@@ -566,6 +566,261 @@
     {
       "adapter": {
         "config": {
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "user-agent"
+            ],
+            "allowedQueryKeys": [],
+            "bodyMode": "none",
+            "maxBodyBytes": 0
+          },
+          "response": {
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe",
+              "sawSecret"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxLineBytes": 8192,
+            "mode": "jsonlStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "id": "demo.proof.stream.jsonl",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/proof-stream/jsonl"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "user-agent"
+            ],
+            "allowedQueryKeys": [],
+            "bodyMode": "none",
+            "maxBodyBytes": 0
+          },
+          "response": {
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe",
+              "sawSecret"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxItemBytes": 8192,
+            "mode": "jsonArrayStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "id": "demo.proof.stream.json-array",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/proof-stream/json-array"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "user-agent"
+            ],
+            "allowedQueryKeys": [],
+            "bodyMode": "none",
+            "maxBodyBytes": 0
+          },
+          "response": {
+            "allowedFields": [
+              "index",
+              "kept",
+              "nested.safe",
+              "sawSecret"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxEventBytes": 8192,
+            "maxLineBytes": 8192,
+            "mode": "jsonSseStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "id": "demo.proof.stream.json-sse",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/proof-stream/json-sse"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "user-agent"
+            ],
+            "allowedQueryKeys": [],
+            "bodyMode": "none",
+            "maxBodyBytes": 0
+          },
+          "response": {
+            "allowedFields": [
+              "requestId",
+              "profile.email",
+              "profile.settings.theme",
+              "items.id",
+              "items.details.safe",
+              "audit.trace",
+              "sawSecret"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxNestedBytes": 262144,
+            "mode": "jsonNestedStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "id": "demo.proof.stream.json-nested",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/proof-stream/json-nested"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "user-agent"
+            ],
+            "allowedQueryKeys": [],
+            "bodyMode": "none",
+            "maxBodyBytes": 0
+          },
+          "response": {
+            "allowedFields": [
+              "kept",
+              "safe",
+              "sawSecret"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxPairBytes": 8192,
+            "mode": "formUrlencodedStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "id": "demo.proof.stream.form",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/proof-stream/form"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "user-agent"
+            ],
+            "allowedQueryKeys": [],
+            "bodyMode": "none",
+            "maxBodyBytes": 0
+          },
+          "response": {
+            "allowedFields": [
+              "id",
+              "public",
+              "safe_note",
+              "sawSecret"
+            ],
+            "maxBodyBytes": 1048576,
+            "maxRecordBytes": 8192,
+            "mode": "csvStream"
+          }
+        },
+        "type": "generic.rest"
+      },
+      "id": "demo.proof.stream.csv",
+      "match": {
+        "host": "demo-upstream",
+        "methods": [
+          "GET"
+        ],
+        "paths": [
+          "/proof-stream/csv"
+        ],
+        "port": 8443,
+        "scheme": "https"
+      },
+      "principals": [
+        "agent:demo"
+      ]
+    },
+    {
+      "adapter": {
+        "config": {
           "allowMessageGetOnlyFromPriorSearch": true,
           "cacheTtlSeconds": 1800,
           "denyEquivalentEndpoints": [
@@ -693,6 +948,7 @@
           "type": "operationPolicy"
         },
         {
+          "calendarWindow": "utcDay",
           "description": "The Docker fixture can publish at most one tweet per UTC calendar day for its single simulated X account; the quota resets at 00:00 UTC.",
           "id": "x-one-tweet-per-day",
           "key": {
@@ -703,8 +959,7 @@
           },
           "max": 1,
           "store": "shared",
-          "type": "rateLimit",
-          "calendarWindow": "utcDay"
+          "type": "rateLimit"
         },
         {
           "allowedFields": [

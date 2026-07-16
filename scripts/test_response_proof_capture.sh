@@ -9,8 +9,11 @@ stream_dir="$TMP_DIR/stream-proof"
 stream_proof="$stream_dir/dev-streaming-proxy-response-proof.json"
 stream_body="$stream_dir/dev-streaming-body.bin"
 stream_summary="$TMP_DIR/dev-streaming-proof-summary.json"
+structured_stream_dir="$TMP_DIR/structured-stream-proofs"
 mkdir -p "$stream_dir"
+mkdir -p "$structured_stream_dir"
 chmod 0700 "$stream_dir"
+chmod 0700 "$structured_stream_dir"
 rm -f \
   "$TMP_DIR/dev-proxy-response-proof.json" \
   "$TMP_DIR/dev-proxy-response-proof-summary.json" \
@@ -467,6 +470,204 @@ assert proof["vendor_tee"]["platform"] == "none-dev", proof
 assert proof["vendor_tee"]["provider"] == "development-fixture", proof
 PY
 
+structured_stream_modes=(jsonl json-array json-sse json-nested form csv)
+for stream_mode in "${structured_stream_modes[@]}"; do
+  mode_dir="$structured_stream_dir/$stream_mode"
+  mkdir -p "$mode_dir"
+  chmod 0700 "$mode_dir"
+  rm -f "$mode_dir/proof.json" "$mode_dir/body.bin" "$mode_dir/summary.json"
+  docker compose run --rm --no-deps \
+    --user "$(id -u):$(id -g)" \
+    -v "$PWD/$TMP_DIR:/proof" \
+    --entrypoint /usr/local/bin/serverware-proof-client \
+    decision-gate-rs \
+    --stream \
+    --proxy decision-gate-rs:9090 \
+    --url "https://demo-upstream:8443/proof-stream/$stream_mode" \
+    --ca /data/decision-gate-ca-cert.pem \
+    --out "/proof/structured-stream-proofs/$stream_mode/proof.json" \
+    --body-out "/proof/structured-stream-proofs/$stream_mode/body.bin" \
+    --collector-key /proof/dev-proof-collector-key.pem \
+    --expected-principal-id agent:demo \
+    --proxy-header "X-Serverware-Agent: demo-agent" \
+    --header "X-Serverware-Agent: demo-agent" \
+    --max-stream-bytes 1048576 \
+    > "$mode_dir/summary.json"
+done
+
+docker compose run --rm --no-deps -T \
+  -v "$PWD/$structured_stream_dir:/proof:ro" \
+  -v "$PWD/schemas:/proof-schemas:ro" \
+  --entrypoint python \
+  serverware - \
+  /proof \
+  /proof-schemas/streaming-response-proof.v1.schema.json <<'PY'
+import json
+import pathlib
+import sys
+
+import jsonschema
+
+proof_root = pathlib.Path(sys.argv[1])
+with open(sys.argv[2], "r", encoding="utf-8") as handle:
+    schema = json.load(handle)
+jsonschema.Draft202012Validator.check_schema(schema)
+proof_paths = sorted(proof_root.glob("*/proof.json"))
+assert len(proof_paths) == 6, proof_paths
+for proof_path in proof_paths:
+    with proof_path.open("r", encoding="utf-8") as handle:
+        jsonschema.validate(json.load(handle), schema)
+PY
+
+python3 - "$structured_stream_dir" <<'PY'
+import csv
+import hashlib
+import io
+import json
+import pathlib
+import sys
+from urllib.parse import parse_qs
+
+
+root = pathlib.Path(sys.argv[1])
+expected = {
+    "jsonl": ("demo.proof.stream.jsonl", "application/x-ndjson"),
+    "json-array": ("demo.proof.stream.json-array", "application/json"),
+    "json-sse": ("demo.proof.stream.json-sse", "text/event-stream"),
+    "json-nested": ("demo.proof.stream.json-nested", "application/json"),
+    "form": ("demo.proof.stream.form", "application/x-www-form-urlencoded"),
+    "csv": ("demo.proof.stream.csv", "text/csv"),
+}
+expected_items = [
+    {"index": 0, "kept": "alpha", "nested": {"safe": "one"}, "sawSecret": True},
+    {"index": 1, "kept": "beta", "nested": {"safe": "two"}, "sawSecret": True},
+]
+expected_raw = {
+    "jsonl": (
+        b'{"index":0,"kept":"alpha","nested":{"safe":"one","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}\n'
+        b'{"index":1,"kept":"beta","nested":{"safe":"two","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}\n'
+    ),
+    "json-array": (
+        b'[{"index":0,"kept":"alpha","nested":{"safe":"one","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"},'
+        b'{"index":1,"kept":"beta","nested":{"safe":"two","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}]'
+    ),
+    "json-sse": (
+        b'event: hidden\nid: hidden-0\ndata: {"index":0,"kept":"alpha","nested":{"safe":"one","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}\n\n'
+        b'event: hidden\nid: hidden-1\ndata: {"index":1,"kept":"beta","nested":{"safe":"two","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}\n\n'
+        b"data: [DONE]\n\n"
+    ),
+    "json-nested": (
+        b'{"requestId":"proof-request","profile":{"email":"operator@example.test","settings":{"theme":"dark","token":"hidden"},"secret":"hidden"},'
+        b'"items":[{"id":"one","details":{"safe":"kept","secret":"hidden"},"secret":"hidden"}],'
+        b'"audit":{"trace":"proof-trace","privateToken":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}'
+    ),
+    "form": b"kept=alpha&safe=one&sawSecret=true&hidden=hidden&upstreamSecret=hidden",
+    "csv": (
+        b"id,public,safe_note,sawSecret,hidden,upstreamSecret\n"
+        b"one,alpha,kept,true,hidden,hidden\n"
+        b"two,beta,kept-too,true,hidden,hidden\n"
+    ),
+}
+
+
+def assert_no_forbidden_keys(value):
+    if isinstance(value, dict):
+        forbidden = {
+            "secret",
+            "token",
+            "privatetoken",
+            "upstreamsecret",
+            "echoedsecret",
+            "authorization_sha256",
+        }
+        assert not (forbidden & {str(key).lower() for key in value}), value
+        for item in value.values():
+            assert_no_forbidden_keys(item)
+    elif isinstance(value, list):
+        for item in value:
+            assert_no_forbidden_keys(item)
+
+
+for mode, (route_id, content_type) in expected.items():
+    mode_dir = root / mode
+    proof_bytes = (mode_dir / "proof.json").read_bytes()
+    body = (mode_dir / "body.bin").read_bytes()
+    summary = json.loads((mode_dir / "summary.json").read_text(encoding="utf-8"))
+    proof = json.loads(proof_bytes)
+    capture = proof["external_capture"]
+    statement = proof["streaming_response_statement"]
+    upstream = capture["upstream_response"]
+    released = capture["released_response"]
+    assert summary["ok"] is True and summary["stream_verified"] is True, summary
+    assert summary["proof_sha256"] == "sha256:" + hashlib.sha256(proof_bytes).hexdigest(), summary
+    assert summary["body_sha256"] == "sha256:" + hashlib.sha256(body).hexdigest(), summary
+    assert summary["body_bytes"] == len(body) > 0, summary
+    assert proof["apiVersion"] == "serverware.streamingProxyResponseProof/v1", proof
+    assert proof["kind"] == "ServerwareStreamingProxyResponseProof", proof
+    assert proof["vendor_tee"]["platform"] == "none-dev", proof
+    assert proof["vendor_tee"]["provider"] == "development-fixture", proof
+    assert capture["principal_id"] == statement["principal_id"] == "agent:demo", (mode, capture)
+    assert capture["route_id"] == statement["route_id"] == route_id, (mode, capture)
+    assert capture["client_request_digest"] == statement["client_request_digest"], mode
+    assert capture["released_response"] == statement["released_response"], mode
+    assert capture["upstream_response"] == statement["upstream_response"], mode
+    raw_body = expected_raw[mode]
+    assert upstream["body_bytes"] == len(raw_body), (mode, upstream)
+    assert upstream["body_digest"] == "sha256:" + hashlib.sha256(raw_body).hexdigest(), (mode, upstream)
+    assert upstream["body_digest"] != released["body_digest"], (mode, upstream, released)
+    assert released["completion"] == "normal-eof", (mode, released)
+    assert released["framing"] == "http1.1-chunked-trailers", (mode, released)
+    assert released["body_bytes"] == len(body), (mode, released)
+    assert released["body_digest"] == summary["body_sha256"], (mode, released)
+    assert released["trailer_names"] == [
+        "X-Serverware-Stream-Proof-B64",
+        "X-Serverware-Stream-Proof-SHA256",
+    ], (mode, released)
+    released_content_type = released["selected_wire_headers"]["content-type"]
+    assert released_content_type.split(";", 1)[0].strip().lower() == content_type, (mode, released)
+    assert capture["release_authority"]["credential_ref"] is None, (mode, capture)
+    assert capture["release_authority"]["credential_version"] == 0, (mode, capture)
+    assert capture["tls_channel_binding"]["exporter_label"] == "EXPORTER-Serverware-Proxy-Stream-v1", capture
+    assert b"hidden" not in body, (mode, body)
+
+    if mode == "jsonl":
+        value = [json.loads(line) for line in body.splitlines() if line]
+        assert value == expected_items, value
+    elif mode == "json-array":
+        value = json.loads(body)
+        assert value == expected_items, value
+    elif mode == "json-sse":
+        data = []
+        for line in body.decode("utf-8").splitlines():
+            if line.startswith("data: ") and line != "data: [DONE]":
+                data.append(json.loads(line[6:]))
+        value = data
+        assert value == expected_items, (body, value)
+        assert body.rstrip().endswith(b"data: [DONE]"), body
+    elif mode == "json-nested":
+        value = json.loads(body)
+        assert value == {
+            "audit": {"trace": "proof-trace"},
+            "items": [{"details": {"safe": "kept"}, "id": "one"}],
+            "profile": {
+                "email": "operator@example.test",
+                "settings": {"theme": "dark"},
+            },
+            "requestId": "proof-request",
+            "sawSecret": True,
+        }, value
+    elif mode == "form":
+        value = parse_qs(body.decode("utf-8"), keep_blank_values=True)
+        assert value == {"kept": ["alpha"], "safe": ["one"], "sawSecret": ["true"]}, value
+    else:
+        value = list(csv.DictReader(io.StringIO(body.decode("utf-8"))))
+        assert value == [
+            {"id": "one", "public": "alpha", "safe_note": "kept", "sawSecret": "true"},
+            {"id": "two", "public": "beta", "safe_note": "kept-too", "sawSecret": "true"},
+        ], value
+    assert_no_forbidden_keys(value)
+PY
+
 nonce="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 status="$(curl -sS -o "$TMP_DIR/response-proof-unsafe.json" -w '%{http_code}' \
   --max-time 10 \
@@ -488,4 +689,4 @@ assert status == 400, (status, payload)
 assert payload == {"error": "response_proof_requires_safe_method"}, payload
 PY
 
-printf '%s\n' '{"buffered_response_proof_capture":"pass","ok":true,"streaming_response_proof_capture":"pass"}'
+printf '%s\n' '{"buffered_response_proof_capture":"pass","ok":true,"streaming_response_proof_capture":"pass","structured_streaming_connect_proofs":6}'

@@ -25,6 +25,40 @@ KEY_PATH = CERT_DIR / "key.pem"
 
 app = FastAPI(title="Serverware demo upstream")
 _REQUEST_COUNTS: dict[tuple[str, str], int] = {}
+_STRUCTURED_PROOF_STREAMS: dict[str, tuple[str, bytes]] = {
+    "jsonl": (
+        "application/x-ndjson",
+        b'{"index":0,"kept":"alpha","nested":{"safe":"one","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}\n'
+        b'{"index":1,"kept":"beta","nested":{"safe":"two","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}\n',
+    ),
+    "json-array": (
+        "application/json",
+        b'[{"index":0,"kept":"alpha","nested":{"safe":"one","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"},'
+        b'{"index":1,"kept":"beta","nested":{"safe":"two","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}]',
+    ),
+    "json-sse": (
+        "text/event-stream",
+        b'event: hidden\nid: hidden-0\ndata: {"index":0,"kept":"alpha","nested":{"safe":"one","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}\n\n'
+        b'event: hidden\nid: hidden-1\ndata: {"index":1,"kept":"beta","nested":{"safe":"two","secret":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}\n\n'
+        b"data: [DONE]\n\n",
+    ),
+    "json-nested": (
+        "application/json",
+        b'{"requestId":"proof-request","profile":{"email":"operator@example.test","settings":{"theme":"dark","token":"hidden"},"secret":"hidden"},'
+        b'"items":[{"id":"one","details":{"safe":"kept","secret":"hidden"},"secret":"hidden"}],'
+        b'"audit":{"trace":"proof-trace","privateToken":"hidden"},"sawSecret":true,"upstreamSecret":"hidden"}',
+    ),
+    "form": (
+        "application/x-www-form-urlencoded",
+        b"kept=alpha&safe=one&sawSecret=true&hidden=hidden&upstreamSecret=hidden",
+    ),
+    "csv": (
+        "text/csv",
+        b"id,public,safe_note,sawSecret,hidden,upstreamSecret\n"
+        b"one,alpha,kept,true,hidden,hidden\n"
+        b"two,beta,kept-too,true,hidden,hidden\n",
+    ),
+}
 
 
 def _record_request(request: Request) -> None:
@@ -232,6 +266,21 @@ async def stream_bytes(request: Request) -> Response:
             "X-Serverware-Stream-Sha256": hashlib.sha256(body).hexdigest(),
         },
     )
+
+
+@app.get("/proof-stream/{stream_format}")
+async def structured_proof_stream(request: Request, stream_format: str) -> StreamingResponse:
+    fixture = _STRUCTURED_PROOF_STREAMS.get(stream_format)
+    if fixture is None:
+        return StreamingResponse(iter([b"unknown stream fixture"]), status_code=404)
+    _record_request(request)
+    media_type, body = fixture
+
+    async def stream_body():
+        for offset in range(0, len(body), 17):
+            yield body[offset : offset + 17]
+
+    return StreamingResponse(stream_body(), media_type=media_type)
 
 
 @app.api_route("/upload-bytes", methods=["POST", "PUT"])

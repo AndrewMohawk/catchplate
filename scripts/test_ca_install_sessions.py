@@ -59,6 +59,13 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
         os.environ["SERVERWARE_DIRECT_CA_DOWNLOAD_ENABLED"] = "0"
+        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
+        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
+        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
 
         from serverware import app as app_module
         from serverware import db

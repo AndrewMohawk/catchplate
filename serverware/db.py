@@ -5348,6 +5348,8 @@ def init_db(path: Path = DB_PATH) -> None:
                 encrypted_operation TEXT,
                 operation_storage_version BIGINT,
                 window_start_epoch_ms BIGINT NOT NULL,
+                window_end_epoch_ms BIGINT NOT NULL,
+                window_kind TEXT NOT NULL DEFAULT 'fixed',
                 window_seconds INTEGER NOT NULL,
                 max_count INTEGER NOT NULL,
                 count INTEGER NOT NULL,
@@ -5399,6 +5401,8 @@ def init_db(path: Path = DB_PATH) -> None:
                 encrypted_operation TEXT,
                 operation_storage_version BIGINT,
                 window_start_epoch_ms BIGINT NOT NULL,
+                window_end_epoch_ms BIGINT NOT NULL,
+                window_kind TEXT NOT NULL DEFAULT 'fixed',
                 window_seconds INTEGER NOT NULL,
                 max_count INTEGER NOT NULL,
                 count_after INTEGER NOT NULL,
@@ -5738,6 +5742,26 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(
             conn, "rate_limit_counters", "operation_storage_version", "BIGINT"
         )
+        for table in (
+            "rate_limit_counters",
+            "release_authorization_quota_reservations",
+        ):
+            _ensure_column(
+                conn,
+                table,
+                "window_kind",
+                "TEXT NOT NULL DEFAULT 'fixed'",
+            )
+            _ensure_column(conn, table, "window_end_epoch_ms", "BIGINT")
+            conn.execute(
+                f"UPDATE {table} SET window_kind = 'fixed' "
+                "WHERE window_kind IS NULL OR window_kind = ''"
+            )
+            conn.execute(
+                f"UPDATE {table} SET window_end_epoch_ms = "
+                "window_start_epoch_ms + (window_seconds * 1000) "
+                "WHERE window_end_epoch_ms IS NULL"
+            )
         _ensure_column(
             conn, "metadata_audit_outbox", "storage_format_version", "BIGINT"
         )
@@ -14006,11 +14030,191 @@ def consume_jit_grant(
     )
 
 
-def _rate_limit_retry_after(
-    window_start_epoch_ms: int, window_seconds: int, now_epoch_ms: int
+_RATE_LIMIT_FIXED_WINDOW = "fixed"
+_RATE_LIMIT_CALENDAR_WINDOWS = frozenset({"utcDay", "utcIsoWeek", "utcMonth"})
+
+
+def _normalize_rate_limit_window(
+    *,
+    window_seconds: int | None,
+    calendar_window: str | None,
+) -> tuple[str, int | None]:
+    if (window_seconds is None) == (calendar_window is None):
+        raise RateLimitStoreError(
+            "rate limit must define exactly one of window_seconds or calendar_window"
+        )
+    if window_seconds is not None:
+        if (
+            not isinstance(window_seconds, int)
+            or isinstance(window_seconds, bool)
+            or not 1 <= window_seconds <= 31_536_000
+        ):
+            raise RateLimitStoreError("rate limit window_seconds is invalid")
+        return _RATE_LIMIT_FIXED_WINDOW, window_seconds
+    if calendar_window not in _RATE_LIMIT_CALENDAR_WINDOWS:
+        raise RateLimitStoreError("rate limit calendar_window is invalid")
+    return str(calendar_window), None
+
+
+def _calendar_rate_limit_bounds(window_kind: str, now_epoch_ms: int) -> tuple[int, int]:
+    now = datetime.fromtimestamp(now_epoch_ms / 1000, timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    if window_kind == "utcDay":
+        start = day_start
+        end = start + timedelta(days=1)
+    elif window_kind == "utcIsoWeek":
+        start = day_start - timedelta(days=day_start.weekday())
+        end = start + timedelta(days=7)
+    elif window_kind == "utcMonth":
+        start = day_start.replace(day=1)
+        if start.month == 12:
+            end = start.replace(year=start.year + 1, month=1)
+        else:
+            end = start.replace(month=start.month + 1)
+    else:
+        raise RateLimitStoreError("rate limit calendar window kind is invalid")
+    return int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+
+
+def _new_rate_limit_bounds(
+    *,
+    window_kind: str,
+    window_seconds: int | None,
+    now_epoch_ms: int,
+) -> tuple[int, int, int]:
+    if window_kind == _RATE_LIMIT_FIXED_WINDOW:
+        if window_seconds is None:
+            raise RateLimitStoreError("fixed rate limit is missing window_seconds")
+        return (
+            now_epoch_ms,
+            now_epoch_ms + window_seconds * 1000,
+            window_seconds,
+        )
+    start, end = _calendar_rate_limit_bounds(window_kind, now_epoch_ms)
+    return start, end, (end - start) // 1000
+
+
+def _stored_rate_limit_bounds(row: Any) -> tuple[str, int, int, int]:
+    try:
+        window_kind = str(row["window_kind"])
+        window_start = int(row["window_start_epoch_ms"])
+        window_end = int(row["window_end_epoch_ms"])
+        stored_seconds = int(row["window_seconds"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise RateLimitStoreError("stored rate limit window is incomplete") from exc
+    if (
+        window_kind not in {_RATE_LIMIT_FIXED_WINDOW, *_RATE_LIMIT_CALENDAR_WINDOWS}
+        or window_start < 0
+        or window_end <= window_start
+        or stored_seconds < 1
+        or window_end - window_start != stored_seconds * 1000
+    ):
+        raise RateLimitStoreError("stored rate limit window is invalid")
+    if window_kind == _RATE_LIMIT_FIXED_WINDOW:
+        return window_kind, window_start, window_end, stored_seconds
+    expected_start, expected_end = _calendar_rate_limit_bounds(
+        window_kind, window_start
+    )
+    if (window_start, window_end) != (expected_start, expected_end):
+        raise RateLimitStoreError("stored calendar rate limit boundaries are invalid")
+    return window_kind, window_start, window_end, stored_seconds
+
+
+def _resolve_rate_limit_bounds(
+    row: Any | None,
+    *,
+    window_kind: str,
+    window_seconds: int | None,
+    now_epoch_ms: int,
+) -> tuple[int, int, int, bool]:
+    if row is None:
+        start, end, span_seconds = _new_rate_limit_bounds(
+            window_kind=window_kind,
+            window_seconds=window_seconds,
+            now_epoch_ms=now_epoch_ms,
+        )
+        return start, end, span_seconds, True
+
+    stored_kind, stored_start, stored_end, stored_seconds = (
+        _stored_rate_limit_bounds(row)
+    )
+    if now_epoch_ms < stored_start:
+        raise RateLimitStoreError(
+            "rate limit clock moved before the stored window start"
+        )
+    if stored_kind == _RATE_LIMIT_FIXED_WINDOW and window_kind == stored_kind:
+        if window_seconds is None:
+            raise RateLimitStoreError("fixed rate limit is missing window_seconds")
+        requested_end = stored_start + window_seconds * 1000
+        if now_epoch_ms >= requested_end:
+            start, end, span_seconds = _new_rate_limit_bounds(
+                window_kind=window_kind,
+                window_seconds=window_seconds,
+                now_epoch_ms=now_epoch_ms,
+            )
+            return start, end, span_seconds, True
+        return stored_start, requested_end, window_seconds, False
+
+    expired = now_epoch_ms >= stored_end
+    if not expired and stored_kind != window_kind:
+        raise RateLimitStoreError(
+            "live rate limit counter cannot change window kind"
+        )
+    if expired:
+        start, end, span_seconds = _new_rate_limit_bounds(
+            window_kind=window_kind,
+            window_seconds=window_seconds,
+            now_epoch_ms=now_epoch_ms,
+        )
+        return start, end, span_seconds, True
+    if window_kind in _RATE_LIMIT_CALENDAR_WINDOWS:
+        expected_start, expected_end = _calendar_rate_limit_bounds(
+            window_kind, now_epoch_ms
+        )
+        if (stored_start, stored_end) != (expected_start, expected_end):
+            raise RateLimitStoreError(
+                "active calendar rate limit boundaries do not match metadata time"
+            )
+        return stored_start, stored_end, stored_seconds, False
+
+    raise RateLimitStoreError("active rate limit window kind is invalid")
+
+
+def _rate_limit_transaction_now_epoch_ms(
+    conn: Any, explicit_now_epoch_ms: int | None
 ) -> int:
-    reset_at = window_start_epoch_ms + window_seconds * 1000
-    return max(1, int((max(reset_at - now_epoch_ms, 0) + 999) // 1000))
+    if explicit_now_epoch_ms is not None:
+        if (
+            not isinstance(explicit_now_epoch_ms, int)
+            or isinstance(explicit_now_epoch_ms, bool)
+            or explicit_now_epoch_ms < 0
+        ):
+            raise RateLimitStoreError("rate limit time is invalid")
+        return explicit_now_epoch_ms
+    if isinstance(conn, PostgresMetadataConnection):
+        value = conn.execute(
+            "SELECT CAST(EXTRACT(EPOCH FROM clock_timestamp()) * 1000 "
+            "AS BIGINT) AS now_epoch_ms"
+        ).fetchone()["now_epoch_ms"]
+    else:
+        value = conn.execute(
+            "SELECT CAST(ROUND((julianday('now') - 2440587.5) * 86400000) "
+            "AS INTEGER) AS now_epoch_ms"
+        ).fetchone()["now_epoch_ms"]
+    try:
+        now_epoch_ms = int(value)
+    except (TypeError, ValueError) as exc:
+        raise RateLimitStoreError("metadata transaction time is invalid") from exc
+    if now_epoch_ms < 0:
+        raise RateLimitStoreError("metadata transaction time is invalid")
+    return now_epoch_ms
+
+
+def _rate_limit_retry_after(window_end_epoch_ms: int, now_epoch_ms: int) -> int:
+    return max(
+        1,
+        int((max(window_end_epoch_ms - now_epoch_ms, 0) + 999) // 1000),
+    )
 
 
 def _rate_limit_response(
@@ -14024,26 +14228,235 @@ def _rate_limit_response(
     count: int,
     now_epoch_ms: int,
     consumed: bool,
+    window_kind: str = _RATE_LIMIT_FIXED_WINDOW,
+    window_end_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
+    if window_end_epoch_ms is None:
+        window_end_epoch_ms = window_start_epoch_ms + window_seconds * 1000
+    descriptor_seconds = (
+        window_seconds if window_kind == _RATE_LIMIT_FIXED_WINDOW else None
+    )
     remaining = max(max_count - count, 0)
     return {
         "allowed": allowed,
         "consumed": consumed,
         "reason": reason,
         "counter_key": counter_key,
+        "window_kind": window_kind,
         "window_start_epoch_ms": window_start_epoch_ms,
-        "window_seconds": window_seconds,
+        "window_end_epoch_ms": window_end_epoch_ms,
+        "window_seconds": descriptor_seconds,
+        "calendar_window": (
+            window_kind if window_kind in _RATE_LIMIT_CALENDAR_WINDOWS else None
+        ),
+        "window_span_seconds": (window_end_epoch_ms - window_start_epoch_ms) // 1000,
         "max": max_count,
         "count": count,
         "remaining": remaining,
         "retry_after_seconds": 0
         if allowed
-        else _rate_limit_retry_after(
-            window_start_epoch_ms, window_seconds, now_epoch_ms
-        ),
+        else _rate_limit_retry_after(window_end_epoch_ms, now_epoch_ms),
         "rate_limit_store_backend": metadata_store_backend_name(),
         "rate_limit_store_ha": metadata_uses_postgres(),
     }
+
+
+def _consume_rate_limit_transactional(
+    *,
+    counter_key: str,
+    principal_id: str,
+    route_id: str,
+    credential_id: str,
+    credential_version: int,
+    policy_hash: str,
+    constraint_id: str,
+    operation: str | None,
+    window_seconds: int | None,
+    calendar_window: str | None,
+    max_count: int,
+    consume: bool,
+    now_epoch_ms: int | None,
+) -> dict[str, Any]:
+    window_kind, fixed_window_seconds = _normalize_rate_limit_window(
+        window_seconds=window_seconds,
+        calendar_window=calendar_window,
+    )
+    stored_operation = _operation_digest(operation)
+    with connect() as conn:
+        if not isinstance(conn, PostgresMetadataConnection):
+            conn.execute("BEGIN IMMEDIATE" if consume else "BEGIN")
+        now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        lock_suffix = (
+            " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        )
+        row = conn.execute(
+            "SELECT * FROM rate_limit_counters WHERE counter_key = ?" + lock_suffix,
+            (counter_key,),
+        ).fetchone()
+        crypto_required = operation is not None and (consume or row is not None)
+        crypto_required = crypto_required or bool(
+            row is not None and row["encrypted_operation"] is not None
+        )
+        keyring = load_bound_secret_keyring() if crypto_required else None
+        encrypted_operation = (
+            _encrypt_operation(
+                operation,
+                table_kind="rate_counter",
+                counter_key=counter_key,
+                attempt_id=None,
+                keyring=keyring,
+            )
+            if operation is not None and keyring is not None
+            else None
+        )
+        if row is None and consume:
+            initial_start, initial_end, initial_span_seconds = _new_rate_limit_bounds(
+                window_kind=window_kind,
+                window_seconds=fixed_window_seconds,
+                now_epoch_ms=now_ms,
+            )
+            conn.execute(
+                """
+                INSERT INTO rate_limit_counters (
+                    counter_key, principal_id, route_id, credential_id,
+                    credential_version, policy_hash, constraint_id, operation,
+                    encrypted_operation, operation_storage_version,
+                    window_start_epoch_ms, window_end_epoch_ms, window_kind,
+                    window_seconds, max_count, count, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                ON CONFLICT (counter_key) DO NOTHING
+                """,
+                (
+                    counter_key,
+                    principal_id,
+                    route_id,
+                    credential_id,
+                    credential_version,
+                    policy_hash,
+                    constraint_id,
+                    stored_operation,
+                    encrypted_operation,
+                    _OPERATION_STORAGE_VERSION,
+                    initial_start,
+                    initial_end,
+                    window_kind,
+                    initial_span_seconds,
+                    max_count,
+                    now_s,
+                    now_s,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM rate_limit_counters WHERE counter_key = ?"
+                + lock_suffix,
+                (counter_key,),
+            ).fetchone()
+            if row is None:
+                raise RateLimitStoreError(
+                    "rate limit counter insert did not create a locked row"
+                )
+        if row is not None and now_epoch_ms is None:
+            now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+            now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        if row is not None:
+            _stored_operation(row, table_kind="rate_counter", keyring=keyring)
+
+        window_start, window_end, span_seconds, reset = _resolve_rate_limit_bounds(
+            row,
+            window_kind=window_kind,
+            window_seconds=fixed_window_seconds,
+            now_epoch_ms=now_ms,
+        )
+        count = 0 if row is None or reset else int(row["count"])
+        if row is None:
+            return _rate_limit_response(
+                allowed=True,
+                reason="available",
+                counter_key=counter_key,
+                window_start_epoch_ms=window_start,
+                window_seconds=span_seconds,
+                max_count=max_count,
+                count=0,
+                now_epoch_ms=now_ms,
+                consumed=False,
+                window_kind=window_kind,
+                window_end_epoch_ms=window_end,
+            )
+        if count >= max_count:
+            return _rate_limit_response(
+                allowed=False,
+                reason="rate_limited",
+                counter_key=counter_key,
+                window_start_epoch_ms=window_start,
+                window_seconds=span_seconds,
+                max_count=max_count,
+                count=count,
+                now_epoch_ms=now_ms,
+                consumed=False,
+                window_kind=window_kind,
+                window_end_epoch_ms=window_end,
+            )
+        if not consume:
+            return _rate_limit_response(
+                allowed=True,
+                reason="available",
+                counter_key=counter_key,
+                window_start_epoch_ms=window_start,
+                window_seconds=span_seconds,
+                max_count=max_count,
+                count=count,
+                now_epoch_ms=now_ms,
+                consumed=False,
+                window_kind=window_kind,
+                window_end_epoch_ms=window_end,
+            )
+        count += 1
+        conn.execute(
+            """
+            UPDATE rate_limit_counters
+            SET principal_id = ?, route_id = ?, credential_id = ?,
+                credential_version = ?, policy_hash = ?, constraint_id = ?,
+                operation = ?, encrypted_operation = ?,
+                operation_storage_version = ?, window_start_epoch_ms = ?,
+                window_end_epoch_ms = ?, window_kind = ?, window_seconds = ?,
+                max_count = ?, count = ?, updated_at = ?
+            WHERE counter_key = ?
+            """,
+            (
+                principal_id,
+                route_id,
+                credential_id,
+                credential_version,
+                policy_hash,
+                constraint_id,
+                stored_operation,
+                encrypted_operation,
+                _OPERATION_STORAGE_VERSION,
+                window_start,
+                window_end,
+                window_kind,
+                span_seconds,
+                max_count,
+                count,
+                now_s,
+                counter_key,
+            ),
+        )
+    return _rate_limit_response(
+        allowed=True,
+        reason="consumed",
+        counter_key=counter_key,
+        window_start_epoch_ms=window_start,
+        window_seconds=span_seconds,
+        max_count=max_count,
+        count=count,
+        now_epoch_ms=now_ms,
+        consumed=True,
+        window_kind=window_kind,
+        window_end_epoch_ms=window_end,
+    )
 
 
 def _consume_rate_limit_sqlite(
@@ -14056,210 +14469,26 @@ def _consume_rate_limit_sqlite(
     policy_hash: str,
     constraint_id: str,
     operation: str | None,
-    window_seconds: int,
+    window_seconds: int | None,
+    calendar_window: str | None,
     max_count: int,
     consume: bool,
-    now_epoch_ms: int,
+    now_epoch_ms: int | None,
 ) -> dict[str, Any]:
-    now_s = datetime.fromtimestamp(now_epoch_ms / 1000, timezone.utc).isoformat()
-    preflight_row = None
-    if not consume:
-        with connect() as preflight:
-            preflight_row = preflight.execute(
-                "SELECT encrypted_operation FROM rate_limit_counters "
-                "WHERE counter_key = ?",
-                (counter_key,),
-            ).fetchone()
-        if preflight_row is None:
-            return _rate_limit_response(
-                allowed=True,
-                reason="available",
-                counter_key=counter_key,
-                window_start_epoch_ms=now_epoch_ms,
-                window_seconds=window_seconds,
-                max_count=max_count,
-                count=0,
-                now_epoch_ms=now_epoch_ms,
-                consumed=False,
-            )
-    crypto_required = operation is not None and (consume or preflight_row is not None)
-    crypto_required = crypto_required or bool(
-        preflight_row is not None and preflight_row["encrypted_operation"] is not None
-    )
-    keyring = load_bound_secret_keyring() if crypto_required else None
-    stored_operation = _operation_digest(operation)
-    encrypted_operation = (
-        _encrypt_operation(
-            operation,
-            table_kind="rate_counter",
-            counter_key=counter_key,
-            attempt_id=None,
-            keyring=keyring,
-        )
-        if operation is not None and keyring is not None
-        else None
-    )
-    with connect() as conn:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            "SELECT * FROM rate_limit_counters WHERE counter_key = ?",
-            (counter_key,),
-        ).fetchone()
-        if row is None:
-            count = 1 if consume else 0
-            if consume:
-                conn.execute(
-                    """
-                    INSERT INTO rate_limit_counters (
-                        counter_key, principal_id, route_id, credential_id, credential_version,
-                        policy_hash, constraint_id, operation, encrypted_operation,
-                        operation_storage_version, window_start_epoch_ms,
-                        window_seconds, max_count, count, created_at, updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        counter_key,
-                        principal_id,
-                        route_id,
-                        credential_id,
-                        credential_version,
-                        policy_hash,
-                        constraint_id,
-                        stored_operation,
-                        encrypted_operation,
-                        _OPERATION_STORAGE_VERSION,
-                        now_epoch_ms,
-                        window_seconds,
-                        max_count,
-                        count,
-                        now_s,
-                        now_s,
-                    ),
-                )
-            return _rate_limit_response(
-                allowed=True,
-                reason="consumed" if consume else "available",
-                counter_key=counter_key,
-                window_start_epoch_ms=now_epoch_ms,
-                window_seconds=window_seconds,
-                max_count=max_count,
-                count=count,
-                now_epoch_ms=now_epoch_ms,
-                consumed=consume,
-            )
-
-        _stored_operation(row, table_kind="rate_counter", keyring=keyring)
-        window_start = int(row["window_start_epoch_ms"])
-        count = int(row["count"])
-        expired = now_epoch_ms >= window_start + int(row["window_seconds"]) * 1000
-        if expired:
-            if not consume:
-                return _rate_limit_response(
-                    allowed=True,
-                    reason="available",
-                    counter_key=counter_key,
-                    window_start_epoch_ms=now_epoch_ms,
-                    window_seconds=window_seconds,
-                    max_count=max_count,
-                    count=0,
-                    now_epoch_ms=now_epoch_ms,
-                    consumed=False,
-                )
-            window_start = now_epoch_ms
-            count = 0
-        if count >= max_count:
-            if (
-                expired
-                or int(row["window_seconds"]) != window_seconds
-                or int(row["max_count"]) != max_count
-            ):
-                conn.execute(
-                    """
-                    UPDATE rate_limit_counters
-                    SET principal_id = ?, route_id = ?, credential_id = ?, credential_version = ?,
-                        policy_hash = ?, constraint_id = ?, operation = ?,
-                        encrypted_operation = ?, operation_storage_version = ?,
-                        window_start_epoch_ms = ?, window_seconds = ?, max_count = ?,
-                        count = ?, updated_at = ?
-                    WHERE counter_key = ?
-                    """,
-                    (
-                        principal_id,
-                        route_id,
-                        credential_id,
-                        credential_version,
-                        policy_hash,
-                        constraint_id,
-                        stored_operation,
-                        encrypted_operation,
-                        _OPERATION_STORAGE_VERSION,
-                        window_start,
-                        window_seconds,
-                        max_count,
-                        count,
-                        now_s,
-                        counter_key,
-                    ),
-                )
-            return _rate_limit_response(
-                allowed=False,
-                reason="rate_limited",
-                counter_key=counter_key,
-                window_start_epoch_ms=window_start,
-                window_seconds=window_seconds,
-                max_count=max_count,
-                count=count,
-                now_epoch_ms=now_epoch_ms,
-                consumed=False,
-            )
-
-        if consume:
-            count += 1
-        if (
-            consume
-            or expired
-            or int(row["window_seconds"]) != window_seconds
-            or int(row["max_count"]) != max_count
-        ):
-            conn.execute(
-                """
-                UPDATE rate_limit_counters
-                SET principal_id = ?, route_id = ?, credential_id = ?, credential_version = ?,
-                    policy_hash = ?, constraint_id = ?, operation = ?,
-                    encrypted_operation = ?, operation_storage_version = ?,
-                    window_start_epoch_ms = ?, window_seconds = ?, max_count = ?,
-                    count = ?, updated_at = ?
-                WHERE counter_key = ?
-                """,
-                (
-                    principal_id,
-                    route_id,
-                    credential_id,
-                    credential_version,
-                    policy_hash,
-                    constraint_id,
-                    stored_operation,
-                    encrypted_operation,
-                    _OPERATION_STORAGE_VERSION,
-                    window_start,
-                    window_seconds,
-                    max_count,
-                    count,
-                    now_s,
-                    counter_key,
-                ),
-            )
-    return _rate_limit_response(
-        allowed=True,
-        reason="consumed" if consume else "available",
+    return _consume_rate_limit_transactional(
         counter_key=counter_key,
-        window_start_epoch_ms=window_start,
+        principal_id=principal_id,
+        route_id=route_id,
+        credential_id=credential_id,
+        credential_version=credential_version,
+        policy_hash=policy_hash,
+        constraint_id=constraint_id,
+        operation=operation,
         window_seconds=window_seconds,
+        calendar_window=calendar_window,
         max_count=max_count,
-        count=count,
+        consume=consume,
         now_epoch_ms=now_epoch_ms,
-        consumed=consume,
     )
 
 
@@ -14273,246 +14502,26 @@ def _consume_rate_limit_postgres(
     policy_hash: str,
     constraint_id: str,
     operation: str | None,
-    window_seconds: int,
+    window_seconds: int | None,
+    calendar_window: str | None,
     max_count: int,
     consume: bool,
-    now_epoch_ms: int,
+    now_epoch_ms: int | None,
 ) -> dict[str, Any]:
-    now_s = datetime.fromtimestamp(now_epoch_ms / 1000, timezone.utc).isoformat()
-    preflight_row = None
-    if not consume:
-        with _metadata_pg_connect_raw() as preflight:
-            preflight_row = preflight.execute(
-                "SELECT encrypted_operation FROM rate_limit_counters "
-                "WHERE counter_key = %s",
-                (counter_key,),
-            ).fetchone()
-        if preflight_row is None:
-            return _rate_limit_response(
-                allowed=True,
-                reason="available",
-                counter_key=counter_key,
-                window_start_epoch_ms=now_epoch_ms,
-                window_seconds=window_seconds,
-                max_count=max_count,
-                count=0,
-                now_epoch_ms=now_epoch_ms,
-                consumed=False,
-            )
-    crypto_required = operation is not None and (consume or preflight_row is not None)
-    crypto_required = crypto_required or bool(
-        preflight_row is not None and preflight_row["encrypted_operation"] is not None
-    )
-    keyring = load_bound_secret_keyring() if crypto_required else None
-    stored_operation = _operation_digest(operation)
-    encrypted_operation = (
-        _encrypt_operation(
-            operation,
-            table_kind="rate_counter",
-            counter_key=counter_key,
-            attempt_id=None,
-            keyring=keyring,
-        )
-        if operation is not None and keyring is not None
-        else None
-    )
-    with _metadata_pg_connect_raw() as conn:
-        with conn.transaction():
-            with conn.cursor() as cur:
-                if consume:
-                    cur.execute(
-                        """
-                        INSERT INTO rate_limit_counters (
-                            counter_key, principal_id, route_id, credential_id, credential_version,
-                            policy_hash, constraint_id, operation, encrypted_operation,
-                            operation_storage_version, window_start_epoch_ms,
-                            window_seconds, max_count, count, created_at, updated_at
-                        )
-                        VALUES (
-                            %(counter_key)s, %(principal_id)s, %(route_id)s, %(credential_id)s,
-                            %(credential_version)s, %(policy_hash)s, %(constraint_id)s, %(operation)s,
-                            %(encrypted_operation)s, %(operation_storage_version)s,
-                            %(window_start_epoch_ms)s, %(window_seconds)s, %(max_count)s,
-                            0, %(created_at)s, %(updated_at)s
-                        )
-                        ON CONFLICT (counter_key) DO NOTHING
-                        """,
-                        {
-                            "counter_key": counter_key,
-                            "principal_id": principal_id,
-                            "route_id": route_id,
-                            "credential_id": credential_id,
-                            "credential_version": credential_version,
-                            "policy_hash": policy_hash,
-                            "constraint_id": constraint_id,
-                            "operation": stored_operation,
-                            "encrypted_operation": encrypted_operation,
-                            "operation_storage_version": _OPERATION_STORAGE_VERSION,
-                            "window_start_epoch_ms": now_epoch_ms,
-                            "window_seconds": window_seconds,
-                            "max_count": max_count,
-                            "created_at": now_s,
-                            "updated_at": now_s,
-                        },
-                    )
-                cur.execute(
-                    """
-                    SELECT *
-                    FROM rate_limit_counters
-                    WHERE counter_key = %(counter_key)s
-                    FOR UPDATE
-                    """,
-                    {"counter_key": counter_key},
-                )
-                row = cur.fetchone()
-                if row is None:
-                    if consume:
-                        raise RateLimitStoreError(
-                            "postgres rate limit counter insert did not create a locked row"
-                        )
-                    return _rate_limit_response(
-                        allowed=True,
-                        reason="available",
-                        counter_key=counter_key,
-                        window_start_epoch_ms=now_epoch_ms,
-                        window_seconds=window_seconds,
-                        max_count=max_count,
-                        count=0,
-                        now_epoch_ms=now_epoch_ms,
-                        consumed=False,
-                    )
-
-                _stored_operation(row, table_kind="rate_counter", keyring=keyring)
-                window_start = int(row["window_start_epoch_ms"])
-                count = int(row["count"])
-                expired = (
-                    now_epoch_ms >= window_start + int(row["window_seconds"]) * 1000
-                )
-                if expired:
-                    if not consume:
-                        return _rate_limit_response(
-                            allowed=True,
-                            reason="available",
-                            counter_key=counter_key,
-                            window_start_epoch_ms=now_epoch_ms,
-                            window_seconds=window_seconds,
-                            max_count=max_count,
-                            count=0,
-                            now_epoch_ms=now_epoch_ms,
-                            consumed=False,
-                        )
-                    window_start = now_epoch_ms
-                    count = 0
-                if count >= max_count:
-                    if (
-                        expired
-                        or int(row["window_seconds"]) != window_seconds
-                        or int(row["max_count"]) != max_count
-                    ):
-                        cur.execute(
-                            """
-                            UPDATE rate_limit_counters
-                            SET principal_id = %(principal_id)s,
-                                route_id = %(route_id)s,
-                                credential_id = %(credential_id)s,
-                                credential_version = %(credential_version)s,
-                                policy_hash = %(policy_hash)s,
-                                constraint_id = %(constraint_id)s,
-                                operation = %(operation)s,
-                                encrypted_operation = %(encrypted_operation)s,
-                                operation_storage_version = %(operation_storage_version)s,
-                                window_start_epoch_ms = %(window_start_epoch_ms)s,
-                                window_seconds = %(window_seconds)s,
-                                max_count = %(max_count)s,
-                                count = %(count)s,
-                                updated_at = %(updated_at)s
-                            WHERE counter_key = %(counter_key)s
-                            """,
-                            {
-                                "counter_key": counter_key,
-                                "principal_id": principal_id,
-                                "route_id": route_id,
-                                "credential_id": credential_id,
-                                "credential_version": credential_version,
-                                "policy_hash": policy_hash,
-                                "constraint_id": constraint_id,
-                                "operation": stored_operation,
-                                "encrypted_operation": encrypted_operation,
-                                "operation_storage_version": _OPERATION_STORAGE_VERSION,
-                                "window_start_epoch_ms": window_start,
-                                "window_seconds": window_seconds,
-                                "max_count": max_count,
-                                "count": count,
-                                "updated_at": now_s,
-                            },
-                        )
-                    return _rate_limit_response(
-                        allowed=False,
-                        reason="rate_limited",
-                        counter_key=counter_key,
-                        window_start_epoch_ms=window_start,
-                        window_seconds=window_seconds,
-                        max_count=max_count,
-                        count=count,
-                        now_epoch_ms=now_epoch_ms,
-                        consumed=False,
-                    )
-
-                if consume:
-                    count += 1
-                if (
-                    consume
-                    or expired
-                    or int(row["window_seconds"]) != window_seconds
-                    or int(row["max_count"]) != max_count
-                ):
-                    cur.execute(
-                        """
-                        UPDATE rate_limit_counters
-                        SET principal_id = %(principal_id)s,
-                            route_id = %(route_id)s,
-                            credential_id = %(credential_id)s,
-                            credential_version = %(credential_version)s,
-                            policy_hash = %(policy_hash)s,
-                            constraint_id = %(constraint_id)s,
-                            operation = %(operation)s,
-                            encrypted_operation = %(encrypted_operation)s,
-                            operation_storage_version = %(operation_storage_version)s,
-                            window_start_epoch_ms = %(window_start_epoch_ms)s,
-                            window_seconds = %(window_seconds)s,
-                            max_count = %(max_count)s,
-                            count = %(count)s,
-                            updated_at = %(updated_at)s
-                        WHERE counter_key = %(counter_key)s
-                        """,
-                        {
-                            "counter_key": counter_key,
-                            "principal_id": principal_id,
-                            "route_id": route_id,
-                            "credential_id": credential_id,
-                            "credential_version": credential_version,
-                            "policy_hash": policy_hash,
-                            "constraint_id": constraint_id,
-                            "operation": stored_operation,
-                            "encrypted_operation": encrypted_operation,
-                            "operation_storage_version": _OPERATION_STORAGE_VERSION,
-                            "window_start_epoch_ms": window_start,
-                            "window_seconds": window_seconds,
-                            "max_count": max_count,
-                            "count": count,
-                            "updated_at": now_s,
-                        },
-                    )
-    return _rate_limit_response(
-        allowed=True,
-        reason="consumed" if consume else "available",
+    return _consume_rate_limit_transactional(
         counter_key=counter_key,
-        window_start_epoch_ms=window_start,
+        principal_id=principal_id,
+        route_id=route_id,
+        credential_id=credential_id,
+        credential_version=credential_version,
+        policy_hash=policy_hash,
+        constraint_id=constraint_id,
+        operation=operation,
         window_seconds=window_seconds,
+        calendar_window=calendar_window,
         max_count=max_count,
-        count=count,
+        consume=consume,
         now_epoch_ms=now_epoch_ms,
-        consumed=consume,
     )
 
 
@@ -14526,7 +14535,8 @@ def consume_rate_limit(
     policy_hash: str,
     constraint_id: str,
     operation: str | None,
-    window_seconds: int,
+    window_seconds: int | None = None,
+    calendar_window: str | None = None,
     max_count: int,
     consume: bool = True,
     now_epoch_ms: int | None = None,
@@ -14536,13 +14546,16 @@ def consume_rate_limit(
 ) -> dict[str, Any]:
     if not counter_key.startswith("sha256:") or len(counter_key) != 71:
         raise RateLimitStoreError("rate limit counter_key must be a sha256: digest")
-    if window_seconds < 1 or max_count < 1:
-        raise RateLimitStoreError(
-            "rate limit max_count and window_seconds must be positive"
-        )
-    now_ms = int(
-        now_epoch_ms if now_epoch_ms is not None else utcnow().timestamp() * 1000
+    _normalize_rate_limit_window(
+        window_seconds=window_seconds,
+        calendar_window=calendar_window,
     )
+    if (
+        not isinstance(max_count, int)
+        or isinstance(max_count, bool)
+        or not 1 <= max_count <= 1_000_000_000
+    ):
+        raise RateLimitStoreError("rate limit max_count is invalid")
     if metadata_uses_postgres():
         result = _consume_rate_limit_postgres(
             counter_key=counter_key,
@@ -14554,9 +14567,10 @@ def consume_rate_limit(
             constraint_id=constraint_id,
             operation=operation,
             window_seconds=window_seconds,
+            calendar_window=calendar_window,
             max_count=max_count,
             consume=consume,
-            now_epoch_ms=now_ms,
+            now_epoch_ms=now_epoch_ms,
         )
     else:
         result = _consume_rate_limit_sqlite(
@@ -14569,9 +14583,10 @@ def consume_rate_limit(
             constraint_id=constraint_id,
             operation=operation,
             window_seconds=window_seconds,
+            calendar_window=calendar_window,
             max_count=max_count,
             consume=consume,
-            now_epoch_ms=now_ms,
+            now_epoch_ms=now_epoch_ms,
         )
     if audit and (consume or not result["allowed"]):
         try:
@@ -14594,8 +14609,11 @@ def consume_rate_limit(
                     "count": result["count"],
                     "max": result["max"],
                     "remaining": result["remaining"],
+                    "window_kind": result["window_kind"],
                     "window_seconds": result["window_seconds"],
+                    "calendar_window": result["calendar_window"],
                     "window_start_epoch_ms": result["window_start_epoch_ms"],
+                    "window_end_epoch_ms": result["window_end_epoch_ms"],
                     "retry_after_seconds": result["retry_after_seconds"],
                     "rate_limit_store_backend": result["rate_limit_store_backend"],
                 },
@@ -14982,8 +15000,24 @@ def _release_authorization_result(
             "counter_key": item["counter_key"],
             "constraint_id": item["constraint_id"],
             "operation": _release_operation(item, keyring=keyring),
+            "window_kind": str(item["window_kind"]),
             "window_start_epoch_ms": int(item["window_start_epoch_ms"]),
-            "window_seconds": int(item["window_seconds"]),
+            "window_end_epoch_ms": int(item["window_end_epoch_ms"]),
+            "window_seconds": (
+                int(item["window_seconds"])
+                if item["window_kind"] == _RATE_LIMIT_FIXED_WINDOW
+                else None
+            ),
+            "calendar_window": (
+                str(item["window_kind"])
+                if item["window_kind"] in _RATE_LIMIT_CALENDAR_WINDOWS
+                else None
+            ),
+            "window_span_seconds": (
+                int(item["window_end_epoch_ms"])
+                - int(item["window_start_epoch_ms"])
+            )
+            // 1000,
             "max": int(item["max_count"]),
             "count": int(item["count_after"]),
             "remaining": max(
@@ -15021,6 +15055,73 @@ def _release_authorization_result(
         "release_authorization_store_backend": metadata_store_backend_name(),
         "release_authorization_store_ha": metadata_uses_postgres(),
     }
+
+
+def _release_reservation_invalid_reason(
+    conn: Any, row: Any, *, now_epoch_ms: int
+) -> str | None:
+    if int(row["reservation_expires_at_epoch_ms"]) <= now_epoch_ms:
+        return "reservation_ttl_expired"
+    quotas = _release_quota_rows(conn, str(row["attempt_id"]))
+    _lock_release_resources(
+        conn, {f"quota:{item['counter_key']}" for item in quotas}
+    )
+    for quota in quotas:
+        if str(quota["reservation_state"]) != "reserved":
+            return "shared_quota_reservation_invalid"
+        window_start = int(quota["window_start_epoch_ms"])
+        window_end = int(quota["window_end_epoch_ms"])
+        if now_epoch_ms < window_start:
+            return "shared_quota_clock_rollback"
+        if now_epoch_ms >= window_end:
+            return "shared_quota_window_expired"
+        counter = conn.execute(
+            "SELECT window_kind, window_start_epoch_ms, window_end_epoch_ms, count "
+            "FROM rate_limit_counters WHERE counter_key = ?"
+            + (" FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""),
+            (quota["counter_key"],),
+        ).fetchone()
+        if (
+            counter is None
+            or str(counter["window_kind"]) != str(quota["window_kind"])
+            or int(counter["window_start_epoch_ms"]) != window_start
+            or int(counter["window_end_epoch_ms"]) != window_end
+            or int(counter["count"]) < 1
+        ):
+            return "shared_quota_window_changed"
+    return None
+
+
+def _cancel_invalid_reserved_release(
+    conn: Any,
+    row: Any,
+    *,
+    now_epoch_ms: int,
+    actor_id: str | None,
+    idempotent_replay: bool,
+    keyring: BoundSecretKeyring | None = None,
+) -> dict[str, Any] | None:
+    if str(row["state"]) != "reserved":
+        return None
+    reason = _release_reservation_invalid_reason(
+        conn, row, now_epoch_ms=now_epoch_ms
+    )
+    if reason is None:
+        return None
+    row = _cancel_release_attempt(
+        conn,
+        row,
+        now_ms=now_epoch_ms,
+        actor_id=actor_id,
+        reason=reason,
+    )
+    return _release_authorization_result(
+        conn,
+        row,
+        idempotent_replay=idempotent_replay,
+        reason=reason,
+        keyring=keyring,
+    )
 
 
 def _insert_release_event(
@@ -15087,13 +15188,27 @@ def _prepare_release_quotas(
         operation = item.get("operation")
         if operation is not None:
             operation = _release_text("shared quota operation", operation)
+        raw_window_kind = item.get("window_kind")
         window_seconds = item.get("window_seconds")
+        if raw_window_kind is None:
+            raw_window_kind = _RATE_LIMIT_FIXED_WINDOW if window_seconds is not None else None
+        calendar_window = (
+            str(raw_window_kind)
+            if raw_window_kind in _RATE_LIMIT_CALENDAR_WINDOWS
+            else None
+        )
+        try:
+            window_kind, fixed_window_seconds = _normalize_rate_limit_window(
+                window_seconds=(window_seconds if calendar_window is None else None),
+                calendar_window=calendar_window,
+            )
+        except RateLimitStoreError as exc:
+            raise ReleaseAuthorizationError("shared quota window is invalid") from exc
+        if raw_window_kind != window_kind:
+            raise ReleaseAuthorizationError("shared quota window kind is invalid")
         max_count = item.get("max_count")
         if (
-            not isinstance(window_seconds, int)
-            or isinstance(window_seconds, bool)
-            or not 1 <= window_seconds <= 31_536_000
-            or not isinstance(max_count, int)
+            not isinstance(max_count, int)
             or isinstance(max_count, bool)
             or not 1 <= max_count <= 1_000_000_000
         ):
@@ -15102,9 +15217,11 @@ def _prepare_release_quotas(
             "counter_key": counter_key,
             "constraint_id": constraint_id,
             "operation": operation,
-            "window_seconds": window_seconds,
+            "window_kind": window_kind,
             "max_count": max_count,
         }
+        if fixed_window_seconds is not None:
+            normalized["window_seconds"] = fixed_window_seconds
         previous = prepared.get(counter_key)
         if previous is not None and previous != normalized:
             raise ReleaseAuthorizationError(
@@ -15240,18 +15357,17 @@ def reserve_release_authorization(
         raise ReleaseAuthorizationError("release authorization binding exceeds 64 KiB")
     binding_digest = "sha256:" + hashlib.sha256(binding_json.encode("utf-8")).hexdigest()
     persisted_binding_json = dumps({"digest": binding_digest})
-    if now_epoch_ms is None:
-        release_now = utcnow()
-        now_ms = int(release_now.timestamp() * 1000)
-    else:
-        now_ms = _release_now_epoch_ms(now_epoch_ms)
-        release_now = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
-    now_s = release_now.isoformat()
     keyring = load_bound_secret_keyring()
 
     try:
         with connect() as conn:
             _begin_release_transaction(conn)
+            try:
+                now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+            except RateLimitStoreError as exc:
+                raise ReleaseAuthorizationError(str(exc)) from exc
+            release_now = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
+            now_s = release_now.isoformat()
             if authority_policy_hash is not None and not _revalidate_release_policy_authority(
                 conn,
                 policy_hash=authority_policy_hash,
@@ -15287,6 +15403,16 @@ def reserve_release_authorization(
                     )
                 _validate_release_consumption_state(conn, existing)
                 if existing["state"] == "reserved":
+                    invalid = _cancel_invalid_reserved_release(
+                        conn,
+                        existing,
+                        now_epoch_ms=now_ms,
+                        actor_id=actor_id,
+                        idempotent_replay=True,
+                        keyring=keyring,
+                    )
+                    if invalid is not None:
+                        return invalid
                     authority_reason = _release_attempt_authority_reason(
                         conn,
                         existing,
@@ -15323,6 +15449,13 @@ def reserve_release_authorization(
             resources = {f"attempt:{attempt_id}"}
             resources.update(f"quota:{item['counter_key']}" for item in quotas)
             _lock_release_resources(conn, resources)
+            if now_epoch_ms is None:
+                try:
+                    now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+                except RateLimitStoreError as exc:
+                    raise ReleaseAuthorizationError(str(exc)) from exc
+                release_now = datetime.fromtimestamp(now_ms / 1000, timezone.utc)
+                now_s = release_now.isoformat()
 
             existing = _release_attempt_row(conn, attempt_id, for_update=True)
             if existing is not None:
@@ -15332,6 +15465,16 @@ def reserve_release_authorization(
                     )
                 _validate_release_consumption_state(conn, existing)
                 if existing["state"] == "reserved":
+                    invalid = _cancel_invalid_reserved_release(
+                        conn,
+                        existing,
+                        now_epoch_ms=now_ms,
+                        actor_id=actor_id,
+                        idempotent_replay=True,
+                        keyring=keyring,
+                    )
+                    if invalid is not None:
+                        return invalid
                     authority_reason = _release_attempt_authority_reason(
                         conn,
                         existing,
@@ -15493,6 +15636,18 @@ def reserve_release_authorization(
 
             prepared_counters: list[dict[str, Any]] = []
             for quota in quotas:
+                window_kind = str(quota["window_kind"])
+                fixed_window_seconds = quota.get("window_seconds")
+                try:
+                    initial_start, initial_end, initial_span_seconds = (
+                        _new_rate_limit_bounds(
+                            window_kind=window_kind,
+                            window_seconds=fixed_window_seconds,
+                            now_epoch_ms=now_ms,
+                        )
+                    )
+                except RateLimitStoreError as exc:
+                    raise ReleaseAuthorizationError(str(exc)) from exc
                 encrypted_counter_operation = _encrypt_operation(
                     quota["operation"],
                     table_kind="rate_counter",
@@ -15506,10 +15661,10 @@ def reserve_release_authorization(
                         counter_key, principal_id, route_id, credential_id,
                         credential_version, policy_hash, constraint_id, operation,
                         encrypted_operation, operation_storage_version,
-                        window_start_epoch_ms, window_seconds, max_count, count,
-                        created_at, updated_at
+                        window_start_epoch_ms, window_end_epoch_ms, window_kind,
+                        window_seconds, max_count, count, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
                     ON CONFLICT (counter_key) DO NOTHING
                     """,
                     (
@@ -15523,8 +15678,10 @@ def reserve_release_authorization(
                         _operation_digest(quota["operation"]),
                         encrypted_counter_operation,
                         _OPERATION_STORAGE_VERSION,
-                        now_ms,
-                        quota["window_seconds"],
+                        initial_start,
+                        initial_end,
+                        window_kind,
+                        initial_span_seconds,
                         quota["max_count"],
                         now_s,
                         now_s,
@@ -15545,22 +15702,25 @@ def reserve_release_authorization(
                 _stored_operation(
                     counter, table_kind="rate_counter", keyring=keyring
                 )
-                window_start = int(counter["window_start_epoch_ms"])
-                count = int(counter["count"])
-                expired = now_ms >= (
-                    window_start + int(counter["window_seconds"]) * 1000
-                )
-                if expired:
-                    window_start = now_ms
-                    count = 0
+                try:
+                    window_start, window_end, span_seconds, reset = (
+                        _resolve_rate_limit_bounds(
+                            counter,
+                            window_kind=window_kind,
+                            window_seconds=fixed_window_seconds,
+                            now_epoch_ms=now_ms,
+                        )
+                    )
+                except RateLimitStoreError as exc:
+                    raise ReleaseAuthorizationError(str(exc)) from exc
+                count = 0 if reset else int(counter["count"])
                 if count >= quota["max_count"]:
                     raise _release_denial(
                         attempt_id=attempt_id,
                         binding_digest=binding_digest,
                         reason="shared_quota_denied",
                         retry_after_seconds=_rate_limit_retry_after(
-                            window_start,
-                            quota["window_seconds"],
+                            window_end,
                             now_ms,
                         ),
                     )
@@ -15568,8 +15728,21 @@ def reserve_release_authorization(
                     {
                         **quota,
                         "window_start_epoch_ms": window_start,
+                        "window_end_epoch_ms": window_end,
+                        "window_span_seconds": span_seconds,
                         "count_after": count + 1,
                     }
+                )
+                reservation_expires_at_ms = min(
+                    reservation_expires_at_ms,
+                    window_end,
+                )
+
+            if reservation_expires_at_ms <= now_ms:
+                raise _release_denial(
+                    attempt_id=attempt_id,
+                    binding_digest=binding_digest,
+                    reason="shared_quota_window_expired",
                 )
 
             conn.execute(
@@ -15635,7 +15808,7 @@ def reserve_release_authorization(
                         credential_version = ?, policy_hash = ?, constraint_id = ?,
                         operation = ?, encrypted_operation = ?,
                         operation_storage_version = ?, window_start_epoch_ms = ?,
-                        window_seconds = ?,
+                        window_end_epoch_ms = ?, window_kind = ?, window_seconds = ?,
                         max_count = ?, count = ?, updated_at = ?
                     WHERE counter_key = ?
                     """,
@@ -15656,7 +15829,9 @@ def reserve_release_authorization(
                         ),
                         _OPERATION_STORAGE_VERSION,
                         quota["window_start_epoch_ms"],
-                        quota["window_seconds"],
+                        quota["window_end_epoch_ms"],
+                        quota["window_kind"],
+                        quota["window_span_seconds"],
                         quota["max_count"],
                         quota["count_after"],
                         now_s,
@@ -15668,10 +15843,11 @@ def reserve_release_authorization(
                     INSERT INTO release_authorization_quota_reservations (
                         attempt_id, counter_key, constraint_id, operation,
                         encrypted_operation, operation_storage_version,
-                        window_start_epoch_ms, window_seconds, max_count,
+                        window_start_epoch_ms, window_end_epoch_ms, window_kind,
+                        window_seconds, max_count,
                         count_after, reservation_state, created_at, updated_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)
                     """,
                     (
                         attempt_id,
@@ -15687,7 +15863,9 @@ def reserve_release_authorization(
                         ),
                         _OPERATION_STORAGE_VERSION,
                         quota["window_start_epoch_ms"],
-                        quota["window_seconds"],
+                        quota["window_end_epoch_ms"],
+                        quota["window_kind"],
+                        quota["window_span_seconds"],
                         quota["max_count"],
                         quota["count_after"],
                         now_s,
@@ -15764,22 +15942,33 @@ def _cancel_release_attempt(
         if quota["reservation_state"] != "reserved":
             continue
         counter = conn.execute(
-            "SELECT window_start_epoch_ms, count FROM rate_limit_counters "
+            "SELECT window_kind, window_start_epoch_ms, window_end_epoch_ms, count "
+            "FROM rate_limit_counters "
             "WHERE counter_key = ?"
             + (" FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""),
             (quota["counter_key"],),
         ).fetchone()
         matching_window = (
             counter is not None
+            and str(counter["window_kind"]) == str(quota["window_kind"])
             and int(counter["window_start_epoch_ms"])
             == int(quota["window_start_epoch_ms"])
+            and int(counter["window_end_epoch_ms"])
+            == int(quota["window_end_epoch_ms"])
         )
         if matching_window:
             conn.execute(
                 "UPDATE rate_limit_counters SET count = CASE WHEN count > 0 "
                 "THEN count - 1 ELSE 0 END, updated_at = ? "
-                "WHERE counter_key = ? AND window_start_epoch_ms = ?",
-                (now_s, quota["counter_key"], quota["window_start_epoch_ms"]),
+                "WHERE counter_key = ? AND window_kind = ? "
+                "AND window_start_epoch_ms = ? AND window_end_epoch_ms = ?",
+                (
+                    now_s,
+                    quota["counter_key"],
+                    quota["window_kind"],
+                    quota["window_start_epoch_ms"],
+                    quota["window_end_epoch_ms"],
+                ),
             )
         conn.execute(
             "UPDATE release_authorization_quota_reservations "
@@ -15986,9 +16175,12 @@ def dispatch_release_authorization(
     normalized_approver_roles = _normalize_release_approver_roles(
         required_approver_roles
     )
-    now_ms = _release_now_epoch_ms(now_epoch_ms)
     with connect() as conn:
         _begin_release_transaction(conn)
+        try:
+            now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        except RateLimitStoreError as exc:
+            raise ReleaseAuthorizationError(str(exc)) from exc
         preview = _release_attempt_row(conn, attempt_id)
         if preview is None:
             raise ReleaseAuthorizationError(
@@ -16007,6 +16199,11 @@ def dispatch_release_authorization(
             if preview["credential_id"]:
                 _lock_credential_mutation(conn, str(preview["credential_id"]))
         row = _bound_release_attempt(conn, attempt_id, binding_digest)
+        if now_epoch_ms is None:
+            try:
+                now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+            except RateLimitStoreError as exc:
+                raise ReleaseAuthorizationError(str(exc)) from exc
         if row["state"] in {"committed", "cancelled", "committed_indeterminate"}:
             return _release_authorization_result(conn, row, idempotent_replay=True)
         if row["state"] == "dispatching":
@@ -16027,20 +16224,15 @@ def dispatch_release_authorization(
                     reason="dispatch_ttl_expired",
                 )
             return _release_authorization_result(conn, row, idempotent_replay=True)
-        if int(row["reservation_expires_at_epoch_ms"]) <= now_ms:
-            row = _cancel_release_attempt(
-                conn,
-                row,
-                now_ms=now_ms,
-                actor_id=actor_id,
-                reason="reservation_ttl_expired",
-            )
-            return _release_authorization_result(
-                conn,
-                row,
-                idempotent_replay=False,
-                reason="reservation_ttl_expired",
-            )
+        invalid = _cancel_invalid_reserved_release(
+            conn,
+            row,
+            now_epoch_ms=now_ms,
+            actor_id=actor_id,
+            idempotent_replay=False,
+        )
+        if invalid is not None:
+            return invalid
         now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
         authority_reason = _release_attempt_authority_reason(
             conn,
@@ -16109,10 +16301,18 @@ def complete_release_authorization(
         raise ReleaseAuthorizationError(
             "release authorization outcome must be forwarded, not_forwarded, or unknown"
         )
-    now_ms = _release_now_epoch_ms(now_epoch_ms)
     with connect() as conn:
         _begin_release_transaction(conn)
+        try:
+            now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+        except RateLimitStoreError as exc:
+            raise ReleaseAuthorizationError(str(exc)) from exc
         row = _bound_release_attempt(conn, attempt_id, binding_digest)
+        if now_epoch_ms is None:
+            try:
+                now_ms = _rate_limit_transaction_now_epoch_ms(conn, None)
+            except RateLimitStoreError as exc:
+                raise ReleaseAuthorizationError(str(exc)) from exc
         if row["state"] in {"committed", "cancelled", "committed_indeterminate"}:
             return _release_authorization_result(conn, row, idempotent_replay=True)
         if row["state"] == "reserved" and outcome == "not_forwarded":
@@ -16165,31 +16365,36 @@ def reconcile_release_authorizations(
     require_atomic_release_writer()
     if not isinstance(limit, int) or not 1 <= limit <= 500:
         raise ReleaseAuthorizationError("reconciliation limit must be between 1 and 500")
-    now_ms = _release_now_epoch_ms(now_epoch_ms)
-    with connect() as conn:
-        _begin_release_transaction(conn)
-        suffix = (
-            " FOR UPDATE SKIP LOCKED"
-            if isinstance(conn, PostgresMetadataConnection)
-            else ""
-        )
-        rows = conn.execute(
-            """
-            SELECT * FROM release_authorization_attempts
-            WHERE (state = 'reserved' AND reservation_expires_at_epoch_ms <= ?)
-               OR (state = 'dispatching' AND dispatch_expires_at_epoch_ms <= ?)
-            ORDER BY CASE WHEN state = 'dispatching' THEN dispatch_expires_at_epoch_ms
-                          ELSE reservation_expires_at_epoch_ms END ASC,
-                     attempt_id ASC
-            LIMIT ?
-            """
-            + suffix,
-            (now_ms, now_ms, limit),
-        ).fetchall()
-        cancelled = 0
-        indeterminate = 0
-        attempt_ids: list[str] = []
-        for row in rows:
+    cancelled = 0
+    indeterminate = 0
+    attempt_ids: list[str] = []
+    for _ in range(limit):
+        with connect() as conn:
+            _begin_release_transaction(conn)
+            try:
+                now_ms = _rate_limit_transaction_now_epoch_ms(conn, now_epoch_ms)
+            except RateLimitStoreError as exc:
+                raise ReleaseAuthorizationError(str(exc)) from exc
+            suffix = (
+                " FOR UPDATE SKIP LOCKED"
+                if isinstance(conn, PostgresMetadataConnection)
+                else ""
+            )
+            row = conn.execute(
+                """
+                SELECT * FROM release_authorization_attempts
+                WHERE (state = 'reserved' AND reservation_expires_at_epoch_ms <= ?)
+                   OR (state = 'dispatching' AND dispatch_expires_at_epoch_ms <= ?)
+                ORDER BY CASE WHEN state = 'dispatching' THEN dispatch_expires_at_epoch_ms
+                              ELSE reservation_expires_at_epoch_ms END ASC,
+                         attempt_id ASC
+                LIMIT 1
+                """
+                + suffix,
+                (now_ms, now_ms),
+            ).fetchone()
+            if row is None:
+                break
             attempt_ids.append(str(row["attempt_id"]))
             if row["state"] == "reserved":
                 _cancel_release_attempt(

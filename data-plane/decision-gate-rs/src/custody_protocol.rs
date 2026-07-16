@@ -16,6 +16,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use time::{Date, Duration as TimeDuration, Month, OffsetDateTime};
 use zeroize::Zeroize;
 
 pub const PROTOCOL_API_VERSION: &str = "serverware.custodyProtocol/v1";
@@ -225,12 +226,29 @@ struct ReleaseAuthorizationBinding {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum RateLimitWindowKind {
+    Fixed,
+    UtcDay,
+    UtcIsoWeek,
+    UtcMonth,
+}
+
+impl RateLimitWindowKind {
+    fn is_calendar(&self) -> bool {
+        self != &Self::Fixed
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 struct ReleaseAuthorizationBindingQuota {
     counter_key: String,
     constraint_id: String,
     operation: Option<String>,
-    window_seconds: u64,
+    window_kind: RateLimitWindowKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_seconds: Option<u64>,
     max_count: u64,
 }
 
@@ -315,6 +333,9 @@ struct DispatchQuota {
     constraint_id: Option<String>,
     operation: Option<String>,
     window_start_epoch_ms: Option<u64>,
+    window_end_epoch_ms: Option<u64>,
+    window_kind: Option<RateLimitWindowKind>,
+    calendar_window: Option<RateLimitWindowKind>,
     window_seconds: Option<u64>,
     max: Option<u64>,
     count: Option<u64>,
@@ -1199,8 +1220,12 @@ fn validate_release_authorization_binding(
                 operation,
             )?;
         }
-        if !(1..=31_536_000).contains(&quota.window_seconds)
-            || !(1..=1_000_000_000).contains(&quota.max_count)
+        if match quota.window_kind {
+            RateLimitWindowKind::Fixed => !quota
+                .window_seconds
+                .is_some_and(|value| (1..=31_536_000).contains(&value)),
+            _ => quota.window_seconds.is_some(),
+        } || !(1..=1_000_000_000).contains(&quota.max_count)
         {
             return Err(invalid_statement(
                 "release authorization binding shared quota bounds are invalid",
@@ -1213,6 +1238,7 @@ fn validate_release_authorization_binding(
         }
         previous_counter_key = Some(quota.counter_key.as_str());
     }
+    validate_dispatch_quotas_against_binding(statement, binding)?;
     let canonical_binding = canonical_json_ensure_ascii_bytes(binding)?;
     if canonical_binding.len() > MAX_RELEASE_AUTHORIZATION_BINDING_BYTES {
         return Err(invalid_statement(format!(
@@ -1223,6 +1249,182 @@ fn validate_release_authorization_binding(
         return Err(invalid_statement(
             "release authorization binding digest mismatch",
         ));
+    }
+    Ok(())
+}
+
+fn custody_utc_epoch_ms(timestamp: OffsetDateTime) -> Result<u64, ProtocolError> {
+    u64::try_from(timestamp.unix_timestamp_nanos() / 1_000_000)
+        .map_err(|_| invalid_statement("calendar quota boundary is outside the supported epoch"))
+}
+
+fn custody_calendar_window_bounds(
+    kind: &RateLimitWindowKind,
+    epoch_ms: u64,
+) -> Result<(u64, u64), ProtocolError> {
+    if !kind.is_calendar() {
+        return Err(invalid_statement(
+            "fixed quota window has no calendar boundaries",
+        ));
+    }
+    let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(epoch_ms) * 1_000_000)
+        .map_err(|_| {
+            invalid_statement("calendar quota timestamp is outside the supported epoch")
+        })?;
+    let date = timestamp.date();
+    let start_date = match kind {
+        RateLimitWindowKind::UtcDay => date,
+        RateLimitWindowKind::UtcIsoWeek => {
+            date - TimeDuration::days(i64::from(date.weekday().number_days_from_monday()))
+        }
+        RateLimitWindowKind::UtcMonth => Date::from_calendar_date(date.year(), date.month(), 1)
+            .map_err(|_| invalid_statement("calendar quota month start is invalid"))?,
+        RateLimitWindowKind::Fixed => unreachable!("calendar kind checked above"),
+    };
+    let end_date = match kind {
+        RateLimitWindowKind::UtcDay => start_date
+            .next_day()
+            .ok_or_else(|| invalid_statement("calendar quota day end is outside range"))?,
+        RateLimitWindowKind::UtcIsoWeek => start_date
+            .checked_add(TimeDuration::days(7))
+            .ok_or_else(|| invalid_statement("calendar quota week end is outside range"))?,
+        RateLimitWindowKind::UtcMonth => {
+            let (year, month) = if start_date.month() == Month::December {
+                (
+                    start_date.year().checked_add(1).ok_or_else(|| {
+                        invalid_statement("calendar quota month end is outside range")
+                    })?,
+                    Month::January,
+                )
+            } else {
+                (
+                    start_date.year(),
+                    Month::try_from(u8::from(start_date.month()) + 1)
+                        .map_err(|_| invalid_statement("calendar quota month end is invalid"))?,
+                )
+            };
+            Date::from_calendar_date(year, month, 1)
+                .map_err(|_| invalid_statement("calendar quota month end is invalid"))?
+        }
+        RateLimitWindowKind::Fixed => unreachable!("calendar kind checked above"),
+    };
+    Ok((
+        custody_utc_epoch_ms(start_date.midnight().assume_utc())?,
+        custody_utc_epoch_ms(end_date.midnight().assume_utc())?,
+    ))
+}
+
+fn validate_dispatch_quotas_against_binding(
+    statement: &ProxyResponseStatement,
+    binding: &ReleaseAuthorizationBinding,
+) -> Result<(), ProtocolError> {
+    let response_body = decode_receipt_base64url(
+        "receipt.response.body_b64",
+        &statement
+            .control_plane_authorization_receipt
+            .response
+            .body_b64,
+        MAX_AUTHORIZATION_RECEIPT_BODY_BYTES,
+    )?;
+    let response_value = parse_json_without_duplicate_keys(&response_body)
+        .map_err(|error| invalid_statement(format!("dispatch response body: {error}")))?;
+    let dispatch_response: DispatchResponseBody = serde_json::from_value(response_value)
+        .map_err(|error| invalid_statement(format!("dispatch response body: {error}")))?;
+    if dispatch_response.quotas.len() != binding.shared_quotas.len() {
+        return Err(invalid_statement(
+            "dispatch quota set does not match the release binding",
+        ));
+    }
+    let reservation_expires_at_epoch_ms = dispatch_response
+        .reservation_expires_at_epoch_ms
+        .ok_or_else(|| invalid_statement("dispatch response is missing reservation expiry"))?;
+    let dispatch_started_at_epoch_ms = dispatch_response
+        .dispatch_started_at_epoch_ms
+        .ok_or_else(|| invalid_statement("dispatch response is missing dispatch start"))?;
+    let mut previous_counter_key: Option<&str> = None;
+    for actual in &dispatch_response.quotas {
+        let counter_key = actual
+            .counter_key
+            .as_deref()
+            .ok_or_else(|| invalid_statement("dispatch quota counter key is missing or invalid"))?;
+        validate_sha256_digest("dispatch quota counter key", counter_key)?;
+        if previous_counter_key.is_some_and(|previous| previous >= counter_key) {
+            return Err(invalid_statement("dispatch quotas are not uniquely sorted"));
+        }
+        previous_counter_key = Some(counter_key);
+    }
+    for (actual, expected) in dispatch_response.quotas.iter().zip(&binding.shared_quotas) {
+        let counter_key = actual
+            .counter_key
+            .as_deref()
+            .expect("dispatch quota key was validated above");
+        let actual_kind = actual
+            .window_kind
+            .as_ref()
+            .unwrap_or(&RateLimitWindowKind::Fixed);
+        if counter_key != expected.counter_key
+            || actual.constraint_id.as_deref() != Some(expected.constraint_id.as_str())
+            || actual.operation != expected.operation
+            || actual_kind != &expected.window_kind
+            || actual.window_seconds != expected.window_seconds
+            || actual.max != Some(expected.max_count)
+        {
+            return Err(invalid_statement("dispatch quota claim substitution"));
+        }
+        let window_start_epoch_ms = actual
+            .window_start_epoch_ms
+            .ok_or_else(|| invalid_statement("dispatch quota window start is missing"))?;
+        let window_end_epoch_ms = match expected.window_kind {
+            RateLimitWindowKind::Fixed => {
+                if actual.calendar_window.is_some() {
+                    return Err(invalid_statement(
+                        "dispatch fixed quota has a calendar descriptor",
+                    ));
+                }
+                let calculated = window_start_epoch_ms
+                    .checked_add(expected.window_seconds.unwrap_or_default() * 1000)
+                    .ok_or_else(|| invalid_statement("dispatch fixed quota window overflows"))?;
+                if actual
+                    .window_end_epoch_ms
+                    .is_some_and(|window_end| window_end != calculated)
+                {
+                    return Err(invalid_statement(
+                        "dispatch fixed quota window end is inconsistent",
+                    ));
+                }
+                calculated
+            }
+            _ => {
+                let window_end_epoch_ms = actual.window_end_epoch_ms.ok_or_else(|| {
+                    invalid_statement("dispatch calendar quota window end is missing")
+                })?;
+                if actual.window_kind.as_ref() != Some(&expected.window_kind)
+                    || actual.calendar_window.as_ref() != Some(&expected.window_kind)
+                    || custody_calendar_window_bounds(&expected.window_kind, window_start_epoch_ms)?
+                        != (window_start_epoch_ms, window_end_epoch_ms)
+                {
+                    return Err(invalid_statement(
+                        "dispatch calendar quota boundaries are not exact",
+                    ));
+                }
+                window_end_epoch_ms
+            }
+        };
+        let count = actual
+            .count
+            .filter(|count| *count <= expected.max_count)
+            .ok_or_else(|| invalid_statement("dispatch quota count is missing or invalid"))?;
+        if actual.remaining != Some(expected.max_count - count)
+            || actual.reservation_state.as_deref() != Some("reserved")
+            || dispatch_started_at_epoch_ms < window_start_epoch_ms
+            || dispatch_started_at_epoch_ms >= window_end_epoch_ms
+            || expected.window_kind.is_calendar()
+                && reservation_expires_at_epoch_ms > window_end_epoch_ms
+        {
+            return Err(invalid_statement(
+                "dispatch quota lifecycle evidence is invalid",
+            ));
+        }
     }
     Ok(())
 }
@@ -2126,6 +2328,84 @@ mod tests {
             require_jit_grant: statement.release_authority.grant_id.is_some(),
             shared_quotas: Vec::new(),
         }
+    }
+
+    #[test]
+    fn custody_proof_binding_rejects_calendar_dispatch_quota_tampering() {
+        let mut statement = statement();
+        let mut binding = authorization_binding_for_statement(&statement);
+        let quota = ReleaseAuthorizationBindingQuota {
+            counter_key: digest(21),
+            constraint_id: "quota:utc-day".to_string(),
+            operation: Some("custody.test".to_string()),
+            window_kind: RateLimitWindowKind::UtcDay,
+            window_seconds: None,
+            max_count: 5,
+        };
+        binding.shared_quotas = vec![quota.clone()];
+        statement.release_authority.consumption_identity_digest = sha256_prefixed(
+            &canonical_json_ensure_ascii_bytes(&binding).expect("calendar binding digest"),
+        );
+        let dispatch_started_at_epoch_ms = statement
+            .release_authority
+            .authorization_state_observed_at_epoch_ms;
+        let (window_start_epoch_ms, window_end_epoch_ms) =
+            custody_calendar_window_bounds(&quota.window_kind, dispatch_started_at_epoch_ms)
+                .expect("calendar bounds");
+        let response_body = canonical_json_bytes(&json!({
+            "apiVersion":"serverware.releaseAuthorization/v1",
+            "ok":true,
+            "authorized":true,
+            "state":"dispatching",
+            "reason":"dispatching",
+            "attemptId":statement.release_authority.attempt_id,
+            "bindingDigest":statement.release_authority.consumption_identity_digest,
+            "idempotentReplay":false,
+            "grantId":statement.release_authority.grant_id,
+            "approvalRequestId":statement.release_authority.approval_id,
+            "reservationExpiresAtEpochMs":statement.release_authority.reservation_expires_at_epoch_ms,
+            "dispatchStartedAtEpochMs":dispatch_started_at_epoch_ms,
+            "dispatchExpiresAtEpochMs":statement.release_authority.dispatch_expires_at_epoch_ms,
+            "completionOutcome":null,
+            "retryAfterSeconds":0,
+            "quotas":[{
+                "counterKey":quota.counter_key,
+                "constraintId":quota.constraint_id,
+                "operation":quota.operation,
+                "windowStartEpochMs":window_start_epoch_ms,
+                "windowEndEpochMs":window_end_epoch_ms,
+                "windowKind":"utcDay",
+                "calendarWindow":"utcDay",
+                "max":5,
+                "count":1,
+                "remaining":4,
+                "reservationState":"reserved"
+            }],
+            "store":{"backend":"sqlite","ha":false}
+        }))
+        .expect("calendar dispatch body");
+        statement
+            .control_plane_authorization_receipt
+            .response
+            .body_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&response_body);
+        validate_release_authorization_binding(&statement, &binding)
+            .expect("exact calendar dispatch quota proof binding");
+
+        let mut tampered: Value =
+            parse_json_without_duplicate_keys(&response_body).expect("dispatch body JSON");
+        tampered["quotas"][0]
+            .as_object_mut()
+            .expect("quota object")
+            .remove("windowEndEpochMs");
+        statement
+            .control_plane_authorization_receipt
+            .response
+            .body_b64 = general_purpose::URL_SAFE_NO_PAD
+            .encode(canonical_json_bytes(&tampered).expect("tampered dispatch body"));
+        assert!(validate_release_authorization_binding(&statement, &binding)
+            .expect_err("calendar proof must require the exact window end")
+            .message
+            .contains("window end is missing"));
     }
 
     fn request_bytes(

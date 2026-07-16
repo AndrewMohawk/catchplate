@@ -194,7 +194,15 @@ def main() -> None:
     expect_model_rejects_actor(DataPlaneAuditEvent, audit_payload)
     expect_model_rejects_actor(DataPlaneRateLimitConsume, rate_payload)
     expect_model_rejects_actor(DataPlaneReleaseAuthorizationReserve, release_payload)
-    for forbidden in ("counterKey", "constraintId", "max", "windowSeconds"):
+    for forbidden in (
+        "counterKey",
+        "constraintId",
+        "max",
+        "windowSeconds",
+        "calendarWindow",
+        "windowStartEpochMs",
+        "windowEndEpochMs",
+    ):
         try:
             DataPlaneReleaseAuthorizationReserve.model_validate(
                 {**release_payload, forbidden: 1}
@@ -515,7 +523,7 @@ def main() -> None:
                 "type": "rateLimit",
                 "store": "shared",
                 "max": 1,
-                "windowSeconds": 3600,
+                "calendarWindow": "utcDay",
                 "key": {
                     "scope": ["route"],
                     "operationFields": ["account"],
@@ -610,9 +618,17 @@ def main() -> None:
         )
     derived_quotas = captured.get("shared_quotas")
     if not isinstance(derived_quotas, list) or {
-        (item.get("constraint_id"), item.get("max_count"), item.get("window_seconds"))
+        (
+            item.get("constraint_id"),
+            item.get("max_count"),
+            item.get("window_kind"),
+            item.get("window_seconds"),
+        )
         for item in derived_quotas
-    } != {("quota:principal", 3, 60), ("quota:account", 1, 3600)}:
+    } != {
+        ("quota:principal", 3, "fixed", 60),
+        ("quota:account", 1, "utcDay", None),
+    }:
         raise AssertionError(
             f"reserve endpoint did not derive every shared claim from policy: {captured}"
         )

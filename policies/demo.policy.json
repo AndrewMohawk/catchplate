@@ -693,12 +693,10 @@
           "type": "operationPolicy"
         },
         {
-          "description": "The Docker fixture can publish at most one tweet per 86,400-second fixed window for this principal and credential.",
+          "description": "The Docker fixture can publish at most one tweet per UTC calendar day for its single simulated X account; the quota resets at 00:00 UTC.",
           "id": "x-one-tweet-per-day",
           "key": {
             "scope": [
-              "principal",
-              "credential",
               "route",
               "operation"
             ]
@@ -706,7 +704,7 @@
           "max": 1,
           "store": "shared",
           "type": "rateLimit",
-          "windowSeconds": 86400
+          "calendarWindow": "utcDay"
         },
         {
           "allowedFields": [

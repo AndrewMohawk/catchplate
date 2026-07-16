@@ -95,6 +95,7 @@ class OAuthProviderSimulator:
         "x": frozenset(
             {
                 "tweet.read",
+                "tweet.write",
                 "users.read",
                 "offline.access",
                 "follows.read",
@@ -359,6 +360,16 @@ class OAuthProviderSimulator:
             .not_valid_after(now + dt.timedelta(days=7))
             .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
             .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key()),
+                critical=False,
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                    ca_key.public_key()
+                ),
+                critical=False,
+            )
+            .add_extension(
                 x509.KeyUsage(
                     digital_signature=True,
                     key_encipherment=False,
@@ -410,6 +421,16 @@ class OAuthProviderSimulator:
             .not_valid_after(now + dt.timedelta(days=7))
             .add_extension(
                 x509.BasicConstraints(ca=False, path_length=None), critical=True
+            )
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(server_key.public_key()),
+                critical=False,
+            )
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_public_key(
+                    ca_key.public_key()
+                ),
+                critical=False,
             )
             .add_extension(
                 x509.SubjectAlternativeName(subject_alternative_names),

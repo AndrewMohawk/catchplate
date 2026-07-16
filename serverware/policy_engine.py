@@ -755,6 +755,7 @@ def _store_release_lifecycle(
     grant_id: str | None = None,
     approval_request_id: str | None = None,
     reservation_expires_at_epoch_ms: int | None = None,
+    quotas: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     lifecycle = {
         "attempt_id": attempt_id,
@@ -762,6 +763,7 @@ def _store_release_lifecycle(
         "binding_digest": binding_digest,
         "state": state,
         "dispatch_attempted": False,
+        "quotas": [dict(item) for item in (quotas or [])],
     }
     if grant_id is not None:
         lifecycle["grant_id"] = grant_id
@@ -825,6 +827,7 @@ def complete_release_authorization(
             outcome=outcome,
             grant_id=lifecycle.get("grant_id"),
             approval_request_id=lifecycle.get("approval_request_id"),
+            previous_lifecycle=lifecycle,
         )
     except runtime.ReleaseAuthorizationClientError:
         return PolicyDecision(
@@ -841,6 +844,7 @@ def complete_release_authorization(
             outcome=outcome,
             grant_id=lifecycle.get("grant_id"),
             approval_request_id=lifecycle.get("approval_request_id"),
+            previous_lifecycle=lifecycle,
         )
     except runtime.ReleaseAuthorizationClientError:
         return PolicyDecision(
@@ -849,6 +853,13 @@ def complete_release_authorization(
             503,
             {"error": "release_authorization_completion_invalid"},
         )
+    lifecycle["quotas"] = [dict(item) for item in result["quotas"]]
+    lifecycle["dispatch_started_at_epoch_ms"] = result.get(
+        "dispatch_started_at_epoch_ms"
+    )
+    lifecycle["dispatch_expires_at_epoch_ms"] = result.get(
+        "dispatch_expires_at_epoch_ms"
+    )
     _set_release_state(
         flow,
         lifecycle,
@@ -898,6 +909,7 @@ def dispatch_release_authorization(flow: http.HTTPFlow) -> PolicyDecision:
             binding_digest=str(lifecycle["binding_digest"]),
             grant_id=lifecycle.get("grant_id"),
             approval_request_id=lifecycle.get("approval_request_id"),
+            previous_lifecycle=lifecycle,
         )
     except runtime.ReleaseAuthorizationClientError:
         complete_release_authorization(flow, "unknown")
@@ -914,6 +926,7 @@ def dispatch_release_authorization(flow: http.HTTPFlow) -> PolicyDecision:
             binding_digest=str(lifecycle["binding_digest"]),
             grant_id=lifecycle.get("grant_id"),
             approval_request_id=lifecycle.get("approval_request_id"),
+            previous_lifecycle=lifecycle,
         )
     except runtime.ReleaseAuthorizationClientError:
         complete_release_authorization(flow, "unknown")
@@ -929,6 +942,7 @@ def dispatch_release_authorization(flow: http.HTTPFlow) -> PolicyDecision:
     lifecycle["dispatch_expires_at_epoch_ms"] = result[
         "dispatch_expires_at_epoch_ms"
     ]
+    lifecycle["quotas"] = [dict(item) for item in result["quotas"]]
     flow.metadata["serverware_release_dispatch_expires_at_epoch_ms"] = result[
         "dispatch_expires_at_epoch_ms"
     ]
@@ -1184,6 +1198,27 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
     if atomic_mode:
         attempt_id = str(uuid.uuid4())
         try:
+            shared_quotas = shared_rate_limit_claims(
+                route,
+                principal_id=principal.id,
+                credential_ref=route.credential_ref,
+                credential_version=credential_version_int,
+                operation_fields=operation_fields,
+            )
+            expected_binding_digest = runtime.release_authorization_binding_digest(
+                attempt_id=attempt_id,
+                flow_id=attempt_id,
+                principal_id=principal.id,
+                route_id=route.id,
+                credential_ref=route.credential_ref,
+                credential_version=credential_version_int,
+                policy_hash=snapshot.hash,
+                request_digest=request_digest,
+                operation_digest=operation_digest,
+                operation_context=dict(operation_fields),
+                shared_quotas=shared_quotas,
+                require_jit_grant=jit_required,
+            )
             reserved = runtime.reserve_release_authorization(
                 attempt_id=attempt_id,
                 flow_id=attempt_id,
@@ -1196,13 +1231,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                 operation_digest=operation_digest,
                 operation_context=dict(operation_fields),
                 canonical_request=canonical_request,
-                shared_quotas=shared_rate_limit_claims(
-                    route,
-                    principal_id=principal.id,
-                    credential_ref=route.credential_ref,
-                    credential_version=credential_version_int,
-                    operation_fields=operation_fields,
-                ),
+                shared_quotas=shared_quotas,
                 require_jit_grant=jit_required,
             )
         except runtime.ReleaseAuthorizationClientError:
@@ -1227,6 +1256,8 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                 reserved,
                 attempt_id=attempt_id,
                 require_jit_grant=jit_required,
+                expected_binding_digest=expected_binding_digest,
+                expected_shared_quotas=shared_quotas,
             )
         except runtime.ReleaseAuthorizationClientError:
             binding_digest = str(reserved.get("binding_digest") or "")
@@ -1265,6 +1296,11 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                             reserved.get("reservation_expires_at_epoch_ms"), bool
                         )
                         else None
+                    ),
+                    quotas=(
+                        reserved.get("quotas")
+                        if isinstance(reserved.get("quotas"), list)
+                        else []
                     ),
                 )
             return block_after_reserve(
@@ -1362,6 +1398,11 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                     attempt_id=attempt_id,
                     binding_digest=binding_digest,
                     state="reserved",
+                    quotas=(
+                        reserved.get("quotas")
+                        if isinstance(reserved.get("quotas"), list)
+                        else []
+                    ),
                 )
             return block_after_reserve(
                 PolicyDecision(
@@ -1382,6 +1423,7 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             reservation_expires_at_epoch_ms=validated_reserve[
                 "reservation_expires_at_epoch_ms"
             ],
+            quotas=reserved["quotas"],
         )
 
     bound_credential_lease: runtime.BoundCredentialLease | None = None

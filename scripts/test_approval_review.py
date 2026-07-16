@@ -23,6 +23,29 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
     binding_digest = "sha256:" + "a" * 64
     grant_id = "grant:exact-lifecycle"
     approval_request_id = "approval:exact-lifecycle"
+    window_start_ms = now_ms - 5_000
+    quota_claim = {
+        "counter_key": "sha256:" + "1" * 64,
+        "constraint_id": "quota:exact-lifecycle",
+        "operation": "npm.publish",
+        "window_kind": "fixed",
+        "window_seconds": 120,
+        "max_count": 2,
+    }
+    reserved_quota = {
+        "counter_key": quota_claim["counter_key"],
+        "constraint_id": quota_claim["constraint_id"],
+        "operation": quota_claim["operation"],
+        "window_kind": "fixed",
+        "window_seconds": 120,
+        "calendar_window": None,
+        "window_start_epoch_ms": window_start_ms,
+        "window_end_epoch_ms": window_start_ms + 120_000,
+        "max": 2,
+        "count": 1,
+        "remaining": 1,
+        "reservation_state": "reserved",
+    }
     reserved = {
         "authorized": True,
         "state": "reserved",
@@ -40,13 +63,16 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
         "dispatch_expires_at_epoch_ms": None,
         "completion_outcome": None,
         "retry_after_seconds": 0,
-        "quotas": [],
+        "quotas": [reserved_quota],
         "store": {"backend": "postgres", "ha": True},
     }
     runtime.validate_reserve_release_authorization_response(
         reserved,
         attempt_id=attempt_id,
         require_jit_grant=True,
+        expected_binding_digest=binding_digest,
+        expected_shared_quotas=[quota_claim],
+        now_epoch_ms=now_ms,
     )
 
     def expect_rejected(call, label: str) -> None:
@@ -61,6 +87,9 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
             {**reserved, "binding_digest": "sha256:" + "A" * 64},
             attempt_id=attempt_id,
             require_jit_grant=True,
+            expected_binding_digest=binding_digest,
+            expected_shared_quotas=[quota_claim],
+            now_epoch_ms=now_ms,
         ),
         "an uppercase SHA-256 binding",
     )
@@ -69,8 +98,57 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
             {**reserved, "grant_id": "grant:other"},
             attempt_id=attempt_id,
             require_jit_grant=False,
+            expected_binding_digest=binding_digest,
+            expected_shared_quotas=[quota_claim],
+            now_epoch_ms=now_ms,
         ),
         "a non-JIT reserve carrying grant identity",
+    )
+    expect_rejected(
+        lambda: runtime.validate_reserve_release_authorization_response(
+            reserved,
+            attempt_id=attempt_id,
+            require_jit_grant=True,
+            expected_binding_digest="sha256:" + "b" * 64,
+            expected_shared_quotas=[quota_claim],
+            now_epoch_ms=now_ms,
+        ),
+        "a substituted reserve binding digest",
+    )
+    expect_rejected(
+        lambda: runtime.validate_reserve_release_authorization_response(
+            reserved,
+            attempt_id=attempt_id,
+            require_jit_grant=True,
+            expected_binding_digest=binding_digest,
+            expected_shared_quotas=[{**quota_claim, "max_count": 1}],
+            now_epoch_ms=now_ms,
+        ),
+        "a substituted reserve quota claim",
+    )
+    expect_rejected(
+        lambda: runtime.validate_reserve_release_authorization_response(
+            {
+                **reserved,
+                "reservation_expires_at_epoch_ms": reserved_quota[
+                    "window_end_epoch_ms"
+                ]
+                + 1,
+            },
+            attempt_id=attempt_id,
+            require_jit_grant=True,
+            expected_binding_digest=binding_digest,
+            expected_shared_quotas=[quota_claim],
+            now_epoch_ms=now_ms,
+        ),
+        "a fixed reservation expiry beyond its quota boundary",
+    )
+    expect_rejected(
+        lambda: runtime._normalized_release_authorization_quota(
+            {**reserved_quota, "count": 3, "remaining": 0},
+            camel_case=False,
+        ),
+        "a quota count above its maximum",
     )
 
     dispatching = {
@@ -87,6 +165,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
         binding_digest=binding_digest,
         grant_id=grant_id,
         approval_request_id=approval_request_id,
+        previous_lifecycle=reserved,
         now_epoch_ms=now_ms,
     )
     for label, changes in (
@@ -105,10 +184,61 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
                 binding_digest=binding_digest,
                 grant_id=grant_id,
                 approval_request_id=approval_request_id,
+                previous_lifecycle=reserved,
                 now_epoch_ms=now_ms,
             ),
             label,
         )
+
+    substituted_dispatch_quota = {
+        **dispatching,
+        "quotas": [{**reserved_quota, "count": 2, "remaining": 0}],
+    }
+    expect_rejected(
+        lambda: runtime.validate_dispatch_release_authorization_response(
+            substituted_dispatch_quota,
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+            previous_lifecycle=reserved,
+            now_epoch_ms=now_ms,
+        ),
+        "a substituted dispatch quota snapshot",
+    )
+    expect_rejected(
+        lambda: runtime.validate_dispatch_release_authorization_response(
+            {
+                **dispatching,
+                "reservation_expires_at_epoch_ms": now_ms + 59_999,
+            },
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+            previous_lifecycle=reserved,
+            now_epoch_ms=now_ms,
+        ),
+        "a substituted dispatch reservation expiry",
+    )
+    boundary_quota = {
+        **reserved_quota,
+        "window_start_epoch_ms": now_ms - 120_000,
+        "window_end_epoch_ms": now_ms,
+    }
+    boundary_reserve = {**reserved, "quotas": [boundary_quota]}
+    expect_rejected(
+        lambda: runtime.validate_dispatch_release_authorization_response(
+            {**dispatching, "quotas": [boundary_quota]},
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+            previous_lifecycle=boundary_reserve,
+            now_epoch_ms=now_ms,
+        ),
+        "a dispatch at the quota window end",
+    )
 
     committed = {
         **dispatching,
@@ -116,6 +246,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
         "reason": "forwarded",
         "idempotent_replay": False,
         "completion_outcome": "forwarded",
+        "quotas": [{**reserved_quota, "reservation_state": "committed"}],
     }
     runtime.validate_complete_release_authorization_response(
         committed,
@@ -124,6 +255,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
         outcome="forwarded",
         grant_id=grant_id,
         approval_request_id=approval_request_id,
+        previous_lifecycle=dispatching,
     )
     expect_rejected(
         lambda: runtime.validate_complete_release_authorization_response(
@@ -133,6 +265,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
             outcome="forwarded",
             grant_id=grant_id,
             approval_request_id=approval_request_id,
+            previous_lifecycle=dispatching,
         ),
         "an authorized/state completion contradiction",
     )
@@ -148,6 +281,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
         outcome="unknown",
         grant_id=grant_id,
         approval_request_id=approval_request_id,
+        previous_lifecycle=dispatching,
     )
     expect_rejected(
         lambda: runtime.validate_complete_release_authorization_response(
@@ -157,8 +291,40 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
             outcome="unknown",
             grant_id=grant_id,
             approval_request_id=approval_request_id,
+            previous_lifecycle=dispatching,
         ),
         "a non-replay forwarded result for unknown completion",
+    )
+    expect_rejected(
+        lambda: runtime.validate_complete_release_authorization_response(
+            {
+                **committed,
+                "quotas": [{**reserved_quota, "reservation_state": "committed"}],
+                "reservation_expires_at_epoch_ms": now_ms + 59_999,
+            },
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            outcome="forwarded",
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+            previous_lifecycle=dispatching,
+        ),
+        "a substituted completion reservation expiry",
+    )
+    expect_rejected(
+        lambda: runtime.validate_complete_release_authorization_response(
+            {
+                **committed,
+                "quotas": [{**reserved_quota, "reservation_state": "reserved"}],
+            },
+            attempt_id=attempt_id,
+            binding_digest=binding_digest,
+            outcome="forwarded",
+            grant_id=grant_id,
+            approval_request_id=approval_request_id,
+            previous_lifecycle=dispatching,
+        ),
+        "an invalid completion quota reservation state",
     )
 
     with patch.dict(
@@ -213,6 +379,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
                 binding_digest=binding_digest,
                 grant_id=grant_id,
                 approval_request_id=approval_request_id,
+                previous_lifecycle=reserved,
             ),
             lambda: runtime.complete_release_authorization(
                 attempt_id=attempt_id,
@@ -220,6 +387,7 @@ def exercise_python_release_lifecycle_contracts(runtime, canonical_json) -> None
                 outcome="forwarded",
                 grant_id=grant_id,
                 approval_request_id=approval_request_id,
+                previous_lifecycle=dispatching,
             ),
         )
         for action, fallback_call in zip(("reserve", "dispatch", "complete"), fallback_calls):
@@ -266,6 +434,20 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
     request_digest = "sha256:" + hashlib.sha256(
         canonical_json(canonical_request).encode("utf-8")
     ).hexdigest()
+    expected_binding_digest = runtime.release_authorization_binding_digest(
+        attempt_id="attempt:python-proxy",
+        flow_id="attempt:python-proxy",
+        principal_id="agent:demo",
+        route_id="demo.npm.publish.jit",
+        credential_ref="cred-demo-bearer",
+        credential_version=2,
+        policy_hash=canonical_request["policy_hash"],
+        request_digest=request_digest,
+        operation_digest="sha256:" + "d" * 64,
+        operation_context=dict(canonical_request["operation"]),
+        shared_quotas=[],
+        require_jit_grant=True,
+    )
     approval_expires_at = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
     response = {
         "apiVersion": "serverware.releaseAuthorization/v1",
@@ -274,7 +456,7 @@ def exercise_python_atomic_reserve_contract(runtime, canonical_json) -> None:
         "state": "denied",
         "reason": "jit_grant_unavailable",
         "attemptId": "attempt:python-proxy",
-        "bindingDigest": "sha256:" + "c" * 64,
+        "bindingDigest": expected_binding_digest,
         "idempotentReplay": False,
         "grantId": None,
         "approvalRequestId": "approval:python-proxy",

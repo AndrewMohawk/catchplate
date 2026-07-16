@@ -17,6 +17,7 @@ import time
 import urllib.error
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -2320,6 +2321,212 @@ def quota_claim(suffix: str, *, maximum: int = 1) -> dict[str, Any]:
     }
 
 
+def calendar_quota_claim(
+    suffix: str, *, calendar_window: str, maximum: int = 1
+) -> dict[str, Any]:
+    claim = quota_claim(suffix, maximum=maximum)
+    claim.pop("window_seconds")
+    claim["window_kind"] = calendar_window
+    return claim
+
+
+def exercise_calendar_rate_limits(db: Any, backend: str) -> None:
+    def epoch_ms(value: str) -> int:
+        return int(
+            datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+            * 1000
+        )
+
+    boundary_cases = (
+        (
+            "leap-day",
+            "utcDay",
+            "2024-02-29T00:00:00Z",
+            "2024-03-01T00:00:00Z",
+        ),
+        (
+            "dst-day",
+            "utcDay",
+            "2025-03-09T00:00:00Z",
+            "2025-03-10T00:00:00Z",
+        ),
+        (
+            "iso-year",
+            "utcIsoWeek",
+            "2024-12-30T00:00:00Z",
+            "2025-01-06T00:00:00Z",
+        ),
+        (
+            "leap-month",
+            "utcMonth",
+            "2024-02-01T00:00:00Z",
+            "2024-03-01T00:00:00Z",
+        ),
+        (
+            "month-year",
+            "utcMonth",
+            "2024-12-01T00:00:00Z",
+            "2025-01-01T00:00:00Z",
+        ),
+    )
+    for label, window_kind, start_text, end_text in boundary_cases:
+        start_ms = epoch_ms(start_text)
+        end_ms = epoch_ms(end_text)
+        counter_key = "sha256:" + hashlib.sha256(
+            f"{backend}:calendar:{label}".encode("utf-8")
+        ).hexdigest()
+        request = {
+            "counter_key": counter_key,
+            "principal_id": f"agent:{backend}:calendar",
+            "route_id": f"route:{backend}:calendar:{label}",
+            "credential_id": "",
+            "credential_version": 0,
+            "policy_hash": "sha256:" + "c" * 64,
+            "constraint_id": f"quota:{backend}:calendar:{label}",
+            "operation": None,
+            "calendar_window": window_kind,
+            "max_count": 1,
+            "now_epoch_ms": start_ms + 1_234,
+            "audit": False,
+        }
+        preview = db.consume_rate_limit(**{**request, "consume": False})
+        if (
+            not preview.get("allowed")
+            or preview.get("consumed")
+            or preview.get("window_kind") != window_kind
+            or preview.get("window_start_epoch_ms") != start_ms
+            or preview.get("window_end_epoch_ms") != end_ms
+        ):
+            raise AssertionError(
+                f"{backend} {label} calendar preview was invalid: {preview}"
+            )
+        with db.connect() as conn:
+            preview_row = conn.execute(
+                "SELECT count(*) AS count FROM rate_limit_counters "
+                "WHERE counter_key = ?",
+                (counter_key,),
+            ).fetchone()
+        if int(preview_row["count"]) != 0:
+            raise AssertionError(f"{backend} {label} preview mutated the counter")
+
+        consumed = db.consume_rate_limit(**request)
+        denied = db.consume_rate_limit(
+            **{**request, "now_epoch_ms": end_ms - 1}
+        )
+        reset = db.consume_rate_limit(**{**request, "now_epoch_ms": end_ms})
+        if (
+            not consumed.get("allowed")
+            or consumed.get("count") != 1
+            or denied.get("allowed")
+            or denied.get("retry_after_seconds") != 1
+            or not reset.get("allowed")
+            or reset.get("count") != 1
+            or reset.get("window_start_epoch_ms") != end_ms
+        ):
+            raise AssertionError(
+                f"{backend} {label} half-open calendar behavior failed: "
+                f"{consumed} {denied} {reset}"
+            )
+
+    rollback_key = "sha256:" + hashlib.sha256(
+        f"{backend}:calendar:rollback".encode("utf-8")
+    ).hexdigest()
+    rollback_request = {
+        "counter_key": rollback_key,
+        "principal_id": f"agent:{backend}:calendar",
+        "route_id": f"route:{backend}:calendar:rollback",
+        "credential_id": "",
+        "credential_version": 0,
+        "policy_hash": "sha256:" + "c" * 64,
+        "constraint_id": f"quota:{backend}:calendar:rollback",
+        "operation": None,
+        "calendar_window": "utcDay",
+        "max_count": 2,
+        "now_epoch_ms": epoch_ms("2025-03-09T12:00:00Z"),
+        "audit": False,
+    }
+    db.consume_rate_limit(**rollback_request)
+    try:
+        db.consume_rate_limit(
+            **{
+                **rollback_request,
+                "now_epoch_ms": epoch_ms("2025-03-08T23:59:59.999Z"),
+            }
+        )
+    except db.RateLimitStoreError:
+        pass
+    else:
+        raise AssertionError(f"{backend} calendar clock rollback was accepted")
+    with db.connect() as conn:
+        rollback_row = conn.execute(
+            "SELECT count, window_kind FROM rate_limit_counters "
+            "WHERE counter_key = ?",
+            (rollback_key,),
+        ).fetchone()
+    if int(rollback_row["count"]) != 1 or rollback_row["window_kind"] != "utcDay":
+        raise AssertionError(f"{backend} clock rollback mutated the counter")
+
+    transition_key = "sha256:" + hashlib.sha256(
+        f"{backend}:calendar:transition".encode("utf-8")
+    ).hexdigest()
+    fixed_start = epoch_ms("2025-01-15T12:00:00Z")
+    fixed = {
+        **rollback_request,
+        "counter_key": transition_key,
+        "constraint_id": f"quota:{backend}:calendar:transition",
+        "calendar_window": None,
+        "window_seconds": 60,
+        "now_epoch_ms": fixed_start,
+    }
+    db.consume_rate_limit(**fixed)
+    calendar = {**fixed, "window_seconds": None, "calendar_window": "utcMonth"}
+    try:
+        db.consume_rate_limit(**calendar)
+    except db.RateLimitStoreError:
+        pass
+    else:
+        raise AssertionError(f"{backend} live quota kind transition was accepted")
+    transitioned = db.consume_rate_limit(
+        **{**calendar, "now_epoch_ms": fixed_start + 60_000}
+    )
+    if not transitioned.get("allowed") or transitioned.get("window_kind") != "utcMonth":
+        raise AssertionError(
+            f"{backend} expired quota did not transition window kind: {transitioned}"
+        )
+
+    duration_key = "sha256:" + hashlib.sha256(
+        f"{backend}:fixed:duration-change".encode("utf-8")
+    ).hexdigest()
+    duration_request = {
+        **rollback_request,
+        "counter_key": duration_key,
+        "constraint_id": f"quota:{backend}:fixed:duration-change",
+        "calendar_window": None,
+        "window_seconds": 60,
+        "max_count": 1,
+        "now_epoch_ms": fixed_start,
+    }
+    first_duration = db.consume_rate_limit(**duration_request)
+    extended_duration = db.consume_rate_limit(
+        **{
+            **duration_request,
+            "window_seconds": 120,
+            "now_epoch_ms": fixed_start + 61_000,
+        }
+    )
+    if (
+        not first_duration.get("allowed")
+        or extended_duration.get("allowed")
+        or extended_duration.get("count") != 1
+        or extended_duration.get("window_start_epoch_ms") != fixed_start
+        or extended_duration.get("window_end_epoch_ms") != fixed_start + 120_000
+    ):
+        raise AssertionError(
+            f"{backend} live fixed duration change reset usage: "
+            f"{first_duration} {extended_duration}"
+        )
+
+
 def release_reserve_kwargs(
     binding: dict[str, Any],
     *,
@@ -4477,6 +4684,268 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
     ):
         raise AssertionError(f"stale dispatch was not committed indeterminate: {stale_reaped}")
 
+    calendar_binding = approved_release_binding(db, f"{backend}-calendar-boundary")
+    calendar_quota = calendar_quota_claim(
+        f"{backend}-calendar-boundary",
+        calendar_window="utcDay",
+        maximum=2,
+    )
+    calendar_end_ms = int(
+        datetime(2025, 1, 2, tzinfo=timezone.utc).timestamp() * 1000
+    )
+    calendar_attempt = f"attempt:{backend}:calendar-boundary"
+    calendar_reservation = db.reserve_release_authorization(
+        **{
+            **release_reserve_kwargs(
+                calendar_binding,
+                attempt_id=calendar_attempt,
+                quotas=[calendar_quota],
+                require_jit_grant=False,
+                now_epoch_ms=calendar_end_ms - 500,
+            ),
+            "reservation_ttl_seconds": 5,
+        }
+    )
+    calendar_result_quota = calendar_reservation.get("quotas", [None])[0]
+    if (
+        calendar_reservation.get("state") != "reserved"
+        or calendar_reservation.get("reservation_expires_at_epoch_ms")
+        != calendar_end_ms
+        or calendar_result_quota is None
+        or calendar_result_quota.get("window_kind") != "utcDay"
+        or calendar_result_quota.get("window_end_epoch_ms") != calendar_end_ms
+    ):
+        raise AssertionError(
+            "calendar reservation was not capped at its authoritative boundary: "
+            f"{calendar_reservation}"
+        )
+    boundary_dispatch = db.dispatch_release_authorization(
+        attempt_id=calendar_attempt,
+        binding_digest=calendar_reservation["binding_digest"],
+        dispatch_ttl_seconds=5,
+        now_epoch_ms=calendar_end_ms,
+    )
+    if (
+        boundary_dispatch.get("state") != "cancelled"
+        or boundary_dispatch.get("authorized") is not False
+        or counter_count(db, calendar_quota["counter_key"]) != 0
+        or boundary_dispatch.get("quotas", [{}])[0].get("reservation_state")
+        != "refunded"
+    ):
+        raise AssertionError(
+            "calendar dispatch at the boundary was not cancelled and refunded: "
+            f"{boundary_dispatch}"
+        )
+
+    fixed_boundary_binding = approved_release_binding(
+        db, f"{backend}-fixed-boundary"
+    )
+    fixed_boundary_quota = quota_claim(
+        f"{backend}-fixed-boundary", maximum=2
+    )
+    fixed_boundary_quota["window_seconds"] = 1
+    fixed_boundary_now = calendar_end_ms + 10_000
+    fixed_boundary_kwargs = {
+        **release_reserve_kwargs(
+            fixed_boundary_binding,
+            attempt_id=f"attempt:{backend}:fixed-boundary",
+            quotas=[fixed_boundary_quota],
+            require_jit_grant=False,
+            now_epoch_ms=fixed_boundary_now,
+        ),
+        "reservation_ttl_seconds": 5,
+    }
+    fixed_boundary_reservation = db.reserve_release_authorization(
+        **fixed_boundary_kwargs
+    )
+    if (
+        fixed_boundary_reservation.get("state") != "reserved"
+        or fixed_boundary_reservation.get("reservation_expires_at_epoch_ms")
+        != fixed_boundary_now + 1_000
+    ):
+        raise AssertionError(
+            "fixed reservation was not capped at its counted window: "
+            f"{fixed_boundary_reservation}"
+        )
+    fixed_boundary_dispatch = db.dispatch_release_authorization(
+        attempt_id=fixed_boundary_kwargs["attempt_id"],
+        binding_digest=fixed_boundary_reservation["binding_digest"],
+        dispatch_ttl_seconds=5,
+        now_epoch_ms=fixed_boundary_now + 1_000,
+    )
+    if (
+        fixed_boundary_dispatch.get("state") != "cancelled"
+        or fixed_boundary_dispatch.get("authorized") is not False
+        or counter_count(db, fixed_boundary_quota["counter_key"]) != 0
+    ):
+        raise AssertionError(
+            "fixed-window dispatch at the boundary was not cancelled and refunded: "
+            f"{fixed_boundary_dispatch}"
+        )
+
+    replay_binding = approved_release_binding(db, f"{backend}-expired-replay")
+    replay_quota = quota_claim(f"{backend}-expired-replay", maximum=2)
+    replay_quota["window_seconds"] = 1
+    replay_now = fixed_boundary_now + 20_000
+    replay_kwargs = {
+        **release_reserve_kwargs(
+            replay_binding,
+            attempt_id=f"attempt:{backend}:expired-replay",
+            quotas=[replay_quota],
+            require_jit_grant=False,
+            now_epoch_ms=replay_now,
+        ),
+        "reservation_ttl_seconds": 5,
+    }
+    replay_reservation = db.reserve_release_authorization(**replay_kwargs)
+    expired_replay = db.reserve_release_authorization(
+        **{**replay_kwargs, "now_epoch_ms": replay_now + 1_000}
+    )
+    if (
+        replay_reservation.get("state") != "reserved"
+        or expired_replay.get("state") != "cancelled"
+        or expired_replay.get("authorized") is not False
+        or expired_replay.get("reason") != "reservation_ttl_expired"
+        or not expired_replay.get("idempotent_replay")
+        or counter_count(db, replay_quota["counter_key"]) != 0
+    ):
+        raise AssertionError(
+            f"expired idempotent reservation replay remained authorized: {expired_replay}"
+        )
+
+    duration_binding = approved_release_binding(db, f"{backend}-atomic-duration")
+    duration_quota = quota_claim(f"{backend}-atomic-duration")
+    duration_now = replay_now + 20_000
+    duration_reservation = db.reserve_release_authorization(
+        **release_reserve_kwargs(
+            duration_binding,
+            attempt_id=f"attempt:{backend}:atomic-duration:first",
+            quotas=[duration_quota],
+            require_jit_grant=False,
+            now_epoch_ms=duration_now,
+        )
+    )
+    extended_quota = {**duration_quota, "window_seconds": 120}
+    extended_reservation = db.reserve_release_authorization(
+        **release_reserve_kwargs(
+            duration_binding,
+            attempt_id=f"attempt:{backend}:atomic-duration:second",
+            quotas=[extended_quota],
+            require_jit_grant=False,
+            now_epoch_ms=duration_now + 1_000,
+        )
+    )
+    if (
+        duration_reservation.get("state") != "reserved"
+        or extended_reservation.get("state") != "denied"
+        or extended_reservation.get("reason") != "shared_quota_denied"
+        or counter_count(db, duration_quota["counter_key"]) != 1
+    ):
+        raise AssertionError(
+            "atomic fixed duration change reset the accumulated count: "
+            f"{duration_reservation} {extended_reservation}"
+        )
+    db.complete_release_authorization(
+        attempt_id=duration_reservation["attempt_id"],
+        binding_digest=duration_reservation["binding_digest"],
+        outcome="not_forwarded",
+        now_epoch_ms=duration_now + 2_000,
+    )
+
+    rollback_binding = approved_release_binding(db, f"{backend}-calendar-rollback")
+    rollback_quota = calendar_quota_claim(
+        f"{backend}-calendar-rollback", calendar_window="utcDay", maximum=2
+    )
+    rollback_attempt = f"attempt:{backend}:calendar-rollback"
+    rollback_reservation = db.reserve_release_authorization(
+        **release_reserve_kwargs(
+            rollback_binding,
+            attempt_id=rollback_attempt,
+            quotas=[rollback_quota],
+            require_jit_grant=False,
+            now_epoch_ms=calendar_end_ms - 500,
+        )
+    )
+    advanced_after_boundary = db.consume_rate_limit(
+        counter_key=rollback_quota["counter_key"],
+        principal_id=rollback_binding["principal_id"],
+        route_id=rollback_binding["route_id"],
+        credential_id=rollback_binding["credential_id"],
+        credential_version=rollback_binding["credential_version"],
+        policy_hash=rollback_binding["policy_hash"],
+        constraint_id=rollback_quota["constraint_id"],
+        operation=rollback_quota["operation"],
+        calendar_window="utcDay",
+        max_count=2,
+        now_epoch_ms=calendar_end_ms,
+        audit=False,
+    )
+    rollback_dispatch = db.dispatch_release_authorization(
+        attempt_id=rollback_attempt,
+        binding_digest=rollback_reservation["binding_digest"],
+        dispatch_ttl_seconds=5,
+        now_epoch_ms=calendar_end_ms - 250,
+    )
+    if (
+        not advanced_after_boundary.get("allowed")
+        or rollback_dispatch.get("state") != "cancelled"
+        or rollback_dispatch.get("reason") != "shared_quota_window_changed"
+        or rollback_dispatch.get("quotas", [{}])[0].get("reservation_state")
+        != "refund_skipped_window"
+        or counter_count(db, rollback_quota["counter_key"]) != 1
+    ):
+        raise AssertionError(
+            "clock rollback revived a reservation from an advanced calendar window: "
+            f"{advanced_after_boundary} {rollback_dispatch}"
+        )
+
+    refund_binding = approved_release_binding(db, f"{backend}-calendar-refund")
+    refund_quota = calendar_quota_claim(
+        f"{backend}-calendar-refund",
+        calendar_window="utcDay",
+        maximum=2,
+    )
+    refund_attempt = f"attempt:{backend}:calendar-refund"
+    refund_reservation = db.reserve_release_authorization(
+        **release_reserve_kwargs(
+            refund_binding,
+            attempt_id=refund_attempt,
+            quotas=[refund_quota],
+            require_jit_grant=False,
+            now_epoch_ms=calendar_end_ms - 500,
+        )
+    )
+    advanced = db.consume_rate_limit(
+        counter_key=refund_quota["counter_key"],
+        principal_id=refund_binding["principal_id"],
+        route_id=refund_binding["route_id"],
+        credential_id=refund_binding["credential_id"],
+        credential_version=refund_binding["credential_version"],
+        policy_hash=refund_binding["policy_hash"],
+        constraint_id=refund_quota["constraint_id"],
+        operation=refund_quota["operation"],
+        calendar_window="utcDay",
+        max_count=2,
+        now_epoch_ms=calendar_end_ms,
+        audit=False,
+    )
+    skipped_refund = db.complete_release_authorization(
+        attempt_id=refund_attempt,
+        binding_digest=refund_reservation["binding_digest"],
+        outcome="not_forwarded",
+        now_epoch_ms=calendar_end_ms + 1,
+    )
+    if (
+        not advanced.get("allowed")
+        or counter_count(db, refund_quota["counter_key"]) != 1
+        or skipped_refund.get("quotas", [{}])[0].get("reservation_state")
+        != "refund_skipped_window"
+    ):
+        raise AssertionError(
+            "calendar refund crossed into a different stored window: "
+            f"{advanced} {skipped_refund}"
+        )
+
     contention_quotas = [
         quota_claim(f"{backend}-contention-a", maximum=8),
         quota_claim(f"{backend}-contention-b", maximum=8),
@@ -5376,27 +5845,67 @@ def _run_proxy_transaction(
         events.append("reserve")
         if isinstance(reserve_result, BaseException):
             raise reserve_result
+        now_ms = int(time.time() * 1000)
+        quotas = []
+        for claim in kwargs["shared_quotas"]:
+            window_kind = claim["window_kind"]
+            if window_kind != "fixed":
+                raise AssertionError(f"proxy fixture does not support {window_kind}")
+            window_start = now_ms
+            window_end = window_start + int(claim["window_seconds"]) * 1000
+            quotas.append(
+                {
+                    "counter_key": claim["counter_key"],
+                    "constraint_id": claim["constraint_id"],
+                    "operation": claim["operation"],
+                    "window_kind": window_kind,
+                    "window_seconds": claim["window_seconds"],
+                    "calendar_window": None,
+                    "window_start_epoch_ms": window_start,
+                    "window_end_epoch_ms": window_end,
+                    "max": claim["max_count"],
+                    "count": 1,
+                    "remaining": claim["max_count"] - 1,
+                    "reservation_state": "reserved",
+                }
+            )
         result = {
             "authorized": True,
             "state": "reserved",
             "reason": "reserved",
             "attempt_id": kwargs["attempt_id"],
-            "binding_digest": "sha256:" + "1" * 64,
+            "binding_digest": policy_engine.runtime.release_authorization_binding_digest(
+                attempt_id=kwargs["attempt_id"],
+                flow_id=kwargs["flow_id"],
+                principal_id=kwargs["principal_id"],
+                route_id=kwargs["route_id"],
+                credential_ref=kwargs["credential_ref"],
+                credential_version=kwargs["credential_version"],
+                policy_hash=kwargs["policy_hash"],
+                request_digest=kwargs["request_digest"],
+                operation_digest=kwargs["operation_digest"],
+                operation_context=kwargs["operation_context"],
+                shared_quotas=kwargs["shared_quotas"],
+                require_jit_grant=kwargs["require_jit_grant"],
+            ),
             "idempotent_replay": False,
             "grant_id": "grant:exact:test" if jit_required else None,
             "approval_request_id": "approval:exact:test" if jit_required else None,
             "approval_status": None,
             "approval_expires_at": None,
             "approval_created": None,
-            "reservation_expires_at_epoch_ms": int(time.time() * 1000) + 60_000,
+            "reservation_expires_at_epoch_ms": now_ms + 55_000,
             "dispatch_started_at_epoch_ms": None,
             "dispatch_expires_at_epoch_ms": None,
             "completion_outcome": None,
             "retry_after_seconds": 0,
+            "quotas": quotas,
         }
         if isinstance(reserve_result, dict):
             result.update(reserve_result)
             result["attempt_id"] = kwargs["attempt_id"]
+            if result.get("authorized") is False and "quotas" not in reserve_result:
+                result["quotas"] = []
         return result
 
     def dispatch(**kwargs: Any) -> dict[str, Any]:
@@ -5404,6 +5913,7 @@ def _run_proxy_transaction(
         if isinstance(dispatch_result, BaseException):
             raise dispatch_result
         now_ms = int(time.time() * 1000)
+        previous = kwargs["previous_lifecycle"]
         result = {
             "authorized": True,
             "state": "dispatching",
@@ -5416,11 +5926,14 @@ def _run_proxy_transaction(
             "approval_status": None,
             "approval_expires_at": None,
             "approval_created": None,
-            "reservation_expires_at_epoch_ms": now_ms + 60_000,
+            "reservation_expires_at_epoch_ms": previous[
+                "reservation_expires_at_epoch_ms"
+            ],
             "dispatch_started_at_epoch_ms": now_ms,
             "dispatch_expires_at_epoch_ms": now_ms + 30_000,
             "completion_outcome": None,
             "retry_after_seconds": 0,
+            "quotas": [dict(item) for item in previous["quotas"]],
         }
         if isinstance(dispatch_result, dict):
             result.update(dispatch_result)
@@ -5441,6 +5954,13 @@ def _run_proxy_transaction(
             "unknown": "forward_outcome_indeterminate",
         }[kwargs["outcome"]]
         now_ms = int(time.time() * 1000)
+        previous = kwargs["previous_lifecycle"]
+        previous_dispatch_started = previous.get("dispatch_started_at_epoch_ms")
+        previous_dispatch_expires = previous.get("dispatch_expires_at_epoch_ms")
+        if kwargs["outcome"] == "unknown" and previous_dispatch_started is None:
+            previous_dispatch_started = now_ms
+            previous_dispatch_expires = now_ms + 30_000
+        reservation_state = "refunded" if expected == "cancelled" else "committed"
         result = {
             "authorized": expected != "cancelled",
             "state": expected,
@@ -5453,15 +5973,17 @@ def _run_proxy_transaction(
             "approval_status": None,
             "approval_expires_at": None,
             "approval_created": None,
-            "reservation_expires_at_epoch_ms": now_ms + 60_000,
-            "dispatch_started_at_epoch_ms": (
-                None if kwargs["outcome"] == "not_forwarded" else now_ms
-            ),
-            "dispatch_expires_at_epoch_ms": (
-                None if kwargs["outcome"] == "not_forwarded" else now_ms + 30_000
-            ),
+            "reservation_expires_at_epoch_ms": previous[
+                "reservation_expires_at_epoch_ms"
+            ],
+            "dispatch_started_at_epoch_ms": previous_dispatch_started,
+            "dispatch_expires_at_epoch_ms": previous_dispatch_expires,
             "completion_outcome": kwargs["outcome"],
             "retry_after_seconds": 0,
+            "quotas": [
+                {**item, "reservation_state": reservation_state}
+                for item in previous["quotas"]
+            ],
         }
         if isinstance(complete_result, dict):
             result.update(complete_result)
@@ -5585,7 +6107,6 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
             "authorized": False,
             "state": "denied",
             "reason": "shared_quota_denied",
-            "binding_digest": "sha256:" + "2" * 64,
             "idempotent_replay": False,
             "grant_id": None,
             "approval_request_id": None,
@@ -5627,11 +6148,10 @@ def exercise_proxy_forward_start_ordering(policy_engine: Any, credential_policy_
         followup="dispatch",
     )
     if (
-        not expired.decision.allowed
-        or expired_dispatch is None
-        or expired_dispatch.allowed
-        or expired_dispatch.payload.get("error")
-        != "release_authorization_reservation_expired"
+        expired.decision.allowed
+        or expired.decision.payload.get("error")
+        != "release_authorization_reserve_invalid"
+        or expired_dispatch is not None
         or "dispatch" in expired_events
         or "complete:not_forwarded" not in expired_events
     ):
@@ -5902,11 +6422,109 @@ def exercise_release_client_idempotent_retry(runtime: Any) -> None:
         )
         stack.enter_context(patch.object(runtime, "request_bytes", side_effect=flaky_request))
         stack.enter_context(patch.object(runtime.time, "sleep", return_value=None))
-        result = runtime._release_authorization_http_post("reserve", reserve_payload)
+        result = runtime._release_authorization_http_post(
+            "reserve",
+            reserve_payload,
+            expected_binding_digest=binding_digest,
+            expected_shared_quotas=[],
+        )
     if result.get("state") != "reserved" or not result.get("idempotent_replay"):
         raise AssertionError(f"idempotent reserve retry did not recover: {result}")
     if len(requests) != 2 or requests[0] != requests[1]:
         raise AssertionError(f"reserve retry changed the durable attempt binding: {requests}")
+
+    calendar_start_ms = int(
+        datetime(2025, 1, 1, tzinfo=timezone.utc).timestamp() * 1000
+    )
+    calendar_end_ms = int(
+        datetime(2025, 1, 2, tzinfo=timezone.utc).timestamp() * 1000
+    )
+    calendar_response = {
+        "apiVersion": "serverware.releaseAuthorization/v1",
+        "ok": True,
+        "authorized": True,
+        "state": "reserved",
+        "reason": "reserved",
+        "attemptId": attempt_id,
+        "bindingDigest": binding_digest,
+        "idempotentReplay": False,
+        "reservationExpiresAtEpochMs": calendar_end_ms,
+        "retryAfterSeconds": 0,
+        "quotas": [
+            {
+                "counterKey": "sha256:" + "7" * 64,
+                "constraintId": "calendar-client-validation",
+                "operation": "test.forward",
+                "windowKind": "utcDay",
+                "calendarWindow": "utcDay",
+                "windowStartEpochMs": calendar_start_ms,
+                "windowEndEpochMs": calendar_end_ms,
+                "max": 2,
+                "count": 1,
+                "remaining": 1,
+                "reservationState": "reserved",
+            }
+        ],
+        "store": {"backend": "postgres", "ha": True},
+    }
+    normalized = runtime._normalized_release_authorization_response(
+        calendar_response,
+        attempt_id=attempt_id,
+    )
+    calendar_claim = {
+        "counter_key": "sha256:" + "7" * 64,
+        "constraint_id": "calendar-client-validation",
+        "operation": "test.forward",
+        "window_kind": "utcDay",
+        "max_count": 2,
+    }
+    runtime.validate_reserve_release_authorization_response(
+        normalized,
+        attempt_id=attempt_id,
+        require_jit_grant=False,
+        expected_binding_digest=binding_digest,
+        expected_shared_quotas=[calendar_claim],
+        now_epoch_ms=calendar_start_ms + 1_000,
+    )
+    for label, mutate in (
+        (
+            "forged boundary",
+            lambda body: body["quotas"][0].update(
+                {"windowStartEpochMs": calendar_start_ms + 1}
+            ),
+        ),
+        (
+            "descriptor mismatch",
+            lambda body: body["quotas"][0].update({"calendarWindow": "utcMonth"}),
+        ),
+        (
+            "expiry beyond boundary",
+            lambda body: body.update(
+                {"reservationExpiresAtEpochMs": calendar_end_ms + 1}
+            ),
+        ),
+    ):
+        malformed = json.loads(json.dumps(calendar_response))
+        mutate(malformed)
+        try:
+            malformed_normalized = runtime._normalized_release_authorization_response(
+                malformed,
+                attempt_id=attempt_id,
+            )
+            runtime.validate_reserve_release_authorization_response(
+                malformed_normalized,
+                attempt_id=attempt_id,
+                require_jit_grant=False,
+                expected_binding_digest=binding_digest,
+                expected_shared_quotas=[calendar_claim],
+                now_epoch_ms=calendar_start_ms + 1_000,
+            )
+        except runtime.ReleaseAuthorizationClientError:
+            pass
+        else:
+            raise AssertionError(
+                f"release client accepted {label}: {malformed_normalized}"
+            )
 
 
 def exercise_proxy_atomic_backend_integration(
@@ -6320,6 +6938,7 @@ def main() -> None:
             exercise_transactional_bound_storage_rewrap(
                 crypto, db, backend
             )
+            exercise_calendar_rate_limits(db, backend)
             exercise_release_authority_lifecycle(db, backend)
             exercise_atomic_release_authorization(db, backend)
             exercise_control_plane_jit_approval(app_module, db, backend)

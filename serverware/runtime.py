@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from collections import OrderedDict
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -607,6 +607,406 @@ def _valid_release_authorization_identity(value: Any) -> bool:
     )
 
 
+def _release_calendar_window_bounds(
+    window_kind: str, window_start_epoch_ms: int
+) -> tuple[int, int]:
+    start = datetime.fromtimestamp(window_start_epoch_ms / 1000, timezone.utc)
+    midnight = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    if window_kind == "utcDay":
+        expected_start = midnight
+        expected_end = expected_start + timedelta(days=1)
+    elif window_kind == "utcIsoWeek":
+        expected_start = midnight - timedelta(days=midnight.weekday())
+        expected_end = expected_start + timedelta(days=7)
+    elif window_kind == "utcMonth":
+        expected_start = midnight.replace(day=1)
+        expected_end = (
+            expected_start.replace(year=expected_start.year + 1, month=1)
+            if expected_start.month == 12
+            else expected_start.replace(month=expected_start.month + 1)
+        )
+    else:
+        raise ReleaseAuthorizationClientError(
+            "release authorization quota calendar window is invalid"
+        )
+    return (
+        int(expected_start.timestamp() * 1000),
+        int(expected_end.timestamp() * 1000),
+    )
+
+
+def _normalized_release_authorization_quota(
+    item: Any, *, camel_case: bool
+) -> dict[str, Any]:
+    if not isinstance(item, dict):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response quota must be an object"
+        )
+    if camel_case:
+        allowed = {
+            "counterKey",
+            "constraintId",
+            "operation",
+            "windowKind",
+            "windowSeconds",
+            "calendarWindow",
+            "windowStartEpochMs",
+            "windowEndEpochMs",
+            "max",
+            "count",
+            "remaining",
+            "reservationState",
+        }
+        value = {
+            "counter_key": item.get("counterKey"),
+            "constraint_id": item.get("constraintId"),
+            "operation": item.get("operation"),
+            "window_kind": item.get("windowKind"),
+            "window_seconds": item.get("windowSeconds"),
+            "calendar_window": item.get("calendarWindow"),
+            "window_start_epoch_ms": item.get("windowStartEpochMs"),
+            "window_end_epoch_ms": item.get("windowEndEpochMs"),
+            "max": item.get("max"),
+            "count": item.get("count"),
+            "remaining": item.get("remaining"),
+            "reservation_state": item.get("reservationState"),
+        }
+    else:
+        allowed = {
+            "counter_key",
+            "constraint_id",
+            "operation",
+            "window_kind",
+            "window_seconds",
+            "calendar_window",
+            "window_span_seconds",
+            "window_start_epoch_ms",
+            "window_end_epoch_ms",
+            "max",
+            "count",
+            "remaining",
+            "reservation_state",
+        }
+        value = dict(item)
+    if set(item) - allowed:
+        raise ReleaseAuthorizationClientError(
+            "release authorization response quota fields are invalid"
+        )
+    counter_key = value.get("counter_key")
+    constraint_id = value.get("constraint_id")
+    operation = value.get("operation")
+    if (
+        not isinstance(counter_key, str)
+        or _SHA256_DIGEST_RE.fullmatch(counter_key) is None
+        or not _valid_release_authorization_identity(constraint_id)
+        or (
+            operation is not None
+            and not _valid_release_authorization_identity(operation)
+        )
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response quota identity is invalid"
+        )
+    window_kind = value.get("window_kind")
+    window_seconds = value.get("window_seconds")
+    calendar_window = value.get("calendar_window")
+    if window_kind == "fixed":
+        if (
+            not isinstance(window_seconds, int)
+            or isinstance(window_seconds, bool)
+            or not 1 <= window_seconds <= 31_536_000
+            or calendar_window is not None
+        ):
+            raise ReleaseAuthorizationClientError(
+                "release authorization fixed quota descriptor is invalid"
+            )
+    elif window_kind in {"utcDay", "utcIsoWeek", "utcMonth"}:
+        if window_seconds is not None or calendar_window != window_kind:
+            raise ReleaseAuthorizationClientError(
+                "release authorization calendar quota descriptor is invalid"
+            )
+    else:
+        raise ReleaseAuthorizationClientError(
+            "release authorization quota window kind is invalid"
+        )
+    window_start = _release_u64(
+        value.get("window_start_epoch_ms"), field="quota window start", optional=False
+    )
+    window_end = _release_u64(
+        value.get("window_end_epoch_ms"), field="quota window end", optional=False
+    )
+    maximum = _release_u64(value.get("max"), field="quota maximum", optional=False)
+    count = _release_u64(value.get("count"), field="quota count", optional=False)
+    remaining = _release_u64(
+        value.get("remaining"), field="quota remaining", optional=False
+    )
+    if (
+        window_start is None
+        or window_end is None
+        or window_end <= window_start
+        or maximum is None
+        or not 1 <= maximum <= 1_000_000_000
+        or count is None
+        or count > maximum
+        or remaining is None
+        or remaining != maximum - count
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization quota bounds are invalid"
+        )
+    if window_kind == "fixed":
+        if window_end != window_start + int(window_seconds) * 1000:
+            raise ReleaseAuthorizationClientError(
+                "release authorization fixed quota boundaries are invalid"
+            )
+    elif (window_start, window_end) != _release_calendar_window_bounds(
+        str(window_kind), window_start
+    ):
+        raise ReleaseAuthorizationClientError(
+            "release authorization calendar quota boundaries are invalid"
+        )
+    reservation_state = value.get("reservation_state")
+    if reservation_state not in {
+        "reserved",
+        "committed",
+        "refunded",
+        "refund_skipped_window",
+    }:
+        raise ReleaseAuthorizationClientError(
+            "release authorization quota reservation state is invalid"
+        )
+    return {
+        "counter_key": counter_key,
+        "constraint_id": constraint_id,
+        "operation": operation,
+        "window_kind": window_kind,
+        "window_seconds": window_seconds,
+        "calendar_window": calendar_window,
+        "window_start_epoch_ms": window_start,
+        "window_end_epoch_ms": window_end,
+        "max": maximum,
+        "count": count,
+        "remaining": remaining,
+        "reservation_state": reservation_state,
+    }
+
+
+def _normalized_expected_release_authorization_quotas(
+    shared_quotas: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not isinstance(shared_quotas, list):
+        raise ReleaseAuthorizationClientError(
+            "release authorization expected quotas must be an array"
+        )
+    normalized: dict[str, dict[str, Any]] = {}
+    allowed = {
+        "counter_key",
+        "constraint_id",
+        "operation",
+        "window_kind",
+        "window_seconds",
+        "max_count",
+    }
+    for item in shared_quotas:
+        if not isinstance(item, dict) or set(item) - allowed:
+            raise ReleaseAuthorizationClientError(
+                "release authorization expected quota fields are invalid"
+            )
+        counter_key = item.get("counter_key")
+        constraint_id = item.get("constraint_id")
+        operation = item.get("operation")
+        window_kind = item.get("window_kind")
+        window_seconds = item.get("window_seconds")
+        maximum = item.get("max_count")
+        if (
+            not isinstance(counter_key, str)
+            or _SHA256_DIGEST_RE.fullmatch(counter_key) is None
+            or not _valid_release_authorization_identity(constraint_id)
+            or (
+                operation is not None
+                and not _valid_release_authorization_identity(operation)
+            )
+            or not isinstance(maximum, int)
+            or isinstance(maximum, bool)
+            or not 1 <= maximum <= 1_000_000_000
+        ):
+            raise ReleaseAuthorizationClientError(
+                "release authorization expected quota claim is invalid"
+            )
+        if window_kind == "fixed":
+            if (
+                not isinstance(window_seconds, int)
+                or isinstance(window_seconds, bool)
+                or not 1 <= window_seconds <= 31_536_000
+            ):
+                raise ReleaseAuthorizationClientError(
+                    "release authorization expected fixed quota is invalid"
+                )
+        elif window_kind in {"utcDay", "utcIsoWeek", "utcMonth"}:
+            if window_seconds is not None:
+                raise ReleaseAuthorizationClientError(
+                    "release authorization expected calendar quota is invalid"
+                )
+        else:
+            raise ReleaseAuthorizationClientError(
+                "release authorization expected quota window kind is invalid"
+            )
+        claim = {
+            "counter_key": counter_key,
+            "constraint_id": constraint_id,
+            "operation": operation,
+            "window_kind": window_kind,
+            "max_count": maximum,
+        }
+        if window_kind == "fixed":
+            claim["window_seconds"] = window_seconds
+        previous = normalized.get(counter_key)
+        if previous is not None and previous != claim:
+            raise ReleaseAuthorizationClientError(
+                "duplicate expected quota key has conflicting policy claims"
+            )
+        normalized[counter_key] = claim
+    return [normalized[key] for key in sorted(normalized)]
+
+
+def release_authorization_binding_digest(
+    *,
+    attempt_id: str,
+    flow_id: str,
+    principal_id: str,
+    route_id: str,
+    credential_ref: str | None,
+    credential_version: int,
+    policy_hash: str,
+    request_digest: str,
+    operation_digest: str | None,
+    operation_context: dict[str, Any],
+    shared_quotas: list[dict[str, Any]],
+    require_jit_grant: bool,
+) -> str:
+    binding = {
+        "attempt_id": attempt_id,
+        "flow_id": flow_id,
+        "principal_id": principal_id,
+        "route_id": route_id,
+        "credential_id": credential_ref or "",
+        "credential_version": credential_version,
+        "policy_hash": policy_hash,
+        "request_digest": request_digest,
+        "operation_digest": operation_digest,
+        "operation_context": operation_context,
+        "require_jit_grant": bool(require_jit_grant),
+        "shared_quotas": _normalized_expected_release_authorization_quotas(
+            shared_quotas
+        ),
+    }
+    encoded = canonical_json(binding).encode("utf-8")
+    if len(encoded) > _RELEASE_AUTHORIZATION_CANONICAL_REQUEST_MAX_BYTES:
+        raise ReleaseAuthorizationClientError(
+            "release authorization binding exceeds 64 KiB"
+        )
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _release_authorization_quota_binding(quota: dict[str, Any]) -> dict[str, Any]:
+    binding = {
+        "counter_key": quota["counter_key"],
+        "constraint_id": quota["constraint_id"],
+        "operation": quota["operation"],
+        "window_kind": quota["window_kind"],
+        "max_count": quota["max"],
+    }
+    if quota["window_kind"] == "fixed":
+        binding["window_seconds"] = quota["window_seconds"]
+    return binding
+
+
+def _normalized_release_authorization_quota_snapshot(
+    value: Any,
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise ReleaseAuthorizationClientError(
+            "release authorization prior quota snapshot is missing"
+        )
+    quotas = [
+        _normalized_release_authorization_quota(item, camel_case=False)
+        for item in value
+    ]
+    counter_keys = [item["counter_key"] for item in quotas]
+    if counter_keys != sorted(set(counter_keys)):
+        raise ReleaseAuthorizationClientError(
+            "release authorization prior quotas are not canonical"
+        )
+    return quotas
+
+
+def _validate_release_authorization_quotas(
+    response: dict[str, Any],
+    *,
+    expected_quotas: list[dict[str, Any]],
+    previous_quotas: list[dict[str, Any]] | None,
+    expected_reservation_state: str,
+    temporal_anchor_epoch_ms: int | None,
+    reservation_expires_at_epoch_ms: int,
+) -> None:
+    quotas = response.get("quotas")
+    if not isinstance(quotas, list) or len(quotas) != len(expected_quotas):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response quota set is incomplete"
+        )
+    if [_release_authorization_quota_binding(item) for item in quotas] != expected_quotas:
+        raise ReleaseAuthorizationClientError(
+            "release authorization quota policy claim substitution"
+        )
+    if previous_quotas is not None:
+        if len(previous_quotas) != len(quotas):
+            raise ReleaseAuthorizationClientError(
+                "release authorization quota lifecycle substitution"
+            )
+        immutable_fields = {
+            "counter_key",
+            "constraint_id",
+            "operation",
+            "window_kind",
+            "window_seconds",
+            "calendar_window",
+            "window_start_epoch_ms",
+            "window_end_epoch_ms",
+            "max",
+            "count",
+            "remaining",
+        }
+        if any(
+            {field: previous.get(field) for field in immutable_fields}
+            != {field: current.get(field) for field in immutable_fields}
+            for previous, current in zip(previous_quotas, quotas)
+        ):
+            raise ReleaseAuthorizationClientError(
+                "release authorization quota lifecycle substitution"
+            )
+    for quota in quotas:
+        window_start = int(quota["window_start_epoch_ms"])
+        window_end = int(quota["window_end_epoch_ms"])
+        if temporal_anchor_epoch_ms is not None and not (
+            window_start <= temporal_anchor_epoch_ms < window_end
+        ):
+            raise ReleaseAuthorizationClientError(
+                "release authorization quota window is not active"
+            )
+        if reservation_expires_at_epoch_ms > window_end:
+            raise ReleaseAuthorizationClientError(
+                "release authorization expiry crosses a quota boundary"
+            )
+        reservation_state = quota.get("reservation_state")
+        if reservation_state != expected_reservation_state and not (
+            expected_reservation_state == "refunded"
+            and reservation_state == "refund_skipped_window"
+        ):
+            raise ReleaseAuthorizationClientError(
+                "release authorization quota reservation state is invalid"
+            )
+
+
 def _normalized_release_authorization_response(
     body: Any,
     *,
@@ -717,9 +1117,18 @@ def _normalized_release_authorization_response(
 
     quotas = body.get("quotas")
     store = body.get("store")
-    if not isinstance(quotas, list) or any(not isinstance(item, dict) for item in quotas):
+    if not isinstance(quotas, list):
         raise ReleaseAuthorizationClientError(
             "release authorization response quotas are invalid"
+        )
+    quotas = [
+        _normalized_release_authorization_quota(item, camel_case=True)
+        for item in quotas
+    ]
+    counter_keys = [item["counter_key"] for item in quotas]
+    if counter_keys != sorted(set(counter_keys)):
+        raise ReleaseAuthorizationClientError(
+            "release authorization response quotas are not canonical"
         )
     if (
         not isinstance(store, dict)
@@ -833,24 +1242,36 @@ def validate_reserve_release_authorization_response(
     *,
     attempt_id: str,
     require_jit_grant: bool,
+    expected_binding_digest: str,
+    expected_shared_quotas: list[dict[str, Any]],
+    now_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
-    _validate_release_authorization_binding(response, attempt_id=attempt_id)
+    _validate_release_authorization_binding(
+        response,
+        attempt_id=attempt_id,
+        binding_digest=expected_binding_digest,
+    )
+    expected_quotas = _normalized_expected_release_authorization_quotas(
+        expected_shared_quotas
+    )
+    now_ms = int(time.time() * 1000) if now_epoch_ms is None else now_epoch_ms
     authorized = response.get("authorized")
     state = response.get("state")
     reason = response.get("reason")
     grant_id = response.get("grant_id")
     approval_request_id = response.get("approval_request_id")
     if authorized is True:
+        reservation_expires_at = _release_u64(
+            response.get("reservation_expires_at_epoch_ms"),
+            field="reservation expiry",
+            optional=False,
+        )
         exact = (
             state == "reserved"
             and reason == "reserved"
             and response.get("completion_outcome") is None
-            and _release_u64(
-                response.get("reservation_expires_at_epoch_ms"),
-                field="reservation expiry",
-                optional=False,
-            )
-            is not None
+            and reservation_expires_at is not None
+            and reservation_expires_at > now_ms
             and response.get("dispatch_started_at_epoch_ms") is None
             and response.get("dispatch_expires_at_epoch_ms") is None
             and response.get("retry_after_seconds") == 0
@@ -874,6 +1295,7 @@ def validate_reserve_release_authorization_response(
                 "jit_grant_unavailable",
                 "jit_grant_expired",
                 "shared_quota_denied",
+                "shared_quota_window_expired",
                 "release_authorization_busy",
             }
             and (require_jit_grant or not jit_denial)
@@ -903,6 +1325,20 @@ def validate_reserve_release_authorization_response(
         raise ReleaseAuthorizationClientError(
             f"release authorization reserve returned invalid lifecycle state {state}"
         )
+    if authorized is True:
+        assert reservation_expires_at is not None
+        _validate_release_authorization_quotas(
+            response,
+            expected_quotas=expected_quotas,
+            previous_quotas=None,
+            expected_reservation_state="reserved",
+            temporal_anchor_epoch_ms=now_ms,
+            reservation_expires_at_epoch_ms=reservation_expires_at,
+        )
+    elif response.get("quotas"):
+        raise ReleaseAuthorizationClientError(
+            "denied release authorization response must not carry quota reservations"
+        )
     return response
 
 
@@ -913,6 +1349,7 @@ def validate_dispatch_release_authorization_response(
     binding_digest: str,
     grant_id: str | None,
     approval_request_id: str | None,
+    previous_lifecycle: dict[str, Any],
     now_epoch_ms: int | None = None,
 ) -> dict[str, Any]:
     _validate_release_authorization_binding(
@@ -923,23 +1360,34 @@ def validate_dispatch_release_authorization_response(
     now_ms = int(time.time() * 1000) if now_epoch_ms is None else now_epoch_ms
     dispatch_started_at = response.get("dispatch_started_at_epoch_ms")
     dispatch_expires_at = response.get("dispatch_expires_at_epoch_ms")
+    reservation_expires_at = response.get("reservation_expires_at_epoch_ms")
+    previous_quotas = _normalized_release_authorization_quota_snapshot(
+        previous_lifecycle.get("quotas")
+    )
+    if any(item["reservation_state"] != "reserved" for item in previous_quotas):
+        raise ReleaseAuthorizationClientError(
+            "release authorization reserve quota state is invalid"
+        )
     exact = (
         response.get("authorized") is True
         and response.get("state") == "dispatching"
         and response.get("reason") == "dispatching"
         and response.get("completion_outcome") is None
         and _release_u64(
-            response.get("reservation_expires_at_epoch_ms"),
+            reservation_expires_at,
             field="reservation expiry",
             optional=False,
         )
         is not None
+        and reservation_expires_at
+        == previous_lifecycle.get("reservation_expires_at_epoch_ms")
         and isinstance(dispatch_started_at, int)
         and not isinstance(dispatch_started_at, bool)
         and 0 <= dispatch_started_at <= _UINT64_MAX
         and isinstance(dispatch_expires_at, int)
         and not isinstance(dispatch_expires_at, bool)
         and dispatch_started_at < dispatch_expires_at <= _UINT64_MAX
+        and dispatch_started_at < reservation_expires_at
         and dispatch_expires_at > now_ms
         and response.get("retry_after_seconds") == 0
         and response.get("approval_status") is None
@@ -955,6 +1403,16 @@ def validate_dispatch_release_authorization_response(
         raise ReleaseAuthorizationClientError(
             "release authorization dispatch did not return exact live dispatching state"
         )
+    _validate_release_authorization_quotas(
+        response,
+        expected_quotas=[
+            _release_authorization_quota_binding(item) for item in previous_quotas
+        ],
+        previous_quotas=previous_quotas,
+        expected_reservation_state="reserved",
+        temporal_anchor_epoch_ms=dispatch_started_at,
+        reservation_expires_at_epoch_ms=reservation_expires_at,
+    )
     return response
 
 
@@ -966,6 +1424,7 @@ def validate_complete_release_authorization_response(
     outcome: str,
     grant_id: str | None,
     approval_request_id: str | None,
+    previous_lifecycle: dict[str, Any],
 ) -> dict[str, Any]:
     _validate_release_authorization_binding(
         response,
@@ -1022,6 +1481,39 @@ def validate_complete_release_authorization_response(
         exact = False
     dispatch_started_at = response.get("dispatch_started_at_epoch_ms")
     dispatch_expires_at = response.get("dispatch_expires_at_epoch_ms")
+    reservation_expires_at = response.get("reservation_expires_at_epoch_ms")
+    previous_dispatch_started_at = previous_lifecycle.get(
+        "dispatch_started_at_epoch_ms"
+    )
+    previous_dispatch_expires_at = previous_lifecycle.get(
+        "dispatch_expires_at_epoch_ms"
+    )
+    previous_quotas = _normalized_release_authorization_quota_snapshot(
+        previous_lifecycle.get("quotas")
+    )
+    if any(item["reservation_state"] != "reserved" for item in previous_quotas):
+        raise ReleaseAuthorizationClientError(
+            "release authorization prior quota state is invalid"
+        )
+    dispatch_timestamps_match = (
+        dispatch_started_at == previous_dispatch_started_at
+        and dispatch_expires_at == previous_dispatch_expires_at
+    )
+    if (
+        outcome == "unknown"
+        and previous_lifecycle.get("dispatch_attempted") is True
+        and previous_dispatch_started_at is None
+        and previous_dispatch_expires_at is None
+    ):
+        dispatch_timestamps_match = (
+            dispatch_started_at is None and dispatch_expires_at is None
+        ) or (
+            isinstance(dispatch_started_at, int)
+            and not isinstance(dispatch_started_at, bool)
+            and isinstance(dispatch_expires_at, int)
+            and not isinstance(dispatch_expires_at, bool)
+            and 0 <= dispatch_started_at < dispatch_expires_at <= _UINT64_MAX
+        )
     exact = exact and (
         _release_u64(
             response.get("reservation_expires_at_epoch_ms"),
@@ -1029,6 +1521,9 @@ def validate_complete_release_authorization_response(
             optional=False,
         )
         is not None
+        and reservation_expires_at
+        == previous_lifecycle.get("reservation_expires_at_epoch_ms")
+        and dispatch_timestamps_match
         and (
             (dispatch_started_at is None and dispatch_expires_at is None)
             or (
@@ -1054,6 +1549,17 @@ def validate_complete_release_authorization_response(
             "release authorization completion returned invalid state "
             f"{state} outcome {completion_outcome!r} for {outcome}"
         )
+    expected_reservation_state = "refunded" if state == "cancelled" else "committed"
+    _validate_release_authorization_quotas(
+        response,
+        expected_quotas=[
+            _release_authorization_quota_binding(item) for item in previous_quotas
+        ],
+        previous_quotas=previous_quotas,
+        expected_reservation_state=expected_reservation_state,
+        temporal_anchor_epoch_ms=None,
+        reservation_expires_at_epoch_ms=reservation_expires_at,
+    )
     return response
 
 
@@ -1077,6 +1583,14 @@ def _normalized_direct_release_authorization_response(
     normalized.setdefault("completion_outcome", None)
     normalized.setdefault("retry_after_seconds", 0)
     normalized.setdefault("quotas", [])
+    if not isinstance(normalized["quotas"], list):
+        raise ReleaseAuthorizationClientError(
+            "release authorization direct quotas must be an array"
+        )
+    normalized["quotas"] = [
+        _normalized_release_authorization_quota(item, camel_case=False)
+        for item in normalized["quotas"]
+    ]
     normalized.setdefault(
         "store",
         {
@@ -1128,6 +1642,9 @@ def _release_authorization_http_post(
     require_jit_grant: bool = False,
     grant_id: str | None = None,
     approval_request_id: str | None = None,
+    expected_binding_digest: str | None = None,
+    expected_shared_quotas: list[dict[str, Any]] | None = None,
+    previous_lifecycle: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     base_url = _release_authorization_base_url()
     token = _release_authorization_token()
@@ -1167,20 +1684,35 @@ def _release_authorization_http_post(
                 attempt_id=str(payload["attemptId"]),
             )
             if action == "reserve":
+                if expected_binding_digest is None or expected_shared_quotas is None:
+                    raise ReleaseAuthorizationClientError(
+                        "release authorization reserve binding is missing"
+                    )
                 return validate_reserve_release_authorization_response(
                     normalized,
                     attempt_id=str(payload["attemptId"]),
                     require_jit_grant=require_jit_grant,
+                    expected_binding_digest=expected_binding_digest,
+                    expected_shared_quotas=expected_shared_quotas,
                 )
             if action == "dispatch":
+                if previous_lifecycle is None:
+                    raise ReleaseAuthorizationClientError(
+                        "release authorization reserve lifecycle is missing"
+                    )
                 return validate_dispatch_release_authorization_response(
                     normalized,
                     attempt_id=str(payload["attemptId"]),
                     binding_digest=str(payload["bindingDigest"]),
                     grant_id=grant_id,
                     approval_request_id=approval_request_id,
+                    previous_lifecycle=previous_lifecycle,
                 )
             if action == "complete":
+                if previous_lifecycle is None:
+                    raise ReleaseAuthorizationClientError(
+                        "release authorization prior lifecycle is missing"
+                    )
                 return validate_complete_release_authorization_response(
                     normalized,
                     attempt_id=str(payload["attemptId"]),
@@ -1188,6 +1720,7 @@ def _release_authorization_http_post(
                     outcome=str(payload["outcome"]),
                     grant_id=grant_id,
                     approval_request_id=approval_request_id,
+                    previous_lifecycle=previous_lifecycle,
                 )
             raise ReleaseAuthorizationClientError(
                 f"release authorization action is invalid: {action}"
@@ -1254,6 +1787,20 @@ def reserve_release_authorization(
         canonical_request,
         request_digest=request_digest,
     )
+    expected_binding_digest = release_authorization_binding_digest(
+        attempt_id=attempt_id,
+        flow_id=flow_id,
+        principal_id=principal_id,
+        route_id=route_id,
+        credential_ref=credential_ref,
+        credential_version=credential_version,
+        policy_hash=policy_hash,
+        request_digest=request_digest,
+        operation_digest=operation_digest,
+        operation_context=operation_context,
+        shared_quotas=shared_quotas,
+        require_jit_grant=require_jit_grant,
+    )
     if _release_authorization_base_url():
         return _release_authorization_http_post(
             "reserve",
@@ -1272,6 +1819,8 @@ def reserve_release_authorization(
                 "canonicalRequest": bounded_canonical_request,
             },
             require_jit_grant=require_jit_grant,
+            expected_binding_digest=expected_binding_digest,
+            expected_shared_quotas=shared_quotas,
         )
     _require_development_release_authorization_fallback()
     if require_jit_grant:
@@ -1301,6 +1850,8 @@ def reserve_release_authorization(
             result,
             attempt_id=attempt_id,
             require_jit_grant=require_jit_grant,
+            expected_binding_digest=expected_binding_digest,
+            expected_shared_quotas=shared_quotas,
         )
     except Exception as exc:
         raise ReleaseAuthorizationClientError(
@@ -1314,6 +1865,7 @@ def dispatch_release_authorization(
     binding_digest: str,
     grant_id: str | None = None,
     approval_request_id: str | None = None,
+    previous_lifecycle: dict[str, Any],
 ) -> dict[str, Any]:
     if _release_authorization_base_url():
         return _release_authorization_http_post(
@@ -1325,6 +1877,7 @@ def dispatch_release_authorization(
             },
             grant_id=grant_id,
             approval_request_id=approval_request_id,
+            previous_lifecycle=previous_lifecycle,
         )
     _require_development_release_authorization_fallback()
     try:
@@ -1342,6 +1895,7 @@ def dispatch_release_authorization(
             binding_digest=binding_digest,
             grant_id=grant_id,
             approval_request_id=approval_request_id,
+            previous_lifecycle=previous_lifecycle,
         )
     except Exception as exc:
         raise ReleaseAuthorizationClientError(
@@ -1356,6 +1910,7 @@ def complete_release_authorization(
     outcome: str,
     grant_id: str | None = None,
     approval_request_id: str | None = None,
+    previous_lifecycle: dict[str, Any],
 ) -> dict[str, Any]:
     if outcome not in {"forwarded", "not_forwarded", "unknown"}:
         raise ReleaseAuthorizationClientError(
@@ -1372,6 +1927,7 @@ def complete_release_authorization(
             },
             grant_id=grant_id,
             approval_request_id=approval_request_id,
+            previous_lifecycle=previous_lifecycle,
         )
     _require_development_release_authorization_fallback()
     try:
@@ -1390,6 +1946,7 @@ def complete_release_authorization(
             outcome=outcome,
             grant_id=grant_id,
             approval_request_id=approval_request_id,
+            previous_lifecycle=previous_lifecycle,
         )
     except Exception as exc:
         raise ReleaseAuthorizationClientError(

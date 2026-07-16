@@ -511,6 +511,8 @@ def main() -> None:
             "const policyTemplates = {",
             "gmail-response-last-30-days",
             "x-one-post-per-day",
+            "calendarWindow",
+            "utcDay",
             "npm.publish.yubikey-jit",
             "'query', 'selectedHeaders', 'bodySha256'",
             "example.slack.chat_post.hourly",
@@ -1080,6 +1082,18 @@ function credentialToJson(value){return value;}
                 raise AssertionError(
                     "X one-post template quota is not stable across principal and credential rotation"
                 )
+            if (
+                x_daily_limit.get("calendarWindow") != "utcDay"
+                or "windowSeconds" in x_daily_limit
+            ):
+                raise AssertionError(
+                    "X one-post template must use a UTC calendar-day quota, not a rolling fixed window"
+                )
+            x_daily_label = str(templates["x_one_post_daily"].get("label") or "")
+            if "UTC calendar day" not in x_daily_label or "00:00 UTC" not in x_daily_label:
+                raise AssertionError(
+                    "X one-post template label must name the UTC calendar day and its 00:00 UTC reset"
+                )
 
             def template_constraint(template_id: str, constraint_id: str) -> dict | None:
                 return next(
@@ -1222,6 +1236,123 @@ function credentialToJson(value){return value;}
                 (ROOT / "policies" / "credential-limits.examples.json").read_text()
             )
             canonical_routes = {route["id"]: route for route in canonical_examples["routes"]}
+
+            def assert_utc_calendar_quota(
+                constraints: list[dict], constraint_id: str, *, label: str
+            ) -> None:
+                quota = next(
+                    (item for item in constraints if item.get("id") == constraint_id),
+                    None,
+                )
+                if quota is None:
+                    raise AssertionError(f"{label} calendar quota is missing")
+                if quota.get("calendarWindow") != "utcDay" or "windowSeconds" in quota:
+                    raise AssertionError(
+                        f"{label} must use calendarWindow utcDay without windowSeconds"
+                    )
+
+            def assert_no_rolling_calendar_wording(value: object, *, label: str) -> None:
+                serialized = json.dumps(value, sort_keys=True).lower()
+                for misleading in (
+                    "24h",
+                    "24-hour",
+                    "24 hour",
+                    "24 hours",
+                    "86400",
+                    "86,400",
+                ):
+                    if misleading in serialized:
+                        raise AssertionError(
+                            f"{label} contains misleading rolling-window wording: {misleading}"
+                        )
+
+            assert_utc_calendar_quota(
+                canonical_routes["example.x.tweet.one_per_day"].get("constraints", []),
+                "one-tweet-per-provider-account-per-day",
+                label="canonical X one-post example",
+            )
+            assert_utc_calendar_quota(
+                templates["x_one_post_daily"].get("constraints", []),
+                "x-one-post-per-day",
+                label="portal X one-post template",
+            )
+            assert_no_rolling_calendar_wording(
+                canonical_routes["example.x.tweet.one_per_day"],
+                label="canonical X one-post example",
+            )
+            assert_no_rolling_calendar_wording(
+                templates["x_one_post_daily"],
+                label="portal X one-post template",
+            )
+            assert_utc_calendar_quota(
+                canonical_routes["example.stripe.payment_intent.tokenized_jit"].get(
+                    "constraints", []
+                ),
+                "payment-intent-five-per-assignment-day",
+                label="canonical Stripe PaymentIntent example",
+            )
+            assert_utc_calendar_quota(
+                templates["stripe_payment_intent_jit"].get("constraints", []),
+                "payment-intent-five-per-assignment-day",
+                label="portal Stripe PaymentIntent template",
+            )
+            assert_no_rolling_calendar_wording(
+                canonical_routes["example.stripe.payment_intent.tokenized_jit"],
+                label="canonical Stripe PaymentIntent example",
+            )
+            assert_no_rolling_calendar_wording(
+                templates["stripe_payment_intent_jit"],
+                label="portal Stripe PaymentIntent template",
+            )
+            stripe_daily_label = str(
+                templates["stripe_payment_intent_jit"].get("label") or ""
+            )
+            if (
+                "UTC calendar day" not in stripe_daily_label
+                or "00:00 UTC" not in stripe_daily_label
+            ):
+                raise AssertionError(
+                    "Stripe PaymentIntent template label must name the UTC calendar day and its 00:00 UTC reset"
+                )
+
+            demo_policy = json.loads(
+                (ROOT / "policies" / "demo.policy.json").read_text()
+            )
+            demo_x_route = next(
+                route
+                for route in demo_policy["routes"]
+                if route.get("id") == "demo.x.tweet.one_per_day"
+            )
+            assert_utc_calendar_quota(
+                demo_x_route.get("constraints", []),
+                "x-one-tweet-per-day",
+                label="demo X one-post example",
+            )
+            assert_no_rolling_calendar_wording(
+                demo_x_route,
+                label="demo X one-post example",
+            )
+
+            x_calendar_template_sources = [
+                section.split("npm_write_mfa: {", 1)[0]
+                for section in ui_html.split("x_one_post_daily: {")[1:]
+            ]
+            if len(x_calendar_template_sources) != 2:
+                raise AssertionError(
+                    "portal must expose exactly one legacy and one PolicyBundle X calendar template"
+                )
+            calendar_template_source = "\n".join(
+                x_calendar_template_sources
+                + [
+                    ui_html.split("stripe_payment_intent_jit: {", 1)[1].split(
+                        "object_store_put: {", 1
+                    )[0]
+                ]
+            )
+            assert_no_rolling_calendar_wording(
+                calendar_template_source,
+                label="portal calendar quota source",
+            )
             synchronized_examples = {
                 "slack_chat_post": "example.slack.chat_post.hourly",
                 "stripe_customers_list": "example.stripe.customers.list",

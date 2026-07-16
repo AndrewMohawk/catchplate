@@ -740,6 +740,8 @@ _PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES = frozenset(
         "data_plane.connect.established",
         "data_plane.connect.keep_alive",
         "data_plane.credential.release_started",
+        "data_plane.gmail.metadata_fanout.completed",
+        "data_plane.gmail.metadata_fanout.started",
         "data_plane.grant.received",
         "data_plane.jit.grant_consumed",
         "data_plane.policy.reload_failed",
@@ -890,11 +892,20 @@ class DataPlaneRateLimitConsume(BaseModel):
         default_factory=dict, alias="operationContext"
     )
     max_count: int = Field(alias="max", ge=1, le=1_000_000_000)
-    window_seconds: int = Field(alias="windowSeconds", ge=1, le=31_536_000)
+    window_seconds: int | None = Field(
+        default=None, alias="windowSeconds", ge=1, le=31_536_000
+    )
+    calendar_window: Literal["utcDay", "utcIsoWeek", "utcMonth"] | None = Field(
+        default=None, alias="calendarWindow"
+    )
     consume: bool = True
 
     @model_validator(mode="after")
     def validate_operation_context_size(self) -> DataPlaneRateLimitConsume:
+        if (self.window_seconds is None) == (self.calendar_window is None):
+            raise ValueError(
+                "exactly one of windowSeconds or calendarWindow is required"
+            )
         try:
             encoded = json.dumps(
                 self.operation_context,
@@ -11264,10 +11275,16 @@ def data_plane_rate_limit_consume(
         )
     constraint = matching_constraints[0]
     expected_max = int(constraint["max"])
-    expected_window_seconds = int(constraint["windowSeconds"])
+    expected_calendar_window = constraint.get("calendarWindow")
+    expected_window_seconds = (
+        int(constraint["windowSeconds"])
+        if expected_calendar_window is None
+        else None
+    )
     if (
         payload.max_count != expected_max
         or payload.window_seconds != expected_window_seconds
+        or payload.calendar_window != expected_calendar_window
     ):
         raise HTTPException(
             status_code=409,
@@ -11306,6 +11323,11 @@ def data_plane_rate_limit_consume(
             constraint_id=payload.constraint_id,
             operation=operation_name,
             window_seconds=expected_window_seconds,
+            calendar_window=(
+                str(expected_calendar_window)
+                if expected_calendar_window is not None
+                else None
+            ),
             max_count=expected_max,
             consume=payload.consume,
             actor_type="data-plane",
@@ -11365,20 +11387,26 @@ def _require_data_plane_token(
 
 
 def _release_authorization_api_response(result: dict[str, Any]) -> dict[str, Any]:
-    quotas = [
-        {
+    quotas = []
+    for item in result.get("quotas") or []:
+        window_kind = str(item.get("window_kind") or "")
+        quota = {
             "counterKey": item.get("counter_key"),
             "constraintId": item.get("constraint_id"),
             "operation": item.get("operation"),
+            "windowKind": window_kind,
             "windowStartEpochMs": item.get("window_start_epoch_ms"),
-            "windowSeconds": item.get("window_seconds"),
+            "windowEndEpochMs": item.get("window_end_epoch_ms"),
             "max": item.get("max"),
             "count": item.get("count"),
             "remaining": item.get("remaining"),
             "reservationState": item.get("reservation_state"),
         }
-        for item in result.get("quotas") or []
-    ]
+        if window_kind == "fixed":
+            quota["windowSeconds"] = item.get("window_seconds")
+        elif window_kind in {"utcDay", "utcIsoWeek", "utcMonth"}:
+            quota["calendarWindow"] = window_kind
+        quotas.append(quota)
     response = {
         "apiVersion": "serverware.releaseAuthorization/v1",
         "ok": True,
@@ -11836,22 +11864,23 @@ def _release_authorization_route_claims(
                     + ", ".join(invalid_fields)
                 ),
             )
-        shared_quotas.append(
-            {
-                "counter_key": _rate_limit_counter_key(
-                    constraint=constraint,
-                    route_id=route.id,
-                    principal_id=payload.principal_id,
-                    credential_ref=route.credential_ref,
-                    credential_version=payload.credential_version,
-                    operation_context=operation_context,
-                ),
-                "constraint_id": str(constraint["id"]),
-                "operation": operation_name,
-                "window_seconds": int(constraint["windowSeconds"]),
-                "max_count": int(constraint["max"]),
-            }
-        )
+        quota_claim = {
+            "counter_key": _rate_limit_counter_key(
+                constraint=constraint,
+                route_id=route.id,
+                principal_id=payload.principal_id,
+                credential_ref=route.credential_ref,
+                credential_version=payload.credential_version,
+                operation_context=operation_context,
+            ),
+            "constraint_id": str(constraint["id"]),
+            "operation": operation_name,
+            "window_kind": str(constraint.get("calendarWindow") or "fixed"),
+            "max_count": int(constraint["max"]),
+        }
+        if quota_claim["window_kind"] == "fixed":
+            quota_claim["window_seconds"] = int(constraint["windowSeconds"])
+        shared_quotas.append(quota_claim)
     return route, shared_quotas, require_jit_grant
 
 
@@ -13002,12 +13031,12 @@ UI_HTML = r"""
         policies: [{"type":"operationPolicy","allowedOperations":["search.read"]},{"type":"queryDateWindow","parameters":["start_time","end_time"],"maxAgeDays":7},{"type":"queryNumericBounds","parameters":["max_results"],"min":1,"max":100,"integer":true}]
       },
       x_one_post_daily: {
-        label: 'X one post per 24h',
-        name: 'X one tweet per 24-hour window',
+        label: 'X one post per UTC calendar day',
+        name: 'X one tweet per UTC calendar day, resetting at 00:00 UTC',
         host: 'api.x.com',
         path: '/2/tweets',
         injection: {"type":"bearer","field":"access_token"},
-        policies: [{"type":"operationPolicy","allowedOperations":["tweets.write"]},{"type":"rateLimit","max":1,"windowSeconds":86400,"store":"shared","key":{"scope":["principal","credential","route","operation"]}},{"type":"jsonBody","contentTypes":["application/json"],"allowedFields":["text","reply_settings"],"requiredFields":["text"],"deniedFields":["media","poll","direct_message_deep_link"],"fields":{"text":{"type":"string","minLength":1,"maxLength":280}}}]
+        policies: [{"type":"operationPolicy","allowedOperations":["tweets.write"]},{"type":"rateLimit","max":1,"calendarWindow":"utcDay","store":"shared","key":{"scope":["route","operation"]}},{"type":"jsonBody","contentTypes":["application/json"],"allowedFields":["text","reply_settings"],"requiredFields":["text"],"deniedFields":["media","poll","direct_message_deep_link"],"fields":{"text":{"type":"string","minLength":1,"maxLength":280}}}]
       },
       npm_write_mfa: {
         label: 'npm write requires MFA',
@@ -13048,7 +13077,7 @@ UI_HTML = r"""
         ]
       },
       x_one_post_daily: {
-        label: 'X one text post per 24-hour window',
+        label: 'X one text post per UTC calendar day, resetting at 00:00 UTC',
         routeId: 'x.post.one-per-day',
         provider: 'x',
         requiredScopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'],
@@ -13057,7 +13086,7 @@ UI_HTML = r"""
         adapter: {type: 'x.v2', config: {mode: 'controlledWrite', blockWrites: false, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
           {id: 'x-only-tweet-create', type: 'operationPolicy', allowedOperations: ['tweets.write']},
-          {id: 'x-one-post-per-day', type: 'rateLimit', max: 1, windowSeconds: 86400, store: 'shared', key: {scope: ['route', 'operation'], operationFields: ['providerAccount']}},
+          {id: 'x-one-post-per-day', type: 'rateLimit', max: 1, calendarWindow: 'utcDay', store: 'shared', key: {scope: ['route', 'operation'], operationFields: ['providerAccount']}},
           {id: 'x-plain-text-body', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['text', 'reply_settings'], requiredFields: ['text'], deniedFields: ['media', 'poll', 'direct_message_deep_link'], fields: {text: {type: 'string', minLength: 1, maxLength: 280}, reply_settings: {type: 'string', enum: ['following', 'mentionedUsers']}}}
         ]
       },
@@ -13113,14 +13142,14 @@ UI_HTML = r"""
         ]
       },
       stripe_payment_intent_jit: {
-        label: 'Tokenized PaymentIntent create + hardware JIT',
+        label: 'Tokenized PaymentIntent create, five per UTC calendar day, resetting at 00:00 UTC + hardware JIT',
         routeId: 'example.stripe.payment_intent.tokenized_jit',
         provider: 'stripe',
         injection: {type: 'bearer'},
         match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['POST'], paths: ['/v1/payment_intents']},
         adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'idempotency-key', 'user-agent'], requiredHeaders: {'idempotency-key': {type: 'string', minLength: 1, maxLength: 255, pattern: '^[-A-Za-z0-9._:]{1,255}$'}}, allowedQueryKeys: [], bodyMode: 'formUrlencoded', maxBodyBytes: 16384, operation: {name: 'stripe.payment_intents.create', formFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'amount', 'currency', 'status', 'payment_method', 'created'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
-          {id: 'payment-intent-five-per-assignment-day', type: 'rateLimit', max: 5, windowSeconds: 86400, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
+          {id: 'payment-intent-five-per-assignment-day', type: 'rateLimit', max: 5, calendarWindow: 'utcDay', store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
           {id: 'payment-intent-tokenized-only', type: 'formBody', contentTypes: ['application/x-www-form-urlencoded'], allowedFields: ['amount', 'currency', 'payment_method', 'confirm', 'metadata.agent_request_id'], requiredFields: ['amount', 'currency', 'payment_method', 'confirm'], deniedFields: ['payment_method_data.card.number', 'payment_method_data.card.cvc', 'source', 'card'], fields: {amount: {type: 'integer', min: 50, max: 50000}, currency: {type: 'string', equals: 'usd'}, payment_method: {type: 'string', pattern: '^pm_[A-Za-z0-9]{8,64}$', maxLength: 67}, confirm: {type: 'string', equals: 'true'}, 'metadata.agent_request_id': {type: 'string', maxLength: 128}}},
           {id: 'payment-intent-response-shape', type: 'responseJson', phase: 'response', operations: ['stripe.payment_intents.create'], fields: {id: {required: true, type: 'string', minLength: 4, maxLength: 255, pattern: '^pi_[A-Za-z0-9]{1,252}$'}, object: {required: true, type: 'string', equals: 'payment_intent'}, status: {required: true, type: 'string', enum: ['requires_payment_method', 'requires_confirmation', 'requires_action', 'processing', 'requires_capture', 'canceled', 'succeeded']}}},
           {id: 'payment-intent-response-binding', type: 'responseBinding', phase: 'response', operations: ['stripe.payment_intents.create'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'amount', operationField: 'amount', responseField: 'amount', comparison: 'canonicalInteger'}, {id: 'currency', operationField: 'currency', responseField: 'currency', comparison: 'exactString'}, {id: 'payment-method', operationField: 'payment_method', responseField: 'payment_method', comparison: 'exactString'}]}

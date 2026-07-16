@@ -224,6 +224,7 @@
         "store": {"enum": ["local", "shared"]},
         "max": {"type": "number"},
         "windowSeconds": {"type": "integer", "minimum": 1, "maximum": 31536000},
+        "calendarWindow": {"enum": ["utcDay", "utcIsoWeek", "utcMonth"]},
         "key": {
           "type": "object",
           "additionalProperties": false,
@@ -343,7 +344,23 @@
         },
         {
           "if": {"properties": {"type": {"const": "rateLimit"}}, "required": ["type"]},
-          "then": {"required": ["max", "windowSeconds"]}
+          "then": {
+            "required": ["max"],
+            "properties": {
+              "max": {"type": "integer", "minimum": 1, "maximum": 1000000000}
+            },
+            "oneOf": [
+              {
+                "required": ["windowSeconds"],
+                "not": {"required": ["calendarWindow"]}
+              },
+              {
+                "required": ["calendarWindow", "store"],
+                "not": {"required": ["windowSeconds"]},
+                "properties": {"store": {"const": "shared"}}
+              }
+            ]
+          }
         },
         {
           "if": {"properties": {"type": {"const": "operationPolicy"}}, "required": ["type"]},

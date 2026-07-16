@@ -37,7 +37,7 @@ GOOGLE_SCOPES = [
     "email",
     "https://www.googleapis.com/auth/gmail.readonly",
 ]
-X_SCOPES = ["tweet.read", "users.read", "offline.access"]
+X_SCOPES = ["tweet.read", "tweet.write", "users.read", "offline.access"]
 OAUTH_COOKIE_PREFIX = "__Host-serverware-oauth-"
 DEFAULT_TIMEOUT_MS = 20_000
 MAX_EVIDENCE_FILE_BYTES = 32 * 1024 * 1024
@@ -551,7 +551,10 @@ def _assert_stripe_uses_manual_credential_flow(
     )
     _require(
         page.locator("#credential-name").input_value()
-        == "Tokenized PaymentIntent create + hardware JIT credential",
+        == (
+            "Tokenized PaymentIntent create, five per UTC calendar day, resetting at "
+            "00:00 UTC + hardware JIT credential"
+        ),
         "Stripe manual credential name was not prefilled",
     )
     _require(
@@ -854,6 +857,7 @@ def _assert_policy_evidence(
     routes = {item["id"]: item for item in bundle.get("routes", [])}
     gmail = routes["browser.gmail.last-30-days"]
     x_search = routes["browser.x.search.seven-days"]
+    x_post = routes["browser.x.post.one-per-day"]
     _require(gmail["match"]["methods"] == ["GET"], "Gmail route is not read-only")
     _require(gmail["adapter"]["type"] == "gmail.v1", "Gmail route adapter mismatch")
     _require(
@@ -876,6 +880,26 @@ def _assert_policy_evidence(
             for item in x_search.get("constraints", [])
         ),
         "X route does not validate the seven-day response boundary",
+    )
+    _require(x_post["match"]["methods"] == ["POST"], "X posting route is not write-only")
+    _require(
+        x_post["adapter"]["config"].get("appIds") == [simulator.X_CLIENT_ID],
+        "X posting route is not bound to the verified OAuth app",
+    )
+    daily_limits = [
+        item
+        for item in x_post.get("constraints", [])
+        if item.get("type") == "rateLimit"
+    ]
+    _require(
+        len(daily_limits) == 1
+        and daily_limits[0].get("max") == 1
+        and daily_limits[0].get("calendarWindow") == "utcDay"
+        and daily_limits[0].get("store") == "shared"
+        and (daily_limits[0].get("key") or {}).get("scope") == ["route", "operation"]
+        and (daily_limits[0].get("key") or {}).get("operationFields")
+        == ["providerAccount"],
+        "X posting route lost its provider-account UTC calendar quota",
     )
 
 
@@ -1326,10 +1350,17 @@ def _run_browser_journey(
                 "X credential is not bound to the OAuth client app",
             )
 
-            final_policy = _preview_stage_activate_policy(
+            x_read_policy = _preview_stage_activate_policy(
                 page,
                 template="x_read_recent",
                 route_id="browser.x.search.seven-days",
+                credential_id=x_credential["id"],
+            )
+            api_documents.append(x_read_policy)
+            final_policy = _preview_stage_activate_policy(
+                page,
+                template="x_one_post_daily",
+                route_id="browser.x.post.one-per-day",
                 credential_id=x_credential["id"],
             )
             _assert_policy_evidence(
@@ -1398,6 +1429,7 @@ def _run_browser_journey(
                 "routes": [
                     "browser.gmail.last-30-days",
                     "browser.x.search.seven-days",
+                    "browser.x.post.one-per-day",
                 ],
                 "providerCounts": observations["counts"],
                 "screenshots": str(screenshots_dir)

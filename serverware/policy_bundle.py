@@ -192,7 +192,7 @@ FIELD_RULE_FIELDS = {
 FIELD_RULE_TYPES = {"string", "number", "integer", "boolean", "object", "array", "null"}
 CONSTRAINT_COMMON_FIELDS = {"id", "description", "type", "phase", "statusCode", "extensions"}
 CONSTRAINT_TYPE_FIELDS = {
-    "rateLimit": {"store", "max", "windowSeconds", "key"},
+    "rateLimit": {"store", "max", "windowSeconds", "calendarWindow", "key"},
     "operationPolicy": {"allowedOperations", "deniedOperations"},
     "queryDateWindow": {"parameters", "required", "formats", "maxAgeDays", "allowFutureSkewSeconds"},
     "queryNumericBounds": {"parameters", "required", "min", "max", "integer"},
@@ -1187,14 +1187,32 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
         if constraint_type == "rateLimit":
             max_count = constraint.get("max")
             window_seconds = constraint.get("windowSeconds")
+            calendar_window = constraint.get("calendarWindow")
             if not isinstance(max_count, int) or isinstance(max_count, bool) or not 1 <= max_count <= 1_000_000_000:
                 raise PolicyBundleError(
                     f"route {route_id} rateLimit {constraint_id} must define integer max between 1 and 1000000000"
                 )
-            if not isinstance(window_seconds, int) or isinstance(window_seconds, bool) or not 1 <= window_seconds <= 31_536_000:
+            if (window_seconds is None) == (calendar_window is None):
+                raise PolicyBundleError(
+                    f"route {route_id} rateLimit {constraint_id} must define exactly one of windowSeconds or calendarWindow"
+                )
+            if window_seconds is not None and (
+                not isinstance(window_seconds, int)
+                or isinstance(window_seconds, bool)
+                or not 1 <= window_seconds <= 31_536_000
+            ):
                 raise PolicyBundleError(
                     f"route {route_id} rateLimit {constraint_id} must define windowSeconds between 1 and 31536000"
                 )
+            if calendar_window is not None:
+                if calendar_window not in {"utcDay", "utcIsoWeek", "utcMonth"}:
+                    raise PolicyBundleError(
+                        f"route {route_id} rateLimit {constraint_id} has invalid calendarWindow"
+                    )
+                if store != "shared":
+                    raise PolicyBundleError(
+                        f"route {route_id} rateLimit {constraint_id} calendarWindow requires store shared"
+                    )
             raw_key_policy = constraint.get("key")
             if raw_key_policy is not None and not isinstance(raw_key_policy, dict):
                 raise PolicyBundleError(f"route {route_id} rateLimit {constraint_id} key must be an object")
@@ -3383,12 +3401,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     {
                         "id": "x-one-tweet-per-day",
                         "type": "rateLimit",
-                        "description": "The Docker fixture can publish at most one tweet per 86,400-second fixed window for this principal and credential.",
+                        "description": "The Docker fixture can publish at most one tweet per UTC calendar day for its single simulated X account; the quota resets at 00:00 UTC.",
                         "max": 1,
-                        "windowSeconds": 86400,
+                        "calendarWindow": "utcDay",
                         "store": "shared",
                         "key": {
-                            "scope": ["principal", "credential", "route", "operation"],
+                            "scope": ["route", "operation"],
                         },
                     },
                     {

@@ -9,7 +9,7 @@ The route-level `constraints` array is the shared customization layer. Provider 
   "id": "x-one-tweet-per-day",
   "type": "rateLimit",
   "max": 1,
-  "windowSeconds": 86400,
+  "calendarWindow": "utcDay",
   "store": "shared",
   "key": {"scope": ["principal", "credential", "route", "operation"]}
 }
@@ -40,7 +40,9 @@ For streaming responses, validation and projection happen incrementally. Serverw
 
 `operationPolicy`: allow or deny normalized adapter operations. Use this to block writes for one app while allowing reads, or to make a broad route safe even if SDKs choose unexpected endpoints.
 
-`rateLimit`: first-use-anchored fixed-window credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. Examples: one tweet per provider account per 86,400-second window, five Slack posts per principal/credential/route assignment per 3,600-second window, and ten bounded JSON object-store writes per principal/credential/route assignment per 3,600-second window. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas. These windows start with the first committed use after expiry; they are not aligned to UTC calendar boundaries.
+`rateLimit`: credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. A constraint selects exactly one window model. `windowSeconds` defines a rolling fixed window anchored by first use; five Slack posts per 3,600-second assignment window and ten object-store writes per 3,600-second assignment window use that model. `calendarWindow` defines a UTC calendar bucket: `utcDay` is `[00:00 UTC, 00:00 UTC the next day)`, `utcIsoWeek` is `[Monday 00:00 UTC, Monday 00:00 UTC the next ISO week)`, and `utcMonth` is `[the first day 00:00 UTC, the first day 00:00 UTC the next month)`. All starts are inclusive and all ends are exclusive. The X and Stripe examples use `utcDay`, so they reset at 00:00 UTC rather than 24 hours after first use. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. `store: "local"` keeps eligible fixed-window counters in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control plane so the quota is atomic across proxy/data-plane replicas; calendar windows require the shared authority.
+
+Every shared quota reservation is bounded by its counted window. A fixed-window reservation cannot dispatch after its rolling window ends, and a calendar reservation created before midnight that has not entered durable dispatch expires and is refunded at 00:00 UTC; the caller must reserve again against the new window. A request that entered dispatch before the boundary remains charged to that earlier window even if completion is reported later, and an unknown post-dispatch result is charged conservatively. Changing the duration of a live fixed-window policy preserves its accumulated count while the requested replacement window remains active. This prevents retry, approval, policy-update, or dispatch latency from moving one reservation between quota windows.
 
 `queryDateWindow`: bounds query parameters such as `start_time`, `end_time`, or `since` to a maximum lookback. Formats supported: RFC3339, date, epoch seconds, and epoch milliseconds.
 
@@ -123,7 +125,7 @@ The demo policy includes:
 
 - Gmail read access limited to the last 30 days, with page size caps and response `internalDate` validation.
 - X recent search limited to seven days, capped at 100 results, with response `created_at` validation.
-- X controlled posting limited to one plain-text tweet per provider account in a first-use-anchored 86,400-second window.
+- X controlled posting limited to one plain-text tweet for the demo's single simulated account per UTC calendar day, resetting at 00:00 UTC. The production template and common example key the same limit by the OAuth callback-verified provider subject.
 - X bounded read access covering every explicitly cataloged current GET endpoint while writes, unknown endpoints, and streaming endpoints stay blocked.
 - npm publish/dist-tag writes guarded by operation allowlists and per-operation JIT approval.
 
@@ -139,9 +141,9 @@ Streaming reads are intentionally excluded from that profile because a live stre
 
 ## Composing New Limits
 
-Constraints compose as an intersection: a request must satisfy the principal, endpoint, adapter, every request constraint, any JIT grant, and every response constraint. This supports rules such as "one post per credential and agent per 86,400-second window, only on weekdays, with a 280-character body" without provider-specific scripting.
+Constraints compose as an intersection: a request must satisfy the principal, endpoint, adapter, every request constraint, any JIT grant, and every response constraint. This supports rules such as "one post per verified provider account per UTC calendar day, resetting at 00:00 UTC, only on weekdays, with a 280-character body" without provider-specific scripting. Use `windowSeconds` when the intended rule is instead a rolling duration from first use.
 
-Shared quotas and JIT are enforced as one release decision, not as sequential best-effort counters. For example, a one-tweet-per-day route cannot consume the daily slot while discovering that its approval is missing, and a failed pre-dispatch audit cannot permanently burn either control. Quota denial reports a retry interval bounded by the policy window, while approval polling remains independently bounded to one hour.
+Shared quotas and JIT are enforced as one release decision, not as sequential best-effort counters. For example, a one-tweet-per-UTC-calendar-day route cannot consume the daily slot while discovering that its approval is missing, and a failed pre-dispatch audit cannot permanently burn either control. Calendar quota denial reports the next UTC boundary and a retry interval to that boundary; the daily reset is 00:00 UTC. Approval polling remains independently bounded to one hour.
 
 Policy files are data, not executable code. Unknown constraint types, fields, adapter operations, and extension semantics are rejected instead of ignored. A limitation that cannot be expressed by the typed constraints requires an audited adapter or constraint implementation in both enforcement runtimes, schema admission rules, and parity tests before it can be enabled. This preserves customization without allowing policy text to become an arbitrary-code escape hatch.
 

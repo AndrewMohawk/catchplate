@@ -17,8 +17,8 @@ The decision API covers:
 - upstream TLS validation through `SERVERWARE_UPSTREAM_CA_BUNDLE`;
 - host, port, method, and path-template route matching;
 - request-only adapter checks for `generic.rest`, `gmail.v1`, `x.v2`, and `npm.registry`, including bounded generic required request headers that are distinct from principal identity headers;
-- shared route constraints for operation allow/deny lists, fixed-window credential quotas, query lookback windows, query numeric caps, JSON body rules, and JSON response date-window validation;
-- authenticated shared quota consumption through `POST /api/data-plane/rate-limits/consume` when a `rateLimit` constraint uses `store: "shared"`, so daily or hourly credential budgets are atomic across Rust data-plane replicas;
+- shared route constraints for operation allow/deny lists, rolling fixed-window and UTC calendar-window credential quotas, query lookback windows, query numeric caps, JSON body rules, and JSON response date-window validation;
+- authenticated shared quota consumption through `POST /api/data-plane/rate-limits/consume` when a `rateLimit` constraint uses `store: "shared"`, so rolling and calendar credential budgets are atomic across Rust data-plane replicas. `windowSeconds` remains first-use-anchored; `calendarWindow` uses half-open `utcDay`, Monday-based `utcIsoWeek`, or `utcMonth` boundaries. A UTC day resets at 00:00 UTC, and an undispatched pre-boundary reservation expires instead of crossing into the next bucket;
 - Gmail recent-query rewrite planning and unproven direct-message read denial;
 - X read/write classification and credential app metadata binding;
 - npm publish/dist-tag classification, required field extraction, and JIT-required decisions;

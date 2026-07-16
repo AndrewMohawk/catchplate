@@ -34,6 +34,7 @@ _MAX_LOCAL_RATE_COUNTER_ENTRIES = 65_536
 
 @dataclass
 class _RateBucket:
+    starts_at: int
     expires_at: int
     count: int
 
@@ -412,22 +413,24 @@ def shared_rate_limit_claims(
             or not _phase_includes(constraint, "request")
         ):
             continue
-        claims.append(
-            {
-                "counter_key": _rate_key(
-                    constraint,
-                    route=route,
-                    principal_id=principal_id,
-                    credential_ref=credential_ref,
-                    credential_version=credential_version,
-                    operation_fields=operation_fields,
-                ),
-                "constraint_id": str(constraint.get("id") or "unnamed"),
-                "operation": operation_fields.get("operation"),
-                "window_seconds": int(constraint.get("windowSeconds") or 0),
-                "max_count": int(constraint.get("max") or 0),
-            }
-        )
+        window_kind = str(constraint.get("calendarWindow") or "fixed")
+        claim = {
+            "counter_key": _rate_key(
+                constraint,
+                route=route,
+                principal_id=principal_id,
+                credential_ref=credential_ref,
+                credential_version=credential_version,
+                operation_fields=operation_fields,
+            ),
+            "constraint_id": str(constraint.get("id") or "unnamed"),
+            "operation": operation_fields.get("operation"),
+            "window_kind": window_kind,
+            "max_count": int(constraint.get("max") or 0),
+        }
+        if window_kind == "fixed":
+            claim["window_seconds"] = int(constraint.get("windowSeconds") or 0)
+        claims.append(claim)
     return claims
 
 
@@ -443,10 +446,31 @@ def _enforce_rate_limit(
     consume: bool,
     skip_shared: bool,
 ) -> PolicyDecision:
-    maximum = int(constraint.get("max") or 0)
-    window_seconds = int(constraint.get("windowSeconds") or 0)
-    if maximum < 1 or window_seconds < 1:
-        return _deny(constraint, "rate limit constraint is invalid", "constraint_invalid_rate_limit")
+    raw_maximum = constraint.get("max")
+    raw_window_seconds = constraint.get("windowSeconds")
+    calendar_window = constraint.get("calendarWindow")
+    if (
+        not isinstance(raw_maximum, int)
+        or isinstance(raw_maximum, bool)
+        or not 1 <= raw_maximum <= 1_000_000_000
+        or (raw_window_seconds is None) == (calendar_window is None)
+        or calendar_window not in {None, "utcDay", "utcIsoWeek", "utcMonth"}
+        or (
+            raw_window_seconds is not None
+            and (
+                not isinstance(raw_window_seconds, int)
+                or isinstance(raw_window_seconds, bool)
+                or not 1 <= raw_window_seconds <= 31_536_000
+            )
+        )
+    ):
+        return _deny(
+            constraint,
+            "rate limit constraint is invalid",
+            "constraint_invalid_rate_limit",
+        )
+    maximum = raw_maximum
+    window_seconds = raw_window_seconds or 0
 
     now = int(time.time())
     key = _rate_key(
@@ -458,6 +482,13 @@ def _enforce_rate_limit(
         operation_fields=operation_fields,
     )
     store = str(constraint.get("store") or "local")
+    if calendar_window is not None and store != "shared":
+        return _deny(
+            constraint,
+            "calendar rate limits require the shared store",
+            "constraint_invalid_rate_limit_store",
+            store=store,
+        )
     if store == "shared":
         if skip_shared:
             return PolicyDecision(True)
@@ -471,7 +502,10 @@ def _enforce_rate_limit(
                 policy_hash=policy_hash or "",
                 constraint_id=str(constraint.get("id") or "unnamed"),
                 operation=operation_fields.get("operation"),
-                window_seconds=window_seconds,
+                window_seconds=window_seconds or None,
+                calendar_window=(
+                    str(calendar_window) if calendar_window is not None else None
+                ),
                 max_count=maximum,
                 consume=consume,
                 actor_type="proxy",
@@ -492,7 +526,11 @@ def _enforce_rate_limit(
                 "credential use rate limit exceeded",
                 "credential_rate_limit_exceeded",
                 max=maximum,
-                windowSeconds=window_seconds,
+                **(
+                    {"calendarWindow": calendar_window}
+                    if calendar_window is not None
+                    else {"windowSeconds": window_seconds}
+                ),
                 retry_after_seconds=result.get("retry_after_seconds", 1),
                 remaining=result.get("remaining", 0),
                 count=result.get("count"),
@@ -510,6 +548,14 @@ def _enforce_rate_limit(
 
     with _RATE_LOCK:
         bucket = _RATE_BUCKETS.get(key)
+        if bucket is not None and now < bucket.starts_at:
+            return _deny(
+                constraint,
+                "local rate-limit clock moved before the active window",
+                "rate_limit_clock_regression",
+                statusCode=503,
+                store="local",
+            )
         if consume and bucket is not None and bucket.expires_at <= now:
             _RATE_BUCKETS.pop(key, None)
             bucket = None
@@ -545,6 +591,7 @@ def _enforce_rate_limit(
                     capacity=_MAX_LOCAL_RATE_COUNTER_ENTRIES,
                 )
             active_bucket = _RateBucket(
+                starts_at=now,
                 expires_at=now + window_seconds,
                 count=0,
             )

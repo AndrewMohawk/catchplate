@@ -205,6 +205,7 @@ def main() -> None:
     }
 
     if args.self_test:
+        selftest_run_id = secrets.token_hex(8)
         for path in ("/v1/decide", "/v1/grants"):
             status, denial = request_head_only(args.gate, path)
             if status != 401 or denial.get("error") != "management_auth_required":
@@ -356,6 +357,9 @@ def main() -> None:
             "deny",
             "npm_publish_attachment_missing",
         )
+        npm_version = f"1.2.3-selftest.{selftest_run_id}"
+        npm_grant_id = f"selftest-npm-publish-{selftest_run_id}"
+        npm_approval_id = f"approval-selftest-{selftest_run_id}"
         npm_publish_payload = {
             **base_payload,
             "method": "PUT",
@@ -364,10 +368,10 @@ def main() -> None:
             "body": json.dumps(
                 {
                     "name": "demo-package",
-                    "dist-tags": {"latest": "1.2.3"},
+                    "dist-tags": {"latest": npm_version},
                     "versions": {
-                        "1.2.3": {
-                            "version": "1.2.3",
+                        npm_version: {
+                            "version": npm_version,
                             "dist": {"integrity": "sha512-demo"},
                         }
                     },
@@ -379,8 +383,8 @@ def main() -> None:
         grant = create_grant(
             args.gate,
             {
-                "grantId": "selftest-npm-publish",
-                "approvalId": "approval-selftest",
+                "grantId": npm_grant_id,
+                "approvalId": npm_approval_id,
                 "principalId": npm_jit["principal_id"],
                 "routeId": npm_jit["route_id"],
                 "credentialRef": npm_jit["credential_ref"],
@@ -403,8 +407,8 @@ def main() -> None:
         stale_grant = create_grant(
             args.gate,
             {
-                "grantId": "selftest-stale-after-rotation",
-                "approvalId": "approval-selftest-stale",
+                "grantId": npm_grant_id,
+                "approvalId": npm_approval_id,
                 "principalId": stale_jit["principal_id"],
                 "routeId": stale_jit["route_id"],
                 "credentialRef": stale_jit["credential_ref"],
@@ -529,5 +533,10 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace").strip()
+        raise SystemExit(
+            f"decision gate benchmark failed: HTTP {exc.code} {exc.url}: {detail or exc.reason}"
+        ) from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"decision gate benchmark failed: {exc}") from exc

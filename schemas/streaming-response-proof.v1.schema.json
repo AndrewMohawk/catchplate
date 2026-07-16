@@ -146,7 +146,7 @@
         "counter_key",
         "constraint_id",
         "operation",
-        "window_seconds",
+        "window_kind",
         "max_count"
       ],
       "properties": {
@@ -154,6 +154,9 @@
         "constraint_id": {"$ref": "#/$defs/identifier"},
         "operation": {
           "anyOf": [{"$ref": "#/$defs/identifier"}, {"type": "null"}]
+        },
+        "window_kind": {
+          "enum": ["fixed", "utcDay", "utcIsoWeek", "utcMonth"]
         },
         "window_seconds": {
           "type": "integer",
@@ -165,7 +168,19 @@
           "minimum": 1,
           "maximum": 1000000000
         }
-      }
+      },
+      "oneOf": [
+        {
+          "required": ["window_seconds"],
+          "properties": {"window_kind": {"const": "fixed"}}
+        },
+        {
+          "properties": {
+            "window_kind": {"enum": ["utcDay", "utcIsoWeek", "utcMonth"]}
+          },
+          "not": {"required": ["window_seconds"]}
+        }
+      ]
     },
     "authorizationBindingCommitment": {
       "type": "object",

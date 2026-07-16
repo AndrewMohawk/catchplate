@@ -635,12 +635,61 @@ struct ReleaseAuthorizationBinding {
     shared_quotas: Vec<ReleaseAuthorizationBindingQuota>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum RateLimitWindowKind {
+    Fixed,
+    UtcDay,
+    UtcIsoWeek,
+    UtcMonth,
+}
+
+impl RateLimitWindowKind {
+    fn from_calendar_policy(value: &str) -> Option<Self> {
+        match value {
+            "utcDay" => Some(Self::UtcDay),
+            "utcIsoWeek" => Some(Self::UtcIsoWeek),
+            "utcMonth" => Some(Self::UtcMonth),
+            _ => None,
+        }
+    }
+
+    fn is_calendar(self) -> bool {
+        self != Self::Fixed
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RateLimitWindow {
+    Fixed(u64),
+    Calendar(RateLimitWindowKind),
+}
+
+impl RateLimitWindow {
+    fn kind(self) -> RateLimitWindowKind {
+        match self {
+            Self::Fixed(_) => RateLimitWindowKind::Fixed,
+            Self::Calendar(kind) => kind,
+        }
+    }
+
+    fn window_seconds(self) -> Option<u64> {
+        match self {
+            Self::Fixed(seconds) => Some(seconds),
+            Self::Calendar(_) => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 struct ReleaseAuthorizationBindingQuota {
     counter_key: String,
     constraint_id: String,
     operation: Option<String>,
-    window_seconds: u64,
+    window_kind: RateLimitWindowKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    window_seconds: Option<u64>,
     max_count: u64,
 }
 
@@ -1574,6 +1623,9 @@ struct ReleaseAuthorizationQuota {
     constraint_id: Option<String>,
     operation: Option<String>,
     window_start_epoch_ms: Option<u64>,
+    window_end_epoch_ms: Option<u64>,
+    window_kind: Option<RateLimitWindowKind>,
+    calendar_window: Option<RateLimitWindowKind>,
     window_seconds: Option<u64>,
     max: Option<u64>,
     count: Option<u64>,
@@ -1605,6 +1657,8 @@ struct ReleaseAuthorizationResponse {
     retry_after_seconds: u64,
     quotas: Vec<ReleaseAuthorizationQuota>,
     store: ReleaseAuthorizationStore,
+    #[serde(skip)]
+    validated_quotas: Vec<ValidatedReleaseAuthorizationQuota>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1622,6 +1676,19 @@ struct ReleaseAuthorizationReservation {
     grant_id: Option<String>,
     approval_request_id: Option<String>,
     reservation_expires_at_epoch_ms: Option<u64>,
+    shared_quotas: Vec<ValidatedReleaseAuthorizationQuota>,
+    dispatch_started_at_epoch_ms: Option<u64>,
+    dispatch_expires_at_epoch_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ValidatedReleaseAuthorizationQuota {
+    binding: ReleaseAuthorizationBindingQuota,
+    window_start_epoch_ms: u64,
+    window_end_epoch_ms: u64,
+    count: u64,
+    remaining: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4895,7 +4962,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 ));
             }
             let type_fields: &[&str] = match constraint_type {
-                "rateLimit" => &["store", "max", "windowSeconds", "key"],
+                "rateLimit" => &["store", "max", "windowSeconds", "calendarWindow", "key"],
                 "operationPolicy" => &["allowedOperations", "deniedOperations"],
                 "queryDateWindow" => &[
                     "parameters",
@@ -5517,16 +5584,21 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 }
             }
             if constraint_type == "rateLimit" {
-                let max = constraint.get("max").and_then(Value::as_u64).unwrap_or(0);
-                let window_seconds = constraint
-                    .get("windowSeconds")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                if !(1..=1_000_000_000).contains(&max)
-                    || !(1..=31_536_000).contains(&window_seconds)
-                {
+                let max = constraint.get("max").and_then(Value::as_u64);
+                if !max.is_some_and(|value| (1..=1_000_000_000).contains(&value)) {
                     return Err(format!(
-                        "route {route_id} rateLimit {constraint_id} has invalid max or windowSeconds"
+                        "route {route_id} rateLimit {constraint_id} max must be an integer from 1 through 1000000000"
+                    ));
+                }
+                let window = rate_limit_window(&Value::Object(constraint.clone()))
+                    .map_err(|err| format!("route {route_id} rateLimit {constraint_id} {err}"))?;
+                let store = constraint
+                    .get("store")
+                    .and_then(Value::as_str)
+                    .unwrap_or("local");
+                if window.kind().is_calendar() && store != "shared" {
+                    return Err(format!(
+                        "route {route_id} rateLimit {constraint_id} calendar windows require store shared"
                     ));
                 }
                 let key = match constraint.get("key") {
@@ -7643,7 +7715,12 @@ fn validate_response_proof_authorization_binding(
                 .operation
                 .as_deref()
                 .is_some_and(|value| !valid_release_authorization_identity(Some(value)))
-            || !(1..=31_536_000).contains(&quota.window_seconds)
+            || match quota.window_kind {
+                RateLimitWindowKind::Fixed => !quota
+                    .window_seconds
+                    .is_some_and(|value| (1..=31_536_000).contains(&value)),
+                _ => quota.window_seconds.is_some(),
+            }
             || !(1..=1_000_000_000).contains(&quota.max_count)
             || previous_counter_key.is_some_and(|previous| previous >= quota.counter_key.as_str())
         {
@@ -11192,11 +11269,290 @@ fn valid_release_authorization_identity(value: Option<&str>) -> bool {
     })
 }
 
+fn expected_shared_release_authorization_quotas(
+    route: &Route,
+    principal_id: &str,
+    credential_ref: Option<&str>,
+    credential_version: u64,
+    operation: &Value,
+) -> Result<Vec<ReleaseAuthorizationBindingQuota>, String> {
+    let mut quotas = BTreeMap::new();
+    for constraint in &route.constraints {
+        if constraint.get("type").and_then(Value::as_str) != Some("rateLimit")
+            || constraint.get("store").and_then(Value::as_str) != Some("shared")
+        {
+            continue;
+        }
+        let window = rate_limit_window(constraint).map_err(|err| {
+            format!(
+                "route {} rateLimit {} {err}",
+                route.id,
+                constraint
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unnamed")
+            )
+        })?;
+        let counter_key = rate_limit_key(
+            constraint,
+            route,
+            principal_id,
+            credential_ref,
+            credential_version,
+            operation,
+        );
+        let operation_name = operation_name(operation);
+        let quota = ReleaseAuthorizationBindingQuota {
+            counter_key: counter_key.clone(),
+            constraint_id: constraint
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed")
+                .to_string(),
+            operation: (!operation_name.is_empty()).then(|| operation_name.to_string()),
+            window_kind: window.kind(),
+            window_seconds: window.window_seconds(),
+            max_count: constraint.get("max").and_then(Value::as_u64).unwrap_or(0),
+        };
+        if quotas
+            .insert(counter_key, quota.clone())
+            .is_some_and(|previous| previous != quota)
+        {
+            return Err("duplicate shared quota key has conflicting policy claims".to_string());
+        }
+    }
+    Ok(quotas.into_values().collect())
+}
+
+fn utc_epoch_ms(timestamp: OffsetDateTime) -> Result<u64, String> {
+    u64::try_from(timestamp.unix_timestamp_nanos() / 1_000_000)
+        .map_err(|_| "calendar rate-limit boundary is outside the supported epoch".to_string())
+}
+
+fn calendar_window_bounds(kind: RateLimitWindowKind, epoch_ms: u64) -> Result<(u64, u64), String> {
+    if !kind.is_calendar() {
+        return Err("fixed rate-limit window has no calendar boundaries".to_string());
+    }
+    let timestamp = OffsetDateTime::from_unix_timestamp_nanos(i128::from(epoch_ms) * 1_000_000)
+        .map_err(|_| "calendar rate-limit timestamp is outside the supported epoch")?;
+    let date = timestamp.date();
+    let start_date = match kind {
+        RateLimitWindowKind::UtcDay => date,
+        RateLimitWindowKind::UtcIsoWeek => {
+            date - TimeDuration::days(i64::from(date.weekday().number_days_from_monday()))
+        }
+        RateLimitWindowKind::UtcMonth => Date::from_calendar_date(date.year(), date.month(), 1)
+            .map_err(|_| "calendar rate-limit month start is invalid")?,
+        RateLimitWindowKind::Fixed => unreachable!("calendar kind checked above"),
+    };
+    let end_date = match kind {
+        RateLimitWindowKind::UtcDay => start_date
+            .next_day()
+            .ok_or("calendar rate-limit day end is outside the supported range")?,
+        RateLimitWindowKind::UtcIsoWeek => start_date
+            .checked_add(TimeDuration::days(7))
+            .ok_or("calendar rate-limit week end is outside the supported range")?,
+        RateLimitWindowKind::UtcMonth => {
+            let (year, month) = if start_date.month() == Month::December {
+                (
+                    start_date
+                        .year()
+                        .checked_add(1)
+                        .ok_or("calendar rate-limit month end is outside the supported range")?,
+                    Month::January,
+                )
+            } else {
+                (
+                    start_date.year(),
+                    Month::try_from(u8::from(start_date.month()) + 1)
+                        .map_err(|_| "calendar rate-limit month end is invalid")?,
+                )
+            };
+            Date::from_calendar_date(year, month, 1)
+                .map_err(|_| "calendar rate-limit month end is invalid")?
+        }
+        RateLimitWindowKind::Fixed => unreachable!("calendar kind checked above"),
+    };
+    Ok((
+        utc_epoch_ms(start_date.midnight().assume_utc())?,
+        utc_epoch_ms(end_date.midnight().assume_utc())?,
+    ))
+}
+
+fn validate_release_authorization_quotas(
+    response: &ReleaseAuthorizationResponse,
+    expected: &[ReleaseAuthorizationBindingQuota],
+    previous: Option<&[ValidatedReleaseAuthorizationQuota]>,
+    expected_reservation_state: &str,
+    temporal_anchor_epoch_ms: Option<u64>,
+    reservation_expires_at_epoch_ms: u64,
+) -> Result<Vec<ValidatedReleaseAuthorizationQuota>, String> {
+    if response.quotas.len() != expected.len() {
+        return Err("release authorization response quota set is incomplete".to_string());
+    }
+    let mut previous_counter_key: Option<&str> = None;
+    for quota in &response.quotas {
+        let counter_key = quota
+            .counter_key
+            .as_deref()
+            .filter(|value| is_sha256_digest(value))
+            .ok_or("release authorization quota counter key is missing or invalid")?;
+        if previous_counter_key.is_some_and(|previous| previous >= counter_key) {
+            return Err(
+                "release authorization response quotas are not uniquely sorted".to_string(),
+            );
+        }
+        previous_counter_key = Some(counter_key);
+    }
+    let mut validated = Vec::with_capacity(response.quotas.len());
+    for (quota, expected) in response.quotas.iter().zip(expected) {
+        let counter_key = quota
+            .counter_key
+            .as_deref()
+            .filter(|value| is_sha256_digest(value))
+            .ok_or("release authorization quota counter key is missing or invalid")?;
+        let window_kind = quota.window_kind.unwrap_or(RateLimitWindowKind::Fixed);
+        let binding = ReleaseAuthorizationBindingQuota {
+            counter_key: counter_key.to_string(),
+            constraint_id: quota
+                .constraint_id
+                .as_deref()
+                .filter(|value| valid_release_authorization_identity(Some(value)))
+                .ok_or("release authorization quota constraint ID is missing or invalid")?
+                .to_string(),
+            operation: quota.operation.clone(),
+            window_kind,
+            window_seconds: quota.window_seconds,
+            max_count: quota
+                .max
+                .filter(|value| (1..=1_000_000_000).contains(value))
+                .ok_or("release authorization quota maximum is missing or invalid")?,
+        };
+        if &binding != expected {
+            return Err("release authorization quota policy claim substitution".to_string());
+        }
+        if binding
+            .operation
+            .as_deref()
+            .is_some_and(|value| !valid_release_authorization_identity(Some(value)))
+        {
+            return Err("release authorization quota operation is invalid".to_string());
+        }
+        let window_start_epoch_ms = quota
+            .window_start_epoch_ms
+            .ok_or("release authorization quota window start is missing")?;
+        let window_end_epoch_ms = match binding.window_kind {
+            RateLimitWindowKind::Fixed => {
+                if quota.calendar_window.is_some() {
+                    return Err(
+                        "fixed release authorization quota has a calendar descriptor".to_string(),
+                    );
+                }
+                let window_seconds = binding
+                    .window_seconds
+                    .ok_or("fixed release authorization quota window is missing")?;
+                let calculated_end = window_start_epoch_ms
+                    .checked_add(
+                        window_seconds
+                            .checked_mul(1000)
+                            .ok_or("fixed release authorization quota window overflows")?,
+                    )
+                    .ok_or("fixed release authorization quota window overflows")?;
+                if quota
+                    .window_end_epoch_ms
+                    .is_some_and(|window_end| window_end != calculated_end)
+                {
+                    return Err(
+                        "fixed release authorization quota window end is inconsistent".to_string(),
+                    );
+                }
+                calculated_end
+            }
+            calendar_kind => {
+                if quota.window_kind != Some(calendar_kind)
+                    || quota.calendar_window != Some(calendar_kind)
+                    || quota.window_seconds.is_some()
+                {
+                    return Err(
+                        "calendar release authorization quota descriptor is incomplete".to_string(),
+                    );
+                }
+                let window_end_epoch_ms = quota
+                    .window_end_epoch_ms
+                    .ok_or("calendar release authorization quota window end is missing")?;
+                let exact_bounds = calendar_window_bounds(calendar_kind, window_start_epoch_ms)?;
+                if exact_bounds != (window_start_epoch_ms, window_end_epoch_ms) {
+                    return Err(
+                        "calendar release authorization quota boundaries are not exact".to_string(),
+                    );
+                }
+                window_end_epoch_ms
+            }
+        };
+        if temporal_anchor_epoch_ms
+            .is_some_and(|now| now < window_start_epoch_ms || now >= window_end_epoch_ms)
+        {
+            return Err("release authorization quota window is not active".to_string());
+        }
+        if binding.window_kind.is_calendar()
+            && reservation_expires_at_epoch_ms > window_end_epoch_ms
+        {
+            return Err(
+                "release authorization expiry crosses a calendar quota boundary".to_string(),
+            );
+        }
+        let count = quota
+            .count
+            .filter(|value| *value <= binding.max_count)
+            .ok_or("release authorization quota count is missing or invalid")?;
+        let remaining = quota
+            .remaining
+            .filter(|value| *value == binding.max_count - count)
+            .ok_or("release authorization quota remaining count is missing or invalid")?;
+        let reservation_state = quota.reservation_state.as_deref();
+        if reservation_state != Some(expected_reservation_state)
+            && !(expected_reservation_state == "refunded"
+                && reservation_state == Some("refund_skipped_window"))
+        {
+            return Err("release authorization quota reservation state is invalid".to_string());
+        }
+        validated.push(ValidatedReleaseAuthorizationQuota {
+            binding,
+            window_start_epoch_ms,
+            window_end_epoch_ms,
+            count,
+            remaining,
+        });
+    }
+    if previous.is_some_and(|previous| previous != validated) {
+        return Err("release authorization quota lifecycle substitution".to_string());
+    }
+    Ok(validated)
+}
+
+#[cfg(test)]
 fn validate_reserve_release_authorization_response(
     response: &ReleaseAuthorizationResponse,
     attempt_id: &str,
     jit_required: bool,
 ) -> Result<(), String> {
+    validate_reserve_release_authorization_response_at(
+        response,
+        attempt_id,
+        jit_required,
+        &[],
+        u64::try_from(now_epoch_ms()).map_err(|_| "current epoch is outside u64")?,
+    )
+    .map(|_| ())
+}
+
+fn validate_reserve_release_authorization_response_at(
+    response: &ReleaseAuthorizationResponse,
+    attempt_id: &str,
+    jit_required: bool,
+    expected_quotas: &[ReleaseAuthorizationBindingQuota],
+    now_epoch_ms: u64,
+) -> Result<Vec<ValidatedReleaseAuthorizationQuota>, String> {
     validate_release_authorization_binding(response, attempt_id, None)?;
     let exact_lifecycle = if response.authorized {
         response.state == "reserved"
@@ -11225,6 +11581,7 @@ fn validate_reserve_release_authorization_response(
             "jit_grant_unavailable"
                 | "jit_grant_expired"
                 | "shared_quota_denied"
+                | "shared_quota_window_expired"
                 | "release_authorization_busy"
         );
         response.state == "denied"
@@ -11251,7 +11608,24 @@ fn validate_reserve_release_authorization_response(
             response.state
         ));
     }
-    Ok(())
+    if response.authorized {
+        let reservation_expires_at_epoch_ms = response
+            .reservation_expires_at_epoch_ms
+            .filter(|expires| *expires > now_epoch_ms)
+            .ok_or("release authorization reservation expiry is missing or expired")?;
+        validate_release_authorization_quotas(
+            response,
+            expected_quotas,
+            None,
+            "reserved",
+            Some(now_epoch_ms),
+            reservation_expires_at_epoch_ms,
+        )
+    } else if response.quotas.is_empty() {
+        Ok(Vec::new())
+    } else {
+        Err("denied release authorization response must not carry quota reservations".to_string())
+    }
 }
 
 fn validate_dispatch_release_authorization_response(
@@ -11275,7 +11649,9 @@ fn validate_dispatch_release_authorization_response(
         || !matches!(
             (started, dispatch_expires, reservation_expires),
             (Some(start), Some(expires), Some(reservation_expires))
-                if start < expires && start < reservation_expires && expires > now_ms
+                if start < expires
+                    && start < reservation_expires
+                    && expires > now_ms
         )
         || response.retry_after_seconds != 0
         || response.approval_status.is_some()
@@ -11283,12 +11659,32 @@ fn validate_dispatch_release_authorization_response(
         || response.approval_created.is_some()
         || response.grant_id != reservation.grant_id
         || response.approval_request_id != reservation.approval_request_id
+        || reservation.dispatch_started_at_epoch_ms.is_some()
+            && response.dispatch_started_at_epoch_ms != reservation.dispatch_started_at_epoch_ms
+        || reservation.dispatch_expires_at_epoch_ms.is_some()
+            && response.dispatch_expires_at_epoch_ms != reservation.dispatch_expires_at_epoch_ms
     {
         return Err(format!(
             "release authorization dispatch did not return exact dispatching state: {}",
             response.state
         ));
     }
+    let reservation_expires_at_epoch_ms = response
+        .reservation_expires_at_epoch_ms
+        .ok_or("release authorization dispatch reservation expiry is missing")?;
+    let expected_quotas = reservation
+        .shared_quotas
+        .iter()
+        .map(|quota| quota.binding.clone())
+        .collect::<Vec<_>>();
+    validate_release_authorization_quotas(
+        response,
+        &expected_quotas,
+        Some(&reservation.shared_quotas),
+        "reserved",
+        response.dispatch_started_at_epoch_ms,
+        reservation_expires_at_epoch_ms,
+    )?;
     Ok(())
 }
 
@@ -11328,12 +11724,39 @@ fn validate_complete_release_authorization_response(
         || response.retry_after_seconds != 0
         || response.grant_id != reservation.grant_id
         || response.approval_request_id != reservation.approval_request_id
+        || response.reservation_expires_at_epoch_ms != reservation.reservation_expires_at_epoch_ms
+        || reservation.dispatch_started_at_epoch_ms.is_some()
+            && response.dispatch_started_at_epoch_ms != reservation.dispatch_started_at_epoch_ms
+        || reservation.dispatch_expires_at_epoch_ms.is_some()
+            && response.dispatch_expires_at_epoch_ms != reservation.dispatch_expires_at_epoch_ms
+        || response.dispatch_started_at_epoch_ms.is_some()
+            != response.dispatch_expires_at_epoch_ms.is_some()
     {
         return Err(format!(
             "release authorization completion returned invalid state {} outcome {:?} for {requested_outcome}",
             response.state, response.completion_outcome
         ));
     }
+    let expected_reservation_state = if response.state == "cancelled" {
+        "refunded"
+    } else {
+        "committed"
+    };
+    let expected_quotas = reservation
+        .shared_quotas
+        .iter()
+        .map(|quota| quota.binding.clone())
+        .collect::<Vec<_>>();
+    validate_release_authorization_quotas(
+        response,
+        &expected_quotas,
+        Some(&reservation.shared_quotas),
+        expected_reservation_state,
+        None,
+        response
+            .reservation_expires_at_epoch_ms
+            .ok_or("release authorization completion reservation expiry is missing")?,
+    )?;
     Ok(())
 }
 
@@ -11341,7 +11764,7 @@ fn reserve_release_authorization(
     state: &GateState,
     attempt_id: &str,
     principal_id: &str,
-    route_id: &str,
+    route: &Route,
     credential_ref: Option<&str>,
     credential_version: u64,
     policy_hash: &str,
@@ -11381,7 +11804,7 @@ fn reserve_release_authorization(
         "attemptId":attempt_id,
         "flowId":attempt_id,
         "principalId":principal_id,
-        "routeId":route_id,
+        "routeId":route.id,
         "credentialRef":credential_ref,
         "credentialVersion":credential_version,
         "policyHash":policy_hash,
@@ -11390,8 +11813,21 @@ fn reserve_release_authorization(
         "operationContext":operation,
         "canonicalRequest":canonical_request,
     });
-    let response = post_release_authorization(state, "reserve", &payload)?;
-    validate_reserve_release_authorization_response(&response, attempt_id, jit_required)?;
+    let mut response = post_release_authorization(state, "reserve", &payload)?;
+    let expected_quotas = expected_shared_release_authorization_quotas(
+        route,
+        principal_id,
+        credential_ref,
+        credential_version,
+        operation,
+    )?;
+    response.validated_quotas = validate_reserve_release_authorization_response_at(
+        &response,
+        attempt_id,
+        jit_required,
+        &expected_quotas,
+        u64::try_from(now_epoch_ms()).map_err(|_| "current epoch is outside u64")?,
+    )?;
     if !response.authorized
         && matches!(
             response.reason.as_str(),
@@ -11463,6 +11899,61 @@ fn release_reservation_from_decision(
     {
         return Err("release attempt correlation is inconsistent".to_string());
     }
+    let reservation_expires_at_epoch_ms = release
+        .get("reservation_expires_at_epoch_ms")
+        .and_then(Value::as_u64)
+        .filter(|expires| u128::from(*expires) > now_epoch_ms())
+        .ok_or("allowed decision release reservation is missing or expired")?;
+    let shared_quotas: Vec<ValidatedReleaseAuthorizationQuota> = serde_json::from_value(
+        release
+            .get("shared_quotas")
+            .cloned()
+            .ok_or("allowed decision is missing release quota bindings")?,
+    )
+    .map_err(|err| format!("allowed decision release quota bindings are invalid: {err}"))?;
+    let mut previous_counter_key: Option<&str> = None;
+    for quota in &shared_quotas {
+        if !is_sha256_digest(&quota.binding.counter_key)
+            || previous_counter_key
+                .is_some_and(|previous| previous >= quota.binding.counter_key.as_str())
+            || quota.window_start_epoch_ms >= quota.window_end_epoch_ms
+            || quota.count > quota.binding.max_count
+            || quota.remaining != quota.binding.max_count - quota.count
+        {
+            return Err("allowed decision release quota binding is invalid".to_string());
+        }
+        previous_counter_key = Some(quota.binding.counter_key.as_str());
+        match quota.binding.window_kind {
+            RateLimitWindowKind::Fixed => {
+                let window_seconds = quota
+                    .binding
+                    .window_seconds
+                    .filter(|value| (1..=MAX_RATE_LIMIT_WINDOW_SECONDS).contains(value))
+                    .ok_or("allowed decision fixed release quota window is invalid")?;
+                if quota
+                    .window_start_epoch_ms
+                    .checked_add(window_seconds * 1000)
+                    != Some(quota.window_end_epoch_ms)
+                {
+                    return Err(
+                        "allowed decision fixed release quota boundaries are invalid".to_string(),
+                    );
+                }
+            }
+            calendar_kind => {
+                if quota.binding.window_seconds.is_some()
+                    || calendar_window_bounds(calendar_kind, quota.window_start_epoch_ms)?
+                        != (quota.window_start_epoch_ms, quota.window_end_epoch_ms)
+                    || reservation_expires_at_epoch_ms > quota.window_end_epoch_ms
+                {
+                    return Err(
+                        "allowed decision calendar release quota boundaries are invalid"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+    }
     Ok(Some(ReleaseAuthorizationReservation {
         attempt_id: attempt_id.to_string(),
         binding_digest: binding_digest.to_string(),
@@ -11474,9 +11965,10 @@ fn release_reservation_from_decision(
             .get("approval_request_id")
             .and_then(Value::as_str)
             .map(str::to_string),
-        reservation_expires_at_epoch_ms: release
-            .get("reservation_expires_at_epoch_ms")
-            .and_then(Value::as_u64),
+        reservation_expires_at_epoch_ms: Some(reservation_expires_at_epoch_ms),
+        shared_quotas,
+        dispatch_started_at_epoch_ms: None,
+        dispatch_expires_at_epoch_ms: None,
     }))
 }
 
@@ -11603,6 +12095,7 @@ fn response_proof_authorization_binding(
     route_id: &str,
     authority: &ResponseProofReleaseAuthority,
     receipt: &ControlPlaneAuthorizationReceipt,
+    reservation: &ReleaseAuthorizationReservation,
 ) -> Result<ReleaseAuthorizationBinding, String> {
     let flow_id = decision
         .get("flow_id")
@@ -11630,38 +12123,12 @@ fn response_proof_authorization_binding(
     )?;
     let dispatch_response: ReleaseAuthorizationResponse = strict_json_from_slice(&response_body)
         .map_err(|err| format!("parse release authorization binding response: {err}"))?;
-    let mut shared_quotas = dispatch_response
-        .quotas
+    validate_dispatch_release_authorization_response(&dispatch_response, reservation)?;
+    let shared_quotas = reservation
+        .shared_quotas
         .iter()
-        .map(|quota| {
-            Ok(ReleaseAuthorizationBindingQuota {
-                counter_key: quota
-                    .counter_key
-                    .as_deref()
-                    .filter(|value| is_sha256_digest(value))
-                    .ok_or_else(|| {
-                        "release authorization binding quota counter key is invalid".to_string()
-                    })?
-                    .to_string(),
-                constraint_id: quota
-                    .constraint_id
-                    .as_deref()
-                    .filter(|value| valid_release_authorization_identity(Some(value)))
-                    .ok_or_else(|| {
-                        "release authorization binding quota constraint ID is invalid".to_string()
-                    })?
-                    .to_string(),
-                operation: quota.operation.clone(),
-                window_seconds: quota.window_seconds.ok_or_else(|| {
-                    "release authorization binding quota window is missing".to_string()
-                })?,
-                max_count: quota.max.ok_or_else(|| {
-                    "release authorization binding quota maximum is missing".to_string()
-                })?,
-            })
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    shared_quotas.sort_by(|left, right| left.counter_key.cmp(&right.counter_key));
+        .map(|quota| quota.binding.clone())
+        .collect();
     Ok(ReleaseAuthorizationBinding {
         attempt_id: authority.attempt_id.clone(),
         flow_id: flow_id.to_string(),
@@ -11709,6 +12176,7 @@ fn response_proof_authorization_context(
         &route_id,
         &release_authority,
         &receipt,
+        reservation,
     )?;
     validate_control_plane_authorization_receipt(
         snapshot,
@@ -11755,6 +12223,8 @@ impl<'a> ReleaseAuthorizationGuard<'a> {
         let dispatch_expires_at_epoch_ms = response
             .dispatch_expires_at_epoch_ms
             .ok_or("release authorization dispatch expiry is unavailable")?;
+        self.reservation.dispatch_started_at_epoch_ms = Some(observed_at_epoch_ms);
+        self.reservation.dispatch_expires_at_epoch_ms = Some(dispatch_expires_at_epoch_ms);
         Ok(ReleaseAuthorizationDispatchObservation {
             observed_at_epoch_ms,
             reservation_expires_at_epoch_ms: response.reservation_expires_at_epoch_ms,
@@ -13521,6 +13991,33 @@ fn operation_name(operation: &Value) -> &str {
         .unwrap_or_default()
 }
 
+fn rate_limit_window(constraint: &Value) -> Result<RateLimitWindow, String> {
+    match (
+        constraint.get("windowSeconds"),
+        constraint.get("calendarWindow"),
+    ) {
+        (Some(window_seconds), None) => window_seconds
+            .as_u64()
+            .filter(|value| (1..=MAX_RATE_LIMIT_WINDOW_SECONDS).contains(value))
+            .map(RateLimitWindow::Fixed)
+            .ok_or_else(|| {
+                format!(
+                    "windowSeconds must be an integer from 1 through {MAX_RATE_LIMIT_WINDOW_SECONDS}"
+                )
+            }),
+        (None, Some(Value::String(calendar_window))) =>
+            RateLimitWindowKind::from_calendar_policy(calendar_window)
+                .map(RateLimitWindow::Calendar)
+                .ok_or_else(|| {
+                    "calendarWindow must be utcDay, utcIsoWeek, or utcMonth".to_string()
+                }),
+        (None, Some(_)) => Err("calendarWindow must be a string".to_string()),
+        _ => Err(
+            "must specify exactly one of windowSeconds or calendarWindow".to_string(),
+        ),
+    }
+}
+
 fn rate_limit_key(
     constraint: &Value,
     route: &Route,
@@ -13617,19 +14114,16 @@ fn enforce_rate_limit(
     skip_shared: bool,
 ) -> Result<(), Value> {
     let max = constraint.get("max").and_then(Value::as_u64).unwrap_or(0);
-    let window_seconds = constraint
-        .get("windowSeconds")
-        .and_then(Value::as_u64)
-        .unwrap_or(0);
-    if max == 0 || window_seconds == 0 {
+    let window = rate_limit_window(constraint);
+    if max == 0 || window.is_err() {
         return Err(constraint_error(
             constraint,
             "constraint_invalid_rate_limit",
             "rate limit constraint is invalid",
         ));
     }
+    let window = window.expect("validated rate-limit window");
     let now = now_epoch_ms();
-    let window_ms = window_seconds as u128 * 1000;
     let key = rate_limit_key(
         constraint,
         route,
@@ -13658,7 +14152,7 @@ fn enforce_rate_limit(
             consume,
             &key,
             max,
-            window_seconds,
+            window,
         );
     }
     if store != "local" {
@@ -13671,6 +14165,14 @@ fn enforce_rate_limit(
             extra,
         ));
     }
+    let Some(window_seconds) = window.window_seconds() else {
+        return Err(constraint_error(
+            constraint,
+            "constraint_invalid_rate_limit_store",
+            "calendar rate limits require the shared store",
+        ));
+    };
+    let window_ms = u128::from(window_seconds) * 1000;
     let mut counters = state
         .constraint_rate_counters
         .lock()
@@ -13746,9 +14248,9 @@ fn shared_rate_limit_request(
     consume: bool,
     key: &str,
     max: u64,
-    window_seconds: u64,
+    window: RateLimitWindow,
 ) -> Value {
-    json!({
+    let mut request = json!({
         "counterKey": key,
         "principalId": principal_id,
         "routeId": route.id,
@@ -13759,9 +14261,23 @@ fn shared_rate_limit_request(
         "operation": operation_name(operation),
         "operationContext": operation,
         "max": max,
-        "windowSeconds": window_seconds,
         "consume": consume,
-    })
+    });
+    let request = request
+        .as_object_mut()
+        .expect("shared rate-limit request is an object");
+    match window {
+        RateLimitWindow::Fixed(window_seconds) => {
+            request.insert("windowSeconds".to_string(), json!(window_seconds));
+        }
+        RateLimitWindow::Calendar(kind) => {
+            request.insert(
+                "calendarWindow".to_string(),
+                serde_json::to_value(kind).expect("serialize calendar window kind"),
+            );
+        }
+    }
+    Value::Object(request.clone())
 }
 
 fn enforce_shared_rate_limit(
@@ -13776,7 +14292,7 @@ fn enforce_shared_rate_limit(
     consume: bool,
     key: &str,
     max: u64,
-    window_seconds: u64,
+    window: RateLimitWindow,
 ) -> Result<(), Value> {
     let mut unavailable = Map::new();
     unavailable.insert("status_code".to_string(), json!(503));
@@ -13816,7 +14332,7 @@ fn enforce_shared_rate_limit(
         consume,
         key,
         max,
-        window_seconds,
+        window,
     );
     let body = serde_json::to_vec(&request).map_err(|err| {
         let mut extra = Map::new();
@@ -13921,7 +14437,17 @@ fn enforce_shared_rate_limit(
     if value.get("allowed").and_then(Value::as_bool) != Some(true) {
         let mut extra = Map::new();
         extra.insert("max".to_string(), json!(max));
-        extra.insert("windowSeconds".to_string(), json!(window_seconds));
+        match window {
+            RateLimitWindow::Fixed(window_seconds) => {
+                extra.insert("windowSeconds".to_string(), json!(window_seconds));
+            }
+            RateLimitWindow::Calendar(kind) => {
+                extra.insert(
+                    "calendarWindow".to_string(),
+                    serde_json::to_value(kind).expect("serialize calendar window kind"),
+                );
+            }
+        }
         extra.insert(
             "retry_after_seconds".to_string(),
             json!(value
@@ -16451,7 +16977,7 @@ fn decide_internal_with_mode(
             state,
             &attempt_id,
             &principal.id,
-            &route.id,
+            route,
             credential_ref.as_deref(),
             credential_version,
             &snapshot.hash,
@@ -16603,6 +17129,9 @@ fn decide_internal_with_mode(
             grant_id: release.grant_id.clone(),
             approval_request_id: release.approval_request_id.clone(),
             reservation_expires_at_epoch_ms: release.reservation_expires_at_epoch_ms,
+            shared_quotas: release.validated_quotas.clone(),
+            dispatch_started_at_epoch_ms: None,
+            dispatch_expires_at_epoch_ms: None,
         };
         if let (Some(credential_id), Some(scope)) =
             (credential_ref.as_ref(), credential_scope.as_ref())
@@ -16766,6 +17295,7 @@ fn decide_internal_with_mode(
                     "grant_id":reservation.grant_id,
                     "approval_request_id":reservation.approval_request_id,
                     "reservation_expires_at_epoch_ms":reservation.reservation_expires_at_epoch_ms,
+                    "shared_quotas":reservation.shared_quotas,
                 },
                 "canonical_request":canonical,
                 "redacted_display":redacted_display,
@@ -27756,6 +28286,7 @@ mod tests {
         authorized: bool,
         idempotent_replay: bool,
     ) -> ReleaseAuthorizationResponse {
+        let now_ms = u64::try_from(now_epoch_ms()).expect("current epoch fits u64");
         ReleaseAuthorizationResponse {
             api_version: "serverware.releaseAuthorization/v1".to_string(),
             ok: true,
@@ -27770,9 +28301,9 @@ mod tests {
             approval_status: None,
             approval_expires_at: None,
             approval_created: None,
-            reservation_expires_at_epoch_ms: (state == "reserved").then_some(1234),
-            dispatch_started_at_epoch_ms: (state == "dispatching").then_some(1235),
-            dispatch_expires_at_epoch_ms: (state == "dispatching").then_some(1236),
+            reservation_expires_at_epoch_ms: (state == "reserved").then_some(now_ms + 30_000),
+            dispatch_started_at_epoch_ms: (state == "dispatching").then_some(now_ms),
+            dispatch_expires_at_epoch_ms: (state == "dispatching").then_some(now_ms + 10_000),
             completion_outcome: completion_outcome.map(str::to_string),
             retry_after_seconds: 0,
             quotas: Vec::new(),
@@ -27780,7 +28311,331 @@ mod tests {
                 backend: Some("sqlite".to_string()),
                 ha: false,
             },
+            validated_quotas: Vec::new(),
         }
+    }
+
+    fn test_calendar_binding_quota(
+        counter_hex: char,
+        constraint_id: &str,
+        kind: RateLimitWindowKind,
+        max_count: u64,
+    ) -> ReleaseAuthorizationBindingQuota {
+        ReleaseAuthorizationBindingQuota {
+            counter_key: format!("sha256:{}", counter_hex.to_string().repeat(64)),
+            constraint_id: constraint_id.to_string(),
+            operation: Some("resource.read".to_string()),
+            window_kind: kind,
+            window_seconds: None,
+            max_count,
+        }
+    }
+
+    fn test_release_authorization_quota(
+        binding: &ReleaseAuthorizationBindingQuota,
+        window_start_epoch_ms: u64,
+        window_end_epoch_ms: u64,
+        reservation_state: &str,
+    ) -> ReleaseAuthorizationQuota {
+        ReleaseAuthorizationQuota {
+            counter_key: Some(binding.counter_key.clone()),
+            constraint_id: Some(binding.constraint_id.clone()),
+            operation: binding.operation.clone(),
+            window_start_epoch_ms: Some(window_start_epoch_ms),
+            window_end_epoch_ms: Some(window_end_epoch_ms),
+            window_kind: Some(binding.window_kind),
+            calendar_window: binding
+                .window_kind
+                .is_calendar()
+                .then_some(binding.window_kind),
+            window_seconds: binding.window_seconds,
+            max: Some(binding.max_count),
+            count: Some(1),
+            remaining: Some(binding.max_count - 1),
+            reservation_state: Some(reservation_state.to_string()),
+        }
+    }
+
+    #[test]
+    fn calendar_quota_boundaries_and_reservation_expiry_are_exact() {
+        fn midnight(year: i32, month: Month, day: u8) -> u64 {
+            utc_epoch_ms(
+                Date::from_calendar_date(year, month, day)
+                    .expect("test date")
+                    .midnight()
+                    .assume_utc(),
+            )
+            .expect("test epoch")
+        }
+
+        let thursday = midnight(2026, Month::July, 16) + 12 * 60 * 60 * 1000;
+        assert_eq!(
+            calendar_window_bounds(RateLimitWindowKind::UtcDay, thursday).expect("UTC day bounds"),
+            (
+                midnight(2026, Month::July, 16),
+                midnight(2026, Month::July, 17)
+            )
+        );
+        assert_eq!(
+            calendar_window_bounds(RateLimitWindowKind::UtcIsoWeek, thursday)
+                .expect("UTC ISO week bounds"),
+            (
+                midnight(2026, Month::July, 13),
+                midnight(2026, Month::July, 20)
+            )
+        );
+        assert_eq!(
+            calendar_window_bounds(RateLimitWindowKind::UtcMonth, thursday)
+                .expect("UTC month bounds"),
+            (
+                midnight(2026, Month::July, 1),
+                midnight(2026, Month::August, 1)
+            )
+        );
+
+        let binding = test_calendar_binding_quota('a', "quota:day", RateLimitWindowKind::UtcDay, 5);
+        let (start, end) = calendar_window_bounds(binding.window_kind, thursday).expect("bounds");
+        let mut response = test_release_authorization_response("reserved", None, true, false);
+        response.reservation_expires_at_epoch_ms = Some(end);
+        response.quotas = vec![test_release_authorization_quota(
+            &binding, start, end, "reserved",
+        )];
+        validate_reserve_release_authorization_response_at(
+            &response,
+            "attempt-test",
+            false,
+            std::slice::from_ref(&binding),
+            end - 1,
+        )
+        .expect("reservation may expire exactly at the calendar boundary");
+
+        response.reservation_expires_at_epoch_ms = Some(end + 1);
+        assert!(validate_reserve_release_authorization_response_at(
+            &response,
+            "attempt-test",
+            false,
+            std::slice::from_ref(&binding),
+            end - 1,
+        )
+        .expect_err("reservation must not cross the boundary")
+        .contains("crosses a calendar quota boundary"));
+    }
+
+    #[test]
+    fn calendar_quota_lifecycle_rejects_descriptor_boundary_order_and_expiry_tampering() {
+        let now_ms = u64::try_from(now_epoch_ms()).expect("current epoch fits u64");
+        let binding = test_calendar_binding_quota('a', "quota:day", RateLimitWindowKind::UtcDay, 5);
+        let (start, end) = calendar_window_bounds(binding.window_kind, now_ms).expect("bounds");
+        let reservation_expires = (now_ms + 30_000).min(end);
+        assert!(
+            reservation_expires > now_ms,
+            "test ran exactly at a UTC boundary"
+        );
+        let mut reserved = test_release_authorization_response("reserved", None, true, false);
+        reserved.reservation_expires_at_epoch_ms = Some(reservation_expires);
+        reserved.quotas = vec![test_release_authorization_quota(
+            &binding, start, end, "reserved",
+        )];
+        let validated = validate_reserve_release_authorization_response_at(
+            &reserved,
+            "attempt-test",
+            false,
+            std::slice::from_ref(&binding),
+            now_ms,
+        )
+        .expect("exact calendar reserve response");
+        let reservation = ReleaseAuthorizationReservation {
+            attempt_id: reserved.attempt_id.clone(),
+            binding_digest: reserved.binding_digest.clone(),
+            grant_id: None,
+            approval_request_id: None,
+            reservation_expires_at_epoch_ms: Some(reservation_expires),
+            shared_quotas: validated,
+            dispatch_started_at_epoch_ms: None,
+            dispatch_expires_at_epoch_ms: None,
+        };
+
+        let mut missing_kind = test_release_authorization_response("reserved", None, true, false);
+        missing_kind.reservation_expires_at_epoch_ms = Some(reservation_expires);
+        missing_kind.quotas = vec![test_release_authorization_quota(
+            &binding, start, end, "reserved",
+        )];
+        missing_kind.quotas[0].window_kind = None;
+        assert!(validate_reserve_release_authorization_response_at(
+            &missing_kind,
+            "attempt-test",
+            false,
+            std::slice::from_ref(&binding),
+            now_ms,
+        )
+        .is_err());
+
+        let mut missing_end = reserved;
+        missing_end.quotas[0].window_end_epoch_ms = None;
+        assert!(validate_reserve_release_authorization_response_at(
+            &missing_end,
+            "attempt-test",
+            false,
+            std::slice::from_ref(&binding),
+            now_ms,
+        )
+        .is_err());
+
+        let mut dispatching = test_release_authorization_response("dispatching", None, true, false);
+        dispatching.reservation_expires_at_epoch_ms = Some(reservation_expires);
+        dispatching.dispatch_started_at_epoch_ms = Some(now_ms);
+        dispatching.dispatch_expires_at_epoch_ms = Some((now_ms + 10_000).min(reservation_expires));
+        dispatching.quotas = vec![test_release_authorization_quota(
+            &binding, start, end, "reserved",
+        )];
+        validate_dispatch_release_authorization_response(&dispatching, &reservation)
+            .expect("exact calendar dispatch response");
+        dispatching.dispatch_expires_at_epoch_ms = Some(end + 30_000);
+        validate_dispatch_release_authorization_response(&dispatching, &reservation)
+            .expect("dispatch begun in the active bucket may complete after its boundary");
+        dispatching.dispatch_expires_at_epoch_ms = Some((now_ms + 10_000).min(reservation_expires));
+        dispatching.reservation_expires_at_epoch_ms = Some(reservation_expires - 1);
+        assert!(
+            validate_dispatch_release_authorization_response(&dispatching, &reservation)
+                .expect_err("dispatch reservation expiry substitution must fail")
+                .contains("exact dispatching state")
+        );
+        dispatching.reservation_expires_at_epoch_ms = Some(reservation_expires);
+        dispatching.quotas[0].window_start_epoch_ms = Some(start + 1);
+        assert!(
+            validate_dispatch_release_authorization_response(&dispatching, &reservation)
+                .expect_err("dispatch calendar boundary substitution must fail")
+                .contains("boundaries are not exact")
+        );
+
+        let mut completed =
+            test_release_authorization_response("committed", Some("forwarded"), true, false);
+        completed.reservation_expires_at_epoch_ms = Some(reservation_expires);
+        completed.quotas = vec![test_release_authorization_quota(
+            &binding,
+            start,
+            end,
+            "committed",
+        )];
+        validate_complete_release_authorization_response(&completed, &reservation, "forwarded")
+            .expect("exact calendar completion response");
+        completed.quotas[0].window_kind = Some(RateLimitWindowKind::UtcMonth);
+        assert!(validate_complete_release_authorization_response(
+            &completed,
+            &reservation,
+            "forwarded"
+        )
+        .expect_err("completion calendar kind substitution must fail")
+        .contains("policy claim substitution"));
+
+        let mut skipped_refund =
+            test_release_authorization_response("cancelled", Some("not_forwarded"), false, false);
+        skipped_refund.reservation_expires_at_epoch_ms = Some(reservation_expires);
+        skipped_refund.quotas = vec![test_release_authorization_quota(
+            &binding,
+            start,
+            end,
+            "refund_skipped_window",
+        )];
+        validate_complete_release_authorization_response(
+            &skipped_refund,
+            &reservation,
+            "not_forwarded",
+        )
+        .expect("a refund must not decrement a counter that advanced to a new window");
+
+        let second =
+            test_calendar_binding_quota('b', "quota:month", RateLimitWindowKind::UtcMonth, 2);
+        let (second_start, second_end) =
+            calendar_window_bounds(second.window_kind, now_ms).expect("month bounds");
+        let mut unordered = test_release_authorization_response("reserved", None, true, false);
+        unordered.reservation_expires_at_epoch_ms = Some(reservation_expires);
+        unordered.quotas = vec![
+            test_release_authorization_quota(&second, second_start, second_end, "reserved"),
+            test_release_authorization_quota(&binding, start, end, "reserved"),
+        ];
+        assert!(validate_reserve_release_authorization_response_at(
+            &unordered,
+            "attempt-test",
+            false,
+            &[binding, second],
+            now_ms,
+        )
+        .expect_err("unsorted quota response must fail")
+        .contains("not uniquely sorted"));
+    }
+
+    #[test]
+    fn response_proof_binding_commits_the_calendar_quota_descriptor() {
+        let digest = |character: char| format!("sha256:{}", character.to_string().repeat(64));
+        let quota = test_calendar_binding_quota('a', "quota:day", RateLimitWindowKind::UtcDay, 5);
+        let quota_json = serde_json::to_value(&quota).expect("calendar quota JSON");
+        assert_eq!(quota_json["window_kind"], "utcDay");
+        assert!(quota_json.get("window_seconds").is_none());
+        let mut fixed_quota = quota.clone();
+        fixed_quota.window_kind = RateLimitWindowKind::Fixed;
+        fixed_quota.window_seconds = Some(86_400);
+        let fixed_json = serde_json::to_value(&fixed_quota).expect("fixed quota JSON");
+        assert_eq!(fixed_json["window_kind"], "fixed");
+        assert_eq!(fixed_json["window_seconds"], 86_400);
+        let binding = ReleaseAuthorizationBinding {
+            attempt_id: digest('b'),
+            flow_id: digest('b'),
+            principal_id: "agent:test".to_string(),
+            route_id: "route:test".to_string(),
+            credential_id: "credential:test".to_string(),
+            credential_version: 7,
+            policy_hash: digest('c'),
+            request_digest: digest('d'),
+            operation_digest: Some(digest('e')),
+            operation_context: json!({"operation":"resource.read"}),
+            require_jit_grant: false,
+            shared_quotas: vec![quota],
+        };
+        let mut authority = ResponseProofReleaseAuthority {
+            authority_mode: "atomic",
+            grant_id: None,
+            approval_id: None,
+            credential_ref: Some("credential:test".to_string()),
+            credential_version: 7,
+            request_digest: digest('d'),
+            operation_digest: digest('e'),
+            attempt_id: digest('b'),
+            consumption_identity_digest: sha256_prefixed(
+                canonical_json_ensure_ascii(&serde_json::to_value(&binding).expect("binding JSON"))
+                    .as_bytes(),
+            ),
+            authorization_state_at_upstream_dispatch: "dispatching",
+            authorization_state_observed_at_epoch_ms: 1,
+            reservation_expires_at_epoch_ms: Some(2),
+            dispatch_expires_at_epoch_ms: 2,
+        };
+        validate_response_proof_authorization_binding(
+            &binding,
+            "agent:test",
+            "route:test",
+            &digest('c'),
+            &authority,
+        )
+        .expect("calendar descriptor is committed by the proof binding digest");
+
+        let mut substituted = binding;
+        substituted.shared_quotas[0].window_seconds = Some(86_400);
+        authority.consumption_identity_digest = sha256_prefixed(
+            canonical_json_ensure_ascii(
+                &serde_json::to_value(&substituted).expect("substituted binding JSON"),
+            )
+            .as_bytes(),
+        );
+        assert!(validate_response_proof_authorization_binding(
+            &substituted,
+            "agent:test",
+            "route:test",
+            &digest('c'),
+            &authority,
+        )
+        .expect_err("calendar binding must reject a substituted fixed duration")
+        .contains("shared quota is invalid"));
     }
 
     fn read_release_test_request(listener: &TcpListener) -> (TcpStream, Value) {
@@ -28089,6 +28944,9 @@ mod tests {
             grant_id: None,
             approval_request_id: None,
             reservation_expires_at_epoch_ms: Some(now_ms + 30_000),
+            shared_quotas: Vec::new(),
+            dispatch_started_at_epoch_ms: None,
+            dispatch_expires_at_epoch_ms: None,
         };
 
         let committed =
@@ -28106,8 +28964,10 @@ mod tests {
         .expect_err("unknown completion must reject a non-replay forwarded result")
         .contains("invalid state"));
 
-        let replayed_forwarded =
+        let mut replayed_forwarded =
             test_release_authorization_response("committed", Some("forwarded"), true, true);
+        replayed_forwarded.reservation_expires_at_epoch_ms =
+            reservation.reservation_expires_at_epoch_ms;
         validate_complete_release_authorization_response(
             &replayed_forwarded,
             &reservation,
@@ -28115,12 +28975,14 @@ mod tests {
         )
         .expect("lost forwarded completion response may replay during unknown cleanup");
 
-        let indeterminate_not_forwarded = test_release_authorization_response(
+        let mut indeterminate_not_forwarded = test_release_authorization_response(
             "committed_indeterminate",
             Some("not_forwarded"),
             true,
             false,
         );
+        indeterminate_not_forwarded.reservation_expires_at_epoch_ms =
+            reservation.reservation_expires_at_epoch_ms;
         assert!(validate_complete_release_authorization_response(
             &indeterminate_not_forwarded,
             &reservation,
@@ -28172,6 +29034,9 @@ mod tests {
             grant_id: Some("grant:test".to_string()),
             approval_request_id: Some("approval:test".to_string()),
             reservation_expires_at_epoch_ms: Some(1234),
+            shared_quotas: Vec::new(),
+            dispatch_started_at_epoch_ms: None,
+            dispatch_expires_at_epoch_ms: None,
         };
         for (state, completion_outcome, authorized, replay, requested_outcome) in [
             ("committed", "forwarded", true, false, "forwarded"),
@@ -28188,6 +29053,7 @@ mod tests {
             );
             exact.grant_id = reservation.grant_id.clone();
             exact.approval_request_id = reservation.approval_request_id.clone();
+            exact.reservation_expires_at_epoch_ms = reservation.reservation_expires_at_epoch_ms;
             validate_complete_release_authorization_response(
                 &exact,
                 &reservation,
@@ -28203,6 +29069,8 @@ mod tests {
             );
             wrong_grant.grant_id = Some("grant:other".to_string());
             wrong_grant.approval_request_id = reservation.approval_request_id.clone();
+            wrong_grant.reservation_expires_at_epoch_ms =
+                reservation.reservation_expires_at_epoch_ms;
             assert!(validate_complete_release_authorization_response(
                 &wrong_grant,
                 &reservation,
@@ -28218,6 +29086,8 @@ mod tests {
             );
             wrong_approval.grant_id = reservation.grant_id.clone();
             wrong_approval.approval_request_id = Some("approval:other".to_string());
+            wrong_approval.reservation_expires_at_epoch_ms =
+                reservation.reservation_expires_at_epoch_ms;
             assert!(validate_complete_release_authorization_response(
                 &wrong_approval,
                 &reservation,
@@ -28260,6 +29130,9 @@ mod tests {
                     grant_id: None,
                     approval_request_id: None,
                     reservation_expires_at_epoch_ms: Some(1234),
+                    shared_quotas: Vec::new(),
+                    dispatch_started_at_epoch_ms: None,
+                    dispatch_expires_at_epoch_ms: None,
                 },
                 stage: ReleaseAuthorizationStage::Reserved,
             };
@@ -28307,6 +29180,9 @@ mod tests {
                 grant_id: None,
                 approval_request_id: None,
                 reservation_expires_at_epoch_ms: Some(1234),
+                shared_quotas: Vec::new(),
+                dispatch_started_at_epoch_ms: None,
+                dispatch_expires_at_epoch_ms: None,
             },
             stage: ReleaseAuthorizationStage::Reserved,
         };
@@ -28366,6 +29242,9 @@ mod tests {
                 grant_id: None,
                 approval_request_id: None,
                 reservation_expires_at_epoch_ms: Some(1234),
+                shared_quotas: Vec::new(),
+                dispatch_started_at_epoch_ms: None,
+                dispatch_expires_at_epoch_ms: None,
             },
             stage: ReleaseAuthorizationStage::Dispatching,
         };
@@ -28477,6 +29356,8 @@ mod tests {
             "http://{address}/api/data-plane/release-authorizations"
         ));
         state.release_authorization_token = Some("release-token".to_string());
+        let mut route = snapshot.routes[0].clone();
+        route.id = "route:test".to_string();
         let operation = json!({"operation":"read"});
         let canonical = json!({
             "request":{"headers":{}},
@@ -28488,7 +29369,7 @@ mod tests {
             &state,
             "attempt-test",
             "agent:test",
-            "route:test",
+            &route,
             None,
             0,
             "sha256:policy-1",
@@ -28507,6 +29388,9 @@ mod tests {
                 grant_id: release.grant_id,
                 approval_request_id: release.approval_request_id,
                 reservation_expires_at_epoch_ms: release.reservation_expires_at_epoch_ms,
+                shared_quotas: release.validated_quotas,
+                dispatch_started_at_epoch_ms: None,
+                dispatch_expires_at_epoch_ms: None,
             },
             stage: ReleaseAuthorizationStage::Reserved,
         };
@@ -33963,6 +34847,9 @@ mod tests {
             grant_id: Some("grant:test".to_string()),
             approval_request_id: Some("approval:test".to_string()),
             reservation_expires_at_epoch_ms: Some(1234),
+            shared_quotas: Vec::new(),
+            dispatch_started_at_epoch_ms: None,
+            dispatch_expires_at_epoch_ms: None,
         };
         let dispatch_observation = ReleaseAuthorizationDispatchObservation {
             observed_at_epoch_ms: 1000,
@@ -34344,14 +35231,129 @@ mod tests {
             true,
             &key,
             5,
-            86400,
+            RateLimitWindow::Fixed(86400),
         );
         assert_eq!(request["operation"], "stripe.payment_intents.create");
         assert_eq!(request["operationContext"], operation);
         assert_eq!(request["counterKey"], key);
         assert_eq!(request["max"], 5);
         assert_eq!(request["windowSeconds"], 86400);
+        assert!(request.get("calendarWindow").is_none());
         assert!(request.get("actorId").is_none());
+
+        let mut calendar_constraint = constraint.clone();
+        calendar_constraint
+            .as_object_mut()
+            .expect("calendar constraint object")
+            .remove("windowSeconds");
+        calendar_constraint["calendarWindow"] = json!("utcDay");
+        let calendar_key = rate_limit_key(
+            &calendar_constraint,
+            &route,
+            "agent:test",
+            Some("credential:test"),
+            7,
+            &operation,
+        );
+        assert_eq!(
+            calendar_key, key,
+            "window kind must not split the counter key"
+        );
+        let calendar_request = shared_rate_limit_request(
+            &calendar_constraint,
+            &route,
+            "agent:test",
+            Some("credential:test"),
+            7,
+            &format!("sha256:{}", "a".repeat(64)),
+            &operation,
+            true,
+            &calendar_key,
+            5,
+            RateLimitWindow::Calendar(RateLimitWindowKind::UtcDay),
+        );
+        assert_eq!(calendar_request["calendarWindow"], "utcDay");
+        assert!(calendar_request.get("windowSeconds").is_none());
+
+        route.constraints = vec![calendar_constraint];
+        let claims = expected_shared_release_authorization_quotas(
+            &route,
+            "agent:test",
+            Some("credential:test"),
+            7,
+            &operation,
+        )
+        .expect("calendar release quota claims");
+        assert_eq!(claims.len(), 1);
+        assert_eq!(claims[0].counter_key, key);
+        assert_eq!(claims[0].window_kind, RateLimitWindowKind::UtcDay);
+        assert_eq!(claims[0].window_seconds, None);
+    }
+
+    #[test]
+    fn calendar_rate_limit_policy_admission_matches_the_shared_compiler_contract() {
+        fn route_with_rate_limit(constraint: Value) -> Value {
+            json!({
+                "id":"route:calendar-quota",
+                "principals":["agent:test"],
+                "match":{
+                    "scheme":"https","host":"example.test","port":443,
+                    "methods":["GET"],"paths":["/resource"]
+                },
+                "adapter":{"type":"generic.rest","config":{
+                    "request":{
+                        "allowedHeaders":[],"allowedQueryKeys":[],
+                        "bodyMode":"none","maxBodyBytes":0,
+                        "operation":{"name":"resource.read"}
+                    },
+                    "response":{"mode":"json","maxBodyBytes":1024,"allowedFields":["safe"]}
+                }},
+                "constraints":[constraint]
+            })
+        }
+
+        for calendar_window in ["utcDay", "utcIsoWeek", "utcMonth"] {
+            let constraint = json!({
+                "id":"quota:calendar","type":"rateLimit","max":5,
+                "calendarWindow":calendar_window,"store":"shared"
+            });
+            validate_policy_capabilities(&policy_with_route(route_with_rate_limit(constraint)))
+                .unwrap_or_else(|error| panic!("{calendar_window} must compile: {error}"));
+        }
+        validate_policy_capabilities(&policy_with_route(route_with_rate_limit(json!({
+            "id":"quota:fixed","type":"rateLimit","max":5,
+            "windowSeconds":3600,"store":"local"
+        }))))
+        .expect("fixed local quota remains supported");
+
+        for (label, constraint) in [
+            (
+                "both",
+                json!({"id":"quota:test","type":"rateLimit","max":5,"windowSeconds":60,"calendarWindow":"utcDay","store":"shared"}),
+            ),
+            (
+                "neither",
+                json!({"id":"quota:test","type":"rateLimit","max":5,"store":"shared"}),
+            ),
+            (
+                "unknown",
+                json!({"id":"quota:test","type":"rateLimit","max":5,"calendarWindow":"utcWeek","store":"shared"}),
+            ),
+            (
+                "local",
+                json!({"id":"quota:test","type":"rateLimit","max":5,"calendarWindow":"utcDay","store":"local"}),
+            ),
+            (
+                "non-integer max",
+                json!({"id":"quota:test","type":"rateLimit","max":5.5,"calendarWindow":"utcDay","store":"shared"}),
+            ),
+        ] {
+            assert!(
+                validate_policy_capabilities(&policy_with_route(route_with_rate_limit(constraint)))
+                    .is_err(),
+                "malformed {label} quota compiled"
+            );
+        }
     }
 
     #[test]

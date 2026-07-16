@@ -1699,6 +1699,95 @@ def main() -> None:
         "scope": ["route", "operation"],
         "operationFields": ["providerAccount"],
     }
+    calendar_policy = copy.deepcopy(examples)
+    calendar_route = next(
+        item
+        for item in calendar_policy["routes"]
+        if item["id"] == "example.x.tweet.one_per_day"
+    )
+    calendar_quota = next(
+        item for item in calendar_route["constraints"] if item["type"] == "rateLimit"
+    )
+    calendar_quota.pop("windowSeconds", None)
+    calendar_quota["calendarWindow"] = "utcMonth"
+    calendar_snapshot = compile_policy_bundle(
+        calendar_policy, validate_schema=validate_schema
+    )
+    compiled_calendar_route = route(calendar_snapshot, calendar_route["id"])
+    compiled_calendar_quota = next(
+        item
+        for item in compiled_calendar_route.constraints
+        if item["type"] == "rateLimit"
+    )
+    assert compiled_calendar_quota["calendarWindow"] == "utcMonth"
+
+    numeric_bounds_policy = copy.deepcopy(examples)
+    numeric_bounds_constraint = next(
+        constraint
+        for candidate_route in numeric_bounds_policy["routes"]
+        for constraint in candidate_route.get("constraints", [])
+        if constraint.get("type") == "queryNumericBounds"
+    )
+    numeric_bounds_constraint["min"] = -2.25
+    numeric_bounds_constraint["max"] = -1.5
+    numeric_bounds_constraint["integer"] = False
+    compile_policy_bundle(
+        numeric_bounds_policy, validate_schema=validate_schema
+    )
+
+    for label, mutate in (
+        (
+            "missing rate-limit window",
+            lambda quota: (
+                quota.pop("windowSeconds", None),
+                quota.pop("calendarWindow", None),
+            ),
+        ),
+        (
+            "ambiguous rate-limit windows",
+            lambda quota: (
+                quota.__setitem__("windowSeconds", 60),
+                quota.__setitem__("calendarWindow", "utcDay"),
+            ),
+        ),
+        (
+            "fractional rate-limit maximum",
+            lambda quota: quota.__setitem__("max", 1.5),
+        ),
+    ):
+        invalid_window = copy.deepcopy(examples)
+        invalid_route = next(
+            item
+            for item in invalid_window["routes"]
+            if item["id"] == "example.x.tweet.one_per_day"
+        )
+        invalid_quota = next(
+            item for item in invalid_route["constraints"] if item["type"] == "rateLimit"
+        )
+        mutate(invalid_quota)
+        assert_policy_rejected(
+            invalid_window,
+            f"compiler accepted {label}",
+            validate_schema=validate_schema,
+        )
+
+    local_calendar = copy.deepcopy(calendar_policy)
+    local_calendar_route = next(
+        item
+        for item in local_calendar["routes"]
+        if item["id"] == "example.x.tweet.one_per_day"
+    )
+    local_calendar_quota = next(
+        item
+        for item in local_calendar_route["constraints"]
+        if item["type"] == "rateLimit"
+    )
+    local_calendar_quota["store"] = "local"
+    assert_policy_rejected(
+        local_calendar,
+        "compiler accepted a local calendar quota",
+        validate_schema=validate_schema,
+    )
     invalid = copy.deepcopy(examples)
     x_credential = next(item for item in invalid["credentials"] if item["id"] == "cred-x")
     x_credential["provider"] = "custom-x"

@@ -190,6 +190,15 @@ def assert_production_dependencies() -> None:
 
 
 def assert_reproducible_rust_binary_config() -> None:
+    for relative in (
+        "data-plane/decision-gate-rs/Dockerfile",
+        "data-plane/decision-gate-rs/Dockerfile.production",
+    ):
+        dockerfile = (ROOT / relative).read_text(encoding="utf-8")
+        if "COPY schemas /schemas" not in dockerfile:
+            raise AssertionError(
+                f"{relative} must package the schemas embedded by the Rust gate"
+            )
     cargo = (ROOT / "data-plane" / "decision-gate-rs" / "Cargo.toml").read_text(encoding="utf-8")
     if "[profile.release]" not in cargo or 'strip = "symbols"' not in cargo:
         raise AssertionError("Rust release binaries must strip nondeterministic symbol tables")

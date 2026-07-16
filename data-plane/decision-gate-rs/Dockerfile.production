@@ -9,6 +9,7 @@ COPY data-plane/decision-gate-rs/Cargo.toml ./Cargo.toml
 COPY data-plane/decision-gate-rs/Cargo.lock ./Cargo.lock
 COPY data-plane/decision-gate-rs/src ./src
 COPY data-plane/decision-gate-rs/trust ./trust
+COPY schemas /schemas
 RUN cargo build --release --locked
 
 FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build
@@ -23,6 +24,7 @@ COPY data-plane/decision-gate-rs/Cargo.toml ./Cargo.toml
 COPY data-plane/decision-gate-rs/Cargo.lock ./Cargo.lock
 COPY data-plane/decision-gate-rs/src ./src
 COPY data-plane/decision-gate-rs/trust ./trust
+COPY schemas /schemas
 RUN cargo build --release --locked --bin serverware-production-launcher \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0

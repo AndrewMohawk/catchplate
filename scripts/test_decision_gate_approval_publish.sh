@@ -286,6 +286,7 @@ assert after_actual["attempts"] == before_actual["attempts"], (before_actual, af
 assert after_actual["quota"] == before_actual["quota"], (before_actual, after_actual)
 assert after_actual["grants"] == before_actual["grants"], (before_actual, after_actual)
 assert after_actual["approvals"] == before_actual["approvals"] + 1, (before_actual, after_actual)
+approval["_test_client_ip"] = payload["clientIp"]
 json.dump(approval, open(output_path, "w", encoding="utf-8"))
 PY
 
@@ -361,17 +362,15 @@ publish = approved.get("data_plane_grant_publish") or {}
 assert approved["id"] == required["approval_id"], (approved, required)
 assert approved["request_digest"] == required["request_digest"], (approved, required)
 assert approved["operation_digest"] == required["operation_digest"], (approved, required)
-assert publish.get("enabled") is True, approved
-assert publish.get("ok") is True, approved
-assert (publish.get("response") or {}).get("grant_id") == f"approval:{approved['id']}", approved
+assert publish == {"enabled": True, "ok": True, "error": None}, approved
 
 decision_payload = {
-    "clientIp": approved["canonical_request"]["client_ip"],
+    "clientIp": required["_test_client_ip"],
     "method": "PUT",
     "url": "https://demo-upstream:8443/npm/demo-package",
     "headers": {
-        **approved["canonical_request"]["request"]["headers"],
         "X-Serverware-Agent": "demo-agent",
+        "Content-Type": "application/json",
     },
     "body": body,
     "credentialMetadata": {approved["credential_id"]: {"x_app_id": "demo-x-app"}},
@@ -448,7 +447,7 @@ def release_store() -> dict:
     return json.loads(raw)
 
 
-operation = approved["canonical_request"]["operation"]
+operation = required["operation"]
 rate_material = {
     "constraint": "npm-jit-rate-atomicity",
     "principal": approved["principal_id"],

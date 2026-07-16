@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import fcntl
 import hashlib
@@ -11,6 +12,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 os.environ.setdefault("SERVERWARE_DATA_DIR", str(Path(".tmp/test-codebase-attestation/data").resolve()))
 os.environ.pop("SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY", None)
@@ -511,6 +513,181 @@ def exercise_response_identity_publication() -> None:
         response_identity.DATA_DIR = original_data_dir
 
 
+def exercise_bounded_control_plane_response_signing() -> None:
+    import serverware.app as app_module
+    from starlette.requests import Request
+    from starlette.responses import StreamingResponse
+
+    context = {
+        "runtime_manifest_digest": "sha256:" + "1" * 64,
+        "policy_bundle_digest": "sha256:" + "2" * 64,
+        "provenance_digest": "sha256:" + "3" * 64,
+        "image_signatures_digest": "sha256:" + "4" * 64,
+        "source_tree_digest": "sha256:" + "5" * 64,
+    }
+    original_limit = app_module._SIGNED_RESPONSE_MAX_BYTES
+    original_context_functions = {
+        "runtime_manifest_digest": app_module.runtime_manifest_digest,
+        "release_provenance_digest": app_module.release_provenance_digest,
+        "image_signatures_digest": app_module.image_signatures_digest,
+        "source_tree_digest": app_module.source_tree_digest,
+        "get_policy_snapshot": app_module.get_policy_snapshot,
+        "response_signature_headers": app_module.response_signature_headers,
+    }
+
+    def request_for(nonce: str | None) -> Request:
+        headers: list[tuple[bytes, bytes]] = []
+        if nonce is not None:
+            headers.append(
+                (b"x-serverware-response-nonce", nonce.encode("latin-1"))
+            )
+        return Request(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "POST",
+                "scheme": "https",
+                "path": "/api/bounded-response",
+                "raw_path": b"/api/bounded-response",
+                "query_string": b"code=oauth-code-secret&state=oauth-state-secret",
+                "headers": headers,
+                "client": ("192.0.2.1", 12345),
+                "server": ("serverware.test", 443),
+            }
+        )
+
+    async def signed_stream(
+        *,
+        nonce: str | None,
+        chunks: list[bytes],
+        source_headers: dict[str, str] | None = None,
+        tail_observed: list[bool] | None = None,
+    ):
+        async def body_iterator():
+            for index, chunk in enumerate(chunks):
+                if tail_observed is not None and index == len(chunks) - 1:
+                    tail_observed[0] = True
+                yield chunk
+
+        async def call_next(_request: Request):
+            return StreamingResponse(
+                body_iterator(),
+                status_code=200,
+                headers=source_headers,
+                media_type="application/octet-stream",
+            )
+
+        return await app_module.signed_response_middleware(
+            request_for(nonce), call_next
+        )
+
+    def statement_from(response) -> dict[str, object]:
+        return json.loads(
+            b64d(response.headers["X-Serverware-Response-Statement-B64"])
+        )
+
+    def verify(response, statement: dict[str, object]) -> None:
+        public_key = serialization.load_pem_public_key(
+            response_public_key_info()["pem"].encode("ascii")
+        )
+        public_key.verify(
+            b64d(
+                response.headers["X-Serverware-Response-Signature"].split(
+                    ":", 1
+                )[1]
+            ),
+            canonical_json(statement).encode("utf-8"),
+        )
+
+    try:
+        app_module._SIGNED_RESPONSE_MAX_BYTES = 64
+        app_module.runtime_manifest_digest = lambda: context["runtime_manifest_digest"]
+        app_module.release_provenance_digest = lambda: context["provenance_digest"]
+        app_module.image_signatures_digest = lambda: context["image_signatures_digest"]
+        app_module.source_tree_digest = lambda: context["source_tree_digest"]
+        app_module.get_policy_snapshot = lambda: SimpleNamespace(
+            hash=context["policy_bundle_digest"]
+        )
+
+        original_secret = b"original-response-secret"
+        unconsumed_secret = b"unconsumed-response-secret"
+        tail_observed = [False]
+        nonce = "bounded-response-nonce"
+        oversized = asyncio.run(
+            signed_stream(
+                nonce=nonce,
+                chunks=[
+                    original_secret + b"x" * (64 - len(original_secret)),
+                    b"!",
+                    unconsumed_secret,
+                ],
+                source_headers={"X-Original-Secret": "must-not-leave"},
+                tail_observed=tail_observed,
+            )
+        )
+        expected_body = b'{"detail":"signed response exceeds 8 MiB"}'
+        if oversized.status_code != 503 or oversized.body != expected_body:
+            raise AssertionError("oversized response did not become the bounded synthetic 503")
+        if tail_observed[0]:
+            raise AssertionError("oversized response iterator was drained after the size violation")
+        if "x-original-secret" in oversized.headers:
+            raise AssertionError("oversized response retained rejected source headers")
+        if original_secret in oversized.body or unconsumed_secret in oversized.body:
+            raise AssertionError("oversized response leaked rejected source bytes")
+
+        statement = statement_from(oversized)
+        statement_json = canonical_json(statement)
+        expected_query = "code=oauth-code-secret&state=oauth-state-secret"
+        if statement != {
+            **statement,
+            "version": "serverware.responseSignature/v2",
+            "request": {
+                "method": "POST",
+                "path": "/api/bounded-response",
+                "query_sha256": sha256_prefixed(expected_query.encode("utf-8")),
+            },
+            "status_code": 503,
+            "body_sha256": sha256_prefixed(expected_body),
+            "nonce": nonce,
+            "context": context,
+        }:
+            raise AssertionError(f"synthetic response statement lost its bindings: {statement}")
+        if (
+            "oauth-code-secret" in statement_json
+            or "oauth-state-secret" in statement_json
+            or original_secret.decode("ascii") in statement_json
+        ):
+            raise AssertionError("synthetic response statement exposed rejected request or response secrets")
+        verify(oversized, statement)
+
+        missing_nonce = asyncio.run(signed_stream(nonce=None, chunks=[b"ok"]))
+        if statement_from(missing_nonce)["nonce"] is not None:
+            raise AssertionError("missing response nonce behavior changed")
+        invalid_nonce_value = "not-valid nonce!"
+        invalid_nonce = asyncio.run(
+            signed_stream(nonce=invalid_nonce_value, chunks=[b"ok"])
+        )
+        if statement_from(invalid_nonce)["nonce"] != invalid_nonce_value:
+            raise AssertionError("supplied response nonce binding behavior changed")
+
+        def signing_failure(_statement: dict[str, object]) -> dict[str, str]:
+            raise RuntimeError("injected synthetic signing failure")
+
+        app_module.response_signature_headers = signing_failure
+        try:
+            asyncio.run(signed_stream(nonce=nonce, chunks=[b"x" * 65]))
+        except RuntimeError as exc:
+            if str(exc) != "injected synthetic signing failure":
+                raise
+        else:
+            raise AssertionError("synthetic signing failure returned an unsigned response")
+    finally:
+        app_module._SIGNED_RESPONSE_MAX_BYTES = original_limit
+        for name, value in original_context_functions.items():
+            setattr(app_module, name, value)
+
+
 def fixture_sigstore(
     key: Ed25519PrivateKey,
     key_id: str,
@@ -775,6 +952,7 @@ def exercise_bundle_verification() -> None:
 
 def main() -> None:
     exercise_response_identity_publication()
+    exercise_bounded_control_plane_response_signing()
     body = b'{"ok":true}'
     context = {
         "runtime_manifest_digest": "sha256:" + "1" * 64,
@@ -783,10 +961,11 @@ def main() -> None:
         "image_signatures_digest": "sha256:" + "4" * 64,
         "source_tree_digest": "sha256:" + "5" * 64,
     }
+    sensitive_query = "code=oauth-code-canary&state=oauth-state-canary"
     statement = response_statement(
         method="GET",
         path="/attestation",
-        query="nonce=test",
+        query=sensitive_query,
         status_code=200,
         body=body,
         nonce="client-nonce",
@@ -794,6 +973,13 @@ def main() -> None:
     )
     headers = response_signature_headers(statement)
     assert headers["X-Serverware-Response-Body-SHA256"] == sha256_prefixed(body)
+    assert statement["request"]["query_sha256"] == sha256_prefixed(
+        sensitive_query.encode("utf-8")
+    )
+    assert "query" not in statement["request"]
+    assert "oauth-code-canary" not in canonical_json(statement)
+    assert "oauth-state-canary" not in canonical_json(statement)
+    assert statement["version"] == "serverware.responseSignature/v2"
     decoded = json.loads(b64d(headers["X-Serverware-Response-Statement-B64"]))
     assert decoded == statement
     public_key = serialization.load_pem_public_key(response_public_key_info()["pem"].encode("ascii"))

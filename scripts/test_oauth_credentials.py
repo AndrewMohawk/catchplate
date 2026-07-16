@@ -1769,13 +1769,14 @@ def main(*, setup_session_only: bool = False) -> None:
         run_oauth_issuance_uncertainty_tests(app_module, oauth, db, identity)
 
         original_request_bytes = oauth.request_bytes
+        identity_payload: object = {}
 
         def fake_identity_http(request, **kwargs):
             authorization = request.headers.get("Authorization")
             if authorization != "Bearer identity-access-token":
                 raise AssertionError(f"identity lookup did not use the OAuth access token: {authorization}")
             if "openidconnect.googleapis.com" in request.full_url:
-                body = b'{"sub":"google-subject-123","email":"andrew@example.test","email_verified":true}'
+                body = json.dumps(identity_payload).encode("utf-8")
             elif "api.x.com/2/users/me" in request.full_url:
                 body = b'{"data":{"id":"x-user-456","username":"andrew","verified":false}}'
             else:
@@ -1783,11 +1784,121 @@ def main(*, setup_session_only: bool = False) -> None:
             return SimpleNamespace(body=body)
 
         oauth.request_bytes = fake_identity_http
-        verified_google = oauth._fetch_provider_identity(oauth.provider_for("google"), "identity-access-token")
-        verified_x = oauth._fetch_provider_identity(oauth.provider_for("x"), "identity-access-token")
-        oauth.request_bytes = original_request_bytes
-        if verified_google.get("provider_account") != "andrew@example.test":
-            raise AssertionError(f"Google identity was not normalized: {verified_google}")
+        try:
+            google_subject = "google-subject-123"
+            for label, identity_payload, expected_account, expected_email_verified in (
+                (
+                    "verified email",
+                    {
+                        "sub": google_subject,
+                        "email": "andrew@example.test",
+                        "email_verified": True,
+                    },
+                    "andrew@example.test",
+                    True,
+                ),
+                (
+                    "explicitly unverified email",
+                    {
+                        "sub": google_subject,
+                        "email": "unverified@example.test",
+                        "email_verified": False,
+                    },
+                    google_subject,
+                    False,
+                ),
+                (
+                    "omitted email verification",
+                    {"sub": google_subject, "email": "unverified@example.test"},
+                    google_subject,
+                    False,
+                ),
+                (
+                    "string email verification",
+                    {
+                        "sub": google_subject,
+                        "email": "unverified@example.test",
+                        "email_verified": "true",
+                    },
+                    google_subject,
+                    False,
+                ),
+                (
+                    "numeric email verification",
+                    {
+                        "sub": google_subject,
+                        "email": "unverified@example.test",
+                        "email_verified": 1,
+                    },
+                    google_subject,
+                    False,
+                ),
+                (
+                    "verified empty email",
+                    {"sub": google_subject, "email": "", "email_verified": True},
+                    google_subject,
+                    False,
+                ),
+                (
+                    "verified non-string email",
+                    {"sub": google_subject, "email": 123, "email_verified": True},
+                    google_subject,
+                    False,
+                ),
+            ):
+                google_identity = oauth._fetch_provider_identity(
+                    oauth.provider_for("google"), "identity-access-token"
+                )
+                expected_identity = {
+                    "provider_subject": google_subject,
+                    "provider_account": expected_account,
+                    "provider_identity_verified": True,
+                    "provider_email_verified": expected_email_verified,
+                }
+                if google_identity != expected_identity:
+                    raise AssertionError(
+                        f"Google {label} identity was not normalized safely: {google_identity}"
+                    )
+
+            for label, identity_payload in (
+                (
+                    "missing subject",
+                    {"email": "andrew@example.test", "email_verified": True},
+                ),
+                (
+                    "empty subject",
+                    {
+                        "sub": "",
+                        "email": "andrew@example.test",
+                        "email_verified": True,
+                    },
+                ),
+                (
+                    "non-string subject",
+                    {
+                        "sub": 123,
+                        "email": "andrew@example.test",
+                        "email_verified": True,
+                    },
+                ),
+            ):
+                try:
+                    oauth._fetch_provider_identity(
+                        oauth.provider_for("google"), "identity-access-token"
+                    )
+                except oauth.OAuthError as exc:
+                    if "sub" not in str(exc):
+                        raise AssertionError(
+                            f"Google {label} failed for the wrong reason: {exc}"
+                        ) from exc
+                else:
+                    raise AssertionError(f"Google identity accepted a {label}")
+
+            verified_x = oauth._fetch_provider_identity(
+                oauth.provider_for("x"), "identity-access-token"
+            )
+        finally:
+            oauth.request_bytes = original_request_bytes
         if verified_x.get("provider_account") != "@andrew":
             raise AssertionError(f"X identity was not normalized: {verified_x}")
 

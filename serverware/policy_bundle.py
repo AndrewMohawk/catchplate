@@ -78,6 +78,141 @@ PROVIDER_ACCOUNT_OPERATION_FIELD = "providerAccount"
 NPM_WRITE_OPERATIONS = frozenset(
     {"publish", "unpublish", "distTagWrite", "tokenWrite", "metadataWrite"}
 )
+FORBIDDEN_UPSTREAM_METADATA_CIDRS = (
+    "169.254.169.254/32",
+    "169.254.170.0/24",
+    "100.100.100.200/32",
+    "192.0.0.192/32",
+    "fd00:ec2::/64",
+    "fd20:ce::/64",
+)
+FORBIDDEN_UPSTREAM_METADATA_NETWORKS = tuple(
+    ipaddress.ip_network(cidr, strict=True)
+    for cidr in FORBIDDEN_UPSTREAM_METADATA_CIDRS
+)
+IPV4_MAPPED_IPV6_NETWORK = ipaddress.ip_network("::ffff:0:0/96", strict=True)
+DEMO_UPSTREAM_RESOLVED_CIDRS = ("172.16.0.0/12",)
+NPM_PUBLIC_REGISTRY_HOST = "registry.npmjs.org"
+NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT = "npm-public-registry-receipt-v1"
+NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS = ("ok", "published")
+PROVIDER_REQUEST_PROFILE_FIELDS = frozenset(
+    {"allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes"}
+)
+GMAIL_V1_REQUEST_HEADERS = (
+    "accept",
+    "accept-encoding",
+    "content-type",
+    "user-agent",
+    "x-goog-api-client",
+    "x-goog-request-params",
+    "x-goog-user-project",
+)
+GMAIL_V1_REQUEST_QUERY_KEYS = (
+    "$.xgafv",
+    "alt",
+    "fields",
+    "format",
+    "includeSpamTrash",
+    "labelIds",
+    "maxResults",
+    "metadataHeaders",
+    "pageToken",
+    "prettyPrint",
+    "q",
+    "quotaUser",
+)
+X_V2_REQUEST_HEADERS = ("accept", "accept-encoding", "content-type", "user-agent")
+
+# Frozen from the official X OpenAPI document at https://api.twitter.com/2/openapi.json
+# on 2026-07-16. Policy changes are required before a newly published query key is usable.
+X_V2_RECENT_SEARCH_QUERY_KEYS = (
+    "end_time",
+    "expansions",
+    "granularity",
+    "max_results",
+    "media.fields",
+    "next_token",
+    "pagination_token",
+    "place.fields",
+    "poll.fields",
+    "query",
+    "search_count.fields",
+    "since_id",
+    "sort_order",
+    "start_time",
+    "tweet.fields",
+    "until_id",
+    "user.fields",
+)
+X_V2_BOUNDED_READ_QUERY_KEYS = (
+    "analytics.fields",
+    "chat_conversation.fields",
+    "chat_message_event.fields",
+    "command",
+    "community.fields",
+    "compliance_job.fields",
+    "connection.fields",
+    "days",
+    "dm_event.fields",
+    "end_time",
+    "endpoints",
+    "engagement.fields",
+    "event_types",
+    "exclude",
+    "expansions",
+    "granularity",
+    "ids",
+    "list.fields",
+    "max_age_hours",
+    "max_results",
+    "max_trends",
+    "media.fields",
+    "media_analytics.fields",
+    "media_id",
+    "media_keys",
+    "news.fields",
+    "next_token",
+    "note.fields",
+    "pagination_token",
+    "personalized_trend.fields",
+    "place.fields",
+    "poll.fields",
+    "post_selection",
+    "public_key.fields",
+    "query",
+    "requested_metrics",
+    "search_count.fields",
+    "since_id",
+    "sort_order",
+    "space.fields",
+    "start_time",
+    "state",
+    "status",
+    "test_mode",
+    "topic.fields",
+    "trend.fields",
+    "tweet.fields",
+    "tweet_ids",
+    "type",
+    "until_id",
+    "usage.fields",
+    "user.fields",
+    "user_ids",
+    "usernames",
+    "webhook_config.fields",
+)
+NPM_REGISTRY_REQUEST_HEADERS = (
+    "accept",
+    "accept-encoding",
+    "content-type",
+    "npm-auth-type",
+    "npm-command",
+    "npm-in-ci",
+    "npm-otp",
+    "npm-scope",
+    "npm-session",
+    "user-agent",
+)
 SUPPORTED_CONSTRAINTS = {
     "rateLimit",
     "operationPolicy",
@@ -956,6 +1091,7 @@ class RoutePolicy:
     credential_ref: str | None
     adapter_type: str
     adapter_config: dict[str, Any]
+    resolved_cidrs: tuple[str, ...] | None = None
     constraints: tuple[dict[str, Any], ...] = ()
     jit: dict[str, Any] = field(default_factory=dict)
 
@@ -2106,9 +2242,54 @@ def _validate_optional_response_release_contract(
     _validate_response_headers(route_id, error, f"{adapter_name} error response")
 
 
+def _validate_public_npm_publish_response_contract(
+    route_id: str,
+    adapter_config: dict[str, Any],
+    response: dict[str, Any],
+    constraints: tuple[dict[str, Any], ...],
+) -> None:
+    if adapter_config.get("publishResponseContract") != NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT:
+        raise PolicyBundleError(
+            f"route {route_id} public npm.publish requires "
+            f"publishResponseContract {NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT}"
+        )
+    max_body_bytes = response.get("maxBodyBytes")
+    if (
+        response.get("mode") != "json"
+        or not isinstance(max_body_bytes, int)
+        or isinstance(max_body_bytes, bool)
+        or not 1 <= max_body_bytes <= 65536
+    ):
+        raise PolicyBundleError(
+            f"route {route_id} public npm.publish response contract requires buffered JSON "
+            "capped at 65536 bytes"
+        )
+    if response.get("allowedFields") != list(NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS):
+        raise PolicyBundleError(
+            f"route {route_id} public npm.publish response must project exactly ok and published"
+        )
+    if response.get("allowedHeaders") != []:
+        raise PolicyBundleError(
+            f"route {route_id} public npm.publish response must not release upstream headers"
+        )
+
+    publish_response_constraints = [
+        constraint
+        for constraint in constraints
+        if constraint.get("type") in {"responseBinding", "responseJson"}
+        and (
+            constraint.get("operations") is None
+            or "npm.publish" in constraint.get("operations", [])
+        )
+    ]
+    if publish_response_constraints:
+        raise PolicyBundleError(
+            f"route {route_id} public npm.publish receipt must not use responseBinding or responseJson"
+        )
+
+
 def _validate_signed_npm_publish_response_contract(
     route_id: str,
-    host: str,
     response: dict[str, Any],
     constraints: tuple[dict[str, Any], ...],
 ) -> None:
@@ -2124,12 +2305,6 @@ def _validate_signed_npm_publish_response_contract(
             "capped at 65536 bytes"
         )
 
-    publish_response_constraints = [
-        constraint
-        for constraint in constraints
-        if constraint.get("type") in {"responseBinding", "responseJson"}
-        and "npm.publish" in (constraint.get("operations") or [])
-    ]
     response_bindings = [
         constraint
         for constraint in constraints
@@ -2142,13 +2317,6 @@ def _validate_signed_npm_publish_response_contract(
         if constraint.get("type") == "responseJson"
         and constraint.get("operations") == ["npm.publish"]
     ]
-    if (
-        host == "registry.npmjs.org"
-        and not publish_response_constraints
-        and not response_bindings
-        and not response_json_constraints
-    ):
-        return
     if not response_bindings:
         raise PolicyBundleError(
             f"route {route_id} signed npm.publish requires a responseBinding scoped only to npm.publish"
@@ -2186,6 +2354,96 @@ def _validate_signed_npm_publish_response_contract(
         )
 
 
+def provider_request_profile(adapter_type: str, mode: str | None = None) -> dict[str, Any]:
+    if adapter_type == "gmail.v1":
+        return {
+            "allowedHeaders": list(GMAIL_V1_REQUEST_HEADERS),
+            "allowedQueryKeys": list(GMAIL_V1_REQUEST_QUERY_KEYS),
+            "allowedMediaTypes": [],
+            "maxBodyBytes": 0,
+        }
+    if adapter_type == "x.v2":
+        if mode == "recentSearchOnly":
+            query_keys = X_V2_RECENT_SEARCH_QUERY_KEYS
+            media_types: tuple[str, ...] = ()
+            max_body_bytes = 0
+        elif mode == "readOnly":
+            query_keys = X_V2_BOUNDED_READ_QUERY_KEYS
+            media_types = ()
+            max_body_bytes = 0
+        elif mode == "controlledWrite":
+            query_keys = ()
+            media_types = ("application/json",)
+            max_body_bytes = 65536
+        else:
+            raise PolicyBundleError(f"unsupported x.v2 request profile mode {mode!r}")
+        return {
+            "allowedHeaders": list(X_V2_REQUEST_HEADERS),
+            "allowedQueryKeys": list(query_keys),
+            "allowedMediaTypes": list(media_types),
+            "maxBodyBytes": max_body_bytes,
+        }
+    if adapter_type == "npm.registry":
+        return {
+            "allowedHeaders": list(NPM_REGISTRY_REQUEST_HEADERS),
+            "allowedQueryKeys": [],
+            "allowedMediaTypes": ["application/json"],
+            "maxBodyBytes": 16 * 1024 * 1024,
+        }
+    raise PolicyBundleError(f"adapter {adapter_type} does not have a provider request profile")
+
+
+def _validate_provider_request_profile(
+    route_id: str,
+    adapter_type: str,
+    adapter_config: dict[str, Any],
+) -> None:
+    request = adapter_config.get("request")
+    if not isinstance(request, dict):
+        raise PolicyBundleError(
+            f"route {route_id} {adapter_type} must define an exact provider request profile"
+        )
+    if set(request) != PROVIDER_REQUEST_PROFILE_FIELDS:
+        missing = sorted(PROVIDER_REQUEST_PROFILE_FIELDS - set(request))
+        unknown = sorted(set(request) - PROVIDER_REQUEST_PROFILE_FIELDS)
+        raise PolicyBundleError(
+            f"route {route_id} {adapter_type} request profile fields are invalid: "
+            f"missing={missing} unknown={unknown}"
+        )
+
+    for field_name in ("allowedHeaders", "allowedQueryKeys", "allowedMediaTypes"):
+        values = request.get(field_name)
+        if (
+            not isinstance(values, list)
+            or any(not isinstance(value, str) or not value for value in values)
+            or len(values) != len(set(values))
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} {adapter_type} request {field_name} must contain unique strings"
+            )
+    for field_name in ("allowedHeaders", "allowedMediaTypes"):
+        if any(value != value.lower() for value in request[field_name]):
+            raise PolicyBundleError(
+                f"route {route_id} {adapter_type} request {field_name} must be lower-case"
+            )
+
+    expected = provider_request_profile(adapter_type, str(adapter_config.get("mode") or ""))
+    for field_name in ("allowedHeaders", "allowedQueryKeys", "allowedMediaTypes"):
+        if set(request[field_name]) != set(expected[field_name]):
+            raise PolicyBundleError(
+                f"route {route_id} {adapter_type} request {field_name} must match the exact "
+                "provider profile"
+            )
+    if (
+        type(request.get("maxBodyBytes")) is not int
+        or request.get("maxBodyBytes") != expected["maxBodyBytes"]
+    ):
+        raise PolicyBundleError(
+            f"route {route_id} {adapter_type} request maxBodyBytes must equal "
+            f"{expected['maxBodyBytes']}"
+        )
+
+
 def _validate_adapter_security_invariants(
     route_id: str,
     host: str,
@@ -2198,6 +2456,9 @@ def _validate_adapter_security_invariants(
     constraints: tuple[dict[str, Any], ...],
     signed_policy: bool,
 ) -> None:
+    if adapter_type in {"gmail.v1", "x.v2", "npm.registry"}:
+        _validate_provider_request_profile(route_id, adapter_type, adapter_config)
+
     if adapter_type == "gmail.v1":
         if not credential_ref:
             raise PolicyBundleError(f"route {route_id} Gmail policy must bind a credential")
@@ -2341,13 +2602,26 @@ def _validate_adapter_security_invariants(
         write_operations = operations.intersection(NPM_WRITE_OPERATIONS)
         response = adapter_config.get("response")
         _validate_bounded_response_profiles(route_id, response, "npm")
+        publish_response_contract = adapter_config.get("publishResponseContract")
+        if publish_response_contract is not None and (
+            host != NPM_PUBLIC_REGISTRY_HOST or "publish" not in operations
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} {NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT} is valid only for "
+                f"npm.publish on {NPM_PUBLIC_REGISTRY_HOST}"
+            )
         if not write_operations:
             return
         assert isinstance(response, dict)
         if response.get("mode") != "json":
             raise PolicyBundleError(f"route {route_id} npm writes require a bounded json success response")
-        if signed_policy and "publish" in operations:
-            _validate_signed_npm_publish_response_contract(route_id, host, response, constraints)
+        if "publish" in operations:
+            if host == NPM_PUBLIC_REGISTRY_HOST:
+                _validate_public_npm_publish_response_contract(
+                    route_id, adapter_config, response, constraints
+                )
+            elif signed_policy:
+                _validate_signed_npm_publish_response_contract(route_id, response, constraints)
         authn = ((jit.get("approvers") or {}).get("authn") or {}) if isinstance(jit, dict) else {}
         authenticator_classes = set(authn.get("allowedAuthenticatorClasses") or [])
         if (
@@ -2364,6 +2638,61 @@ def _validate_adapter_security_invariants(
             raise PolicyBundleError(
                 f"route {route_id} npm writes require one-use, hardware-attested WebAuthn JIT"
             )
+
+
+def _validate_route_resolved_cidrs(
+    route_id: str,
+    match: dict[str, Any],
+) -> tuple[str, ...] | None:
+    if "resolvedCidrs" not in match:
+        return None
+
+    raw_cidrs = match["resolvedCidrs"]
+    if not isinstance(raw_cidrs, list) or not 1 <= len(raw_cidrs) <= 32:
+        raise PolicyBundleError(
+            f"route {route_id} resolvedCidrs must contain 1-32 canonical CIDRs"
+        )
+
+    normalized_cidrs: list[str] = []
+    seen: set[str] = set()
+    for raw_cidr in raw_cidrs:
+        if not isinstance(raw_cidr, str) or not raw_cidr or "%" in raw_cidr:
+            raise PolicyBundleError(
+                f"route {route_id} resolvedCidrs must contain canonical CIDR strings without zone IDs"
+            )
+        try:
+            network = ipaddress.ip_network(raw_cidr, strict=True)
+        except ValueError as exc:
+            raise PolicyBundleError(
+                f"route {route_id} resolvedCidrs contains an invalid or host-bit CIDR"
+            ) from exc
+
+        normalized = str(network)
+        if normalized in seen:
+            raise PolicyBundleError(
+                f"route {route_id} resolvedCidrs must be unique after normalization"
+            )
+        seen.add(normalized)
+        if raw_cidr != normalized:
+            raise PolicyBundleError(
+                f"route {route_id} resolvedCidrs contains a noncanonical CIDR"
+            )
+        if isinstance(network, ipaddress.IPv6Network) and network.overlaps(
+            IPV4_MAPPED_IPV6_NETWORK
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} resolvedCidrs cannot include IPv4-mapped IPv6 space"
+            )
+        if any(
+            network.version == forbidden.version and network.overlaps(forbidden)
+            for forbidden in FORBIDDEN_UPSTREAM_METADATA_NETWORKS
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} resolvedCidrs overlaps a forbidden metadata range"
+            )
+        normalized_cidrs.append(normalized)
+
+    return tuple(normalized_cidrs)
 
 
 def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False, validate_schema: bool = False) -> PolicySnapshot:
@@ -2466,6 +2795,7 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
         seen_routes.add(route_id)
 
         match = item.get("match") or {}
+        resolved_cidrs = _validate_route_resolved_cidrs(route_id, match)
         methods = frozenset(method.upper() for method in (match.get("methods") or []))
         if not methods:
             raise PolicyBundleError(f"route {route_id} must define methods")
@@ -2744,6 +3074,7 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                 credential_ref=credential_ref,
                 adapter_type=adapter_type,
                 adapter_config=adapter_config,
+                resolved_cidrs=resolved_cidrs,
                 constraints=constraints,
                 jit=jit,
             )
@@ -2925,7 +3256,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
             },
         }
 
-    return {
+    bundle = {
         "apiVersion": "serverware.policy/v1",
         "kind": "PolicyBundle",
         "metadata": {
@@ -3384,6 +3715,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                 "adapter": {
                     "type": "gmail.v1",
                     "config": {
+                        "request": provider_request_profile("gmail.v1"),
                         "maxAgeDays": 30,
                         "maxResults": 10,
                         "forceQuery": True,
@@ -3456,6 +3788,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                 "adapter": {
                     "type": "x.v2",
                     "config": {
+                        "request": provider_request_profile("x.v2", "controlledWrite"),
                         "mode": "controlledWrite",
                         "blockWrites": False,
                         "appIds": ["demo-x-app"],
@@ -3518,6 +3851,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                 "adapter": {
                     "type": "x.v2",
                     "config": {
+                        "request": provider_request_profile("x.v2", "recentSearchOnly"),
                         "mode": "recentSearchOnly",
                         "blockWrites": True,
                         "appIds": ["demo-x-app"],
@@ -3582,6 +3916,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                 "adapter": {
                     "type": "x.v2",
                     "config": {
+                        "request": provider_request_profile("x.v2", "readOnly"),
                         "mode": "readOnly",
                         "blockWrites": True,
                         "appIds": ["demo-x-app"],
@@ -3627,6 +3962,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                 "adapter": {
                     "type": "npm.registry",
                     "config": {
+                        "request": provider_request_profile("npm.registry"),
                         "operations": ["publish", "distTagWrite"],
                         "response": {
                             "mode": "json",
@@ -3735,6 +4071,10 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
             },
         ],
     }
+    for route in bundle["routes"]:
+        if route["match"]["host"] == "demo-upstream":
+            route["match"]["resolvedCidrs"] = list(DEMO_UPSTREAM_RESOLVED_CIDRS)
+    return bundle
 
 
 def request_url_parts(pretty_url: str) -> tuple[str, str, int, str]:

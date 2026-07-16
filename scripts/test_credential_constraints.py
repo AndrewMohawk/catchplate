@@ -90,8 +90,14 @@ from serverware.constraints import (
     reset_local_constraint_state,
 )
 from serverware.policy_bundle import (
+    GMAIL_V1_REQUEST_HEADERS,
+    GMAIL_V1_REQUEST_QUERY_KEYS,
+    NPM_REGISTRY_REQUEST_HEADERS,
+    X_V2_BOUNDED_READ_QUERY_KEYS,
     X_V2_BOUNDED_READ_OPERATIONS,
+    X_V2_RECENT_SEARCH_QUERY_KEYS,
     X_V2_RECENT_SEARCH_PATHS,
+    X_V2_REQUEST_HEADERS,
     CredentialPolicy,
     PolicyBundleError,
     _load_raw_policy,
@@ -99,6 +105,7 @@ from serverware.policy_bundle import (
     canonical_json,
     compile_policy_bundle,
     demo_policy_bundle,
+    provider_request_profile,
     provider_account_scope_value,
     sign_policy_bundle,
     strict_json_loads,
@@ -694,6 +701,91 @@ def main() -> None:
     db.init_db()
     validate_schema = schema_validation_available()
     demo_bundle = demo_policy_bundle("cred-demo-bearer")
+    internal_demo_routes = [
+        item for item in demo_bundle["routes"] if item["match"]["host"] == "demo-upstream"
+    ]
+    assert internal_demo_routes
+    assert all(
+        item["match"]["resolvedCidrs"] == ["172.16.0.0/12"]
+        for item in internal_demo_routes
+    )
+
+    valid_resolved_cidrs = [
+        "10.0.0.0/8",
+        "127.0.0.0/8",
+        "fd12:3456:789a::/48",
+        "::1/128",
+    ]
+    explicit_resolution = copy.deepcopy(demo_bundle)
+    next(
+        item for item in explicit_resolution["routes"] if item["id"] == "demo.echo"
+    )["match"]["resolvedCidrs"] = valid_resolved_cidrs
+    explicit_snapshot = compile_policy_bundle(
+        explicit_resolution,
+        validate_schema=validate_schema,
+    )
+    assert route(explicit_snapshot, "demo.echo").resolved_cidrs == tuple(
+        valid_resolved_cidrs
+    )
+    assert next(
+        item for item in explicit_snapshot.raw["routes"] if item["id"] == "demo.echo"
+    )["match"]["resolvedCidrs"] == valid_resolved_cidrs
+
+    public_only_resolution = copy.deepcopy(demo_bundle)
+    next(
+        item for item in public_only_resolution["routes"] if item["id"] == "demo.echo"
+    )["match"].pop("resolvedCidrs")
+    public_only_snapshot = compile_policy_bundle(
+        public_only_resolution,
+        validate_schema=validate_schema,
+    )
+    assert route(public_only_snapshot, "demo.echo").resolved_cidrs is None
+
+    invalid_resolved_cidr_sets = (
+        ("empty list", []),
+        ("more than 32 entries", [f"10.{index}.0.0/16" for index in range(33)]),
+        ("non-string entry", [123]),
+        ("host bits", ["10.0.0.1/8"]),
+        ("noncanonical IPv6", ["FD12:3456:789A::/48"]),
+        ("zone ID", ["fe80::%eth0/64"]),
+        ("invalid CIDR", ["not-a-cidr"]),
+        ("IPv4-mapped IPv6", ["::ffff:192.0.2.0/120"]),
+        (
+            "duplicate after normalization",
+            ["2001:db8::/32", "2001:0db8::/32"],
+        ),
+    )
+    for label, cidrs in invalid_resolved_cidr_sets:
+        invalid = copy.deepcopy(demo_bundle)
+        next(item for item in invalid["routes"] if item["id"] == "demo.echo")[
+            "match"
+        ]["resolvedCidrs"] = cidrs
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted resolvedCidrs with {label}",
+            validate_schema=validate_schema,
+        )
+
+    for metadata_overlap in (
+        "169.254.169.254/32",
+        "169.254.170.0/24",
+        "169.254.0.0/16",
+        "100.100.100.200/32",
+        "192.0.0.192/32",
+        "fd00:ec2::/64",
+        "fd00::/8",
+        "fd20:ce::/64",
+    ):
+        invalid = copy.deepcopy(demo_bundle)
+        next(item for item in invalid["routes"] if item["id"] == "demo.echo")[
+            "match"
+        ]["resolvedCidrs"] = [metadata_overlap]
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted metadata-overlapping CIDR {metadata_overlap}",
+            validate_schema=validate_schema,
+        )
+
     for encoded in (
         '{"duplicate":1,"duplicate":1}',
         '{"number":NaN}',
@@ -747,6 +839,8 @@ def main() -> None:
     demo = compile_policy_bundle(demo_bundle, validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     example_snapshot = compile_policy_bundle(examples, validate_schema=validate_schema)
+    assert all("resolvedCidrs" not in item["match"] for item in examples["routes"])
+    assert all(item.resolved_cidrs is None for item in example_snapshot.routes)
 
     for label, predicate, value, expected_allowed in REQUEST_VALUE_PARITY_VECTORS:
         vector_flow = flow("GET", f"https://example.test/items?scope={quote(value, safe='')}")
@@ -1828,6 +1922,12 @@ def main() -> None:
         "/2/tweets/counts/recent",
         "/2/tweets/search/recent",
     }
+    assert len(X_V2_RECENT_SEARCH_QUERY_KEYS) == 17
+    assert len(X_V2_BOUNDED_READ_QUERY_KEYS) == 55
+    assert len(GMAIL_V1_REQUEST_QUERY_KEYS) == 12
+    assert len(GMAIL_V1_REQUEST_HEADERS) == 7
+    assert len(X_V2_REQUEST_HEADERS) == 4
+    assert len(NPM_REGISTRY_REQUEST_HEADERS) == 10
     for operation, templates in X_V2_READ_OPERATION_PATHS:
         for template in templates:
             concrete_path = "/".join(
@@ -1835,6 +1935,91 @@ def main() -> None:
                 for segment in template.split("/")
             )
             assert _x_read_operation(concrete_path) == operation, (concrete_path, operation)
+
+    provider_profile_routes = (
+        ("example.gmail.last_30_days", "gmail.v1", None),
+        ("example.x.search.seven_days", "x.v2", "recentSearchOnly"),
+        ("example.x.full_bounded_read", "x.v2", "readOnly"),
+        ("example.x.tweet.one_per_day", "x.v2", "controlledWrite"),
+        ("example.npm.publish.yubikey_jit", "npm.registry", None),
+    )
+    for route_id, adapter_type, mode in provider_profile_routes:
+        expected_profile = provider_request_profile(adapter_type, mode)
+        configured_route = next(item for item in examples["routes"] if item["id"] == route_id)
+        assert configured_route["adapter"]["config"]["request"] == expected_profile
+
+        for field_name, widened_value in (
+            ("allowedHeaders", "x-provider-profile-widening"),
+            ("allowedQueryKeys", "serverware_unknown_query"),
+            ("allowedMediaTypes", "text/plain"),
+        ):
+            invalid = copy.deepcopy(examples)
+            request_profile = next(
+                item for item in invalid["routes"] if item["id"] == route_id
+            )["adapter"]["config"]["request"]
+            request_profile[field_name].append(widened_value)
+            assert_policy_rejected(
+                invalid,
+                f"compiler accepted widened {adapter_type} {field_name}",
+                validate_schema=validate_schema,
+            )
+
+        invalid = copy.deepcopy(examples)
+        request_profile = next(
+            item for item in invalid["routes"] if item["id"] == route_id
+        )["adapter"]["config"]["request"]
+        request_profile["allowedHeaders"].pop()
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted narrowed {adapter_type} allowedHeaders",
+            validate_schema=validate_schema,
+        )
+
+        invalid = copy.deepcopy(examples)
+        request_profile = next(
+            item for item in invalid["routes"] if item["id"] == route_id
+        )["adapter"]["config"]["request"]
+        request_profile["allowedHeaders"].append(request_profile["allowedHeaders"][0])
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted duplicate {adapter_type} allowedHeaders",
+            validate_schema=validate_schema,
+        )
+
+        invalid = copy.deepcopy(examples)
+        request_profile = next(
+            item for item in invalid["routes"] if item["id"] == route_id
+        )["adapter"]["config"]["request"]
+        request_profile["allowedHeaders"][0] = request_profile["allowedHeaders"][0].upper()
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted non-lowercase {adapter_type} allowedHeaders",
+            validate_schema=validate_schema,
+        )
+
+        invalid = copy.deepcopy(examples)
+        request_profile = next(
+            item for item in invalid["routes"] if item["id"] == route_id
+        )["adapter"]["config"]["request"]
+        request_profile.pop("maxBodyBytes")
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted incomplete {adapter_type} request profile",
+            validate_schema=validate_schema,
+        )
+
+        invalid = copy.deepcopy(examples)
+        request_profile = next(
+            item for item in invalid["routes"] if item["id"] == route_id
+        )["adapter"]["config"]["request"]
+        request_profile["maxBodyBytes"] = max(0, expected_profile["maxBodyBytes"] - 1)
+        if request_profile["maxBodyBytes"] == expected_profile["maxBodyBytes"]:
+            request_profile["maxBodyBytes"] = expected_profile["maxBodyBytes"] + 1
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted altered {adapter_type} maxBodyBytes",
+            validate_schema=validate_schema,
+        )
     if validate_schema:
         invalid_field = json.loads(json.dumps(examples))
         invalid_field["credentials"][0]["injection"]["field"] = "*.access_token"
@@ -2273,14 +2458,84 @@ def main() -> None:
         item for item in public_npm["routes"] if item["id"] == npm_route_raw["id"]
     )
     public_npm_route["match"]["host"] = "registry.npmjs.org"
+    public_npm_route["adapter"]["config"][
+        "publishResponseContract"
+    ] = "npm-public-registry-receipt-v1"
+    public_npm_route["adapter"]["config"]["response"]["allowedFields"] = [
+        "ok",
+        "published",
+    ]
+    public_npm_route["adapter"]["config"]["response"]["allowedHeaders"] = []
     public_npm_route["constraints"] = [
         constraint
         for constraint in public_npm_route["constraints"]
         if constraint["type"] not in {"responseBinding", "responseJson"}
     ]
-    compile_policy_bundle(
+    public_npm_snapshot = compile_policy_bundle(
         sign_policy_bundle(public_npm),
         verify_signature=True,
+        validate_schema=validate_schema,
+    )
+
+    for mutation, expected_reason, schema_rejects in (
+        (
+            lambda item: item["adapter"]["config"].pop("publishResponseContract"),
+            f"route {npm_route_raw['id']} public npm.publish requires "
+            "publishResponseContract npm-public-registry-receipt-v1",
+            False,
+        ),
+        (
+            lambda item: item["adapter"]["config"]["response"].__setitem__(
+                "allowedFields", ["package", "version", "published"]
+            ),
+            f"route {npm_route_raw['id']} public npm.publish response must project exactly ok and published",
+            True,
+        ),
+        (
+            lambda item: item["adapter"]["config"]["response"].__setitem__(
+                "allowedHeaders", ["etag"]
+            ),
+            f"route {npm_route_raw['id']} public npm.publish response must not release upstream headers",
+            True,
+        ),
+    ):
+        invalid_public = copy.deepcopy(public_npm)
+        mutation(
+            next(
+                item
+                for item in invalid_public["routes"]
+                if item["id"] == npm_route_raw["id"]
+            )
+        )
+        assert_signed_policy_rejected_reason(
+            invalid_public,
+            expected_reason,
+            validate_schema=False,
+        )
+        if validate_schema and schema_rejects:
+            assert_signed_policy_and_schema_rejected(
+                invalid_public,
+                "an invalid public npm publish receipt projection",
+                validate_schema=True,
+            )
+
+    constrained_public = copy.deepcopy(public_npm)
+    constrained_public_route = next(
+        item
+        for item in constrained_public["routes"]
+        if item["id"] == npm_route_raw["id"]
+    )
+    constrained_public_route["constraints"].append(
+        {
+            "id": "untrusted-public-publish-identity",
+            "type": "responseJson",
+            "phase": "response",
+            "fields": {"published": {"type": "boolean", "equals": True}},
+        }
+    )
+    assert_signed_policy_rejected_reason(
+        constrained_public,
+        f"route {npm_route_raw['id']} public npm.publish receipt must not use responseBinding or responseJson",
         validate_schema=validate_schema,
     )
 
@@ -2291,6 +2546,7 @@ def main() -> None:
         if item["id"] == npm_route_raw["id"]
     )
     non_public_route["match"]["host"] = "registry.example.test"
+    non_public_route["adapter"]["config"].pop("publishResponseContract")
     assert_signed_policy_rejected_reason(
         non_public_without_response_identity,
         f"route {npm_route_raw['id']} signed npm.publish requires a responseBinding scoped only to npm.publish",
@@ -2896,8 +3152,39 @@ def main() -> None:
         "https://api.example.test/data",
         response=source_with_siblings,
     )
+    projected.response.headers["content-type"] = ' Application/JSON ; charset="utf-8" '
+    assert generic_adapter.prepare_response(projected, projected_route, {}).allowed
     assert generic_adapter.validate_response(projected, projected_route, {}).allowed
     assert json.loads(projected.response.get_text()) == {"data": {"id": "safe"}}
+    assert projected.response.headers == {
+        "Content-Type": "application/json",
+        "Content-Length": str(len(projected.response.raw_content)),
+    }
+
+    for label, response_headers in (
+        ("missing", {}),
+        (
+            "duplicate",
+            {"content-type": "application/json", "Content-Type": "application/json"},
+        ),
+        ("malformed", {"content-type": "application/json; charset"}),
+        ("different", {"content-type": "application/problem+json"}),
+    ):
+        denied_media_type = flow(
+            "GET",
+            "https://api.example.test/data",
+            response={"data": {"id": "must-not-release"}},
+        )
+        denied_media_type.response.headers = response_headers
+        denied_media_type.response.raw_content = b"not-json-and-must-not-release"
+        original_body = denied_media_type.response.raw_content
+        for decision in (
+            generic_adapter.prepare_response(denied_media_type, projected_route, {}),
+            generic_adapter.validate_response(denied_media_type, projected_route, {}),
+        ):
+            assert_denied(decision, "response_json_content_type_denied")
+            assert decision.status_code == 502, (label, decision)
+        assert denied_media_type.response.raw_content == original_body, label
 
     explicit_opaque_route = SimpleNamespace(
         credential_ref=None,
@@ -2924,8 +3211,33 @@ def main() -> None:
         "https://demo-upstream:8443/2/tweets",
         response=source_with_siblings,
     )
+    x_projection.response.headers["content-type"] = "application/json;charset=utf-8"
+    assert get_adapter("x.v2").prepare_response(x_projection, x_projection_route, {}).allowed
     assert get_adapter("x.v2").validate_response(x_projection, x_projection_route, {}).allowed
     assert json.loads(x_projection.response.get_text()) == {"data": {"id": "safe"}}
+
+    x_wrong_media_type = flow(
+        "POST",
+        "https://demo-upstream:8443/2/tweets",
+        response=source_with_siblings,
+    )
+    x_wrong_media_type.response.headers["content-type"] = "text/json"
+    assert_denied(
+        get_adapter("x.v2").prepare_response(
+            x_wrong_media_type,
+            x_projection_route,
+            {},
+        ),
+        "response_json_content_type_denied",
+    )
+    assert_denied(
+        get_adapter("x.v2").validate_response(
+            x_wrong_media_type,
+            x_projection_route,
+            {},
+        ),
+        "response_json_content_type_denied",
+    )
 
     object_store_route = route(example_snapshot, "example.object_store.small_puts")
     object_store_adapter = get_adapter(object_store_route.adapter_type)
@@ -3738,9 +4050,116 @@ def main() -> None:
         "form_body_field_not_allowed",
     )
 
+    gmail_request_route = route(example_snapshot, "example.gmail.last_30_days")
+    gmail_request_adapter = get_adapter(gmail_request_route.adapter_type)
+    gmail_bodyless_content_type = flow(
+        "GET",
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=serverware",
+    )
+    gmail_bodyless_content_type.request.headers["content-type"] = (
+        ' Application/JSON ; charset="utf-8" '
+    )
+    assert gmail_request_adapter.validate_request(
+        gmail_bodyless_content_type,
+        gmail_request_route,
+        {"user": "me"},
+    ).allowed
+    for denied_request, expected_error in (
+        (
+            flow(
+                "GET",
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages?unknown=1",
+            ),
+            "request_query_key_not_allowed",
+        ),
+        (
+            flow(
+                "GET",
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                {"forbidden": True},
+            ),
+            "request_body_not_allowed",
+        ),
+    ):
+        assert_denied(
+            gmail_request_adapter.validate_request(
+                denied_request,
+                gmail_request_route,
+                {"user": "me"},
+            ),
+            expected_error,
+        )
+    gmail_unknown_header = flow(
+        "GET",
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+    )
+    gmail_unknown_header.request.headers["x-agent-widening"] = "1"
+    assert_denied(
+        gmail_request_adapter.validate_request(
+            gmail_unknown_header,
+            gmail_request_route,
+            {"user": "me"},
+        ),
+        "request_header_not_allowed",
+    )
+    gmail_duplicate_content_type = flow(
+        "GET",
+        "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+    )
+    gmail_duplicate_content_type.request.headers = {
+        "content-type": "application/json",
+        "Content-Type": "application/json",
+    }
+    assert_denied(
+        gmail_request_adapter.validate_request(
+            gmail_duplicate_content_type,
+            gmail_request_route,
+            {"user": "me"},
+        ),
+        "request_content_type_ambiguous",
+    )
+
     x_route = route(example_snapshot, "example.x.search.seven_days")
     x_request = flow("GET", "https://api.x.com/2/tweets/search/recent?query=serverware&tweet.fields=author_id")
     x_adapter = get_adapter(x_route.adapter_type)
+    x_bodyless_content_type = flow(
+        "GET",
+        "https://api.x.com/2/tweets/search/recent?query=serverware",
+    )
+    x_bodyless_content_type.request.headers["content-type"] = "application/json"
+    assert x_adapter.validate_request(x_bodyless_content_type, x_route, {}).allowed
+    x_recent_unknown_header = flow(
+        "GET",
+        "https://api.x.com/2/tweets/search/recent?query=serverware",
+    )
+    x_recent_unknown_header.request.headers["x-agent-widening"] = "1"
+    assert_denied(
+        x_adapter.validate_request(x_recent_unknown_header, x_route, {}),
+        "request_header_not_allowed",
+    )
+    assert_denied(
+        x_adapter.validate_request(
+            flow(
+                "GET",
+                "https://api.x.com/2/tweets/search/recent?query=serverware&unknown=1",
+            ),
+            x_route,
+            {},
+        ),
+        "request_query_key_not_allowed",
+    )
+    assert_denied(
+        x_adapter.validate_request(
+            flow(
+                "GET",
+                "https://api.x.com/2/tweets/search/recent?query=serverware",
+                {"forbidden": True},
+            ),
+            x_route,
+            {},
+        ),
+        "request_body_not_allowed",
+    )
     assert x_adapter.rewrite_request(x_request, x_route, {}).allowed
     assert set(x_request.request.query["tweet.fields"].split(",")) == {"author_id", "created_at"}
     for historical_path in ("/2/tweets/search/all", "/2/tweets/counts/all"):
@@ -3760,6 +4179,21 @@ def main() -> None:
 
     full_x_route = route(example_snapshot, "example.x.full_bounded_read")
     full_x_adapter = get_adapter(full_x_route.adapter_type)
+    full_x_bodyless_content_type = flow("GET", "https://api.x.com/2/users/me")
+    full_x_bodyless_content_type.request.headers["content-type"] = "application/json"
+    assert full_x_adapter.validate_request(
+        full_x_bodyless_content_type,
+        full_x_route,
+        {},
+    ).allowed
+    assert_denied(
+        full_x_adapter.validate_request(
+            flow("GET", "https://api.x.com/2/users/me?unknown=1"),
+            full_x_route,
+            {},
+        ),
+        "request_query_key_not_allowed",
+    )
     expected_x_reads = {
         "https://api.x.com/2/tweets/123": "tweets.read",
         "https://api.x.com/2/tweets/analytics": "analytics.read",
@@ -3769,7 +4203,7 @@ def main() -> None:
         "https://api.x.com/2/users/123/bookmarks/folders/456": "bookmarks.read",
         "https://api.x.com/2/users/123/owned_lists": "lists.read",
         "https://api.x.com/2/dm_events": "directMessages.read",
-        "https://api.x.com/2/media/upload?id=123": "media.read",
+        "https://api.x.com/2/media/upload?media_id=123": "media.read",
         "https://api.x.com/2/spaces/search?query=security": "spaces.read",
     }
     for url, operation in expected_x_reads.items():
@@ -3786,11 +4220,69 @@ def main() -> None:
     )
     assert_denied(
         full_x_adapter.validate_request(
-            flow("POST", "https://api.x.com/2/tweets", {"text": "blocked on read route"}),
+            flow("POST", "https://api.x.com/2/tweets"),
             full_x_route,
             {},
         ),
         "x_write_blocked",
+    )
+
+    x_write_route = route(example_snapshot, "example.x.tweet.one_per_day")
+    x_write_adapter = get_adapter(x_write_route.adapter_type)
+    assert x_write_adapter.validate_request(
+        flow("POST", "https://api.x.com/2/tweets", {"text": "bounded post"}),
+        x_write_route,
+        {},
+    ).allowed
+    x_write_unknown_header = flow(
+        "POST",
+        "https://api.x.com/2/tweets",
+        {"text": "bounded post"},
+    )
+    x_write_unknown_header.request.headers["x-agent-widening"] = "1"
+    assert_denied(
+        x_write_adapter.validate_request(x_write_unknown_header, x_write_route, {}),
+        "request_header_not_allowed",
+    )
+    assert_denied(
+        x_write_adapter.validate_request(
+            flow(
+                "POST",
+                "https://api.x.com/2/tweets?unknown=1",
+                {"text": "bounded post"},
+            ),
+            x_write_route,
+            {},
+        ),
+        "request_query_key_not_allowed",
+    )
+    for label, headers, expected_error in (
+        ("missing", {}, "request_content_type_required"),
+        ("wrong", {"content-type": "text/plain"}, "request_content_type_denied"),
+        (
+            "duplicate",
+            {
+                "content-type": "application/json",
+                "Content-Type": "application/json",
+            },
+            "request_content_type_ambiguous",
+        ),
+    ):
+        denied_x_write = flow(
+            "POST",
+            "https://api.x.com/2/tweets",
+            {"text": "bounded post"},
+        )
+        denied_x_write.request.headers = headers
+        decision = x_write_adapter.validate_request(denied_x_write, x_write_route, {})
+        assert_denied(decision, expected_error)
+        assert decision.status_code == 415, label
+    oversized_x_write = flow("POST", "https://api.x.com/2/tweets")
+    oversized_x_write.request.headers["content-type"] = "application/json"
+    oversized_x_write.request.raw_content = b"x" * 65537
+    assert_denied(
+        x_write_adapter.validate_request(oversized_x_write, x_write_route, {}),
+        "request_body_too_large",
     )
 
     npm_route = route(example_snapshot, "example.npm.publish.yubikey_jit")
@@ -3830,6 +4322,59 @@ def main() -> None:
     assert npm_fields["tarballIntegrity"].startswith("sha512-"), npm_fields
     assert npm_adapter.validate_request(npm_request, npm_route, {"package": "@scope%2fexample"}).allowed
 
+    npm_unknown_header = copy.deepcopy(npm_request)
+    npm_unknown_header.request.headers["x-agent-widening"] = "1"
+    assert_denied(
+        npm_adapter.validate_request(
+            npm_unknown_header,
+            npm_route,
+            {"package": "@scope%2fexample"},
+        ),
+        "request_header_not_allowed",
+    )
+    npm_unknown_query = copy.deepcopy(npm_request)
+    npm_unknown_query.request.pretty_url += "?unknown=1"
+    assert_denied(
+        npm_adapter.validate_request(
+            npm_unknown_query,
+            npm_route,
+            {"package": "@scope%2fexample"},
+        ),
+        "request_query_key_not_allowed",
+    )
+    for label, headers, expected_error in (
+        ("missing", {}, "request_content_type_required"),
+        ("wrong", {"content-type": "text/plain"}, "request_content_type_denied"),
+        (
+            "duplicate",
+            {
+                "content-type": "application/json",
+                "Content-Type": "application/json",
+            },
+            "request_content_type_ambiguous",
+        ),
+    ):
+        denied_npm = copy.deepcopy(npm_request)
+        denied_npm.request.headers = headers
+        decision = npm_adapter.validate_request(
+            denied_npm,
+            npm_route,
+            {"package": "@scope%2fexample"},
+        )
+        assert_denied(decision, expected_error)
+        assert decision.status_code == 415, label
+    oversized_npm = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
+    oversized_npm.request.headers["content-type"] = "application/json"
+    oversized_npm.request.raw_content = b"x" * (16777216 + 1)
+    assert_denied(
+        npm_adapter.validate_request(
+            oversized_npm,
+            npm_route,
+            {"package": "@scope%2fexample"},
+        ),
+        "request_body_too_large",
+    )
+
     valid_npm_json = npm_request.request.raw_content.decode("utf-8")
     invalid_npm_publish_bodies = (
         valid_npm_json.replace(
@@ -3842,6 +4387,7 @@ def main() -> None:
     )
     for invalid_body in invalid_npm_publish_bodies:
         invalid_publish = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
+        invalid_publish.request.headers["content-type"] = "application/json"
         invalid_publish.request.raw_content = invalid_body
         assert_denied(
             npm_adapter.validate_request(
@@ -3863,6 +4409,7 @@ def main() -> None:
             raise AssertionError("npm JIT operation fields accepted an invalid publish body")
 
     invalid_metadata = flow("POST", "https://registry.npmjs.org/-/npm/v1/user")
+    invalid_metadata.request.headers["content-type"] = "application/json"
     invalid_metadata.request.raw_content = b'{"email":"owner@example.test","email":"attacker@example.test"}'
     assert_denied(
         npm_adapter.validate_request(invalid_metadata, npm_route, {}),
@@ -3870,6 +4417,7 @@ def main() -> None:
     )
 
     invalid_revision = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
+    invalid_revision.request.headers["content-type"] = "application/json"
     invalid_revision.request.raw_content = b'{"_rev":"1-safe","_rev":"2-attacker"}'
     credential_accesses: list[str] = []
     upstream_contacts: list[str] = []
@@ -3910,13 +4458,37 @@ def main() -> None:
         try:
             blocked_npm = flow("PUT", "https://registry.npmjs.org/@scope%2fexample")
             blocked_npm.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_npm.request.headers["content-type"] = "application/json"
             blocked_npm.request.raw_content = invalid_npm_publish_bodies[0]
-            ServerwareAddon().request(blocked_npm)
-            assert credential_reads == [], credential_reads
-            assert authorization_calls == [], authorization_calls
-            assert blocked_npm.metadata.get("serverware_blocked_response") is True
-            assert blocked_npm.response.status_code == 403
-            assert json.loads(blocked_npm.response.raw_content)["error"] == "npm_publish_invalid_json"
+            blocked_gmail = flow(
+                "GET",
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages?unknown=1",
+            )
+            blocked_gmail.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_x_read = flow(
+                "GET",
+                "https://api.x.com/2/tweets/search/recent?query=serverware&unknown=1",
+            )
+            blocked_x_read.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_x_write = flow(
+                "POST",
+                "https://api.x.com/2/tweets",
+                {"text": "must not reserve"},
+            )
+            blocked_x_write.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_x_write.request.headers["content-type"] = "text/plain"
+            for blocked_request, expected_error, expected_status in (
+                (blocked_gmail, "request_query_key_not_allowed", 403),
+                (blocked_x_read, "request_query_key_not_allowed", 403),
+                (blocked_x_write, "request_content_type_denied", 415),
+                (blocked_npm, "npm_publish_invalid_json", 403),
+            ):
+                ServerwareAddon().request(blocked_request)
+                assert credential_reads == [], credential_reads
+                assert authorization_calls == [], authorization_calls
+                assert blocked_request.metadata.get("serverware_blocked_response") is True
+                assert blocked_request.response.status_code == expected_status
+                assert json.loads(blocked_request.response.raw_content)["error"] == expected_error
         finally:
             runtime.dispatch_release_authorization = original_dispatch
             runtime.reserve_release_authorization = original_reserve
@@ -4637,6 +5209,30 @@ def main() -> None:
     assert evaluate_response_constraints(gmail_detail, gmail_route).allowed
 
     gmail_adapter = get_adapter(gmail_route.adapter_type)
+    gmail_wrong_media_type = flow(
+        "GET",
+        "https://demo-upstream:8443/gmail/v1/users/me/messages/recent",
+        response={"id": "recent"},
+    )
+    gmail_wrong_media_type.response.headers["content-type"] = "text/plain"
+    gmail_wrong_media_type.response.raw_content = b"not-json-and-must-not-release"
+    gmail_wrong_media_body = gmail_wrong_media_type.response.raw_content
+    for decision in (
+        gmail_adapter.prepare_response(
+            gmail_wrong_media_type,
+            gmail_route,
+            {"user": "me", "message_id": "recent"},
+        ),
+        gmail_adapter.validate_response(
+            gmail_wrong_media_type,
+            gmail_route,
+            {"user": "me", "message_id": "recent"},
+        ),
+    ):
+        assert_denied(decision, "response_json_content_type_denied")
+        assert decision.status_code == 502
+    assert gmail_wrong_media_type.response.raw_content == gmail_wrong_media_body
+
     fractional_internal_date = flow(
         "GET",
         "https://demo-upstream:8443/gmail/v1/users/me/messages/fractional",
@@ -4645,6 +5241,9 @@ def main() -> None:
             "internalDate": float(epoch_ms_days_ago(1)) + 0.5,
         },
     )
+    fractional_internal_date.response.headers[
+        "content-type"
+    ] = "application/json; charset=utf-8"
     assert_denied(
         gmail_adapter.validate_response(
             fractional_internal_date,
@@ -4783,6 +5382,161 @@ def main() -> None:
     npm_error.response.status_code = 403
     npm_adapter = get_adapter(route(demo, "demo.npm.publish.jit").adapter_type)
     npm_demo_route = route(demo, "demo.npm.publish.jit")
+    npm_public_route = route(public_npm_snapshot, "demo.npm.publish.jit")
+    npm_public_params = {"package": "@scope%2fexample"}
+
+    def public_npm_receipt(
+        payload: dict,
+        *,
+        status_code: int = 200,
+    ) -> SimpleNamespace:
+        receipt = flow(
+            "PUT",
+            "https://registry.npmjs.org/npm/@scope%2fexample",
+            npm_document,
+            response=payload,
+        )
+        receipt.response.status_code = status_code
+        receipt.metadata["serverware_operation"] = {
+            "operation": "npm.publish",
+            "packageName": "@scope/example",
+            "packageVersion": "1.2.3",
+        }
+        return receipt
+
+    for status_code in (200, 201):
+        empty_public_receipt = public_npm_receipt({}, status_code=status_code)
+        assert npm_adapter.prepare_response(
+            empty_public_receipt,
+            npm_public_route,
+            npm_public_params,
+        ).allowed
+        assert npm_adapter.validate_response(
+            empty_public_receipt,
+            npm_public_route,
+            npm_public_params,
+        ).allowed
+        assert json.loads(empty_public_receipt.response.get_text()) == {}
+
+    projected_public_receipt = public_npm_receipt(
+        {
+            "ok": True,
+            "published": True,
+            "package": "other",
+            "version": "9.9.9",
+        }
+    )
+    assert npm_adapter.validate_response(
+        projected_public_receipt,
+        npm_public_route,
+        npm_public_params,
+    ).allowed
+    assert json.loads(projected_public_receipt.response.get_text()) == {
+        "ok": True,
+        "published": True,
+    }
+    assert b"other" not in projected_public_receipt.response.raw_content
+    assert b"9.9.9" not in projected_public_receipt.response.raw_content
+
+    wrong_identity_only = public_npm_receipt(
+        {"package": "other", "version": "9.9.9"}
+    )
+    assert npm_adapter.validate_response(
+        wrong_identity_only,
+        npm_public_route,
+        npm_public_params,
+    ).allowed
+    assert json.loads(wrong_identity_only.response.get_text()) == {}
+
+    denied_public_receipts = (
+        {"published": False, "package": "other", "version": "9.9.9"},
+        {"ok": False},
+        {"ok": True, "published": False},
+        {"published": "true"},
+    )
+    for payload in denied_public_receipts:
+        denied_public_receipt = public_npm_receipt(payload)
+        original_body = denied_public_receipt.response.raw_content
+        assert npm_adapter.prepare_response(
+            denied_public_receipt,
+            npm_public_route,
+            npm_public_params,
+        ).allowed
+        assert_denied(
+            npm_adapter.validate_response(
+                denied_public_receipt,
+                npm_public_route,
+                npm_public_params,
+            ),
+            "npm_public_publish_receipt_success_denied",
+        )
+        assert denied_public_receipt.response.raw_content == original_body
+
+    duplicate_boolean_receipt = public_npm_receipt({})
+    duplicate_boolean_receipt.response.raw_content = (
+        b'{"published":true,"published":false}'
+    )
+    assert_denied(
+        npm_adapter.validate_response(
+            duplicate_boolean_receipt,
+            npm_public_route,
+            npm_public_params,
+        ),
+        "npm_public_publish_receipt_invalid_json",
+    )
+
+    non_object_receipt = public_npm_receipt({})
+    non_object_receipt.response.raw_content = b"[]"
+    assert_denied(
+        npm_adapter.validate_response(
+            non_object_receipt,
+            npm_public_route,
+            npm_public_params,
+        ),
+        "npm_public_publish_receipt_object_required",
+    )
+
+    public_status_202 = public_npm_receipt({}, status_code=202)
+    for decision in (
+        npm_adapter.prepare_response(
+            public_status_202,
+            npm_public_route,
+            npm_public_params,
+        ),
+        npm_adapter.validate_response(
+            public_status_202,
+            npm_public_route,
+            npm_public_params,
+        ),
+    ):
+        assert_denied(decision, "npm_public_publish_receipt_status_denied")
+
+    for label, headers in (
+        ("missing", {}),
+        ("wrong", {"content-type": "text/plain"}),
+        (
+            "duplicate",
+            {"content-type": "application/json", "Content-Type": "application/json"},
+        ),
+    ):
+        denied_public_media = public_npm_receipt({})
+        denied_public_media.response.headers = headers
+        original_body = denied_public_media.response.raw_content
+        for decision in (
+            npm_adapter.prepare_response(
+                denied_public_media,
+                npm_public_route,
+                npm_public_params,
+            ),
+            npm_adapter.validate_response(
+                denied_public_media,
+                npm_public_route,
+                npm_public_params,
+            ),
+        ):
+            assert_denied(decision, "response_json_content_type_denied")
+        assert denied_public_media.response.raw_content == original_body, label
+
     npm_demo_request = flow(
         "PUT",
         "https://demo-upstream:8443/npm/@scope%2fexample",
@@ -4816,7 +5570,42 @@ def main() -> None:
         evaluate_response_constraints(npm_demo_wrong_version, npm_demo_route),
         "response_binding_mismatch",
     )
-    assert npm_adapter.validate_response(npm_error, npm_demo_route, {"package": "@scope%2fexample"}).allowed
+    npm_wrong_error_media_type = flow(
+        "PUT",
+        "https://demo-upstream:8443/@scope%2fexample",
+        response={"error": "must-not-release"},
+    )
+    npm_wrong_error_media_type.response.status_code = 403
+    npm_wrong_error_media_type.response.headers["content-type"] = "text/plain"
+    npm_wrong_error_media_type.response.raw_content = b"not-json-and-must-not-release"
+    npm_wrong_error_body = npm_wrong_error_media_type.response.raw_content
+    for decision in (
+        npm_adapter.prepare_response(
+            npm_wrong_error_media_type,
+            npm_demo_route,
+            {"package": "@scope%2fexample"},
+        ),
+        npm_adapter.validate_response(
+            npm_wrong_error_media_type,
+            npm_demo_route,
+            {"package": "@scope%2fexample"},
+        ),
+    ):
+        assert_denied(decision, "response_json_content_type_denied")
+        assert decision.status_code == 502
+    assert npm_wrong_error_media_type.response.raw_content == npm_wrong_error_body
+
+    npm_error.response.headers["content-type"] = "application/json; charset=utf-8"
+    assert npm_adapter.prepare_response(
+        npm_error,
+        npm_demo_route,
+        {"package": "@scope%2fexample"},
+    ).allowed
+    assert npm_adapter.validate_response(
+        npm_error,
+        npm_demo_route,
+        {"package": "@scope%2fexample"},
+    ).allowed
     assert json.loads(npm_error.response.get_text()) == {"error": "denied", "reason": "policy"}
 
     npm_invalid_error = flow(

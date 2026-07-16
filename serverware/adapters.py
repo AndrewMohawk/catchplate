@@ -15,9 +15,13 @@ from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsp
 from serverware import db, http_client, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
+    NPM_PUBLIC_REGISTRY_HOST,
+    NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT,
+    NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS,
     X_V2_RECENT_SEARCH_PATHS,
     bounded_pattern_matches,
     is_serverware_internal_header,
+    provider_request_profile,
     strict_json_loads,
 )
 
@@ -70,6 +74,13 @@ _RESPONSE_CONTENT_TYPES = {
     "csvStream": "text/csv",
 }
 _MEDIA_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
+_HTTP_TOKEN_PATTERN = r"[!#$%&'*+.^_`|~0-9A-Za-z-]+"
+_CONTENT_TYPE_RE = re.compile(
+    rf"^[ \t]*({_HTTP_TOKEN_PATTERN})/({_HTTP_TOKEN_PATTERN})"
+    rf"(?:[ \t]*;[ \t]*{_HTTP_TOKEN_PATTERN}[ \t]*=[ \t]*"
+    rf'(?:{_HTTP_TOKEN_PATTERN}|"(?:[\t !#-\[\]-~]|\\[\t -~])*")'
+    rf")*[ \t]*$"
+)
 _RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
 _OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
 _JSON_OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
@@ -131,6 +142,127 @@ class ApiAdapter:
     id = "generic.rest"
 
     def validate_credential(self, route: Any, credential: dict[str, Any] | None) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
+
+    def _validate_provider_request_profile(self, flow: Any, route: Any) -> PolicyDecision:
+        request_cfg = route.adapter_config.get("request")
+        try:
+            expected = provider_request_profile(
+                self.id,
+                str(route.adapter_config.get("mode") or ""),
+            )
+        except Exception:
+            expected = None
+        valid_lists = isinstance(request_cfg, dict) and isinstance(expected, dict)
+        if valid_lists:
+            for field_name in (
+                "allowedHeaders",
+                "allowedQueryKeys",
+                "allowedMediaTypes",
+            ):
+                values = request_cfg.get(field_name)
+                expected_values = expected.get(field_name)
+                if (
+                    not isinstance(values, list)
+                    or any(not isinstance(value, str) for value in values)
+                    or len(values) != len(set(values))
+                    or set(values) != set(expected_values or [])
+                ):
+                    valid_lists = False
+                    break
+        if (
+            not isinstance(request_cfg, dict)
+            or set(request_cfg) != set(expected or {})
+            or not valid_lists
+            or type(request_cfg.get("maxBodyBytes")) is not int
+            or request_cfg.get("maxBodyBytes") != (expected or {}).get("maxBodyBytes")
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason=f"{self.id} request profile is invalid",
+                payload={"error": "provider_request_profile_invalid", "adapter": self.id},
+            )
+
+        allowed_headers = set(request_cfg["allowedHeaders"])
+        for raw_name in getattr(flow.request, "headers", {}):
+            name = str(raw_name).strip().lower()
+            if name in _GENERIC_NON_FORWARDED_HEADERS or is_serverware_internal_header(name):
+                continue
+            if name not in allowed_headers:
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=403,
+                    reason=f"{self.id} request header is not allowed by policy: {name}",
+                    payload={"error": "request_header_not_allowed", "header": name},
+                )
+
+        allowed_query_keys = set(request_cfg["allowedQueryKeys"])
+        for key, _ in parse_qsl(
+            urlsplit(flow.request.pretty_url).query,
+            keep_blank_values=True,
+        ):
+            if key not in allowed_query_keys:
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=403,
+                    reason=f"{self.id} request query key is not allowed by policy: {key}",
+                    payload={"error": "request_query_key_not_allowed", "queryKey": key},
+                )
+
+        body = flow.request.raw_content or b""
+        max_body_bytes = request_cfg["maxBodyBytes"]
+        if body and max_body_bytes == 0:
+            return PolicyDecision(
+                allowed=False,
+                status_code=403,
+                reason=f"{self.id} request body is forbidden by policy",
+                payload={"error": "request_body_not_allowed"},
+            )
+        if len(body) > max_body_bytes:
+            return PolicyDecision(
+                allowed=False,
+                status_code=413,
+                reason=f"{self.id} request body exceeded policy limit",
+                payload={"error": "request_body_too_large", "maxBodyBytes": max_body_bytes},
+            )
+
+        content_types = self._response_header_values(flow.request.headers, "content-type")
+        if not content_types:
+            if body:
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=415,
+                    reason=f"{self.id} request Content-Type is required for a body",
+                    payload={"error": "request_content_type_required"},
+                )
+            return PolicyDecision(allowed=True)
+        if len(content_types) != 1:
+            return PolicyDecision(
+                allowed=False,
+                status_code=415,
+                reason=f"{self.id} request Content-Type must occur exactly once",
+                payload={"error": "request_content_type_ambiguous"},
+            )
+        value = content_types[0]
+        match = _CONTENT_TYPE_RE.fullmatch(value) if len(value.encode("utf-8")) <= 8192 else None
+        if match is None:
+            return PolicyDecision(
+                allowed=False,
+                status_code=415,
+                reason=f"{self.id} request Content-Type is malformed",
+                payload={"error": "request_content_type_denied"},
+            )
+        if not body:
+            return PolicyDecision(allowed=True)
+        media_type = f"{match.group(1)}/{match.group(2)}".lower()
+        if media_type not in set(request_cfg["allowedMediaTypes"]):
+            return PolicyDecision(
+                allowed=False,
+                status_code=415,
+                reason=f"{self.id} request Content-Type is not allowed by policy",
+                payload={"error": "request_content_type_denied"},
+            )
         return PolicyDecision(allowed=True)
 
     def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
@@ -410,6 +542,13 @@ class ApiAdapter:
         *,
         authorization_factory: Callable[[], tuple[str, float]] | None = None,
     ) -> PolicyDecision:
+        if not flow.response:
+            return PolicyDecision(allowed=True)
+        response_cfg, _profile_error = self._response_profile(flow, route)
+        if response_cfg is not None and response_cfg.get("mode") == "json":
+            media_type_error = self._json_response_media_type_error(flow)
+            if media_type_error is not None:
+                return media_type_error
         return PolicyDecision(allowed=True)
 
     def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
@@ -419,6 +558,10 @@ class ApiAdapter:
         if profile_error is not None:
             return profile_error
         assert response_cfg is not None
+        if response_cfg.get("mode") == "json":
+            media_type_error = self._json_response_media_type_error(flow)
+            if media_type_error is not None:
+                return media_type_error
         max_body = response_cfg.get("maxBodyBytes")
         if max_body is None:
             return PolicyDecision(
@@ -548,6 +691,43 @@ class ApiAdapter:
             status_code=502,
             reason="provider returned an invalid response status",
             payload={"error": "response_status_invalid", "upstreamStatus": status_code},
+        )
+
+    @staticmethod
+    def _response_header_values(headers: Any, name: str) -> list[str]:
+        get_all = getattr(headers, "get_all", None)
+        if callable(get_all):
+            values = get_all(name)
+            return [str(value) for value in (values or [])]
+        lower = name.lower()
+        return [
+            str(value)
+            for raw_name, value in getattr(headers, "items", lambda: [])()
+            if str(raw_name).lower() == lower
+        ]
+
+    def _json_response_media_type_error(self, flow: Any) -> PolicyDecision | None:
+        values = self._response_header_values(flow.response.headers, "content-type")
+        valid = False
+        if len(values) == 1:
+            try:
+                encoded_value = values[0].encode("utf-8")
+            except UnicodeEncodeError:
+                encoded_value = b""
+            if encoded_value and len(encoded_value) <= 8192:
+                match = _CONTENT_TYPE_RE.fullmatch(values[0])
+                valid = bool(
+                    match
+                    and f"{match.group(1)}/{match.group(2)}".lower()
+                    == "application/json"
+                )
+        if valid:
+            return None
+        return PolicyDecision(
+            allowed=False,
+            status_code=502,
+            reason="upstream JSON response Content-Type is invalid",
+            payload={"error": "response_json_content_type_denied"},
         )
 
     def _normalize_response_headers(
@@ -910,6 +1090,9 @@ class GmailV1Adapter(ApiAdapter):
         return f"({query}) {guard}"
 
     def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        profile_decision = self._validate_provider_request_profile(flow, route)
+        if not profile_decision.allowed:
+            return profile_decision
         denied_equivalents = {str(item).lower() for item in route.adapter_config.get("denyEquivalentEndpoints") or []}
         if denied_equivalents:
             path_segments = {segment.lower() for segment in (urlsplit(flow.request.pretty_url).path or "").split("/") if segment}
@@ -1201,9 +1384,21 @@ class GmailV1Adapter(ApiAdapter):
         *,
         authorization_factory: Callable[[], str] | None = None,
     ) -> PolicyDecision:
-        if not flow.response or not self._is_list(params):
+        media_type_decision = super().prepare_response(
+            flow,
+            route,
+            params,
+            authorization_factory=authorization_factory,
+        )
+        if not media_type_decision.allowed:
+            return media_type_decision
+        if not flow.response:
             return PolicyDecision(allowed=True)
-        if not 200 <= int(flow.response.status_code) < 300:
+        if 200 <= int(flow.response.status_code) < 300:
+            media_type_error = self._json_response_media_type_error(flow)
+            if media_type_error is not None:
+                return media_type_error
+        if not self._is_list(params) or not 200 <= int(flow.response.status_code) < 300:
             return PolicyDecision(allowed=True)
         try:
             config = self._metadata_fetch_config(route)
@@ -1597,6 +1792,9 @@ class GmailV1Adapter(ApiAdapter):
         if not 200 <= int(flow.response.status_code) < 300:
             return super().validate_response(flow, route, params)
         response_cfg = route.adapter_config.get("response") or {}
+        media_type_error = self._json_response_media_type_error(flow)
+        if media_type_error is not None:
+            return media_type_error
         projection_error = self._response_projection_error(
             response_cfg,
             "json",
@@ -2043,6 +2241,9 @@ class XV2Adapter(ApiAdapter):
                 reason="x.v2 write operation blocked by read-only policy",
                 payload={"error": "x_write_blocked", "mode": route.adapter_config.get("mode", "readOnly")},
             )
+        profile_decision = self._validate_provider_request_profile(flow, route)
+        if not profile_decision.allowed:
+            return profile_decision
         path = (urlsplit(flow.request.pretty_url).path or "/").rstrip("/") or "/"
         if (
             route.adapter_config.get("mode") == "recentSearchOnly"
@@ -2084,6 +2285,163 @@ class XV2Adapter(ApiAdapter):
 
 class NpmRegistryAdapter(ApiAdapter):
     id = "npm.registry"
+
+    def _is_public_registry_publish(
+        self,
+        flow: Any,
+        route: Any,
+        params: dict[str, str],
+    ) -> bool:
+        if getattr(route, "host", None) != NPM_PUBLIC_REGISTRY_HOST:
+            return False
+        operation = (flow.metadata.get("serverware_operation") or {}).get("operation")
+        if isinstance(operation, str):
+            return operation == "npm.publish"
+        try:
+            body = (
+                self._json_body(flow)
+                if flow.request.method.upper() not in {"GET", "HEAD"}
+                else None
+            )
+            return self._operation_name(flow, params, body) == "publish"
+        except (UnicodeError, ValueError, RecursionError):
+            return False
+
+    @staticmethod
+    def _public_registry_receipt_policy_error(route: Any) -> PolicyDecision | None:
+        response = route.adapter_config.get("response") or {}
+        has_public_response_constraint = any(
+            isinstance(constraint, dict)
+            and constraint.get("type") in {"responseBinding", "responseJson"}
+            and (
+                constraint.get("operations") is None
+                or "npm.publish" in constraint.get("operations", [])
+            )
+            for constraint in (getattr(route, "constraints", ()) or ())
+        )
+        if (
+            route.adapter_config.get("publishResponseContract")
+            != NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT
+            or response.get("mode") != "json"
+            or response.get("allowedFields") != list(NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS)
+            or response.get("allowedHeaders") != []
+            or has_public_response_constraint
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="public npm publish receipt policy is invalid",
+                payload={"error": "npm_public_publish_receipt_policy_invalid"},
+            )
+        return None
+
+    def _public_registry_receipt_error(
+        self,
+        flow: Any,
+        route: Any,
+        params: dict[str, str],
+        *,
+        validate_body: bool,
+    ) -> PolicyDecision | None:
+        if not self._is_public_registry_publish(flow, route, params):
+            return None
+        policy_error = self._public_registry_receipt_policy_error(route)
+        if policy_error is not None:
+            return policy_error
+        status_code = int(flow.response.status_code)
+        if 200 <= status_code < 300 and status_code not in {200, 201}:
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="public npm publish receipt status is not allowed",
+                payload={
+                    "error": "npm_public_publish_receipt_status_denied",
+                    "upstreamStatus": status_code,
+                },
+            )
+        if not validate_body or status_code not in {200, 201}:
+            return None
+        response = route.adapter_config.get("response") or {}
+        max_body_bytes = response.get("maxBodyBytes")
+        if (
+            not isinstance(max_body_bytes, int)
+            or isinstance(max_body_bytes, bool)
+            or not 1 <= max_body_bytes <= 65536
+            or len(flow.response.raw_content or b"") > max_body_bytes
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="public npm publish receipt exceeded its body limit",
+                payload={"error": "npm_public_publish_receipt_body_denied"},
+            )
+        try:
+            payload = strict_json_loads(flow.response.raw_content or b"")
+        except (UnicodeError, ValueError, RecursionError):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="public npm publish receipt is not strict JSON",
+                payload={"error": "npm_public_publish_receipt_invalid_json"},
+            )
+        if not isinstance(payload, dict):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="public npm publish receipt must be a JSON object",
+                payload={"error": "npm_public_publish_receipt_object_required"},
+            )
+        if any(field in payload and payload[field] is not True for field in NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="public npm publish receipt contains a contradictory success flag",
+                payload={"error": "npm_public_publish_receipt_success_denied"},
+            )
+        return None
+
+    def prepare_response(
+        self,
+        flow: Any,
+        route: Any,
+        params: dict[str, str],
+        *,
+        authorization_factory: Callable[[], tuple[str, float]] | None = None,
+    ) -> PolicyDecision:
+        decision = super().prepare_response(
+            flow,
+            route,
+            params,
+            authorization_factory=authorization_factory,
+        )
+        if not decision.allowed or not flow.response:
+            return decision
+        return self._public_registry_receipt_error(
+            flow,
+            route,
+            params,
+            validate_body=False,
+        ) or PolicyDecision(allowed=True)
+
+    def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        if flow.response and self._is_public_registry_publish(flow, route, params):
+            response_cfg, profile_error = self._response_profile(flow, route)
+            if profile_error is not None:
+                return profile_error
+            assert response_cfg is not None
+            if response_cfg.get("mode") == "json":
+                media_type_error = self._json_response_media_type_error(flow)
+                if media_type_error is not None:
+                    return media_type_error
+            receipt_error = self._public_registry_receipt_error(
+                flow,
+                route,
+                params,
+                validate_body=True,
+            )
+            if receipt_error is not None:
+                return receipt_error
+        return super().validate_response(flow, route, params)
 
     def _registry_path(self, flow: Any) -> str:
         path = (urlsplit(flow.request.pretty_url).path or "/").rstrip("/") or "/"
@@ -2262,6 +2620,9 @@ class NpmRegistryAdapter(ApiAdapter):
         return PolicyDecision(allowed=True)
 
     def validate_request(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        profile_decision = self._validate_provider_request_profile(flow, route)
+        if not profile_decision.allowed:
+            return profile_decision
         method = flow.request.method.upper()
         try:
             body = self._json_body(flow) if method not in {"GET", "HEAD"} else None

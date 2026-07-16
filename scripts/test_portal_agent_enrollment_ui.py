@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import copy
 import json
 import os
@@ -39,6 +40,93 @@ def javascript_function_source(
     return match.group("name"), source[match.start() : end]
 
 
+def assert_approval_review_decision_ui(ui_html: str) -> None:
+    try:
+        review_fn = ui_html.split("function renderApprovalReview()", 1)[1].split(
+            "async function approve", 1
+        )[0]
+    except IndexError as exc:
+        raise AssertionError("could not isolate renderApprovalReview function") from exc
+
+    review_action_markers = (
+        "const actionsTarget = $('approval-review-actions')",
+        "actionsTarget.hidden = review.status !== 'pending'",
+        'for="${denialNoteId}"',
+        'id="${denialNoteId}"',
+        "approvalReviewActionBlockReason(approvalItem)",
+        "() => approve('${review.id}')",
+        "() => deny('${review.id}')",
+        "review.status === 'pending'",
+        "review.decision_note",
+    )
+    missing_review_actions = [
+        marker for marker in review_action_markers if marker not in review_fn
+    ]
+    if missing_review_actions:
+        raise AssertionError(
+            "approval review decision controls are incomplete; "
+            f"missing={missing_review_actions}; renderer={review_fn[:1200]!r}"
+        )
+    if "api(`/api/approvals/" in review_fn:
+        raise AssertionError(
+            "approval review renderer must reuse approve(id)/deny(id), not issue decision API requests"
+        )
+
+    _, approve_fn = javascript_function_source(
+        ui_html, "approve", label="JIT approval decision"
+    )
+    approve_markers = (
+        "approvalReviewBlockReason(item)",
+        "state.approvalReview?.review_receipt?.id",
+        "navigator.credentials.get",
+        "await api(`/api/approvals/${id}/approve",
+        "await refresh()",
+        "await loadApprovalReview(id)",
+    )
+    missing_approve_markers = [
+        marker for marker in approve_markers if marker not in approve_fn
+    ]
+    if missing_approve_markers:
+        raise AssertionError(
+            "review approval path lost receipt, WebAuthn, or completed-review behavior; "
+            f"missing={missing_approve_markers}; approve={approve_fn[:1200]!r}"
+        )
+    if approve_fn.rfind("await loadApprovalReview(id)") < approve_fn.rfind(
+        "await refresh()"
+    ):
+        raise AssertionError(
+            "review approval path must reload the canonical completed document after refresh"
+        )
+
+    _, deny_fn = javascript_function_source(ui_html, "deny", label="JIT denial decision")
+    deny_markers = (
+        "const reviewNote = $(`approval-review-deny-note-${id}`)",
+        "(reviewNote || $(`jit-deny-note-${id}`))?.value.trim()",
+        "await api(`/api/approvals/${id}/deny`",
+        "if (reviewed) await loadApprovalReview(id)",
+    )
+    missing_deny_markers = [marker for marker in deny_markers if marker not in deny_fn]
+    if missing_deny_markers:
+        raise AssertionError(
+            "review denial path lost its local note or completed-review behavior; "
+            f"missing={missing_deny_markers}; deny={deny_fn[:1000]!r}"
+        )
+    if deny_fn.count("/api/approvals/${id}/deny") != 1:
+        raise AssertionError("review denial path must issue exactly one decision request")
+
+    for marker in (
+        "access_token",
+        "refresh_token",
+        "secretToken",
+        "top-secret-value",
+        "Bearer top-secret-value",
+    ):
+        if marker in review_fn:
+            raise AssertionError(
+                f"approval review UI must not hard-code secret-bearing examples: {marker}"
+            )
+
+
 class PortalAccessibilityParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
@@ -63,6 +151,18 @@ class PortalAccessibilityParser(HTMLParser):
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--approval-review-only",
+        action="store_true",
+        help="run only the focused static approval-review decision contract",
+    )
+    parser.add_argument(
+        "--policy-templates-only",
+        action="store_true",
+        help="run only the focused static specialized-provider template contract",
+    )
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix="serverware-portal-enrollment-") as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
         os.environ["SERVERWARE_POLICY_BUNDLE"] = str(Path(tmp) / "policy-bundle.json")
@@ -70,7 +170,12 @@ def main() -> None:
         os.environ["SERVERWARE_POLICY_SIGNING_PUBLIC_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pub.pem")
 
         from serverware.enrollment import policy_principal_summaries
-        from serverware.policy_bundle import compile_policy_bundle, demo_policy_bundle, sign_policy_bundle
+        from serverware.policy_bundle import (
+            compile_policy_bundle,
+            demo_policy_bundle,
+            provider_request_profile,
+            sign_policy_bundle,
+        )
 
         signed = sign_policy_bundle(demo_policy_bundle("cred-demo-bearer"))
         snapshot = compile_policy_bundle(signed, verify_signature=True, validate_schema=False)
@@ -220,17 +325,22 @@ def main() -> None:
 
         required_approval_review_markup = (
             'id="approval-review"',
+            'id="approval-review-actions"',
             "state.approvalReview",
             "loadApprovalReview",
             "renderApprovalReview",
             "reviewPill",
             "approvalReviewBlockReason",
+            "approvalReviewActionBlockReason",
             "approvalIdFromLocation",
             "resolvedApprovalDeepLink",
             "window.history.replaceState({}, '', `/approvals/${encodeURIComponent(id)}`)",
             "`/api/approvals/${encodeURIComponent(id)}/review`",
             "Open review first",
+            "Approval expired",
             "Policy changed; request a new approval",
+            "Review receipt unavailable or expired; refresh the review",
+            "const approvalBlockReason = approvalReviewActionBlockReason(item)",
             "risk_flags",
             "retry_semantics",
             "previous_similar_approvals",
@@ -244,6 +354,14 @@ def main() -> None:
         for marker in required_approval_review_markup:
             if marker not in ui_html:
                 raise AssertionError(f"portal approval-review UI marker missing: {marker}")
+        assert_approval_review_decision_ui(ui_html)
+        if args.approval_review_only:
+            print(
+                canonical_json(
+                    {"ok": True, "portal_approval_review_decision_ui": "pass"}
+                )
+            )
+            return
 
         parser = PortalAccessibilityParser()
         parser.feed(ui_html)
@@ -279,7 +397,8 @@ def main() -> None:
             'id="operator-session-verify"',
             'id="operator-sign-out"',
             "fetch('/api/auth/status'",
-            "fetch('/api/auth/oidc/start'",
+            "const query = new URLSearchParams({return_to: returnTo})",
+            "fetch(`/api/auth/oidc/start?${query}`",
             "window.location.assign(payload.authorizationUrl)",
             "sessionApi('/api/auth/logout')",
             "sessionApi('/api/auth/session/webauthn/options')",
@@ -508,6 +627,8 @@ def main() -> None:
 
         policy_markers = (
             'id="policy-route-form"',
+            'id="policy-template-summary"',
+            'id="setup-template-summary"',
             "const policyTemplates = {",
             "gmail-response-last-30-days",
             "x-one-post-per-day",
@@ -530,6 +651,11 @@ def main() -> None:
             "function oauthCredentialGrantedScopes(credential)",
             "function oauthCredentialProviderSubject(credential)",
             "function policyCredentialInjection(credential, activeCredential, template)",
+            "function policyConstraintLabel(constraint)",
+            "function renderPolicyEffect(targetId, template)",
+            "Unknown host, path, method, or validation result is denied",
+            "Human approval required",
+            "hardware attestation required",
             "item.metadata?.provider_account",
             "item.metadata?.provider_subject",
             'id="policy-custom-route"',
@@ -1065,6 +1191,108 @@ function credentialToJson(value){return value;}
                 "custom_json",
             }:
                 raise AssertionError(f"unexpected common PolicyBundle template set: {sorted(templates)}")
+
+            specialized_profiles = {
+                "gmail_recent": ("gmail.v1", None),
+                "x_read_recent": ("x.v2", "recentSearchOnly"),
+                "x_one_post_daily": ("x.v2", "controlledWrite"),
+                "npm_write_mfa": ("npm.registry", None),
+            }
+            for template_id, (adapter_type, mode) in specialized_profiles.items():
+                adapter = templates[template_id].get("adapter") or {}
+                config = adapter.get("config") or {}
+                if adapter.get("type") != adapter_type or config.get("mode") != mode:
+                    raise AssertionError(
+                        f"portal specialized adapter identity drifted: {template_id}: {adapter}"
+                    )
+                expected_request = provider_request_profile(adapter_type, mode)
+                actual_request = config.get("request")
+                if actual_request != expected_request:
+                    raise AssertionError(
+                        f"portal provider request profile drifted: {template_id}: "
+                        f"expected={canonical_json(expected_request)} "
+                        f"actual={canonical_json(actual_request)}"
+                    )
+
+            npm_template = templates["npm_write_mfa"]
+            if npm_template.get("match") != {
+                "scheme": "https",
+                "host": "registry.npmjs.org",
+                "port": 443,
+                "methods": ["PUT"],
+                "paths": ["/{package}"],
+            }:
+                raise AssertionError(
+                    f"public npm template is not exact publish-only: {npm_template.get('match')}"
+                )
+            npm_config = npm_template["adapter"]["config"]
+            if npm_config.get("operations") != ["publish"]:
+                raise AssertionError(
+                    f"public npm template claims non-publish operations: {npm_config.get('operations')}"
+                )
+            if (
+                npm_config.get("publishResponseContract")
+                != "npm-public-registry-receipt-v1"
+            ):
+                raise AssertionError("public npm template lost its receipt contract")
+            npm_response = npm_config.get("response") or {}
+            if {
+                key: npm_response.get(key)
+                for key in ("mode", "maxBodyBytes", "allowedFields", "allowedHeaders")
+            } != {
+                "mode": "json",
+                "maxBodyBytes": 65536,
+                "allowedFields": ["ok", "published"],
+                "allowedHeaders": [],
+            }:
+                raise AssertionError(
+                    f"public npm template release is not the bounded receipt projection: {npm_response}"
+                )
+            npm_constraints = npm_template.get("constraints") or []
+            if any(
+                item.get("type") in {"responseBinding", "responseJson"}
+                for item in npm_constraints
+            ):
+                raise AssertionError(
+                    "public npm receipt must not use compatible-registry response identity rules"
+                )
+            npm_operation_policy = next(
+                (
+                    item
+                    for item in npm_constraints
+                    if item.get("type") == "operationPolicy"
+                ),
+                None,
+            )
+            if not npm_operation_policy or npm_operation_policy.get(
+                "allowedOperations"
+            ) != ["npm.publish"]:
+                raise AssertionError(
+                    f"public npm template does not allow only npm.publish: {npm_constraints}"
+                )
+            npm_jit = npm_template.get("jit") or {}
+            npm_authn = (npm_jit.get("approvers") or {}).get("authn") or {}
+            if not (
+                npm_jit.get("required") is True
+                and npm_jit.get("mode") == "perOperation"
+                and npm_jit.get("maxUses") == 1
+                and npm_jit.get("consumeOn") == "forwardStart"
+                and npm_authn.get("webauthnRequired") is True
+                and npm_authn.get("userVerification") == "required"
+                and npm_authn.get("requireHardwareAttestation") is True
+                and set(npm_authn.get("allowedAuthenticatorClasses") or [])
+                == {"yubikey", "hardware"}
+            ):
+                raise AssertionError(
+                    f"public npm template lost one-use hardware WebAuthn JIT: {npm_jit}"
+                )
+            if args.policy_templates_only:
+                print(
+                    canonical_json(
+                        {"ok": True, "portal_provider_policy_templates": "pass"}
+                    )
+                )
+                return
             if "tweet.write" not in templates["x_one_post_daily"].get("requiredScopes", []):
                 raise AssertionError("X write template does not require the provider tweet.write scope")
             x_daily_limit = next(
@@ -1517,22 +1745,6 @@ function credentialToJson(value){return value;}
                 )
                 if not matched or matched.route.id != route_id:
                     raise AssertionError(f"PolicyBundle portal template did not match its allow dry-run: {template_id}")
-
-        try:
-            review_fn = ui_html.split("function renderApprovalReview()", 1)[1].split("async function approve", 1)[0]
-        except IndexError as exc:
-            raise AssertionError("could not isolate renderApprovalReview function") from exc
-
-        forbidden_review_literals = (
-            "access_token",
-            "refresh_token",
-            "secretToken",
-            "top-secret-value",
-            "Bearer top-secret-value",
-        )
-        for marker in forbidden_review_literals:
-            if marker in review_fn:
-                raise AssertionError(f"approval review UI must not hard-code secret-bearing examples: {marker}")
 
         forbidden_markup = ("tokenSha256", "proxy bearer token")
         for marker in forbidden_markup:

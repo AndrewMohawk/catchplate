@@ -67,7 +67,7 @@ def _configure_environment(
         "SERVERWARE_WEB_TLS_CERT_FILE": str(simulator.server_cert_path),
         "SERVERWARE_WEB_TLS_KEY_FILE": str(simulator.server_key_path),
         "SERVERWARE_ADMIN_TOKEN": ADMIN_TOKEN,
-        "SERVERWARE_ADMIN_USER": "user:browser-operator",
+        "SERVERWARE_ADMIN_USER": "user:demo",
         "SERVERWARE_ADMIN_ROLES": (
             "admin,approver,auditor,policy_author,policy_publisher,credential_owner,"
             "attestation_operator,attestation_reviewer"
@@ -268,6 +268,35 @@ def _api_json(page: Any, path: str) -> Any:
     if result["status"] != 200:
         raise AssertionError(
             f"GET {path} returned HTTP {result['status']}: {result['text'][:500]}"
+        )
+    return json.loads(result["text"])
+
+
+def _api_post_json(page: Any, path: str, payload: dict[str, Any] | None = None) -> Any:
+    result = page.evaluate(
+        """
+        async ({path, payload}) => {
+          const token = document.querySelector('#admin-token')?.value || '';
+          const response = await fetch(path, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Serverware-Admin-Token': token,
+              'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify(payload || {}),
+            credentials: 'same-origin',
+            cache: 'no-store'
+          });
+          const text = await response.text();
+          return {status: response.status, text};
+        }
+        """,
+        {"path": path, "payload": payload or {}},
+    )
+    if result["status"] != 200:
+        raise AssertionError(
+            f"POST {path} returned HTTP {result['status']}: {result['text'][:500]}"
         )
     return json.loads(result["text"])
 
@@ -477,6 +506,159 @@ def _assert_no_horizontal_overflow(page: Any, *, label: str) -> None:
         maximum <= dimensions["viewportWidth"] + 1,
         f"{label} portal overflows horizontally: {dimensions}",
     )
+
+
+def _assert_control_within_viewport(page: Any, locator: Any, *, label: str) -> None:
+    box = locator.bounding_box()
+    viewport = page.viewport_size
+    _require(box is not None and viewport is not None, f"{label} has no rendered bounds")
+    _require(
+        box["x"] >= -1
+        and box["y"] >= -1
+        and box["x"] + box["width"] <= viewport["width"] + 1,
+        f"{label} is outside the viewport: box={box}, viewport={viewport}",
+    )
+
+
+def _approval_diagnostics(page: Any, approval_id: str) -> dict[str, Any]:
+    return page.evaluate(
+        """
+        (id) => ({
+          url: window.location.href,
+          stateReview: state.approvalReview,
+          stateApproval: (state.approvals || []).find((item) => item.id === id) || null,
+          status: document.querySelector('#operator-status')?.textContent || '',
+          reviewText: document.querySelector('#approval-review')?.textContent || '',
+          actionsText: document.querySelector('#approval-review-actions')?.textContent || '',
+          actionsHidden: document.querySelector('#approval-review-actions')?.hidden,
+          activeElement: document.activeElement?.id || ''
+        })
+        """,
+        approval_id,
+    )
+
+
+def _install_dev_webauthn_shim(context: Any) -> None:
+    context.add_init_script(
+        r"""
+        (() => {
+          const toBase64Url = (value) => {
+            const bytes = new Uint8Array(value);
+            let raw = '';
+            for (const byte of bytes) raw += String.fromCharCode(byte);
+            return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+          };
+          const fromBase64Url = (value) => {
+            const padded = value + '='.repeat((4 - value.length % 4) % 4);
+            const raw = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+            return Uint8Array.from(raw, (char) => char.charCodeAt(0)).buffer;
+          };
+          if (!window.PublicKeyCredential) {
+            Object.defineProperty(window, 'PublicKeyCredential', {
+              configurable: true,
+              value: function PublicKeyCredential() {}
+            });
+          }
+          const credentials = navigator.credentials;
+          if (!credentials) return;
+          const nativeGet = typeof credentials.get === 'function'
+            ? credentials.get.bind(credentials)
+            : null;
+          Object.defineProperty(credentials, 'get', {
+            configurable: true,
+            value: async (options = {}) => {
+              if (!options.publicKey) {
+                if (nativeGet) return nativeGet(options);
+                throw new Error('Credential request did not include publicKey options');
+              }
+              const token = document.querySelector('#admin-token')?.value || '';
+              const response = await fetch('/api/dev/webauthn/assertion', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'X-Serverware-Admin-Token': token,
+                  'Authorization': `Bearer ${token}`
+                },
+                body: JSON.stringify({challenge: toBase64Url(options.publicKey.challenge)}),
+                credentials: 'same-origin',
+                cache: 'no-store'
+              });
+              const text = await response.text();
+              if (!response.ok) {
+                throw new Error(`Dev WebAuthn assertion failed with ${response.status}: ${text.slice(0, 300)}`);
+              }
+              const assertion = JSON.parse(text);
+              return {
+                id: assertion.id,
+                rawId: fromBase64Url(assertion.rawId),
+                type: assertion.type,
+                response: Object.fromEntries(
+                  Object.entries(assertion.response || {}).map(
+                    ([key, value]) => [key, fromBase64Url(value)]
+                  )
+                ),
+                getClientExtensionResults: () => ({})
+              };
+            }
+          });
+          window.__serverwareDevWebAuthnShim = true;
+        })();
+        """
+    )
+
+
+def _assert_single_approval_decision(
+    page: Any,
+    browser_observations: list[dict[str, Any]],
+    approval_id: str,
+    decision: str,
+    *,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    expected_status = "approved" if decision == "approve" else "denied"
+    endpoint = f"/api/approvals/{approval_id}/{decision}"
+    decision_requests = [
+        item
+        for item in browser_observations
+        if item.get("type") == "request"
+        and item.get("method") == "POST"
+        and endpoint in item.get("url", "")
+    ]
+    approvals = _api_json(page, "/api/approvals")
+    matches = [item for item in approvals if item.get("id") == approval_id]
+    from serverware import db
+
+    audit_events = [
+        item
+        for item in db.list_audit_events(limit=500)
+        if item.get("event_type") == f"approval.{expected_status}"
+        and (item.get("event") or {}).get("approval_request_id") == approval_id
+    ]
+    diagnostics = {
+        "decisionRequests": decision_requests,
+        "approvalRecords": matches,
+        "auditEvents": audit_events,
+        "review": _approval_diagnostics(page, approval_id),
+    }
+    _require(
+        len(decision_requests) == 1,
+        f"{decision} from review did not issue exactly one decision request: {diagnostics}",
+    )
+    _require(
+        len(matches) == 1 and matches[0].get("status") == expected_status,
+        f"{decision} from review did not persist exactly one {expected_status} status: {diagnostics}",
+    )
+    _require(
+        len(audit_events) == 1,
+        f"{decision} from review did not append exactly one audit decision: {diagnostics}",
+    )
+    if reason is not None:
+        _require(
+            matches[0].get("decision_note") == reason
+            and (audit_events[0].get("event") or {}).get("note") == reason,
+            f"review denial did not preserve its exact reason: {diagnostics}",
+        )
+    return matches[0]
 
 
 def _assert_stripe_uses_manual_credential_flow(
@@ -773,19 +955,33 @@ def _preview_stage_activate_policy(
         "validated candidate cannot be staged",
     )
     page.locator("#policy-stage-button").click()
-    page.wait_for_function(
-        """
-        () => {
-          try {
-            return JSON.parse(document.querySelector('#policy-canary-status')?.value || '{}')
-              .canary?.status === 'running';
-          } catch (_) {
-            return false;
-          }
-        }
-        """,
-        timeout=DEFAULT_TIMEOUT_MS,
-    )
+    try:
+        page.wait_for_function(
+            """
+            () => {
+              try {
+                return JSON.parse(document.querySelector('#policy-canary-status')?.value || '{}')
+                  .canary?.status === 'running';
+              } catch (_) {
+                return false;
+              }
+            }
+            """,
+            timeout=DEFAULT_TIMEOUT_MS,
+        )
+    except Exception as exc:
+        diagnostics = page.evaluate(
+            """
+            () => ({
+              status: document.querySelector('#operator-status')?.textContent || '',
+              canaryStatus: document.querySelector('#policy-canary-status')?.value || '',
+              candidateOutput: document.querySelector('#policy-candidate-output')?.value || ''
+            })
+            """
+        )
+        raise AssertionError(
+            f"{route_id} candidate staging did not complete: {diagnostics}"
+        ) from exc
     _require(
         page.locator("#policy-activate-button").is_enabled(),
         "running canary cannot be activated",
@@ -796,6 +992,11 @@ def _preview_stage_activate_policy(
         "/api/policy",
         lambda payload: payload.get("ready") is True
         and payload.get("policy_hash") != old_hash,
+    )
+    page.wait_for_function(
+        "(policyHash) => state.activePolicy?.policy_hash === policyHash",
+        arg=active_after["policy_hash"],
+        timeout=DEFAULT_TIMEOUT_MS,
     )
     route = next(
         (
@@ -903,11 +1104,24 @@ def _assert_policy_evidence(
     )
 
 
+def _settle_screenshot_focus(page: Any) -> None:
+    page.evaluate(
+        """() => {
+          const active = document.activeElement;
+          if (active instanceof HTMLElement) active.blur();
+          const skipLink = document.querySelector('.skip-link');
+          if (skipLink instanceof HTMLElement) skipLink.style.visibility = 'hidden';
+        }"""
+    )
+    page.wait_for_timeout(50)
+
+
 def _capture_screenshot(page: Any, selector: str, destination: Path) -> None:
     page.set_viewport_size({"width": 1440, "height": 1100})
     page.locator(selector).scroll_into_view_if_needed()
     page.evaluate("window.scrollBy(0, -16)")
     page.wait_for_timeout(150)
+    _settle_screenshot_focus(page)
     page.screenshot(
         path=str(destination),
         type="png",
@@ -922,6 +1136,7 @@ def _capture_mobile_screenshot(page: Any, selector: str, destination: Path) -> N
     page.locator(selector).scroll_into_view_if_needed()
     page.evaluate("window.scrollBy(0, -8)")
     page.wait_for_timeout(150)
+    _settle_screenshot_focus(page)
     page.screenshot(
         path=str(destination),
         type="png",
@@ -936,13 +1151,27 @@ def _capture_element_screenshot(page: Any, selector: str, destination: Path) -> 
     target = page.locator(selector)
     target.scroll_into_view_if_needed()
     page.wait_for_timeout(150)
+    _settle_screenshot_focus(page)
     target.screenshot(path=str(destination), type="png")
 
 
-def _create_browser_jit_approval() -> dict[str, Any]:
+def _create_browser_jit_approval(
+    *,
+    package_name: str = "@scope/browser-package",
+    package_version: str = "1.2.3",
+    digest_seed: str = "a",
+) -> dict[str, Any]:
     from serverware import db
     from serverware.policy_bundle import get_policy_snapshot
 
+    _require(
+        len(digest_seed) == 1 and digest_seed in "0123456789abcdef",
+        f"invalid browser approval digest seed: {digest_seed!r}",
+    )
+    seed_index = int(digest_seed, 16)
+    digest_characters = "0123456789abcdef"
+    operation_seed = digest_characters[(seed_index + 1) % 16]
+    body_seed = digest_characters[(seed_index + 2) % 16]
     snapshot = get_policy_snapshot()
     _require(snapshot is not None, "demo policy is unavailable for approval review")
     credential = db.get_credential("cred-demo-bearer")
@@ -950,29 +1179,29 @@ def _create_browser_jit_approval() -> dict[str, Any]:
     return db.ensure_jit_approval_request(
         route_id="demo.npm.publish.jit",
         method="PUT",
-        url="https://demo-upstream:8443/npm/@scope%2Fbrowser-package",
+        url=f"https://demo-upstream:8443/npm/{quote(package_name, safe='')}",
         principal_id="agent:demo",
         credential_id=credential["id"],
         credential_version=int(credential["credential_version"]),
         policy_hash=snapshot.hash,
-        request_digest="sha256:" + "a" * 64,
-        operation_digest="sha256:" + "b" * 64,
+        request_digest="sha256:" + digest_seed * 64,
+        operation_digest="sha256:" + operation_seed * 64,
         canonical_request={
             "principal": "agent:demo",
             "request": {
                 "method": "PUT",
-                "body_sha256": "sha256:" + "c" * 64,
+                "body_sha256": "sha256:" + body_seed * 64,
             },
             "operation": {
                 "type": "npm.publish",
-                "packageName": "@scope/browser-package",
-                "packageVersion": "1.2.3",
+                "packageName": package_name,
+                "packageVersion": package_version,
                 "tarballIntegrity": "sha512-browser-fixture",
             },
         },
         redacted_display={
-            "package": "@scope/browser-package",
-            "version": "1.2.3",
+            "package": package_name,
+            "version": package_version,
         },
         pending_ttl_seconds=300,
         grant_ttl_seconds=30,
@@ -1085,6 +1314,7 @@ def _run_browser_journey(
             timezone_id="UTC",
             reduced_motion="reduce",
         )
+        _install_dev_webauthn_shim(context)
         page = context.new_page()
         page.set_default_timeout(DEFAULT_TIMEOUT_MS)
 
@@ -1215,6 +1445,17 @@ def _run_browser_journey(
                 )
                 page.set_viewport_size({"width": 1440, "height": 1100})
 
+            dev_credential = _api_post_json(page, "/api/dev/webauthn/credential")
+            _require(
+                dev_credential.get("user_id") == "user:demo"
+                and dev_credential.get("attestation_trusted") is True,
+                f"dev authenticator registration was not trusted: {dev_credential}",
+            )
+            _require(
+                page.evaluate("window.__serverwareDevWebAuthnShim === true"),
+                "browser WebAuthn shim was not installed",
+            )
+
             approval = _create_browser_jit_approval()
             approval_url = f"{public_url}/approvals/{quote(approval['id'], safe='')}"
             approval_response = page.goto(approval_url, wait_until="domcontentloaded")
@@ -1241,7 +1482,13 @@ def _run_browser_journey(
                 timeout=DEFAULT_TIMEOUT_MS,
             )
             review_panel = page.locator("#approval-review")
+            review_context = page.locator(".approval-review-context")
+            approval_actions = page.locator("#approval-review-actions")
             _require(review_panel.is_visible(), "approval review panel is not visible")
+            _require(
+                approval_actions.is_visible(),
+                f"pending approval review controls are not visible: {_approval_diagnostics(page, approval['id'])}",
+            )
             review_text = review_panel.text_content() or ""
             for marker in (
                 approval["id"],
@@ -1255,21 +1502,152 @@ def _run_browser_journey(
                 page.evaluate("document.activeElement?.id") == "approval-review",
                 "approval deep link did not focus the canonical review document",
             )
+            approval_note = approval_actions.get_by_label("Denial note", exact=True)
+            approval_button = approval_actions.get_by_role(
+                "button", name="Approve", exact=True
+            )
+            denial_button = approval_actions.get_by_role(
+                "button", name="Deny", exact=True
+            )
+            _require(
+                approval_note.get_attribute("maxlength") == "500"
+                and approval_note.get_attribute("autocomplete") == "off",
+                "review denial note lost its bounded keyboard-accessible field",
+            )
+            _require(
+                approval_button.is_enabled() and denial_button.is_enabled(),
+                f"pending reviewed approval controls are unexpectedly blocked: {_approval_diagnostics(page, approval['id'])}",
+            )
             _assert_no_horizontal_overflow(page, label="desktop approval review")
             if screenshots_dir is not None:
-                _capture_screenshot(
+                _capture_element_screenshot(
                     page,
-                    "#approval-review",
+                    ".approval-review-context",
                     screenshots_dir / "operator-portal-approval.png",
                 )
-                page.set_viewport_size({"width": 390, "height": 844})
-                review_panel.scroll_into_view_if_needed()
-                page.wait_for_timeout(150)
-                page.locator("#approval-review").screenshot(
+
+            page.set_viewport_size({"width": 390, "height": 844})
+            approval_actions.scroll_into_view_if_needed()
+            page.wait_for_timeout(150)
+            _assert_no_horizontal_overflow(page, label="mobile pending approval review")
+            for locator, label in (
+                (approval_note, "mobile review denial note"),
+                (approval_button, "mobile review approve button"),
+                (denial_button, "mobile review deny button"),
+            ):
+                _assert_control_within_viewport(page, locator, label=label)
+            if screenshots_dir is not None:
+                _settle_screenshot_focus(page)
+                review_context.screenshot(
                     path=str(screenshots_dir / "operator-portal-approval-mobile.png"),
                     type="png",
                 )
-                page.set_viewport_size({"width": 1440, "height": 1100})
+
+            page.set_viewport_size({"width": 1440, "height": 1100})
+            approval_actions.scroll_into_view_if_needed()
+            try:
+                approval_button.click()
+                page.wait_for_function(
+                    """
+                    (id) => state.approvalReview?.id === id
+                      && state.approvalReview?.status === 'approved'
+                      && document.querySelector('#approval-review-actions')?.hidden === true
+                    """,
+                    arg=approval["id"],
+                    timeout=DEFAULT_TIMEOUT_MS,
+                )
+            except Exception as exc:
+                raise AssertionError(
+                    "approval from canonical review did not complete: "
+                    f"{_approval_diagnostics(page, approval['id'])}"
+                ) from exc
+            approved_record = _assert_single_approval_decision(
+                page, browser_observations, approval["id"], "approve"
+            )
+            _require(
+                "approved" in (review_panel.text_content() or "").lower(),
+                f"completed approval review omitted approved status: {_approval_diagnostics(page, approval['id'])}",
+            )
+            _assert_no_horizontal_overflow(page, label="desktop completed approval review")
+
+            denied_approval = _create_browser_jit_approval(
+                package_name="@scope/browser-denied",
+                package_version="9.9.9",
+                digest_seed="d",
+            )
+            denied_url = (
+                f"{public_url}/approvals/{quote(denied_approval['id'], safe='')}"
+            )
+            denied_response = page.goto(denied_url, wait_until="domcontentloaded")
+            _require(
+                denied_response is not None and denied_response.status == 200,
+                "denial approval deep link did not return the operator portal",
+            )
+            page.locator("#admin-token").fill(ADMIN_TOKEN)
+            page.locator("#admin-token").dispatch_event("change")
+            _wait_for_portal(page, public_url, expected_url=denied_url)
+            try:
+                page.wait_for_function(
+                    """
+                    (id) => state.approvalReview?.id === id
+                      && state.approvalReview?.status === 'pending'
+                      && document.querySelector('#approval-review-actions')?.hidden === false
+                    """,
+                    arg=denied_approval["id"],
+                    timeout=DEFAULT_TIMEOUT_MS,
+                )
+            except Exception as exc:
+                raise AssertionError(
+                    "denial review did not become actionable: "
+                    f"{_approval_diagnostics(page, denied_approval['id'])}"
+                ) from exc
+            page.set_viewport_size({"width": 390, "height": 844})
+            denial_actions = page.locator("#approval-review-actions")
+            denial_note = denial_actions.get_by_label("Denial note", exact=True)
+            denial_submit = denial_actions.get_by_role(
+                "button", name="Deny", exact=True
+            )
+            denial_reason = "Package provenance does not match the reviewed release."
+            denial_note.fill(denial_reason)
+            denial_actions.scroll_into_view_if_needed()
+            page.wait_for_timeout(150)
+            _assert_no_horizontal_overflow(page, label="mobile pending denial review")
+            _assert_control_within_viewport(
+                page, denial_note, label="mobile review denial note with reason"
+            )
+            _assert_control_within_viewport(
+                page, denial_submit, label="mobile review deny button"
+            )
+            try:
+                denial_submit.click()
+                page.wait_for_function(
+                    """
+                    ({id, reason}) => state.approvalReview?.id === id
+                      && state.approvalReview?.status === 'denied'
+                      && state.approvalReview?.decision_note === reason
+                      && document.querySelector('#approval-review-actions')?.hidden === true
+                    """,
+                    arg={"id": denied_approval["id"], "reason": denial_reason},
+                    timeout=DEFAULT_TIMEOUT_MS,
+                )
+            except Exception as exc:
+                raise AssertionError(
+                    "denial from canonical review did not complete: "
+                    f"{_approval_diagnostics(page, denied_approval['id'])}"
+                ) from exc
+            denied_record = _assert_single_approval_decision(
+                page,
+                browser_observations,
+                denied_approval["id"],
+                "deny",
+                reason=denial_reason,
+            )
+            _require(
+                denial_reason in (page.locator("#approval-review").text_content() or ""),
+                f"completed denial review omitted its reason: {_approval_diagnostics(page, denied_approval['id'])}",
+            )
+            _assert_no_horizontal_overflow(page, label="mobile completed denial review")
+            page.set_viewport_size({"width": 1440, "height": 1100})
 
             page.goto(public_url + "/", wait_until="domcontentloaded")
             page.locator("#admin-token").fill(ADMIN_TOKEN)
@@ -1277,6 +1655,18 @@ def _run_browser_journey(
             _wait_for_portal(page, public_url)
 
             page.locator("#setup-template").select_option("gmail_recent")
+            page.wait_for_function(
+                """
+                () => {
+                  const text = document.querySelector('#setup-template-summary')?.textContent || '';
+                  return text.includes('Gmail messages from last 30 days')
+                    && text.includes('gmail.googleapis.com')
+                    && text.includes('Response age: at most 30 days')
+                    && text.includes('Unknown host, path, method, or validation result is denied');
+                }
+                """,
+                timeout=DEFAULT_TIMEOUT_MS,
+            )
             page.locator("#setup-principal").select_option("agent:demo")
             page.locator("#setup-route-id").fill("browser.gmail.last-30-days")
             page.locator("#setup-connect-button").click()
@@ -1363,6 +1753,15 @@ def _run_browser_journey(
                 route_id="browser.x.post.one-per-day",
                 credential_id=x_credential["id"],
             )
+            policy_summary = page.locator("#policy-template-summary").inner_text()
+            for marker in (
+                "X one text post per UTC calendar day",
+                "POST https://api.x.com/2/tweets",
+                "Quota: 1 per UTC calendar day",
+                "Request body:",
+                "Unknown host, path, method, or validation result is denied",
+            ):
+                _require(marker in policy_summary, f"policy effect summary omitted {marker!r}")
             _assert_policy_evidence(
                 final_policy,
                 google_credential["id"],
@@ -1424,6 +1823,17 @@ def _run_browser_journey(
                 "credentials": {
                     "google": google_credential["id"],
                     "x": x_credential["id"],
+                },
+                "approvalDecisions": {
+                    "approved": {
+                        "id": approved_record["id"],
+                        "status": approved_record["status"],
+                    },
+                    "denied": {
+                        "id": denied_record["id"],
+                        "status": denied_record["status"],
+                        "reason": denied_record["decision_note"],
+                    },
                 },
                 "policyHash": final_policy_api["policy_hash"],
                 "routes": [

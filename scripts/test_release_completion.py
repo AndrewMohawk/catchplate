@@ -1761,7 +1761,7 @@ def control_plane_authorization_receipt(
         "request": {
             "method": "POST",
             "path": verify_release_completion.CONTROL_PLANE_DISPATCH_PATH,
-            "query": "",
+            "query_sha256": sha256_prefixed_bytes(b""),
         },
         "status_code": 200,
         "body_sha256": response_body_digest,
@@ -4663,6 +4663,7 @@ def test_proxy_response_proof_requirements(
             + detail(missing_response_signing_trust)
         )
 
+    valid_document = proxy_response_proof(provenance_digest)
     valid_receipt = clone_document(
         valid_document["server_statement"]["control_plane_authorization_receipt"]
     )
@@ -4884,6 +4885,8 @@ def test_proxy_response_proof_requirements(
             f"a signed response issued exactly at {body_field}",
         )
 
+    valid_document = proxy_response_proof(provenance_digest)
+
     wrong_version = clone_document(valid_document)
     wrong_version["apiVersion"] = "serverware.proxyResponseProof/v2"
     expect_proxy_proof_failure(
@@ -4966,6 +4969,8 @@ def test_proxy_response_proof_requirements(
         "server statement fields do not match the contract",
         "a self-reported field smuggled into the server statement",
     )
+
+    valid_document = proxy_response_proof(provenance_digest)
 
     missing_server_signature = clone_document(valid_document)
     missing_server_signature["server_signature"] = {}
@@ -5103,6 +5108,10 @@ def test_proxy_response_proof_requirements(
     stale_statement["server_statement"]["issued_at_unix"] = int(time.time()) - 600
     resign_proxy_response_proof(stale_statement)
     expect_proxy_proof_failure(tmp, stale_statement, "server statement is stale", "a stale server statement")
+
+    # This suite runs the full verifier for every case. Refresh the valid base
+    # between groups so unrelated negative cases do not age past the 300s gate.
+    valid_document = proxy_response_proof(provenance_digest)
 
     unsuccessful = clone_document(valid_document)
     unsuccessful["external_capture"]["response"]["status"] = 503
@@ -5301,6 +5310,8 @@ def test_proxy_response_proof_requirements(
         "a credential-backed proof without a positive credential version",
     )
 
+    valid_document = proxy_response_proof(provenance_digest)
+
     cross_wired_upstream = clone_document(valid_document)
     cross_wired_server_response = cross_wired_upstream["server_statement"][
         "upstream_response"
@@ -5392,6 +5403,8 @@ def test_proxy_response_proof_requirements(
         "external capture tls_channel_binding does not match server statement",
         "a TLS channel mismatch between capture and statement",
     )
+
+    valid_document = proxy_response_proof(provenance_digest)
 
     missing_quote = clone_document(valid_document)
     missing_quote["vendor_tee"]["quote"] = None
@@ -6988,6 +7001,9 @@ def main() -> None:
         else:
             raise AssertionError("final completion accepted reuse of the same expected challenge")
 
+        # Earlier direct hardware-verifier checks are intentionally extensive.
+        # Start the subprocess-backed negative group with fresh signed evidence.
+        valid_hardware_assurance = hardware_assurance_document(nitro, tmp)
         arbitrary_source_binding = clone_document(valid_hardware_assurance)
         forged_manifest = arbitrary_source_binding["statement"]["eif"]["build_manifest"]
         forged_manifest["release_identity"]["source_tree_digest"] = digest("0")

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import inspect
 import json
 import os
 import sys
@@ -229,6 +230,70 @@ def main() -> None:
 
         db.init_db()
 
+        setup_target = "/?setup=123e4567-e89b-42d3-a456-426614174000"
+        valid_return_targets = {
+            "/": "/",
+            "/approvals": "/approvals",
+            "/approvals/approval.release_2026-07-16:primary": "/approvals/approval.release_2026-07-16:primary",
+            "/approvals/" + "a" * 256: "/approvals/" + "a" * 256,
+            setup_target: setup_target,
+        }
+        for candidate, expected in valid_return_targets.items():
+            actual = app_module._operator_oidc_return_target(candidate)
+            if actual != expected:
+                raise AssertionError(
+                    f"valid OIDC return target was not preserved: {candidate!r} -> {actual!r}"
+                )
+        invalid_return_targets = [
+            None,
+            "",
+            "approvals/id",
+            " https://attacker.invalid/approvals/id",
+            "https://attacker.invalid/approvals/id",
+            "http://serverware.test/approvals/id",
+            "//attacker.invalid/approvals/id",
+            "/\\attacker.invalid/approvals/id",
+            "\\\\attacker.invalid\\approvals\\id",
+            "/approvals/id#https://attacker.invalid",
+            "/approvals/id\x00suffix",
+            "/approvals/id\r\nLocation: https://attacker.invalid",
+            "/%2f%2fattacker.invalid/approvals/id",
+            "/%5c%5cattacker.invalid/approvals/id",
+            "/approvals/%2e%2e/%2e%2e",
+            "/api/auth/status",
+            "/approvals/",
+            "/approvals/id?next=https://attacker.invalid",
+            "/?setup=123e4567-e89b-42d3-a456-426614174000&next=/approvals/id",
+            "/?setup=123e4567-e89b-42d3-a456-426614174000&setup=123e4567-e89b-42d3-a456-426614174000",
+            "/?setup=123e4567-e89b-42d3-a456-426614174000#fragment",
+            "/?setup=123E4567-E89B-42D3-A456-426614174000",
+            "/?unsupported=value",
+            "/?",
+            "/approvals/" + "a" * 257,
+            "/" + "a" * app_module._OIDC_RETURN_TARGET_MAX_BYTES,
+        ]
+        for candidate in invalid_return_targets:
+            actual = app_module._operator_oidc_return_target(candidate)
+            if actual != "/":
+                raise AssertionError(
+                    f"unsafe OIDC return target was accepted: {candidate!r} -> {actual!r}"
+                )
+        callback_parameters = inspect.signature(
+            app_module.operator_oidc_callback
+        ).parameters
+        if "return_to" in callback_parameters or "return_target" in callback_parameters:
+            raise AssertionError(
+                "OIDC callback accepts a caller-controlled return target"
+            )
+        if (
+            "new URLSearchParams({return_to: returnTo})" not in app_module.UI_HTML
+            or "`${window.location.pathname}${window.location.search}`"
+            not in app_module.UI_HTML
+        ):
+            raise AssertionError(
+                "OIDC browser login does not preserve the current portal deep link"
+            )
+
         token = sign_jwt(private_key, kid=kid, issuer=issuer, audience=audience, roles=["auditor", "policy_author"])
         identity = auth.require_admin(FakeRequest(token), x_serverware_admin_token=None)
         if identity.user_id != "oidc:andrew" or identity.auth_method != "oidc-bearer":
@@ -406,6 +471,193 @@ def main() -> None:
             raise AssertionError(f"browser OIDC token exchange omitted PKCE: {exchange_body}")
         if not str(token_exchange_requests[0].headers.get("Authorization") or "").startswith("Basic "):
             raise AssertionError("browser OIDC token exchange did not authenticate the client")
+
+        def complete_portal_login(
+            *,
+            return_to: str,
+            expected_target: str,
+            code: str,
+            client_host: str,
+        ) -> tuple[dict[str, str], str]:
+            start_response = Response()
+            start_payload = app_module.operator_oidc_start(
+                start_response,
+                FakeRequest(
+                    path="/api/auth/oidc/start",
+                    client_host=client_host,
+                ),
+                return_to=return_to,
+            )
+            authorization_url = str(start_payload["authorizationUrl"])
+            authorization_query = dict(
+                urllib.parse.parse_qsl(urllib.parse.urlsplit(authorization_url).query)
+            )
+            state_hash = (
+                "sha256:"
+                + hashlib.sha256(
+                    authorization_query["state"].encode("ascii")
+                ).hexdigest()
+            )
+            flow_cookie = SimpleCookie()
+            flow_cookie.load(start_response.headers["set-cookie"])
+            browser_nonce = flow_cookie["serverware_oidc_flow"].value
+            if expected_target != "/" and (
+                expected_target in authorization_url
+                or expected_target in json.dumps(start_payload, sort_keys=True)
+                or expected_target in browser_nonce
+            ):
+                raise AssertionError(
+                    "OIDC return target leaked into browser/provider state"
+                )
+
+            start_records = db.search_audit_events(
+                event_type="control_plane.oidc_login.started",
+                q=state_hash,
+                limit=2,
+                scan_limit=5000,
+            )["items"]
+            if (
+                len(start_records) != 1
+                or start_records[0]["event"].get("return_target") != expected_target
+            ):
+                raise AssertionError(
+                    f"OIDC return target was not bound to server-side state: {start_records}"
+                )
+
+            id_token = sign_jwt(
+                private_key,
+                kid=kid,
+                issuer=issuer,
+                audience=audience,
+                roles=["auditor", "policy_author"],
+                nonce=authorization_query["nonce"],
+            )
+            exchanges: list[Any] = []
+
+            def fake_portal_token_exchange(request, **kwargs):
+                exchanges.append(request)
+                return type(
+                    "TokenResponse",
+                    (),
+                    {
+                        "status": 200,
+                        "headers": {},
+                        "body": json.dumps({"id_token": id_token}).encode("utf-8"),
+                    },
+                )()
+
+            with patch.object(
+                operator_oidc,
+                "request_bytes",
+                side_effect=fake_portal_token_exchange,
+            ):
+                redirect = app_module.operator_oidc_callback(
+                    FakeRequest(
+                        path="/api/auth/oidc/callback",
+                        cookies={"serverware_oidc_flow": browser_nonce},
+                    ),
+                    state=authorization_query["state"],
+                    code=code,
+                )
+            if (
+                redirect.status_code != 303
+                or redirect.headers.get("location") != expected_target
+            ):
+                raise AssertionError(
+                    f"OIDC callback restored the wrong target: {redirect.status_code} {redirect.headers.get('location')}"
+                )
+            if len(exchanges) != 1:
+                raise AssertionError(
+                    "portal OIDC callback did not perform one token exchange"
+                )
+            return authorization_query, browser_nonce
+
+        approval_query, approval_browser_nonce = complete_portal_login(
+            return_to="/approvals/approval.release_2026-07-16:primary",
+            expected_target="/approvals/approval.release_2026-07-16:primary",
+            code="approval-return-authorization-code",
+            client_host="198.51.100.50",
+        )
+        try:
+            app_module.operator_oidc_callback(
+                FakeRequest(
+                    path="/api/auth/oidc/callback",
+                    cookies={"serverware_oidc_flow": approval_browser_nonce},
+                ),
+                state=approval_query["state"],
+                code="approval-return-replay-code",
+            )
+        except HTTPException as exc:
+            if exc.status_code != 401 or "already consumed" not in str(exc.detail):
+                raise AssertionError(
+                    f"portal OIDC return state replay failed incorrectly: {exc}"
+                ) from exc
+        else:
+            raise AssertionError("portal OIDC return state was reusable")
+
+        complete_portal_login(
+            return_to=setup_target,
+            expected_target=setup_target,
+            code="setup-return-authorization-code",
+            client_host="198.51.100.51",
+        )
+        complete_portal_login(
+            return_to="https://attacker.invalid/approvals/stolen",
+            expected_target="/",
+            code="unsafe-return-authorization-code",
+            client_host="198.51.100.52",
+        )
+
+        expired_response = Response()
+        expired_start = app_module.operator_oidc_start(
+            expired_response,
+            FakeRequest(
+                path="/api/auth/oidc/start",
+                client_host="198.51.100.53",
+            ),
+            return_to="/approvals/expired-state",
+        )
+        expired_query = dict(
+            urllib.parse.parse_qsl(
+                urllib.parse.urlsplit(expired_start["authorizationUrl"]).query
+            )
+        )
+        expired_cookie = SimpleCookie()
+        expired_cookie.load(expired_response.headers["set-cookie"])
+        expired_state_hash = (
+            "sha256:"
+            + hashlib.sha256(expired_query["state"].encode("ascii")).hexdigest()
+        )
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE oidc_login_states SET expires_at = ? WHERE id = ?",
+                ("2000-01-01T00:00:00+00:00", expired_state_hash),
+            )
+        with patch.object(
+            operator_oidc,
+            "request_bytes",
+            side_effect=AssertionError("expired OIDC state reached token exchange"),
+        ):
+            try:
+                app_module.operator_oidc_callback(
+                    FakeRequest(
+                        path="/api/auth/oidc/callback",
+                        cookies={
+                            "serverware_oidc_flow": expired_cookie[
+                                "serverware_oidc_flow"
+                            ].value
+                        },
+                    ),
+                    state=expired_query["state"],
+                    code="expired-return-authorization-code",
+                )
+            except HTTPException as exc:
+                if exc.status_code != 401 or "expired" not in str(exc.detail):
+                    raise AssertionError(
+                        f"expired portal OIDC return state failed incorrectly: {exc}"
+                    ) from exc
+            else:
+                raise AssertionError("expired portal OIDC return state was accepted")
 
         cookie_identity = auth.require_admin(
             FakeRequest(cookies={auth.OIDC_SESSION_COOKIE_NAME: session_token}),

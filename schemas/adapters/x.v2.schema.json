@@ -21,9 +21,40 @@
         "allowedHeaders": {"$ref": "#/$defs/allowedResponseHeaders"},
         "onInvalid": {"const": "block"}
       }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes"],
+      "properties": {
+        "allowedHeaders": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"
+          }
+        },
+        "allowedQueryKeys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256}
+        },
+        "allowedMediaTypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+/[a-z0-9!#$%&'*+.^_`|~-]+$"
+          }
+        },
+        "maxBodyBytes": {"type": "integer", "minimum": 0}
+      }
     }
   },
-  "required": ["mode", "blockWrites", "appIds", "response"],
+  "required": ["request", "mode", "blockWrites", "appIds", "response"],
   "additionalProperties": false,
   "allOf": [
     {
@@ -42,6 +73,7 @@
     }
   ],
   "properties": {
+    "request": {"$ref": "#/$defs/request"},
     "mode": {"enum": ["readOnly", "recentSearchOnly", "controlledWrite"]},
     "blockWrites": {"type": "boolean"},
     "appIds": {

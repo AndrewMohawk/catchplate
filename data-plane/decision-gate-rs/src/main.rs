@@ -16,9 +16,7 @@ use ring_rand::SecureRandom;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
-use serde::de::{
-    self, DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor,
-};
+use serde::de::{self, DeserializeOwned, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
 use serverware_decision_gate::{
@@ -42,7 +40,7 @@ use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, Cursor, Read, Write};
-use std::net::{IpAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream, ToSocketAddrs};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -51,7 +49,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -107,6 +105,11 @@ const CREDENTIAL_LEASE_RENEW_BEFORE: Duration = Duration::from_secs(4);
 const CREDENTIAL_LEASE_HOT_WINDOW: Duration = Duration::from_secs(30);
 const CREDENTIAL_LEASE_RECIPIENT_ATTESTATION_TIMEOUT: Duration = Duration::from_secs(2);
 const MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW: Duration = Duration::from_millis(250);
+const UPSTREAM_RESOLVER_WORKERS: usize = 4;
+const UPSTREAM_RESOLVER_QUEUE_CAPACITY: usize = 256;
+const UPSTREAM_RESOLUTION_TIMEOUT: Duration = Duration::from_secs(2);
+const MAX_UPSTREAM_RESOLVED_ADDRESSES: usize = 32;
+const MAX_PINNED_UPSTREAM_CLIENTS: usize = 256;
 const GMAIL_METADATA_FETCH_MAX_MESSAGES: u64 = 32;
 const GMAIL_METADATA_FETCH_MAX_PER_REQUEST_TIMEOUT_MS: u64 = 3_000;
 const GMAIL_METADATA_FETCH_MAX_TOTAL_TIMEOUT_MS: u64 = 10_000;
@@ -144,6 +147,135 @@ const RESPONSE_PROOF_CUSTODY_HEALTH_PROBE_INTERVAL: Duration = Duration::from_se
 const RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS: Duration = Duration::from_secs(6);
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
 const SUPPORTED_ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
+const NPM_PUBLIC_REGISTRY_HOST: &str = "registry.npmjs.org";
+const NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT: &str = "npm-public-registry-receipt-v1";
+const NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS: [&str; 2] = ["ok", "published"];
+const PROVIDER_REQUEST_PROFILE_FIELDS: [&str; 4] = [
+    "allowedHeaders",
+    "allowedQueryKeys",
+    "allowedMediaTypes",
+    "maxBodyBytes",
+];
+const GMAIL_V1_REQUEST_HEADERS: &[&str] = &[
+    "accept",
+    "accept-encoding",
+    "content-type",
+    "user-agent",
+    "x-goog-api-client",
+    "x-goog-request-params",
+    "x-goog-user-project",
+];
+const GMAIL_V1_REQUEST_QUERY_KEYS: &[&str] = &[
+    "$.xgafv",
+    "alt",
+    "fields",
+    "format",
+    "includeSpamTrash",
+    "labelIds",
+    "maxResults",
+    "metadataHeaders",
+    "pageToken",
+    "prettyPrint",
+    "q",
+    "quotaUser",
+];
+const X_V2_REQUEST_HEADERS: &[&str] = &["accept", "accept-encoding", "content-type", "user-agent"];
+const X_V2_RECENT_SEARCH_QUERY_KEYS: &[&str] = &[
+    "end_time",
+    "expansions",
+    "granularity",
+    "max_results",
+    "media.fields",
+    "next_token",
+    "pagination_token",
+    "place.fields",
+    "poll.fields",
+    "query",
+    "search_count.fields",
+    "since_id",
+    "sort_order",
+    "start_time",
+    "tweet.fields",
+    "until_id",
+    "user.fields",
+];
+const X_V2_BOUNDED_READ_QUERY_KEYS: &[&str] = &[
+    "analytics.fields",
+    "chat_conversation.fields",
+    "chat_message_event.fields",
+    "command",
+    "community.fields",
+    "compliance_job.fields",
+    "connection.fields",
+    "days",
+    "dm_event.fields",
+    "end_time",
+    "endpoints",
+    "engagement.fields",
+    "event_types",
+    "exclude",
+    "expansions",
+    "granularity",
+    "ids",
+    "list.fields",
+    "max_age_hours",
+    "max_results",
+    "max_trends",
+    "media.fields",
+    "media_analytics.fields",
+    "media_id",
+    "media_keys",
+    "news.fields",
+    "next_token",
+    "note.fields",
+    "pagination_token",
+    "personalized_trend.fields",
+    "place.fields",
+    "poll.fields",
+    "post_selection",
+    "public_key.fields",
+    "query",
+    "requested_metrics",
+    "search_count.fields",
+    "since_id",
+    "sort_order",
+    "space.fields",
+    "start_time",
+    "state",
+    "status",
+    "test_mode",
+    "topic.fields",
+    "trend.fields",
+    "tweet.fields",
+    "tweet_ids",
+    "type",
+    "until_id",
+    "usage.fields",
+    "user.fields",
+    "user_ids",
+    "usernames",
+    "webhook_config.fields",
+];
+const NPM_REGISTRY_REQUEST_HEADERS: &[&str] = &[
+    "accept",
+    "accept-encoding",
+    "content-type",
+    "npm-auth-type",
+    "npm-command",
+    "npm-in-ci",
+    "npm-otp",
+    "npm-scope",
+    "npm-session",
+    "user-agent",
+];
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ProviderRequestProfile {
+    allowed_headers: &'static [&'static str],
+    allowed_query_keys: &'static [&'static str],
+    allowed_media_types: &'static [&'static str],
+    max_body_bytes: u64,
+}
 
 struct DuplicateRejectingJsonValue(Value);
 
@@ -252,36 +384,125 @@ fn strict_json_value_from_slice(input: &[u8]) -> Result<Value, serde_json::Error
     Ok(value)
 }
 
-fn contains_integer_negative_zero(input: &[u8]) -> bool {
-    let mut in_string = false;
-    let mut escaped = false;
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum IntegerNegativeZeroState {
+    #[default]
+    None,
+    Minus,
+    NegativeZero,
+}
 
-    for (index, byte) in input.iter().copied().enumerate() {
-        if in_string {
-            if escaped {
-                escaped = false;
+#[derive(Default)]
+struct IntegerNegativeZeroDetector {
+    in_string: bool,
+    escaped: bool,
+    state: IntegerNegativeZeroState,
+}
+
+impl IntegerNegativeZeroDetector {
+    fn scan(&mut self, input: &[u8]) -> bool {
+        input.iter().copied().any(|byte| self.scan_byte(byte))
+    }
+
+    fn finish(&self) -> bool {
+        !self.in_string && self.state == IntegerNegativeZeroState::NegativeZero
+    }
+
+    fn scan_byte(&mut self, byte: u8) -> bool {
+        if self.in_string {
+            if self.escaped {
+                self.escaped = false;
             } else if byte == b'\\' {
-                escaped = true;
+                self.escaped = true;
             } else if byte == b'"' {
-                in_string = false;
+                self.in_string = false;
             }
-            continue;
+            return false;
         }
-        if byte == b'"' {
-            in_string = true;
-            continue;
-        }
-        if byte != b'-' || input.get(index + 1) != Some(&b'0') {
-            continue;
-        }
-        if input
-            .get(index + 2)
-            .is_none_or(|next| matches!(next, b' ' | b'\t' | b'\r' | b'\n' | b',' | b']' | b'}'))
-        {
-            return true;
+
+        match self.state {
+            IntegerNegativeZeroState::None => self.scan_value_start(byte),
+            IntegerNegativeZeroState::Minus => {
+                self.state = IntegerNegativeZeroState::None;
+                if byte == b'0' {
+                    self.state = IntegerNegativeZeroState::NegativeZero;
+                    false
+                } else {
+                    self.scan_value_start(byte)
+                }
+            }
+            IntegerNegativeZeroState::NegativeZero => {
+                self.state = IntegerNegativeZeroState::None;
+                if json_ws(byte) || matches!(byte, b',' | b']' | b'}') {
+                    true
+                } else if matches!(byte, b'.' | b'e' | b'E') {
+                    false
+                } else {
+                    self.scan_value_start(byte)
+                }
+            }
         }
     }
-    false
+
+    fn scan_value_start(&mut self, byte: u8) -> bool {
+        if byte == b'"' {
+            self.in_string = true;
+            self.escaped = false;
+        } else if byte == b'-' {
+            self.state = IntegerNegativeZeroState::Minus;
+        }
+        false
+    }
+}
+
+fn contains_integer_negative_zero(input: &[u8]) -> bool {
+    let mut detector = IntegerNegativeZeroDetector::default();
+    detector.scan(input) || detector.finish()
+}
+
+struct StrictJsonRead<R> {
+    inner: R,
+    negative_zero: IntegerNegativeZeroDetector,
+    rejected: bool,
+}
+
+impl<R> StrictJsonRead<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            negative_zero: IntegerNegativeZeroDetector::default(),
+            rejected: false,
+        }
+    }
+
+    fn negative_zero_error() -> io::Error {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "integer -0 is not permitted in strict JSON",
+        )
+    }
+}
+
+impl<R: Read> Read for StrictJsonRead<R> {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        if out.is_empty() {
+            return Ok(0);
+        }
+        if self.rejected {
+            return Err(Self::negative_zero_error());
+        }
+        let read = self.inner.read(out)?;
+        let rejected = if read == 0 {
+            self.negative_zero.finish()
+        } else {
+            self.negative_zero.scan(&out[..read])
+        };
+        if rejected {
+            self.rejected = true;
+            return Err(Self::negative_zero_error());
+        }
+        Ok(read)
+    }
 }
 
 fn strict_json_value_from_str(input: &str) -> Result<Value, serde_json::Error> {
@@ -360,6 +581,7 @@ struct Route {
     scheme: String,
     host: String,
     port: u16,
+    resolved_address_policy: ResolvedAddressPolicy,
     methods: HashSet<String>,
     paths: Vec<PathTemplate>,
     credential_ref: Option<String>,
@@ -367,6 +589,190 @@ struct Route {
     adapter_config: Value,
     constraints: Vec<Value>,
     jit: Value,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum ResolvedAddressPolicy {
+    PublicOnly,
+    ExplicitCidrs(Vec<IpNet>),
+}
+
+trait UpstreamResolver: Send + Sync {
+    fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String>;
+}
+
+struct UpstreamResolutionJob {
+    host: String,
+    port: u16,
+    response: SyncSender<Result<Vec<SocketAddr>, String>>,
+}
+
+struct SystemUpstreamResolver {
+    sender: SyncSender<UpstreamResolutionJob>,
+    timeout: Duration,
+}
+
+impl SystemUpstreamResolver {
+    fn new(workers: usize, queue_capacity: usize, timeout: Duration) -> Result<Self, String> {
+        let (sender, receiver) = mpsc::sync_channel::<UpstreamResolutionJob>(queue_capacity);
+        let receiver = Arc::new(Mutex::new(receiver));
+        for index in 0..workers {
+            let receiver = Arc::clone(&receiver);
+            thread::Builder::new()
+                .name(format!("upstream-resolver-{index}"))
+                .spawn(move || loop {
+                    let job = {
+                        let receiver = receiver
+                            .lock()
+                            .expect("upstream resolver queue mutex poisoned");
+                        receiver.recv()
+                    };
+                    let Ok(job) = job else {
+                        return;
+                    };
+                    let result = (job.host.as_str(), job.port)
+                        .to_socket_addrs()
+                        .map(|addresses| addresses.collect::<Vec<_>>())
+                        .map_err(|error| error.to_string());
+                    let _ = job.response.send(result);
+                })
+                .map_err(|error| format!("spawn upstream resolver worker: {error}"))?;
+        }
+        Ok(Self { sender, timeout })
+    }
+}
+
+impl UpstreamResolver for SystemUpstreamResolver {
+    fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        let job = UpstreamResolutionJob {
+            host: host.to_string(),
+            port,
+            response,
+        };
+        match self.sender.try_send(job) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => return Err("upstream resolver queue is full".to_string()),
+            Err(TrySendError::Disconnected(_)) => {
+                return Err("upstream resolver workers are unavailable".to_string())
+            }
+        }
+        match receiver.recv_timeout(self.timeout) {
+            Ok(result) => result,
+            Err(RecvTimeoutError::Timeout) => Err("upstream resolution timed out".to_string()),
+            Err(RecvTimeoutError::Disconnected) => {
+                Err("upstream resolver worker stopped".to_string())
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct UpstreamClientConfig {
+    root_certificates: Vec<reqwest::Certificate>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+struct PinnedUpstreamClientKey {
+    host: String,
+    port: u16,
+    address: IpAddr,
+    reuse_idle_connections: bool,
+}
+
+struct PinnedUpstreamClientCache {
+    entries: HashMap<PinnedUpstreamClientKey, Client>,
+    order: VecDeque<PinnedUpstreamClientKey>,
+    max_entries: usize,
+}
+
+impl PinnedUpstreamClientCache {
+    fn new(max_entries: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            max_entries,
+        }
+    }
+
+    fn get(&mut self, key: &PinnedUpstreamClientKey) -> Option<Client> {
+        let client = self.entries.get(key)?.clone();
+        self.order.retain(|candidate| candidate != key);
+        self.order.push_back(key.clone());
+        Some(client)
+    }
+
+    fn insert(&mut self, key: PinnedUpstreamClientKey, client: Client) {
+        self.entries.insert(key.clone(), client);
+        self.order.retain(|candidate| candidate != &key);
+        self.order.push_back(key);
+        while self.entries.len() > self.max_entries {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+    }
+}
+
+#[derive(Clone)]
+struct PreparedUpstream {
+    policy_hash: String,
+    route_id: String,
+    host: String,
+    port: u16,
+    socket_addr: SocketAddr,
+    answer_count: usize,
+    client: Client,
+}
+
+#[derive(Debug)]
+enum UpstreamPreparationError {
+    ResolutionUnavailable {
+        detail: String,
+    },
+    AddressDenied {
+        detail: String,
+        addresses: Vec<IpAddr>,
+    },
+    TransportPreparation {
+        detail: String,
+    },
+}
+
+impl UpstreamPreparationError {
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::AddressDenied { .. } => StatusCode::FORBIDDEN,
+            Self::ResolutionUnavailable { .. } | Self::TransportPreparation { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
+        }
+    }
+
+    fn code(&self) -> &'static str {
+        match self {
+            Self::ResolutionUnavailable { .. } => "upstream_resolution_unavailable",
+            Self::AddressDenied { .. } => "upstream_address_denied",
+            Self::TransportPreparation { .. } => "upstream_transport_preparation_failed",
+        }
+    }
+
+    fn audit_detail(&self) -> &str {
+        match self {
+            Self::ResolutionUnavailable { detail }
+            | Self::AddressDenied { detail, .. }
+            | Self::TransportPreparation { detail } => detail,
+        }
+    }
+
+    fn audit_addresses(&self) -> Vec<String> {
+        match self {
+            Self::AddressDenied { addresses, .. } => {
+                addresses.iter().map(ToString::to_string).collect()
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -744,8 +1150,9 @@ struct GateState {
     credential_lease_renewal_queued: AtomicU64,
     credential_lease_renewal_queue_full: AtomicU64,
     credential_lease_cache_max: usize,
-    upstream_client: Client,
-    one_shot_upstream_client: Client,
+    upstream_resolver: Arc<dyn UpstreamResolver>,
+    upstream_client_config: UpstreamClientConfig,
+    pinned_upstream_clients: Mutex<PinnedUpstreamClientCache>,
     audit_client: Client,
     credential_lease_client: Client,
     audit_url: Option<String>,
@@ -1668,6 +2075,7 @@ struct GmailMetadataFanoutExecution<'a> {
     parent_credential_binding: Option<&'a CredentialLeaseReleaseBinding>,
     injection_plan: &'a Value,
     dispatch_expires_at_epoch_ms: Option<u64>,
+    prepared_upstream: &'a PreparedUpstream,
 }
 
 struct CredentialLeaseFlight {
@@ -2327,7 +2735,7 @@ struct CredentialLeaseResponseStatement {
 struct CredentialLeaseResponseRequest {
     method: String,
     path: String,
-    query: String,
+    query_sha256: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -3653,6 +4061,132 @@ fn validate_runtime_credential_body_policy(route: &Route) -> Result<(), Value> {
     }))
 }
 
+fn validate_provider_request_admission(
+    req: &DecisionRequest,
+    url: &Url,
+    route: &Route,
+) -> Result<(), Value> {
+    if !matches!(
+        route.adapter_type.as_str(),
+        "gmail.v1" | "x.v2" | "npm.registry"
+    ) {
+        return Ok(());
+    }
+    let Some(adapter_config) = route.adapter_config.as_object() else {
+        return Err(json!({
+            "error":"provider_request_profile_invalid",
+            "adapter":route.adapter_type,
+            "status_code":500,
+        }));
+    };
+    let profile =
+        validate_provider_request_profile_config(&route.id, &route.adapter_type, adapter_config)
+            .map_err(|_| {
+                json!({
+                    "error":"provider_request_profile_invalid",
+                    "adapter":route.adapter_type,
+                    "status_code":500,
+                })
+            })?;
+
+    let allowed_headers = profile
+        .allowed_headers
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    let mut normalized_headers = BTreeMap::new();
+    for (raw_name, value) in &req.headers {
+        let name = raw_name.to_ascii_lowercase();
+        if normalized_headers.insert(name.clone(), value).is_some() {
+            return Err(if name == "content-type" {
+                json!({
+                    "error":"request_content_type_ambiguous",
+                    "status_code":415,
+                })
+            } else {
+                json!({
+                    "error":"request_header_ambiguous",
+                    "header":name,
+                    "status_code":400,
+                })
+            });
+        }
+        if !is_provider_request_profile_exempt_header(&name)
+            && !allowed_headers.contains(name.as_str())
+        {
+            return Err(json!({
+                "error":"request_header_not_allowed",
+                "header":name,
+                "status_code":403,
+            }));
+        }
+    }
+
+    let allowed_query_keys = profile
+        .allowed_query_keys
+        .iter()
+        .copied()
+        .collect::<HashSet<_>>();
+    for (key, _) in url.query_pairs() {
+        if !allowed_query_keys.contains(key.as_ref()) {
+            return Err(json!({
+                "error":"request_query_key_not_allowed",
+                "queryKey":key,
+                "status_code":403,
+            }));
+        }
+    }
+
+    let body_length = decision_request_body_length(req)
+        .map_err(|detail| {
+            json!({
+                "error":"invalid_request_framing",
+                "detail":detail,
+                "status_code":400,
+            })
+        })?
+        .unwrap_or(0);
+    if body_length != 0 && profile.max_body_bytes == 0 {
+        return Err(json!({
+            "error":"request_body_not_allowed",
+            "status_code":403,
+        }));
+    }
+    if body_length > profile.max_body_bytes {
+        return Err(json!({
+            "error":"request_body_too_large",
+            "maxBodyBytes":profile.max_body_bytes,
+            "status_code":413,
+        }));
+    }
+
+    let Some(content_type) = normalized_headers.get("content-type") else {
+        if body_length != 0 {
+            return Err(json!({
+                "error":"request_content_type_required",
+                "status_code":415,
+            }));
+        }
+        return Ok(());
+    };
+    let Some(media_type) = normalized_provider_request_media_type(content_type) else {
+        return Err(json!({
+            "error":"request_content_type_denied",
+            "status_code":415,
+        }));
+    };
+    if body_length == 0 {
+        return Ok(());
+    }
+    if !profile.allowed_media_types.contains(&media_type.as_str()) {
+        return Err(json!({
+            "error":"request_content_type_denied",
+            "status_code":415,
+        }));
+    }
+    Ok(())
+}
+
 fn valid_response_json_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= 256
@@ -4514,6 +5048,148 @@ fn is_non_forwardable_agent_header(name: &str) -> bool {
         || matches!(name, "authorization" | "cookie" | "content-length" | "host")
 }
 
+fn provider_request_profile(
+    adapter_type: &str,
+    mode: Option<&str>,
+) -> Result<Option<ProviderRequestProfile>, String> {
+    let profile = match adapter_type {
+        "gmail.v1" => ProviderRequestProfile {
+            allowed_headers: GMAIL_V1_REQUEST_HEADERS,
+            allowed_query_keys: GMAIL_V1_REQUEST_QUERY_KEYS,
+            allowed_media_types: &[],
+            max_body_bytes: 0,
+        },
+        "x.v2" => match mode {
+            Some("recentSearchOnly") => ProviderRequestProfile {
+                allowed_headers: X_V2_REQUEST_HEADERS,
+                allowed_query_keys: X_V2_RECENT_SEARCH_QUERY_KEYS,
+                allowed_media_types: &[],
+                max_body_bytes: 0,
+            },
+            Some("readOnly") => ProviderRequestProfile {
+                allowed_headers: X_V2_REQUEST_HEADERS,
+                allowed_query_keys: X_V2_BOUNDED_READ_QUERY_KEYS,
+                allowed_media_types: &[],
+                max_body_bytes: 0,
+            },
+            Some("controlledWrite") => ProviderRequestProfile {
+                allowed_headers: X_V2_REQUEST_HEADERS,
+                allowed_query_keys: &[],
+                allowed_media_types: &["application/json"],
+                max_body_bytes: 65_536,
+            },
+            other => {
+                return Err(format!(
+                    "unsupported x.v2 request profile mode {:?}",
+                    other.unwrap_or("")
+                ));
+            }
+        },
+        "npm.registry" => ProviderRequestProfile {
+            allowed_headers: NPM_REGISTRY_REQUEST_HEADERS,
+            allowed_query_keys: &[],
+            allowed_media_types: &["application/json"],
+            max_body_bytes: 16 * 1024 * 1024,
+        },
+        _ => return Ok(None),
+    };
+    Ok(Some(profile))
+}
+
+fn validate_provider_request_profile_list(
+    request: &Map<String, Value>,
+    field: &str,
+    expected: &[&str],
+    require_lowercase: bool,
+    label: &str,
+) -> Result<(), String> {
+    let values = request
+        .get(field)
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("{label} request {field} must contain unique strings"))?;
+    let mut actual = HashSet::with_capacity(values.len());
+    for value in values {
+        let value = value
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("{label} request {field} must contain unique strings"))?;
+        if require_lowercase && value != value.to_ascii_lowercase() {
+            return Err(format!("{label} request {field} must be lower-case"));
+        }
+        if !actual.insert(value) {
+            return Err(format!(
+                "{label} request {field} must contain unique strings"
+            ));
+        }
+    }
+    if actual.len() != expected.len() || expected.iter().any(|value| !actual.contains(value)) {
+        return Err(format!(
+            "{label} request {field} must match the exact provider profile"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_provider_request_profile_config(
+    route_id: &str,
+    adapter_type: &str,
+    adapter_config: &Map<String, Value>,
+) -> Result<ProviderRequestProfile, String> {
+    let profile = provider_request_profile(
+        adapter_type,
+        adapter_config.get("mode").and_then(Value::as_str),
+    )?
+    .ok_or_else(|| format!("adapter {adapter_type} does not have a provider request profile"))?;
+    let label = format!("route {route_id} {adapter_type}");
+    let request = adapter_config
+        .get("request")
+        .and_then(Value::as_object)
+        .ok_or_else(|| format!("{label} must define an exact provider request profile"))?;
+    if request.len() != PROVIDER_REQUEST_PROFILE_FIELDS.len()
+        || request
+            .keys()
+            .any(|field| !PROVIDER_REQUEST_PROFILE_FIELDS.contains(&field.as_str()))
+    {
+        return Err(format!(
+            "{label} request profile must contain exactly allowedHeaders, allowedQueryKeys, allowedMediaTypes, and maxBodyBytes"
+        ));
+    }
+    validate_provider_request_profile_list(
+        request,
+        "allowedHeaders",
+        profile.allowed_headers,
+        true,
+        &label,
+    )?;
+    validate_provider_request_profile_list(
+        request,
+        "allowedQueryKeys",
+        profile.allowed_query_keys,
+        false,
+        &label,
+    )?;
+    validate_provider_request_profile_list(
+        request,
+        "allowedMediaTypes",
+        profile.allowed_media_types,
+        true,
+        &label,
+    )?;
+    if request.get("maxBodyBytes").and_then(Value::as_u64) != Some(profile.max_body_bytes) {
+        return Err(format!(
+            "{label} request maxBodyBytes must equal {}",
+            profile.max_body_bytes
+        ));
+    }
+    Ok(profile)
+}
+
+fn is_provider_request_profile_exempt_header(name: &str) -> bool {
+    is_standard_hop_by_hop_header(name)
+        || is_serverware_internal_header(name)
+        || matches!(name, "content-length" | "host")
+}
+
 fn validate_generic_required_header_policy(
     route_id: &str,
     request: &Map<String, Value>,
@@ -4594,9 +5270,88 @@ fn validate_generic_required_header_policy(
     Ok(())
 }
 
+fn validate_public_npm_publish_response_contract(
+    route_id: &str,
+    adapter_config: &serde_json::Map<String, Value>,
+    constraints: &[Value],
+) -> Result<(), String> {
+    if adapter_config
+        .get("publishResponseContract")
+        .and_then(Value::as_str)
+        != Some(NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT)
+    {
+        return Err(format!(
+            "route {route_id} public npm.publish requires publishResponseContract {NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT}"
+        ));
+    }
+    let response = adapter_config
+        .get("response")
+        .and_then(Value::as_object)
+        .ok_or_else(|| {
+            format!(
+                "route {route_id} public npm.publish response contract requires buffered JSON capped at 65536 bytes"
+            )
+        })?;
+    if response.get("mode").and_then(Value::as_str) != Some("json")
+        || response
+            .get("maxBodyBytes")
+            .and_then(Value::as_u64)
+            .is_none_or(|limit| !(1..=65_536).contains(&limit))
+    {
+        return Err(format!(
+            "route {route_id} public npm.publish response contract requires buffered JSON capped at 65536 bytes"
+        ));
+    }
+    if response
+        .get("allowedFields")
+        .and_then(Value::as_array)
+        .is_none_or(|fields| {
+            fields.len() != NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS.len()
+                || fields
+                    .iter()
+                    .zip(NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS)
+                    .any(|(field, expected)| field.as_str() != Some(expected))
+        })
+    {
+        return Err(format!(
+            "route {route_id} public npm.publish response must project exactly ok and published"
+        ));
+    }
+    if response
+        .get("allowedHeaders")
+        .and_then(Value::as_array)
+        .is_none_or(|headers| !headers.is_empty())
+    {
+        return Err(format!(
+            "route {route_id} public npm.publish response must not release upstream headers"
+        ));
+    }
+
+    let publish_response_constraints = constraints
+        .iter()
+        .filter(|constraint| {
+            matches!(
+                constraint.get("type").and_then(Value::as_str),
+                Some("responseBinding" | "responseJson")
+            ) && constraint.get("operations").is_none_or(|operations| {
+                operations.as_array().is_some_and(|operations| {
+                    operations
+                        .iter()
+                        .any(|operation| operation.as_str() == Some("npm.publish"))
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    if !publish_response_constraints.is_empty() {
+        return Err(format!(
+            "route {route_id} public npm.publish receipt must not use responseBinding or responseJson"
+        ));
+    }
+    Ok(())
+}
+
 fn validate_signed_npm_publish_response_contract(
     route_id: &str,
-    host: &str,
     adapter_config: &serde_json::Map<String, Value>,
     constraints: &[Value],
 ) -> Result<(), String> {
@@ -4619,22 +5374,6 @@ fn validate_signed_npm_publish_response_contract(
         ));
     }
 
-    let publish_response_constraints = constraints
-        .iter()
-        .filter(|constraint| {
-            matches!(
-                constraint.get("type").and_then(Value::as_str),
-                Some("responseBinding" | "responseJson")
-            ) && constraint
-                .get("operations")
-                .and_then(Value::as_array)
-                .is_some_and(|operations| {
-                    operations
-                        .iter()
-                        .any(|operation| operation.as_str() == Some("npm.publish"))
-                })
-        })
-        .collect::<Vec<_>>();
     let response_bindings = constraints
         .iter()
         .filter(|constraint| {
@@ -4659,13 +5398,6 @@ fn validate_signed_npm_publish_response_contract(
                     })
         })
         .collect::<Vec<_>>();
-    if host == "registry.npmjs.org"
-        && publish_response_constraints.is_empty()
-        && response_bindings.is_empty()
-        && response_json_constraints.is_empty()
-    {
-        return Ok(());
-    }
     if response_bindings.is_empty() {
         return Err(format!(
             "route {route_id} signed npm.publish requires a responseBinding scoped only to npm.publish"
@@ -5080,6 +5812,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .and_then(|adapter| adapter.get("config"))
             .and_then(Value::as_object)
             .ok_or_else(|| format!("route {route_id} adapter config missing"))?;
+        if matches!(adapter_type, "gmail.v1" | "x.v2" | "npm.registry") {
+            validate_provider_request_profile_config(route_id, adapter_type, adapter_config)?;
+        }
         let constraints: &[Value] = match route.get("constraints") {
             Some(Value::Array(constraints)) => constraints,
             None => &[],
@@ -5316,6 +6051,22 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 .get("operations")
                 .and_then(Value::as_array)
                 .ok_or_else(|| format!("route {route_id} npm operations missing"))?;
+            let has_publish = operations
+                .iter()
+                .any(|operation| operation.as_str() == Some("publish"));
+            let host = route
+                .get("match")
+                .and_then(Value::as_object)
+                .and_then(|route_match| route_match.get("host"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if adapter_config.contains_key("publishResponseContract")
+                && (host != NPM_PUBLIC_REGISTRY_HOST || !has_publish)
+            {
+                return Err(format!(
+                    "route {route_id} {NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT} is valid only for npm.publish on {NPM_PUBLIC_REGISTRY_HOST}"
+                ));
+            }
             let has_write = operations.iter().any(|operation| {
                 matches!(
                     operation.as_str(),
@@ -6665,8 +7416,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 "route {route_id} cannot stream responses with whole-body response constraints"
             ));
         }
-        if signed_policy
-            && adapter_type == "npm.registry"
+        if adapter_type == "npm.registry"
             && adapter_config
                 .get("operations")
                 .and_then(Value::as_array)
@@ -6682,12 +7432,19 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                 .and_then(|route_match| route_match.get("host"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            validate_signed_npm_publish_response_contract(
-                route_id,
-                host,
-                adapter_config,
-                constraints,
-            )?;
+            if host == NPM_PUBLIC_REGISTRY_HOST {
+                validate_public_npm_publish_response_contract(
+                    route_id,
+                    adapter_config,
+                    constraints,
+                )?;
+            } else if signed_policy {
+                validate_signed_npm_publish_response_contract(
+                    route_id,
+                    adapter_config,
+                    constraints,
+                )?;
+            }
         }
 
         let Some(jit_value) = route.get("jit") else {
@@ -7023,6 +7780,48 @@ fn parse_cidrs(value: Option<&Value>, context: &str) -> Result<Vec<IpNet>, Strin
     Ok(networks)
 }
 
+fn parse_resolved_address_policy(
+    value: Option<&Value>,
+    context: &str,
+) -> Result<ResolvedAddressPolicy, String> {
+    let Some(value) = value else {
+        return Ok(ResolvedAddressPolicy::PublicOnly);
+    };
+    let cidrs = value
+        .as_array()
+        .ok_or_else(|| format!("{context} must be an array"))?;
+    if !(1..=32).contains(&cidrs.len()) {
+        return Err(format!("{context} must contain between 1 and 32 CIDRs"));
+    }
+    let mapped_ipv4 = "::ffff:0:0/96"
+        .parse::<IpNet>()
+        .expect("constant mapped IPv4 CIDR");
+    let mut networks = Vec::with_capacity(cidrs.len());
+    let mut seen = HashSet::with_capacity(cidrs.len());
+    for value in cidrs {
+        let cidr = value
+            .as_str()
+            .ok_or_else(|| format!("{context} entries must be strings"))?;
+        let network = cidr
+            .parse::<IpNet>()
+            .map_err(|error| format!("invalid CIDR {cidr} in {context}: {error}"))?;
+        if network.to_string() != cidr || network.addr() != network.network() {
+            return Err(format!("CIDR {cidr} in {context} is not canonical"));
+        }
+        if matches!(network, IpNet::V6(network) if mapped_ipv4.contains(&IpAddr::V6(network.network())))
+        {
+            return Err(format!(
+                "IPv4-mapped IPv6 CIDR {cidr} is not permitted in {context}"
+            ));
+        }
+        if !seen.insert(network) {
+            return Err(format!("CIDR {cidr} is duplicated in {context}"));
+        }
+        networks.push(network);
+    }
+    Ok(ResolvedAddressPolicy::ExplicitCidrs(networks))
+}
+
 fn parse_proxy_authorization(
     value: Option<&Value>,
     principal_id: &str,
@@ -7296,7 +8095,7 @@ fn load_snapshot(
             .and_then(Value::as_object)
             .ok_or("route adapter missing")?;
         routes.push(Route {
-            id,
+            id: id.clone(),
             principals: item
                 .get("principals")
                 .and_then(Value::as_array)
@@ -7320,6 +8119,10 @@ fn load_snapshot(
                 .get("port")
                 .and_then(Value::as_u64)
                 .unwrap_or(443) as u16,
+            resolved_address_policy: parse_resolved_address_policy(
+                route_match.get("resolvedCidrs"),
+                &format!("route {id} match.resolvedCidrs"),
+            )?,
             methods,
             paths,
             credential_ref: item
@@ -9397,11 +10200,11 @@ fn validate_control_plane_authorization_receipt(
         .map_err(|err| format!("serialize control-plane response statement: {err}"))?;
     if canonical_json_ensure_ascii(&canonical_statement).as_bytes() != statement_bytes.as_slice()
         || response.statement_sha256 != sha256_prefixed(&statement_bytes)
-        || statement.version != "serverware.responseSignature/v1"
+        || statement.version != "serverware.responseSignature/v2"
         || statement.nonce.as_deref() != Some(request.nonce.as_str())
         || statement.request.method != request.method
         || statement.request.path != request.path
-        || statement.request.query != request.query
+        || statement.request.query_sha256 != sha256_prefixed(request.query.as_bytes())
         || statement.status_code != response.status
         || statement.body_sha256 != response.body_sha256
         || statement.response_signing_key_id != response.response_signing_key_id
@@ -10241,7 +11044,7 @@ fn verify_control_plane_signed_response(
         .map_err(|err| format!("{label} signature verification failed: {err}"))?;
 
     let expected_body_digest = sha256_prefixed(body);
-    if statement.version != "serverware.responseSignature/v1"
+    if statement.version != "serverware.responseSignature/v2"
         || statement.nonce.as_deref() != Some(response_nonce)
         || statement.status_code != status.as_u16()
         || statement.body_sha256 != expected_body_digest
@@ -10264,7 +11067,8 @@ fn verify_control_plane_signed_response(
         Url::parse(request_url).map_err(|err| format!("parse {label} request URL: {err}"))?;
     if statement.request.method != request_method
         || statement.request.path != parsed_url.path()
-        || statement.request.query != parsed_url.query().unwrap_or("")
+        || statement.request.query_sha256
+            != sha256_prefixed(parsed_url.query().unwrap_or("").as_bytes())
     {
         return Err(format!("{label} request binding mismatch"));
     }
@@ -11651,14 +12455,8 @@ fn pem_certificates(bundle: &str) -> Vec<Vec<u8>> {
     certs
 }
 
-fn build_upstream_client(reuse_idle_connections: bool) -> Result<Client, String> {
-    let mut builder = Client::builder()
-        .timeout(Duration::from_secs(10))
-        .no_proxy()
-        .redirect(reqwest::redirect::Policy::none());
-    if !reuse_idle_connections {
-        builder = builder.pool_max_idle_per_host(0);
-    }
+fn load_upstream_client_config() -> Result<UpstreamClientConfig, String> {
+    let mut root_certificates = Vec::new();
     if let Ok(path) = env::var("SERVERWARE_UPSTREAM_CA_BUNDLE") {
         if !path.trim().is_empty() {
             let text = fs::read_to_string(&path)
@@ -11670,21 +12468,335 @@ fn build_upstream_client(reuse_idle_connections: bool) -> Result<Client, String>
             for cert in certs {
                 let cert = reqwest::Certificate::from_pem(&cert)
                     .map_err(|err| format!("parse upstream CA certificate {path}: {err}"))?;
-                builder = builder.add_root_certificate(cert);
+                root_certificates.push(cert);
             }
         }
     }
-    builder
-        .build()
-        .map_err(|err| format!("build upstream HTTP client: {err}"))
+    Ok(UpstreamClientConfig { root_certificates })
 }
 
-fn upstream_client_for_method<'a>(state: &'a GateState, method: &Method) -> &'a Client {
-    if matches!(*method, Method::GET | Method::HEAD | Method::OPTIONS) {
-        &state.upstream_client
-    } else {
-        &state.one_shot_upstream_client
+fn build_pinned_upstream_client(
+    config: &UpstreamClientConfig,
+    host: &str,
+    socket_addr: SocketAddr,
+    reuse_idle_connections: bool,
+) -> Result<Client, String> {
+    let mut builder = Client::builder()
+        .timeout(Duration::from_secs(10))
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .resolve(host, socket_addr);
+    if !reuse_idle_connections {
+        builder = builder.pool_max_idle_per_host(0);
     }
+    for certificate in &config.root_certificates {
+        builder = builder.add_root_certificate(certificate.clone());
+    }
+    builder
+        .build()
+        .map_err(|err| format!("build pinned upstream HTTP client: {err}"))
+}
+
+fn ipv4_in_network(address: Ipv4Addr, base: Ipv4Addr, prefix: u8) -> bool {
+    let address = u32::from(address);
+    let base = u32::from(base);
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u32::MAX << (32 - u32::from(prefix))
+    };
+    address & mask == base & mask
+}
+
+fn ipv6_in_network(address: Ipv6Addr, base: Ipv6Addr, prefix: u8) -> bool {
+    let address = u128::from(address);
+    let base = u128::from(base);
+    let mask = if prefix == 0 {
+        0
+    } else {
+        u128::MAX << (128 - u32::from(prefix))
+    };
+    address & mask == base & mask
+}
+
+fn normalize_resolved_ip(address: IpAddr) -> IpAddr {
+    match address {
+        IpAddr::V6(address) => address
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(address)),
+        address => address,
+    }
+}
+
+fn unconditionally_denied_upstream_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            address.is_unspecified()
+                || address.is_multicast()
+                || address == Ipv4Addr::BROADCAST
+                || ipv4_in_network(address, Ipv4Addr::UNSPECIFIED, 8)
+                || ipv4_in_network(address, Ipv4Addr::new(240, 0, 0, 0), 4)
+                || address == Ipv4Addr::new(169, 254, 169, 254)
+                || ipv4_in_network(address, Ipv4Addr::new(169, 254, 170, 0), 24)
+                || address == Ipv4Addr::new(100, 100, 100, 200)
+                || address == Ipv4Addr::new(192, 0, 0, 192)
+                || ipv4_in_network(address, Ipv4Addr::new(192, 88, 99, 0), 24)
+        }
+        IpAddr::V6(address) => {
+            address.is_unspecified()
+                || address.is_multicast()
+                || ipv6_in_network(address, Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0), 64)
+                || ipv6_in_network(address, Ipv6Addr::new(0xfd20, 0x00ce, 0, 0, 0, 0, 0, 0), 64)
+                || ipv6_in_network(address, Ipv6Addr::new(0x0064, 0xff9b, 0, 0, 0, 0, 0, 0), 96)
+                || ipv6_in_network(address, Ipv6Addr::new(0x0064, 0xff9b, 1, 0, 0, 0, 0, 0), 48)
+                || ipv6_in_network(address, Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 32)
+                || ipv6_in_network(address, Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0), 16)
+        }
+    }
+}
+
+fn publicly_routable_upstream_address(address: IpAddr) -> bool {
+    if unconditionally_denied_upstream_address(address) {
+        return false;
+    }
+    match address {
+        IpAddr::V4(address) => ![
+            (Ipv4Addr::new(0, 0, 0, 0), 8),
+            (Ipv4Addr::new(10, 0, 0, 0), 8),
+            (Ipv4Addr::new(100, 64, 0, 0), 10),
+            (Ipv4Addr::new(127, 0, 0, 0), 8),
+            (Ipv4Addr::new(169, 254, 0, 0), 16),
+            (Ipv4Addr::new(172, 16, 0, 0), 12),
+            (Ipv4Addr::new(192, 0, 0, 0), 24),
+            (Ipv4Addr::new(192, 0, 2, 0), 24),
+            (Ipv4Addr::new(192, 88, 99, 0), 24),
+            (Ipv4Addr::new(192, 168, 0, 0), 16),
+            (Ipv4Addr::new(198, 18, 0, 0), 15),
+            (Ipv4Addr::new(198, 51, 100, 0), 24),
+            (Ipv4Addr::new(203, 0, 113, 0), 24),
+            (Ipv4Addr::new(224, 0, 0, 0), 4),
+            (Ipv4Addr::new(240, 0, 0, 0), 4),
+        ]
+        .iter()
+        .any(|(base, prefix)| ipv4_in_network(address, *base, *prefix)),
+        IpAddr::V6(address) => {
+            ipv6_in_network(address, Ipv6Addr::new(0x2000, 0, 0, 0, 0, 0, 0, 0), 3)
+                && !ipv6_in_network(address, Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 23)
+                && !ipv6_in_network(address, Ipv6Addr::new(0x2001, 0x0db8, 0, 0, 0, 0, 0, 0), 32)
+                && !ipv6_in_network(address, Ipv6Addr::new(0x2002, 0, 0, 0, 0, 0, 0, 0), 16)
+                && !ipv6_in_network(address, Ipv6Addr::new(0x3fff, 0, 0, 0, 0, 0, 0, 0), 20)
+        }
+    }
+}
+
+fn address_allowed_by_policy(address: IpAddr, policy: &ResolvedAddressPolicy) -> bool {
+    if unconditionally_denied_upstream_address(address) {
+        return false;
+    }
+    match policy {
+        ResolvedAddressPolicy::PublicOnly => publicly_routable_upstream_address(address),
+        ResolvedAddressPolicy::ExplicitCidrs(networks) => {
+            networks.iter().any(|network| network.contains(&address))
+        }
+    }
+}
+
+fn compare_ip_addresses(left: &IpAddr, right: &IpAddr) -> std::cmp::Ordering {
+    match (left, right) {
+        (IpAddr::V4(left), IpAddr::V4(right)) => left.octets().cmp(&right.octets()),
+        (IpAddr::V4(_), IpAddr::V6(_)) => std::cmp::Ordering::Less,
+        (IpAddr::V6(_), IpAddr::V4(_)) => std::cmp::Ordering::Greater,
+        (IpAddr::V6(left), IpAddr::V6(right)) => left.octets().cmp(&right.octets()),
+    }
+}
+
+fn validate_resolved_addresses(
+    addresses: Vec<SocketAddr>,
+    port: u16,
+    policy: &ResolvedAddressPolicy,
+) -> Result<Vec<SocketAddr>, UpstreamPreparationError> {
+    if addresses.is_empty() || addresses.len() > MAX_UPSTREAM_RESOLVED_ADDRESSES {
+        return Err(UpstreamPreparationError::ResolutionUnavailable {
+            detail: format!(
+                "upstream resolver returned {} addresses; expected 1..={MAX_UPSTREAM_RESOLVED_ADDRESSES}",
+                addresses.len()
+            ),
+        });
+    }
+    let mut normalized = addresses
+        .into_iter()
+        .map(|address| normalize_resolved_ip(address.ip()))
+        .collect::<Vec<_>>();
+    normalized.sort_by(compare_ip_addresses);
+    normalized.dedup();
+    let denied = normalized
+        .iter()
+        .copied()
+        .filter(|address| !address_allowed_by_policy(*address, policy))
+        .collect::<Vec<_>>();
+    if !denied.is_empty() {
+        return Err(UpstreamPreparationError::AddressDenied {
+            detail: "one or more resolved addresses are prohibited by signed route policy"
+                .to_string(),
+            addresses: denied,
+        });
+    }
+    Ok(normalized
+        .into_iter()
+        .map(|address| SocketAddr::new(address, port))
+        .collect())
+}
+
+fn prepare_upstream(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    route: &Route,
+    method: &str,
+) -> Result<PreparedUpstream, UpstreamPreparationError> {
+    let resolved = state
+        .upstream_resolver
+        .resolve(&route.host, route.port)
+        .map_err(|detail| UpstreamPreparationError::ResolutionUnavailable { detail })?;
+    let addresses =
+        validate_resolved_addresses(resolved, route.port, &route.resolved_address_policy)?;
+    let socket_addr = addresses[0];
+    let reuse_idle_connections = matches!(method, "GET" | "HEAD" | "OPTIONS");
+    let key = PinnedUpstreamClientKey {
+        host: route.host.clone(),
+        port: route.port,
+        address: socket_addr.ip(),
+        reuse_idle_connections,
+    };
+    let client = {
+        let mut cache = state
+            .pinned_upstream_clients
+            .lock()
+            .expect("pinned upstream client cache mutex poisoned");
+        if let Some(client) = cache.get(&key) {
+            client
+        } else {
+            let client = build_pinned_upstream_client(
+                &state.upstream_client_config,
+                &route.host,
+                socket_addr,
+                reuse_idle_connections,
+            )
+            .map_err(|detail| UpstreamPreparationError::TransportPreparation { detail })?;
+            cache.insert(key, client.clone());
+            client
+        }
+    };
+    Ok(PreparedUpstream {
+        policy_hash: snapshot.hash.clone(),
+        route_id: route.id.clone(),
+        host: route.host.clone(),
+        port: route.port,
+        socket_addr,
+        answer_count: addresses.len(),
+        client,
+    })
+}
+
+fn prepare_upstream_for_forward(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    request: &RequestHead,
+    target_url: &Url,
+    authenticated_principal_id: Option<&str>,
+) -> Result<Option<PreparedUpstream>, UpstreamPreparationError> {
+    if validate_request_target_path(&request.target).is_err()
+        || !target_url.username().is_empty()
+        || target_url.password().is_some()
+        || target_url.fragment().is_some()
+    {
+        return Ok(None);
+    }
+    let headers = lower_headers(&request.headers);
+    let principal = if let Some(principal_id) = authenticated_principal_id {
+        snapshot
+            .principals
+            .iter()
+            .find(|principal| principal.id == principal_id)
+    } else {
+        snapshot.identify_principal(request.client_ip.as_deref(), &headers)
+    };
+    let Some(principal) = principal else {
+        return Ok(None);
+    };
+    let Some(route_match) = snapshot.match_route(&principal.id, &request.method, target_url) else {
+        return Ok(None);
+    };
+    prepare_upstream(state, snapshot, route_match.route, &request.method).map(Some)
+}
+
+fn prepare_upstream_for_buffered_forward(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    request: &IncomingRequest,
+    target_url: &Url,
+    authenticated_principal_id: Option<&str>,
+) -> Result<Option<PreparedUpstream>, UpstreamPreparationError> {
+    prepare_upstream_for_forward(
+        state,
+        snapshot,
+        &RequestHead {
+            method: request.method.clone(),
+            target: request.target.clone(),
+            headers: request.headers.clone(),
+            content_length: request.body.len(),
+            has_content_length: true,
+            prefetched_body: Vec::new(),
+            client_ip: request.client_ip.clone(),
+        },
+        target_url,
+        authenticated_principal_id,
+    )
+}
+
+fn audit_upstream_preparation_error(
+    state: &GateState,
+    request_method: &str,
+    target_url: &Url,
+    error: &UpstreamPreparationError,
+) {
+    enqueue_audit(
+        state,
+        "data_plane.upstream_resolution.denied",
+        json!({
+            "component":"serverware-decision-gate-rs",
+            "outcome":"denied",
+            "stage":"upstream_resolution",
+            "error":error.code(),
+            "detail":error.audit_detail(),
+            "method":request_method,
+            "scheme":target_url.scheme(),
+            "host":target_url.host_str(),
+            "port":target_url.port_or_known_default(),
+            "path":target_url.path(),
+            "addresses":error.audit_addresses(),
+        }),
+    );
+}
+
+fn upstream_preparation_error_response(error: &UpstreamPreparationError) -> Vec<u8> {
+    json_status_response(error.status(), json!({"error":error.code()}))
+}
+
+fn validate_prepared_upstream_binding(
+    prepared: &PreparedUpstream,
+    snapshot: &Snapshot,
+    decision: &Value,
+    upstream_url: &Url,
+) -> bool {
+    prepared.policy_hash == snapshot.hash
+        && decision.get("policy_hash").and_then(Value::as_str)
+            == Some(prepared.policy_hash.as_str())
+        && decision.get("route_id").and_then(Value::as_str) == Some(prepared.route_id.as_str())
+        && upstream_url.host_str() == Some(prepared.host.as_str())
+        && upstream_url.port_or_known_default() == Some(prepared.port)
+        && prepared.socket_addr.port() == prepared.port
+        && prepared.answer_count != 0
 }
 
 fn build_audit_client() -> Result<Client, String> {
@@ -18517,6 +19629,18 @@ fn decide_internal_with_mode(
             .to_string();
         return deny_for_route(500, &reason, payload, route, started);
     }
+    if let Err(payload) = validate_provider_request_admission(&req, &url, route) {
+        let status = payload
+            .get("status_code")
+            .and_then(Value::as_u64)
+            .unwrap_or(403) as u16;
+        let reason = payload
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("provider request denied")
+            .to_string();
+        return deny_for_route(status, &reason, payload, route, started);
+    }
     let credential_ref = route.credential_ref.clone();
     let injection = if let Some(credential_id) = credential_ref.as_ref() {
         let Some(credential) = snapshot.credentials.get(credential_id) else {
@@ -20436,8 +21560,9 @@ fn fetch_gmail_metadata_child(
             };
         }
     };
-    let builder = state
-        .upstream_client
+    let builder = execution
+        .prepared_upstream
+        .client
         .get(child_url.as_str())
         .headers(headers);
     let response = match send_upstream_request_with_current_lease_and_timeout(
@@ -21209,6 +22334,93 @@ struct JsonCopyVisitor<'a, W: Write> {
     out: &'a mut W,
 }
 
+#[derive(Clone, Copy)]
+struct StrictJsonValidateSeed;
+
+struct StrictJsonValidateVisitor;
+
+impl<'de> DeserializeSeed<'de> for StrictJsonValidateSeed {
+    type Value = ();
+
+    fn deserialize<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_any(StrictJsonValidateVisitor)
+    }
+}
+
+impl<'de> Visitor<'de> for StrictJsonValidateVisitor {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("a JSON value without duplicate object keys")
+    }
+
+    fn visit_bool<E>(self, _value: bool) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_i64<E>(self, _value: i64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_u64<E>(self, _value: u64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_f64<E>(self, _value: f64) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_str<E>(self, _value: &str) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_string<E>(self, _value: String) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_none<E>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_unit<E>(self) -> Result<Self::Value, E> {
+        Ok(())
+    }
+
+    fn visit_some<D>(self, deserializer: D) -> Result<Self::Value, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StrictJsonValidateSeed.deserialize(deserializer)
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        while seq.next_element_seed(StrictJsonValidateSeed)?.is_some() {}
+        Ok(())
+    }
+
+    fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut seen = HashSet::new();
+        while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key.clone()) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key {key:?}"
+                )));
+            }
+            map.next_value_seed(StrictJsonValidateSeed)?;
+        }
+        Ok(())
+    }
+}
+
 impl<'de, 'a, W: Write> Visitor<'de> for JsonCopyVisitor<'a, W> {
     type Value = ();
 
@@ -21301,7 +22513,13 @@ impl<'de, 'a, W: Write> Visitor<'de> for JsonCopyVisitor<'a, W> {
     {
         write_json_bytes(self.out, b"{").map_err(de::Error::custom)?;
         let mut first = true;
+        let mut seen = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key.clone()) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key {key:?}"
+                )));
+            }
             if first {
                 first = false;
             } else {
@@ -21475,7 +22693,13 @@ impl<'de, 'a, W: Write> Visitor<'de> for JsonRedactVisitor<'a, W> {
     {
         write_json_bytes(self.out, b"{").map_err(de::Error::custom)?;
         let mut wrote_field = false;
+        let mut seen = HashSet::new();
         while let Some(key) = map.next_key::<String>()? {
+            if !seen.insert(key.clone()) {
+                return Err(de::Error::custom(format!(
+                    "duplicate JSON object key {key:?}"
+                )));
+            }
             let tails = self
                 .paths
                 .iter()
@@ -21489,7 +22713,7 @@ impl<'de, 'a, W: Write> Visitor<'de> for JsonRedactVisitor<'a, W> {
                 })
                 .collect::<Vec<_>>();
             if tails.is_empty() {
-                map.next_value::<IgnoredAny>()?;
+                map.next_value_seed(StrictJsonValidateSeed)?;
                 continue;
             }
             if tails.iter().any(Vec::is_empty) {
@@ -21566,7 +22790,7 @@ fn redact_json_nested_to_writer<R: Read, W: Write>(
     allowed_fields: &[Vec<String>],
     max_nested_bytes: usize,
 ) -> Result<(), String> {
-    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let mut deserializer = serde_json::Deserializer::from_reader(StrictJsonRead::new(reader));
     JsonRedactSeed {
         paths: allowed_fields,
         out: writer,
@@ -21591,7 +22815,7 @@ fn redact_json_line(line: &[u8], paths: &[Vec<String>]) -> Result<Vec<u8>, Strin
     if trimmed.is_empty() {
         return Ok(b"\n".to_vec());
     }
-    let payload = serde_json::from_slice::<Value>(trimmed)
+    let payload = strict_json_value_from_slice(trimmed)
         .map_err(|err| format!("json_lines_invalid_json: {err}"))?;
     let redacted = redact_json_value(&payload, paths);
     let mut out =
@@ -21784,7 +23008,7 @@ impl JsonArrayRedactorCore {
         if trimmed.is_empty() {
             return Err("json_array_empty_item".to_string());
         }
-        let payload = serde_json::from_slice::<Value>(trimmed)
+        let payload = strict_json_value_from_slice(trimmed)
             .map_err(|err| format!("json_array_invalid_json: {err}"))?;
         let redacted = redact_json_value(&payload, &self.allowed_fields);
         serde_json::to_vec(&redacted).map_err(|err| format!("json_array_serialize: {err}"))
@@ -22114,7 +23338,7 @@ impl JsonSseRedactorCore {
         if trimmed.is_empty() {
             return Err("json_sse_empty_data".to_string());
         }
-        let payload = serde_json::from_slice::<Value>(trimmed)
+        let payload = strict_json_value_from_slice(trimmed)
             .map_err(|err| format!("json_sse_invalid_json: {err}"))?;
         let redacted = redact_json_value(&payload, &self.allowed_fields);
         let redacted =
@@ -22998,6 +24222,165 @@ fn response_config_for_status(response_config: &Value, status: StatusCode) -> Re
         "error":"response_status_invalid",
         "upstreamStatus":status.as_u16(),
     }))
+}
+
+fn is_http_token_byte(byte: u8) -> bool {
+    byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte)
+}
+
+fn normalized_media_type_with_parameter_policy(
+    value: &str,
+    reject_duplicate_parameters: bool,
+) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut cursor = 0;
+    let skip_ows = |cursor: &mut usize| {
+        while bytes
+            .get(*cursor)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            *cursor += 1;
+        }
+    };
+    let token = |cursor: &mut usize| {
+        let start = *cursor;
+        while bytes
+            .get(*cursor)
+            .is_some_and(|byte| is_http_token_byte(*byte))
+        {
+            *cursor += 1;
+        }
+        (start, *cursor)
+    };
+
+    skip_ows(&mut cursor);
+    let (type_start, type_end) = token(&mut cursor);
+    if type_start == type_end || bytes.get(cursor) != Some(&b'/') {
+        return None;
+    }
+    cursor += 1;
+    let (subtype_start, subtype_end) = token(&mut cursor);
+    if subtype_start == subtype_end {
+        return None;
+    }
+    let media_type = format!(
+        "{}/{}",
+        std::str::from_utf8(&bytes[type_start..type_end]).ok()?,
+        std::str::from_utf8(&bytes[subtype_start..subtype_end]).ok()?
+    )
+    .to_ascii_lowercase();
+
+    skip_ows(&mut cursor);
+    let mut parameter_names = HashSet::new();
+    while cursor < bytes.len() {
+        if bytes[cursor] != b';' {
+            return None;
+        }
+        cursor += 1;
+        skip_ows(&mut cursor);
+        let (name_start, name_end) = token(&mut cursor);
+        if name_start == name_end {
+            return None;
+        }
+        let name = std::str::from_utf8(&bytes[name_start..name_end])
+            .ok()?
+            .to_ascii_lowercase();
+        if reject_duplicate_parameters && !parameter_names.insert(name) {
+            return None;
+        }
+        skip_ows(&mut cursor);
+        if bytes.get(cursor) != Some(&b'=') {
+            return None;
+        }
+        cursor += 1;
+        skip_ows(&mut cursor);
+        if bytes.get(cursor) == Some(&b'"') {
+            cursor += 1;
+            let mut closed = false;
+            while let Some(byte) = bytes.get(cursor).copied() {
+                match byte {
+                    b'"' => {
+                        cursor += 1;
+                        closed = true;
+                        break;
+                    }
+                    b'\\' => {
+                        cursor += 1;
+                        let escaped = bytes.get(cursor).copied()?;
+                        if !matches!(escaped, b'\t' | b' '..=b'~') {
+                            return None;
+                        }
+                        cursor += 1;
+                    }
+                    b'\t' | b' ' | b'!' | b'#'..=b'[' | b']'..=b'~' => cursor += 1,
+                    _ => return None,
+                }
+            }
+            if !closed {
+                return None;
+            }
+        } else {
+            let (value_start, value_end) = token(&mut cursor);
+            if value_start == value_end {
+                return None;
+            }
+        }
+        skip_ows(&mut cursor);
+    }
+    Some(media_type)
+}
+
+fn normalized_media_type(value: &str) -> Option<String> {
+    normalized_media_type_with_parameter_policy(value, true)
+}
+
+fn normalized_provider_request_media_type(value: &str) -> Option<String> {
+    if value.len() > 8_192 {
+        return None;
+    }
+    normalized_media_type_with_parameter_policy(value, false)
+}
+
+fn validate_selected_json_response_content_type(
+    response_config: &Value,
+    upstream_headers: &HeaderMap,
+    adapter_type: &str,
+) -> Result<(), Value> {
+    if response_config.get("mode").and_then(Value::as_str) != Some("json") {
+        return Ok(());
+    }
+    let mut values = upstream_headers.get_all("content-type").iter();
+    let Some(value) = values.next() else {
+        return Err(json!({
+            "error":"response_json_content_type_missing",
+            "adapter":adapter_type,
+        }));
+    };
+    if values.next().is_some() {
+        return Err(json!({
+            "error":"response_json_content_type_duplicate",
+            "adapter":adapter_type,
+        }));
+    }
+    let value = value.to_str().map_err(|_| {
+        json!({
+            "error":"response_json_content_type_malformed",
+            "adapter":adapter_type,
+        })
+    })?;
+    let Some(media_type) = normalized_media_type(value) else {
+        return Err(json!({
+            "error":"response_json_content_type_malformed",
+            "adapter":adapter_type,
+        }));
+    };
+    if media_type != "application/json" {
+        return Err(json!({
+            "error":"response_json_content_type_mismatch",
+            "adapter":adapter_type,
+        }));
+    }
+    Ok(())
 }
 
 fn canonical_response_content_type(content_type: Option<&str>) -> String {
@@ -24418,6 +25801,17 @@ fn validate_forward_response(
     }
     let operation = decision.get("operation");
     if status.is_success() {
+        if let Err(payload) = validate_public_npm_publish_receipt(
+            route_match.route,
+            status,
+            content_type,
+            &body,
+            operation.unwrap_or(&Value::Null),
+        ) {
+            return block_forward_response(state, decision, method, url, status, payload);
+        }
+    }
+    if status.is_success() {
         let operation_context = operation.unwrap_or(&Value::Null);
         if let Err(payload) = validate_response_binding_envelope(
             route_match.route,
@@ -24785,6 +26179,88 @@ fn streaming_response_proof_upstream_canonical_digest(
     }))
 }
 
+fn validate_public_npm_publish_receipt(
+    route: &Route,
+    status: StatusCode,
+    content_type: Option<&str>,
+    body: &[u8],
+    operation: &Value,
+) -> Result<(), Value> {
+    if route.adapter_type != "npm.registry"
+        || route.host != NPM_PUBLIC_REGISTRY_HOST
+        || operation.get("operation").and_then(Value::as_str) != Some("npm.publish")
+    {
+        return Ok(());
+    }
+    let response = route
+        .adapter_config
+        .get("response")
+        .and_then(Value::as_object);
+    let receipt_fields_valid = response
+        .and_then(|response| response.get("allowedFields"))
+        .and_then(Value::as_array)
+        .is_some_and(|fields| {
+            fields.len() == NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS.len()
+                && fields
+                    .iter()
+                    .zip(NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS)
+                    .all(|(field, expected)| field.as_str() == Some(expected))
+        });
+    let receipt_headers_valid = response
+        .and_then(|response| response.get("allowedHeaders"))
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty);
+    let has_public_response_constraint = route.constraints.iter().any(|constraint| {
+        matches!(
+            constraint.get("type").and_then(Value::as_str),
+            Some("responseBinding" | "responseJson")
+        ) && constraint.get("operations").is_none_or(|operations| {
+            operations.as_array().is_some_and(|operations| {
+                operations
+                    .iter()
+                    .any(|operation| operation.as_str() == Some("npm.publish"))
+            })
+        })
+    });
+    if route
+        .adapter_config
+        .get("publishResponseContract")
+        .and_then(Value::as_str)
+        != Some(NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT)
+        || response
+            .and_then(|response| response.get("mode"))
+            .and_then(Value::as_str)
+            != Some("json")
+        || !receipt_fields_valid
+        || !receipt_headers_valid
+        || has_public_response_constraint
+    {
+        return Err(json!({"error":"npm_public_publish_receipt_policy_invalid"}));
+    }
+    if !matches!(status.as_u16(), 200 | 201) {
+        return Err(json!({
+            "error":"npm_public_publish_receipt_status_denied",
+            "upstreamStatus":status.as_u16(),
+        }));
+    }
+    if content_type != Some("application/json") {
+        return Err(json!({"error":"npm_public_publish_receipt_content_type_denied"}));
+    }
+    let payload = strict_json_value_from_slice(body)
+        .map_err(|_| json!({"error":"npm_public_publish_receipt_invalid_json"}))?;
+    let object = payload
+        .as_object()
+        .ok_or_else(|| json!({"error":"npm_public_publish_receipt_object_required"}))?;
+    if NPM_PUBLIC_REGISTRY_RECEIPT_FIELDS.iter().any(|field| {
+        object
+            .get(*field)
+            .is_some_and(|value| value != &Value::Bool(true))
+    }) {
+        return Err(json!({"error":"npm_public_publish_receipt_success_denied"}));
+    }
+    Ok(())
+}
+
 fn finalize_upstream_response(
     state: &GateState,
     snapshot: &Arc<Snapshot>,
@@ -24870,6 +26346,20 @@ fn finalize_upstream_response(
                 ))
             }
         };
+    if let Err(payload) = validate_selected_json_response_content_type(
+        &response_config,
+        &upstream_headers,
+        &base_response_policy.adapter_type,
+    ) {
+        return ForwardResult::Buffered(block_forward_response(
+            state,
+            decision,
+            request_method,
+            upstream_url,
+            status,
+            payload,
+        ));
+    }
     if let Some(payload) = credential_response_projection_error(
         base_response_policy.credential_bearing,
         &response_config,
@@ -25130,6 +26620,19 @@ fn forward_absolute_request_inner<'a>(
             ))
         }
     };
+    let prepared_upstream = match prepare_upstream_for_buffered_forward(
+        state,
+        snapshot,
+        &request,
+        &target_url,
+        authenticated_principal_id,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            audit_upstream_preparation_error(state, &request.method, &target_url, &error);
+            buffered!(upstream_preparation_error_response(&error));
+        }
+    };
     let decision_request = DecisionRequest {
         client_ip: request.client_ip.clone(),
         method: request.method.clone(),
@@ -25202,6 +26705,18 @@ fn forward_absolute_request_inner<'a>(
         &mut upstream_url,
         decision.get("rewrite").unwrap_or(&Value::Null),
     );
+    let Some(prepared_upstream) = prepared_upstream.as_ref() else {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    };
+    if !validate_prepared_upstream_binding(prepared_upstream, snapshot, &decision, &upstream_url) {
+        buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    }
     let route_streaming =
         response_policy_for_decision(snapshot, &decision, &request.method, &upstream_url)
             .is_some_and(|policy| streaming_response_policy(&policy).is_some());
@@ -25341,7 +26856,8 @@ fn forward_absolute_request_inner<'a>(
         }
     };
     let request_method = request.method.clone();
-    let mut builder = upstream_client_for_method(state, &method)
+    let mut builder = prepared_upstream
+        .client
         .request(method, upstream_url.as_str())
         .headers(headers);
     if !request.body.is_empty() {
@@ -25493,6 +27009,7 @@ fn forward_absolute_request_inner<'a>(
         dispatch_expires_at_epoch_ms: release_dispatch_observation
             .as_ref()
             .map(|observation| observation.dispatch_expires_at_epoch_ms),
+        prepared_upstream,
     });
     let mut gmail_proof_commit = None;
     let result = finalize_upstream_response(
@@ -25566,6 +27083,19 @@ fn forward_absolute_streaming_request_to(
             ))
         }
     };
+    let prepared_upstream = match prepare_upstream_for_forward(
+        state,
+        snapshot,
+        &request,
+        &target_url,
+        authenticated_principal_id,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            audit_upstream_preparation_error(state, &request.method, &target_url, &error);
+            write_buffered!(upstream_preparation_error_response(&error));
+        }
+    };
     let decision_request = DecisionRequest {
         client_ip: request.client_ip.clone(),
         method: request.method.clone(),
@@ -25619,6 +27149,18 @@ fn forward_absolute_streaming_request_to(
         &mut upstream_url,
         decision.get("rewrite").unwrap_or(&Value::Null),
     );
+    let Some(prepared_upstream) = prepared_upstream.as_ref() else {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    };
+    if !validate_prepared_upstream_binding(prepared_upstream, snapshot, &decision, &upstream_url) {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    }
     let injection_plan = decision
         .get("injection")
         .and_then(|value| value.get("plan"))
@@ -25757,7 +27299,8 @@ fn forward_absolute_streaming_request_to(
         )),
         _ => Body::sized(body_stream, content_length),
     };
-    let builder = upstream_client_for_method(state, &method)
+    let builder = prepared_upstream
+        .client
         .request(method, upstream_url.as_str())
         .headers(headers)
         .body(upstream_body);
@@ -25973,6 +27516,19 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             ))
         }
     };
+    let prepared_upstream = match prepare_upstream_for_forward(
+        state,
+        snapshot,
+        &request,
+        &target_url,
+        authenticated_principal_id,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            audit_upstream_preparation_error(state, &request.method, &target_url, &error);
+            write_buffered!(upstream_preparation_error_response(&error));
+        }
+    };
     let decision_request = DecisionRequest {
         client_ip: request.client_ip.clone(),
         method: request.method.clone(),
@@ -26026,6 +27582,18 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         &mut upstream_url,
         decision.get("rewrite").unwrap_or(&Value::Null),
     );
+    let Some(prepared_upstream) = prepared_upstream.as_ref() else {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    };
+    if !validate_prepared_upstream_binding(prepared_upstream, snapshot, &decision, &upstream_url) {
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":"upstream_transport_preparation_failed"}),
+        ));
+    }
     let injection_plan = decision
         .get("injection")
         .and_then(|value| value.get("plan"))
@@ -26193,7 +27761,8 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         )),
         _ => Body::sized(body_reader, content_length),
     };
-    let builder = upstream_client_for_method(state, &method)
+    let builder = prepared_upstream
+        .client
         .request(method, upstream_url.as_str())
         .headers(headers)
         .body(body);
@@ -26791,7 +28360,18 @@ fn buffered_route_body_limit(
         return MAX_BUFFERED_REQUEST_BODY_BYTES;
     };
     if route_match.route.adapter_type != "generic.rest" {
-        return MAX_BUFFERED_REQUEST_BODY_BYTES;
+        return provider_request_profile(
+            &route_match.route.adapter_type,
+            route_match
+                .route
+                .adapter_config
+                .get("mode")
+                .and_then(Value::as_str),
+        )
+        .ok()
+        .flatten()
+        .map(|profile| profile.max_body_bytes.min(MAX_BUFFERED_REQUEST_BODY_BYTES))
+        .unwrap_or(MAX_BUFFERED_REQUEST_BODY_BYTES);
     }
     let Some(request_config) = get_object(&route_match.route.adapter_config, "request") else {
         return MAX_BUFFERED_REQUEST_BODY_BYTES;
@@ -28842,8 +30422,12 @@ fn main() -> Result<(), String> {
         policy_minimum_rollback_epoch,
     )?;
     let snapshot = Arc::new(initial_snapshot);
-    let upstream_client = build_upstream_client(true)?;
-    let one_shot_upstream_client = build_upstream_client(false)?;
+    let upstream_client_config = load_upstream_client_config()?;
+    let upstream_resolver: Arc<dyn UpstreamResolver> = Arc::new(SystemUpstreamResolver::new(
+        UPSTREAM_RESOLVER_WORKERS,
+        UPSTREAM_RESOLVER_QUEUE_CAPACITY,
+        UPSTREAM_RESOLUTION_TIMEOUT,
+    )?);
     let audit_client = build_audit_client()?;
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
@@ -28884,8 +30468,11 @@ fn main() -> Result<(), String> {
         credential_lease_renewal_queued: AtomicU64::new(0),
         credential_lease_renewal_queue_full: AtomicU64::new(0),
         credential_lease_cache_max,
-        upstream_client,
-        one_shot_upstream_client,
+        upstream_resolver,
+        upstream_client_config,
+        pinned_upstream_clients: Mutex::new(PinnedUpstreamClientCache::new(
+            MAX_PINNED_UPSTREAM_CLIENTS,
+        )),
         audit_client,
         credential_lease_client,
         audit_url,
@@ -28997,6 +30584,61 @@ fn main() -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    struct TestUpstreamResolver;
+
+    impl UpstreamResolver for TestUpstreamResolver {
+        fn resolve(&self, host: &str, port: u16) -> Result<Vec<SocketAddr>, String> {
+            let address = host
+                .parse::<IpAddr>()
+                .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
+            Ok(vec![SocketAddr::new(address, port)])
+        }
+    }
+
+    struct SequencedUpstreamResolver {
+        calls: AtomicU64,
+        answers: Mutex<VecDeque<Result<Vec<SocketAddr>, String>>>,
+    }
+
+    impl SequencedUpstreamResolver {
+        fn new(answers: Vec<Result<Vec<SocketAddr>, String>>) -> Self {
+            Self {
+                calls: AtomicU64::new(0),
+                answers: Mutex::new(answers.into()),
+            }
+        }
+
+        fn calls(&self) -> u64 {
+            self.calls.load(Ordering::Relaxed)
+        }
+
+        fn remaining_answers(&self) -> usize {
+            self.answers
+                .lock()
+                .expect("sequenced resolver answers")
+                .len()
+        }
+    }
+
+    impl UpstreamResolver for SequencedUpstreamResolver {
+        fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<SocketAddr>, String> {
+            self.calls.fetch_add(1, Ordering::Relaxed);
+            self.answers
+                .lock()
+                .expect("sequenced resolver answers")
+                .pop_front()
+                .unwrap_or_else(|| Err("unexpected additional resolution".to_string()))
+        }
+    }
+
+    fn test_upstream_client() -> Client {
+        Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("test upstream client")
+    }
 
     fn test_temp_path(label: &str) -> PathBuf {
         static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
@@ -29592,6 +31234,104 @@ mod tests {
         response
     }
 
+    fn finalize_test_upstream_response(snapshot: Arc<Snapshot>, raw_response: Vec<u8>) -> String {
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation",
+            "operation":{"operation":"test.read"},
+        });
+        let url = Url::parse("https://example.test/resource").expect("test upstream URL");
+        let response = test_reqwest_response(raw_response);
+        match finalize_upstream_response(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            response,
+            &ResponseSecretGuard::default(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        ) {
+            ForwardResult::Buffered(response) => {
+                String::from_utf8(response).expect("buffered test response")
+            }
+            ForwardResult::Streamed => panic!("buffered test response unexpectedly streamed"),
+        }
+    }
+
+    fn finalize_public_npm_test_upstream_response(raw_response: Vec<u8>) -> String {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        let route = &mut snapshot.routes[0];
+        route.host = NPM_PUBLIC_REGISTRY_HOST.to_string();
+        route.methods.insert("PUT".to_string());
+        route.adapter_type = "npm.registry".to_string();
+        route.adapter_config = json!({
+            "operations":["publish"],
+            "publishResponseContract":NPM_PUBLIC_REGISTRY_RECEIPT_CONTRACT,
+            "response":{
+                "mode":"json",
+                "maxBodyBytes":65536,
+                "allowedFields":["ok","published"],
+                "allowedHeaders":[],
+                "error":{
+                    "mode":"json",
+                    "maxBodyBytes":65536,
+                    "allowedFields":["error","reason"],
+                    "allowedHeaders":[],
+                    "onInvalid":"block"
+                }
+            }
+        });
+        let snapshot = Arc::new(snapshot);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "request_digest":"sha256:request",
+            "operation_digest":"sha256:operation",
+            "operation":{
+                "operation":"npm.publish",
+                "packageName":"@scope/example",
+                "packageVersion":"1.2.3",
+                "tarballIntegrity":"sha512:test"
+            },
+        });
+        let url = Url::parse("https://registry.npmjs.org/resource").expect("public npm URL");
+        let response = test_reqwest_response(raw_response);
+        match finalize_upstream_response(
+            &state,
+            &snapshot,
+            &decision,
+            "PUT",
+            &url,
+            response,
+            &ResponseSecretGuard::default(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        ) {
+            ForwardResult::Buffered(response) => {
+                String::from_utf8(response).expect("buffered public npm response")
+            }
+            ForwardResult::Streamed => panic!("public npm response unexpectedly streamed"),
+        }
+    }
+
     fn serve_one_control_plane_response(
         status: &str,
         body: &[u8],
@@ -29656,6 +31396,9 @@ mod tests {
                 scheme: "https".to_string(),
                 host: "example.test".to_string(),
                 port: 443,
+                resolved_address_policy: ResolvedAddressPolicy::ExplicitCidrs(vec!["127.0.0.0/8"
+                    .parse()
+                    .expect("test loopback CIDR")]),
                 methods: HashSet::from(["GET".to_string(), "POST".to_string()]),
                 paths: vec![compile_template("/resource").expect("test route template")],
                 credential_ref: None,
@@ -29777,8 +31520,13 @@ mod tests {
             credential_lease_renewal_queued: AtomicU64::new(0),
             credential_lease_renewal_queue_full: AtomicU64::new(0),
             credential_lease_cache_max: 10_000,
-            upstream_client: client.clone(),
-            one_shot_upstream_client: client.clone(),
+            upstream_resolver: Arc::new(TestUpstreamResolver),
+            upstream_client_config: UpstreamClientConfig {
+                root_certificates: Vec::new(),
+            },
+            pinned_upstream_clients: Mutex::new(PinnedUpstreamClientCache::new(
+                MAX_PINNED_UPSTREAM_CLIENTS,
+            )),
             audit_client: client.clone(),
             credential_lease_client: client,
             audit_url: None,
@@ -31974,12 +33722,12 @@ mod tests {
             .split_once('?')
             .unwrap_or((&request.target, ""));
         let statement = json!({
-            "version":"serverware.responseSignature/v1",
+            "version":"serverware.responseSignature/v2",
             "issued_at_ms":issued_at_ms,
             "request":{
                 "method":request.method,
                 "path":path,
-                "query":query,
+                "query_sha256":sha256_prefixed(query.as_bytes()),
             },
             "status_code":status.as_u16(),
             "body_sha256":body_sha256,
@@ -33341,6 +35089,52 @@ mod tests {
         })
     }
 
+    fn provider_request_profile_json(adapter_type: &str, mode: Option<&str>) -> Value {
+        let profile = provider_request_profile(adapter_type, mode)
+            .expect("provider request profile")
+            .expect("specialized adapter request profile");
+        json!({
+            "allowedHeaders":profile.allowed_headers,
+            "allowedQueryKeys":profile.allowed_query_keys,
+            "allowedMediaTypes":profile.allowed_media_types,
+            "maxBodyBytes":profile.max_body_bytes,
+        })
+    }
+
+    fn specialized_test_route(adapter_type: &str, mode: Option<&str>) -> Route {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.adapter_type = adapter_type.to_string();
+        route.adapter_config = json!({
+            "request":provider_request_profile_json(adapter_type, mode),
+        });
+        if let Some(mode) = mode {
+            route.adapter_config["mode"] = json!(mode);
+        }
+        route
+    }
+
+    fn provider_test_request(
+        method: &str,
+        url: &str,
+        headers: BTreeMap<String, String>,
+        body: &str,
+        forwarded_body_length: Option<u64>,
+    ) -> DecisionRequest {
+        DecisionRequest {
+            client_ip: None,
+            method: method.to_string(),
+            url: url.to_string(),
+            headers,
+            body: body.to_string(),
+            body_sha256: Some(sha256_prefixed(body.as_bytes())),
+            forwarded_body_length,
+            forwarded_body_utf8_valid: Some(true),
+            credential_metadata: BTreeMap::new(),
+            gmail_proofs: Vec::new(),
+            client_request_digest: None,
+        }
+    }
+
     fn policy_with_credential_route(mut route: Value) -> Value {
         route["credentialRef"] = json!("credential:test");
         let mut policy = policy_with_route(route);
@@ -33624,9 +35418,13 @@ mod tests {
     #[test]
     fn response_statement_rejects_unknown_context_fields() {
         let value = json!({
-            "version": "serverware.response-signature.v1",
+            "version": "serverware.responseSignature/v2",
             "issued_at_ms": 1,
-            "request": {"method": "POST", "path": "/leases", "query": ""},
+            "request": {
+                "method": "POST",
+                "path": "/leases",
+                "query_sha256": sha256_prefixed(b"")
+            },
             "status_code": 200,
             "body_sha256": "sha256:body",
             "nonce": "canonical-nonce",
@@ -33691,18 +35489,618 @@ mod tests {
     }
 
     #[test]
-    fn mutating_upstream_requests_use_a_non_pooled_client() {
-        let state = test_gate_state(test_snapshot(1));
-        assert!(std::ptr::eq(
-            upstream_client_for_method(&state, &Method::GET),
-            &state.upstream_client
+    fn upstream_address_policy_blocks_special_metadata_and_mapped_addresses() {
+        let blocked = [
+            "0.0.0.1",
+            "10.0.0.1",
+            "100.64.0.1",
+            "100.100.100.200",
+            "127.0.0.1",
+            "169.254.169.254",
+            "169.254.170.5",
+            "172.16.0.1",
+            "192.0.0.1",
+            "192.0.0.192",
+            "192.0.2.1",
+            "192.88.99.1",
+            "192.168.1.1",
+            "198.18.0.1",
+            "198.51.100.1",
+            "203.0.113.1",
+            "224.0.0.1",
+            "255.255.255.255",
+            "::",
+            "::1",
+            "::ffff:127.0.0.1",
+            "64:ff9b::1",
+            "64:ff9b:1::1",
+            "2001::1",
+            "2001:db8::1",
+            "2002::1",
+            "3fff::1",
+            "fc00::1",
+            "fd00:ec2::1",
+            "fd20:ce::1",
+            "fe80::1",
+            "ff02::1",
+        ];
+        for address in blocked {
+            let address = address.parse::<IpAddr>().expect("blocked test IP");
+            assert!(
+                !address_allowed_by_policy(address, &ResolvedAddressPolicy::PublicOnly),
+                "public-only policy admitted {address}"
+            );
+        }
+        for address in ["8.8.8.8", "1.1.1.1", "2001:4860:4860::8888"] {
+            let address = address.parse::<IpAddr>().expect("public test IP");
+            assert!(
+                address_allowed_by_policy(address, &ResolvedAddressPolicy::PublicOnly),
+                "public-only policy rejected {address}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_cidrs_allow_private_targets_but_never_metadata_or_mixed_answers() {
+        let policy = ResolvedAddressPolicy::ExplicitCidrs(vec![
+            "10.20.0.0/16".parse().expect("private CIDR"),
+            "127.0.0.0/8".parse().expect("loopback CIDR"),
+        ]);
+        let allowed = validate_resolved_addresses(
+            vec!["10.20.4.5:9000".parse().expect("private socket")],
+            443,
+            &policy,
+        )
+        .expect("explicit private target");
+        assert_eq!(allowed, vec!["10.20.4.5:443".parse().unwrap()]);
+
+        let outside = validate_resolved_addresses(
+            vec!["10.21.4.5:443".parse().expect("outside socket")],
+            443,
+            &policy,
+        );
+        assert!(matches!(
+            outside,
+            Err(UpstreamPreparationError::AddressDenied { .. })
         ));
-        for method in [Method::POST, Method::PUT, Method::PATCH, Method::DELETE] {
-            assert!(std::ptr::eq(
-                upstream_client_for_method(&state, &method),
-                &state.one_shot_upstream_client
+
+        let mixed = validate_resolved_addresses(
+            vec![
+                "10.20.4.5:443".parse().unwrap(),
+                "8.8.8.8:443".parse().unwrap(),
+            ],
+            443,
+            &policy,
+        );
+        assert!(matches!(
+            mixed,
+            Err(UpstreamPreparationError::AddressDenied { .. })
+        ));
+
+        let broad = ResolvedAddressPolicy::ExplicitCidrs(vec![
+            "0.0.0.0/0".parse().expect("broad IPv4 CIDR"),
+            "::/0".parse().expect("broad IPv6 CIDR"),
+        ]);
+        for address in [
+            "169.254.169.254:443",
+            "169.254.170.1:443",
+            "100.100.100.200:443",
+            "192.0.0.192:443",
+            "[fd00:ec2::1]:443",
+            "[fd20:ce::1]:443",
+            "[::]:443",
+            "[ff02::1]:443",
+        ] {
+            assert!(matches!(
+                validate_resolved_addresses(vec![address.parse().unwrap()], 443, &broad),
+                Err(UpstreamPreparationError::AddressDenied { .. })
             ));
         }
+    }
+
+    #[test]
+    fn resolved_answer_validation_is_bounded_deduplicated_and_deterministic() {
+        let policy = ResolvedAddressPolicy::ExplicitCidrs(vec![
+            "127.0.0.0/8".parse().unwrap(),
+            "fd00::/8".parse().unwrap(),
+        ]);
+        assert!(matches!(
+            validate_resolved_addresses(Vec::new(), 443, &policy),
+            Err(UpstreamPreparationError::ResolutionUnavailable { .. })
+        ));
+        assert!(matches!(
+            validate_resolved_addresses(
+                (1..=33)
+                    .map(|last| SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, last)), 80))
+                    .collect(),
+                443,
+                &policy,
+            ),
+            Err(UpstreamPreparationError::ResolutionUnavailable { .. })
+        ));
+        let first = validate_resolved_addresses(
+            vec![
+                "[fd00::2]:80".parse().unwrap(),
+                "127.0.0.2:80".parse().unwrap(),
+                "127.0.0.1:81".parse().unwrap(),
+                "127.0.0.2:82".parse().unwrap(),
+            ],
+            443,
+            &policy,
+        )
+        .expect("valid deterministic answers");
+        let second = validate_resolved_addresses(
+            vec![
+                "127.0.0.2:82".parse().unwrap(),
+                "127.0.0.1:81".parse().unwrap(),
+                "[fd00::2]:80".parse().unwrap(),
+            ],
+            443,
+            &policy,
+        )
+        .expect("permuted deterministic answers");
+        assert_eq!(first, second);
+        assert_eq!(first[0], "127.0.0.1:443".parse().unwrap());
+        assert_eq!(first.len(), 3);
+
+        let mut cache = PinnedUpstreamClientCache::new(2);
+        let client = test_upstream_client();
+        for last in 1..=3 {
+            cache.insert(
+                PinnedUpstreamClientKey {
+                    host: "cache.invalid".to_string(),
+                    port: 443,
+                    address: IpAddr::V4(Ipv4Addr::new(127, 0, 0, last)),
+                    reuse_idle_connections: true,
+                },
+                client.clone(),
+            );
+        }
+        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(cache.order.len(), 2);
+    }
+
+    #[test]
+    fn resolved_cidr_policy_requires_canonical_non_mapped_networks() {
+        assert_eq!(
+            parse_resolved_address_policy(None, "route test").unwrap(),
+            ResolvedAddressPolicy::PublicOnly
+        );
+        assert!(matches!(
+            parse_resolved_address_policy(
+                Some(&json!(["127.0.0.0/8", "10.0.0.0/8"])),
+                "route test"
+            )
+            .unwrap(),
+            ResolvedAddressPolicy::ExplicitCidrs(networks) if networks.len() == 2
+        ));
+        for invalid in [
+            json!([]),
+            json!(["10.1.2.3/8"]),
+            json!(["::ffff:127.0.0.0/104"]),
+            json!(["127.0.0.0/8", "127.0.0.0/8"]),
+        ] {
+            assert!(
+                parse_resolved_address_policy(Some(&invalid), "route test").is_err(),
+                "accepted invalid resolved CIDRs: {invalid}"
+            );
+        }
+    }
+
+    #[test]
+    fn buffered_forward_resolves_once_and_uses_only_the_first_pinned_answer_set() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("rebind listener");
+        let address = listener.local_addr().expect("rebind address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept pinned request");
+            let mut request = [0_u8; 4096];
+            let read = stream.read(&mut request).expect("read pinned request");
+            assert!(String::from_utf8_lossy(&request[..read]).starts_with("GET /resource "));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{\"safe\":true}",
+                )
+                .expect("write pinned response");
+        });
+
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        let route = &mut snapshot_value.routes[0];
+        route.scheme = "http".to_string();
+        route.host = "rebind.invalid".to_string();
+        route.port = address.port();
+        route.methods = HashSet::from(["GET".to_string()]);
+        let snapshot = Arc::new(snapshot_value);
+        let resolver = Arc::new(SequencedUpstreamResolver::new(vec![
+            Ok(vec![SocketAddr::new(address.ip(), address.port())]),
+            Ok(vec!["10.0.0.1:443".parse().unwrap()]),
+        ]));
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.upstream_resolver = resolver.clone();
+
+        let result = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "GET".to_string(),
+                target: format!("http://rebind.invalid:{}/resource", address.port()),
+                headers: BTreeMap::new(),
+                body: Vec::new(),
+                client_ip: None,
+            },
+            Some("agent:test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let ForwardResult::Buffered(response) = result else {
+            panic!("buffered rebind test unexpectedly streamed");
+        };
+        assert!(String::from_utf8_lossy(&response).starts_with("HTTP/1.1 200"));
+        server.join().expect("join pinned server");
+        assert_eq!(resolver.calls(), 1);
+        assert_eq!(resolver.remaining_answers(), 1);
+        let cache = state
+            .pinned_upstream_clients
+            .lock()
+            .expect("pinned client cache");
+        assert!(cache.entries.keys().all(|key| key.address == address.ip()));
+    }
+
+    #[test]
+    fn address_denial_precedes_credential_jit_quota_release_and_upstream_side_effects() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("side-effect listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking side-effect listener");
+        let address = listener.local_addr().expect("side-effect address");
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        let route = &mut snapshot_value.routes[0];
+        route.host = "blocked.invalid".to_string();
+        route.credential_ref = Some("credential:test".to_string());
+        route.resolved_address_policy = ResolvedAddressPolicy::PublicOnly;
+        route.jit = json!({"required":true,"ttlSeconds":30,"maxUses":1});
+        route.constraints = vec![json!({
+            "id":"shared-quota",
+            "type":"rateLimit",
+            "max":1,
+            "windowSeconds":60,
+            "store":"shared"
+        })];
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer"}),
+            },
+        );
+        let snapshot = Arc::new(snapshot_value);
+        let resolver = Arc::new(SequencedUpstreamResolver::new(vec![Ok(vec![
+            SocketAddr::new(address.ip(), 443),
+        ])]));
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.upstream_resolver = resolver.clone();
+        let base = format!("http://{address}");
+        state.credential_lease_url = Some(format!("{base}/credential-leases"));
+        state.grant_consume_url = Some(format!("{base}/grants/consume"));
+        state.rate_limit_consume_url = Some(format!("{base}/rate-limits/consume"));
+        state.atomic_release_authorization_enabled = true;
+        state.release_authorization_base_url = Some(format!("{base}/release-authorizations"));
+
+        let result = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "GET".to_string(),
+                target: "https://blocked.invalid/resource".to_string(),
+                headers: BTreeMap::new(),
+                body: Vec::new(),
+                client_ip: None,
+            },
+            Some("agent:test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let ForwardResult::Buffered(response) = result else {
+            panic!("address denial unexpectedly streamed");
+        };
+        let response = String::from_utf8(response).expect("address denial response");
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(response.contains("upstream_address_denied"), "{response}");
+        assert!(!response.contains("127.0.0.1"), "{response}");
+        assert_eq!(resolver.calls(), 1);
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+        assert!(state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .is_empty());
+        assert!(state.grants.lock().expect("grants").is_empty());
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+        assert_eq!(
+            state
+                .credential_lease_refresh_success
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state
+                .credential_lease_refresh_failed
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert!(matches!(
+            listener.accept(),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock
+        ));
+    }
+
+    fn spawn_streaming_rebind_upstream() -> (SocketAddr, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("streaming rebind listener");
+        let address = listener.local_addr().expect("streaming rebind address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept streaming request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("streaming request timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            loop {
+                let read = stream.read(&mut buffer).expect("read streaming request");
+                assert!(read != 0, "streaming request ended early");
+                request.extend_from_slice(&buffer[..read]);
+                let Some(header_end) = request
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .map(|index| index + 4)
+                else {
+                    continue;
+                };
+                if request.len() >= header_end + 1 {
+                    break;
+                }
+            }
+            assert!(String::from_utf8_lossy(&request).starts_with("POST /resource "));
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{\"safe\":true}",
+                )
+                .expect("write streaming response");
+        });
+        (address, server)
+    }
+
+    fn streaming_rebind_snapshot(address: SocketAddr) -> Arc<Snapshot> {
+        let mut snapshot = (*test_snapshot(1)).clone();
+        let route = &mut snapshot.routes[0];
+        route.scheme = "http".to_string();
+        route.host = "rebind.invalid".to_string();
+        route.port = address.port();
+        route.methods = HashSet::from(["POST".to_string()]);
+        route.adapter_config["request"] = json!({
+            "allowedHeaders":[],
+            "allowedQueryKeys":[],
+            "bodyMode":"stream",
+            "maxBodyBytes":16,
+        });
+        Arc::new(snapshot)
+    }
+
+    fn streaming_rebind_policy() -> StreamingRequestPolicy {
+        StreamingRequestPolicy {
+            mode: "stream".to_string(),
+            max_body_bytes: 16,
+            max_line_bytes: 16,
+            max_item_bytes: 16,
+            max_event_bytes: 16,
+            max_pair_bytes: 16,
+            max_record_bytes: 16,
+            max_nested_bytes: 16,
+            allowed_fields: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn absolute_and_connect_streaming_paths_never_reresolve_after_preparation() {
+        let (absolute_address, absolute_server) = spawn_streaming_rebind_upstream();
+        let absolute_snapshot = streaming_rebind_snapshot(absolute_address);
+        let absolute_resolver = Arc::new(SequencedUpstreamResolver::new(vec![
+            Ok(vec![absolute_address]),
+            Ok(vec!["10.0.0.1:443".parse().unwrap()]),
+        ]));
+        let mut absolute_state = test_gate_state(Arc::clone(&absolute_snapshot));
+        absolute_state.upstream_resolver = absolute_resolver.clone();
+        let absolute_stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
+        let absolute_body = RequestBodyStream::new(
+            Box::new(Cursor::new(Vec::<u8>::new())),
+            b"x".to_vec(),
+            1,
+            Arc::clone(&absolute_stats),
+        );
+        let absolute_request = RequestHead {
+            method: "POST".to_string(),
+            target: format!("http://rebind.invalid:{}/resource", absolute_address.port()),
+            headers: BTreeMap::new(),
+            content_length: 1,
+            has_content_length: true,
+            prefetched_body: Vec::new(),
+            client_ip: None,
+        };
+        let mut absolute_output = Vec::new();
+        assert!(forward_absolute_streaming_request_to(
+            &absolute_state,
+            &absolute_snapshot,
+            absolute_request,
+            absolute_body,
+            absolute_stats,
+            streaming_rebind_policy(),
+            Some("agent:test"),
+            false,
+            &mut absolute_output,
+        ));
+        absolute_server
+            .join()
+            .expect("join absolute streaming server");
+        assert_eq!(absolute_resolver.calls(), 1);
+        assert_eq!(absolute_resolver.remaining_answers(), 1);
+
+        let (connect_address, connect_server) = spawn_streaming_rebind_upstream();
+        let connect_snapshot = streaming_rebind_snapshot(connect_address);
+        let connect_resolver = Arc::new(SequencedUpstreamResolver::new(vec![
+            Ok(vec![connect_address]),
+            Ok(vec!["10.0.0.1:443".parse().unwrap()]),
+        ]));
+        let mut connect_state = test_gate_state(Arc::clone(&connect_snapshot));
+        connect_state.upstream_resolver = connect_resolver.clone();
+        let connect_state = Arc::new(connect_state);
+        let connect_request = RequestHead {
+            method: "POST".to_string(),
+            target: format!("http://rebind.invalid:{}/resource", connect_address.port()),
+            headers: BTreeMap::new(),
+            content_length: 1,
+            has_content_length: true,
+            prefetched_body: b"x".to_vec(),
+            client_ip: None,
+        };
+        let mut connect_io = DeadlineIo::new(
+            Cursor::new(Vec::<u8>::new()),
+            Duration::from_secs(2),
+            Duration::from_secs(2),
+        );
+        assert!(forward_intercepted_streaming_request_to(
+            &connect_state,
+            &connect_snapshot,
+            connect_request,
+            &mut connect_io,
+            streaming_rebind_policy(),
+            Some("agent:test"),
+            false,
+        ));
+        connect_server
+            .join()
+            .expect("join CONNECT streaming server");
+        assert_eq!(connect_resolver.calls(), 1);
+        assert_eq!(connect_resolver.remaining_answers(), 1);
+    }
+
+    #[test]
+    fn pinned_ip_transport_preserves_original_hostname_tls_identity() {
+        let hostname = "rebind.invalid";
+        let key = KeyPair::generate().expect("generate upstream TLS key");
+        let mut params =
+            CertificateParams::new(vec![hostname.to_string()]).expect("upstream TLS params");
+        params
+            .distinguished_name
+            .push(DnType::CommonName, hostname.to_string());
+        params
+            .extended_key_usages
+            .push(ExtendedKeyUsagePurpose::ServerAuth);
+        let certificate = params
+            .self_signed(&key)
+            .expect("self-sign upstream TLS cert");
+        let certificate_der = certificate.der().to_vec();
+        let server_config = Arc::new(
+            ServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(
+                    vec![CertificateDer::from(certificate_der.clone())],
+                    PrivateKeyDer::from(PrivatePkcs8KeyDer::from(key.serialize_der())),
+                )
+                .expect("upstream TLS server config"),
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").expect("upstream TLS listener");
+        let address = listener.local_addr().expect("upstream TLS address");
+        let server = thread::spawn(move || {
+            for index in 0..2 {
+                let (stream, _) = listener.accept().expect("accept upstream TLS request");
+                let connection =
+                    ServerConnection::new(Arc::clone(&server_config)).expect("TLS connection");
+                let mut tls = StreamOwned::new(connection, stream);
+                let mut request = [0_u8; 4096];
+                let result = tls.read(&mut request);
+                if index == 0 {
+                    let read = result.expect("read hostname-bound TLS request");
+                    assert!(String::from_utf8_lossy(&request[..read]).starts_with("GET /resource "));
+                    tls.write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .expect("write hostname-bound TLS response");
+                } else {
+                    assert!(
+                        result.is_err() || matches!(result, Ok(0)),
+                        "wrong-host TLS request unexpectedly completed"
+                    );
+                }
+            }
+        });
+
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        let route = &mut snapshot_value.routes[0];
+        route.host = hostname.to_string();
+        route.port = address.port();
+        route.methods = HashSet::from(["GET".to_string()]);
+        let snapshot = Arc::new(snapshot_value);
+        let resolver = Arc::new(SequencedUpstreamResolver::new(vec![Ok(vec![address])]));
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.upstream_resolver = resolver.clone();
+        state.upstream_client_config = UpstreamClientConfig {
+            root_certificates: vec![
+                reqwest::Certificate::from_der(&certificate_der).expect("upstream root cert")
+            ],
+        };
+        let prepared = prepare_upstream(&state, &snapshot, &snapshot.routes[0], "GET")
+            .expect("prepare hostname-bound upstream");
+        let response = prepared
+            .client
+            .get(format!("https://{hostname}:{}/resource", address.port()))
+            .send()
+            .expect("original hostname must validate against pinned IP certificate");
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let wrong_host_client = build_pinned_upstream_client(
+            &state.upstream_client_config,
+            "wrong.invalid",
+            address,
+            false,
+        )
+        .expect("build wrong-host pinned client");
+        assert!(wrong_host_client
+            .get(format!("https://wrong.invalid:{}/resource", address.port()))
+            .send()
+            .is_err());
+        server.join().expect("join upstream TLS server");
+        assert_eq!(resolver.calls(), 1);
+    }
+
+    #[test]
+    fn mutating_upstream_requests_use_a_non_pooled_client() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        prepare_upstream(&state, &snapshot, &snapshot.routes[0], "GET")
+            .expect("prepare pooled upstream");
+        prepare_upstream(&state, &snapshot, &snapshot.routes[0], "POST")
+            .expect("prepare one-shot upstream");
+        let cache = state
+            .pinned_upstream_clients
+            .lock()
+            .expect("pinned client cache");
+        assert!(cache.entries.keys().any(|key| key.reuse_idle_connections));
+        assert!(cache.entries.keys().any(|key| !key.reuse_idle_connections));
     }
 
     #[test]
@@ -33760,6 +36158,420 @@ mod tests {
     }
 
     #[test]
+    fn provider_request_profile_policy_admission_is_exact_for_every_mode() {
+        for (adapter_type, mode, expected_query_count, expected_max_body) in [
+            ("gmail.v1", None, 12, 0),
+            ("x.v2", Some("recentSearchOnly"), 17, 0),
+            ("x.v2", Some("readOnly"), 55, 0),
+            ("x.v2", Some("controlledWrite"), 0, 65_536),
+            ("npm.registry", None, 0, 16 * 1024 * 1024),
+        ] {
+            let mut config = json!({
+                "request":provider_request_profile_json(adapter_type, mode),
+            });
+            if let Some(mode) = mode {
+                config["mode"] = json!(mode);
+            }
+            let config_object = config.as_object().expect("adapter config");
+            let admitted = validate_provider_request_profile_config(
+                "route:provider-profile",
+                adapter_type,
+                config_object,
+            )
+            .expect("exact provider profile");
+            assert_eq!(admitted.allowed_query_keys.len(), expected_query_count);
+            assert_eq!(admitted.max_body_bytes, expected_max_body);
+
+            for field in ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes"] {
+                let mut widened = config.clone();
+                widened["request"][field]
+                    .as_array_mut()
+                    .expect("profile list")
+                    .push(json!(if field == "allowedMediaTypes" {
+                        "application/problem+json"
+                    } else {
+                        "x-serverware-unlisted"
+                    }));
+                assert!(validate_provider_request_profile_config(
+                    "route:provider-profile",
+                    adapter_type,
+                    widened.as_object().expect("widened config"),
+                )
+                .expect_err("widened provider profile must fail")
+                .contains("exact provider profile"));
+
+                let mut narrowed = config.clone();
+                let values = narrowed["request"][field]
+                    .as_array_mut()
+                    .expect("profile list");
+                if values.is_empty() {
+                    values.push(json!(if field == "allowedMediaTypes" {
+                        "application/json"
+                    } else {
+                        "temporary"
+                    }));
+                } else {
+                    values.pop();
+                }
+                assert!(validate_provider_request_profile_config(
+                    "route:provider-profile",
+                    adapter_type,
+                    narrowed.as_object().expect("narrowed config"),
+                )
+                .expect_err("narrowed provider profile must fail")
+                .contains("exact provider profile"));
+            }
+
+            let mut wrong_limit = config.clone();
+            wrong_limit["request"]["maxBodyBytes"] = json!(expected_max_body + 1);
+            assert!(validate_provider_request_profile_config(
+                "route:provider-profile",
+                adapter_type,
+                wrong_limit.as_object().expect("wrong-limit config"),
+            )
+            .expect_err("provider body limit drift must fail")
+            .contains("must equal"));
+
+            let mut unknown_field = config;
+            unknown_field["request"]["bodyMode"] = json!("any");
+            assert!(validate_provider_request_profile_config(
+                "route:provider-profile",
+                adapter_type,
+                unknown_field.as_object().expect("unknown-field config"),
+            )
+            .expect_err("unknown provider profile field must fail")
+            .contains("exactly allowedHeaders"));
+        }
+    }
+
+    #[test]
+    fn provider_request_paths_enforce_headers_queries_bodies_and_media_types() {
+        let cases = [
+            (
+                specialized_test_route("gmail.v1", None),
+                "GET",
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages?q=security&maxResults=10",
+                "",
+                BTreeMap::from([
+                    (
+                        "content-type".to_string(),
+                        "text/plain; a=1; a=2".to_string(),
+                    ),
+                    ("x-goog-api-client".to_string(), "test".to_string()),
+                    ("x-serverware-agent".to_string(), "trusted".to_string()),
+                ]),
+            ),
+            (
+                specialized_test_route("x.v2", Some("recentSearchOnly")),
+                "GET",
+                "https://api.x.com/2/tweets/search/recent?query=security&tweet.fields=id",
+                "",
+                BTreeMap::from([("accept".to_string(), "application/json".to_string())]),
+            ),
+            (
+                specialized_test_route("x.v2", Some("readOnly")),
+                "GET",
+                "https://api.x.com/2/users/by?usernames=alice&user.fields=id",
+                "",
+                BTreeMap::from([("content-type".to_string(), "text/plain".to_string())]),
+            ),
+            (
+                specialized_test_route("x.v2", Some("controlledWrite")),
+                "POST",
+                "https://api.x.com/2/tweets",
+                r#"{"text":"hello"}"#,
+                BTreeMap::from([(
+                    "content-type".to_string(),
+                    "Application/JSON; charset=\"utf-8\"".to_string(),
+                )]),
+            ),
+            (
+                specialized_test_route("npm.registry", None),
+                "PUT",
+                "https://registry.npmjs.org/%40scope%2Fpackage",
+                "{}",
+                BTreeMap::from([
+                    ("content-type".to_string(), "application/json".to_string()),
+                    ("npm-command".to_string(), "publish".to_string()),
+                ]),
+            ),
+        ];
+
+        for (route, method, target, body, headers) in &cases {
+            let request = provider_test_request(
+                method,
+                target,
+                headers.clone(),
+                body,
+                Some(body.len() as u64),
+            );
+            let url = Url::parse(target).expect("provider URL");
+            validate_provider_request_admission(&request, &url, route)
+                .expect("exact provider request must pass");
+
+            let mut unknown_header = request.headers.clone();
+            unknown_header.insert("x-not-allowed".to_string(), "value".to_string());
+            let denied = validate_provider_request_admission(
+                &provider_test_request(
+                    method,
+                    target,
+                    unknown_header,
+                    body,
+                    Some(body.len() as u64),
+                ),
+                &url,
+                route,
+            )
+            .expect_err("unknown provider header must fail");
+            assert_eq!(denied["error"], "request_header_not_allowed");
+
+            for (credential_header_name, credential_header_value) in [
+                ("authorization", "Bearer caller-secret"),
+                ("cookie", "session=caller-secret"),
+                ("x-api-key", "caller-secret"),
+            ] {
+                let mut credential_header = request.headers.clone();
+                credential_header.insert(
+                    credential_header_name.to_string(),
+                    credential_header_value.to_string(),
+                );
+                let denied = validate_provider_request_admission(
+                    &provider_test_request(
+                        method,
+                        target,
+                        credential_header,
+                        body,
+                        Some(body.len() as u64),
+                    ),
+                    &url,
+                    route,
+                )
+                .expect_err("caller credential header must fail");
+                assert_eq!(denied["error"], "request_header_not_allowed");
+            }
+
+            let separator = if target.contains('?') { '&' } else { '?' };
+            let unknown_query = format!("{target}{separator}serverware_unknown=true");
+            let denied = validate_provider_request_admission(
+                &request,
+                &Url::parse(&unknown_query).expect("provider URL with unknown query"),
+                route,
+            )
+            .expect_err("unknown provider query key must fail");
+            assert_eq!(denied["error"], "request_query_key_not_allowed");
+        }
+
+        for (adapter_type, mode, target) in [
+            (
+                "gmail.v1",
+                None,
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+            ),
+            (
+                "x.v2",
+                Some("recentSearchOnly"),
+                "https://api.x.com/2/tweets/search/recent?query=test",
+            ),
+            ("x.v2", Some("readOnly"), "https://api.x.com/2/users/me"),
+        ] {
+            let route = specialized_test_route(adapter_type, mode);
+            let request = provider_test_request(
+                "GET",
+                target,
+                BTreeMap::from([("content-type".to_string(), "application/json".to_string())]),
+                "x",
+                Some(1),
+            );
+            let denied = validate_provider_request_admission(
+                &request,
+                &Url::parse(target).expect("bodyless provider URL"),
+                &route,
+            )
+            .expect_err("read profile body must fail");
+            assert_eq!(denied["error"], "request_body_not_allowed");
+        }
+
+        for (adapter_type, mode, target, max_body_bytes) in [
+            (
+                "x.v2",
+                Some("controlledWrite"),
+                "https://api.x.com/2/tweets",
+                65_536,
+            ),
+            (
+                "npm.registry",
+                None,
+                "https://registry.npmjs.org/package",
+                16 * 1024 * 1024,
+            ),
+        ] {
+            let route = specialized_test_route(adapter_type, mode);
+            let url = Url::parse(target).expect("write provider URL");
+            let body_request = |headers, length| {
+                provider_test_request("POST", target, headers, "{}", Some(length))
+            };
+            let valid_content_type =
+                BTreeMap::from([("content-type".to_string(), "application/json".to_string())]);
+            let denied = validate_provider_request_admission(
+                &body_request(valid_content_type.clone(), max_body_bytes + 1),
+                &url,
+                &route,
+            )
+            .expect_err("oversized provider body must fail");
+            assert_eq!(denied["error"], "request_body_too_large");
+            assert_eq!(denied["status_code"], 413);
+
+            for (headers, expected_error) in [
+                (BTreeMap::new(), "request_content_type_required"),
+                (
+                    BTreeMap::from([("content-type".to_string(), "not/a;".to_string())]),
+                    "request_content_type_denied",
+                ),
+                (
+                    BTreeMap::from([("content-type".to_string(), "text/plain".to_string())]),
+                    "request_content_type_denied",
+                ),
+                (
+                    BTreeMap::from([
+                        ("Content-Type".to_string(), "application/json".to_string()),
+                        ("content-type".to_string(), "application/json".to_string()),
+                    ]),
+                    "request_content_type_ambiguous",
+                ),
+            ] {
+                let denied =
+                    validate_provider_request_admission(&body_request(headers, 2), &url, &route)
+                        .expect_err("provider media failure must fail closed");
+                assert_eq!(denied["error"], expected_error);
+                assert_eq!(denied["status_code"], 415);
+            }
+        }
+    }
+
+    #[test]
+    fn provider_request_denial_precedes_all_downstream_side_effects() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("downstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking downstream listener");
+        let address = listener.local_addr().expect("downstream address");
+        let contact_count = Arc::new(AtomicU64::new(0));
+        let server_count = Arc::clone(&contact_count);
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(750);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        server_count.fetch_add(1, Ordering::Relaxed);
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(100)));
+                        let mut request = [0u8; 4096];
+                        let _ = stream.read(&mut request);
+                        let _ = stream.write_all(
+                            b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                        );
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(error) => panic!("downstream accept failed: {error}"),
+                }
+            }
+        });
+
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        let route = &mut snapshot_value.routes[0];
+        route.scheme = "http".to_string();
+        route.host = address.ip().to_string();
+        route.port = address.port();
+        route.methods = HashSet::from(["GET".to_string()]);
+        route.adapter_type = "x.v2".to_string();
+        route.adapter_config = json!({
+            "mode":"recentSearchOnly",
+            "request":provider_request_profile_json("x.v2", Some("recentSearchOnly")),
+            "blockWrites":true,
+            "appIds":["approved-app"],
+            "allowedReadOperations":["search.read"],
+            "response":{"mode":"json","maxBodyBytes":1024,"allowedFields":["data"]},
+        });
+        route.credential_ref = Some("credential:test".to_string());
+        route.jit = json!({"required":true,"ttlSeconds":30,"maxUses":1});
+        route.constraints = vec![json!({
+            "id":"shared-quota",
+            "type":"rateLimit",
+            "max":1,
+            "windowSeconds":60,
+            "store":"shared",
+        })];
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "x".to_string(),
+                provider_subject: Some("user:test".to_string()),
+                injection: json!({
+                    "type":"bearer",
+                    "header":"Authorization",
+                    "field":"access_token",
+                    "prefix":"Bearer ",
+                }),
+            },
+        );
+        let snapshot = Arc::new(snapshot_value);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        let base = format!("http://{address}");
+        state.credential_lease_url = Some(format!("{base}/credential-leases"));
+        state.grant_consume_url = Some(format!("{base}/grants/consume"));
+        state.rate_limit_consume_url = Some(format!("{base}/rate-limits/consume"));
+        state.atomic_release_authorization_enabled = true;
+        state.release_authorization_base_url = Some(format!("{base}/release-authorizations"));
+
+        let target = format!("http://{address}/resource?query=test");
+        let response = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "GET".to_string(),
+                target,
+                headers: BTreeMap::from([(
+                    "authorization".to_string(),
+                    "Bearer caller-secret".to_string(),
+                )]),
+                body: Vec::new(),
+                client_ip: None,
+            },
+            Some("agent:test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let ForwardResult::Buffered(response) = response else {
+            panic!("provider denial unexpectedly streamed");
+        };
+        let response = String::from_utf8(response).expect("provider denial response");
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(
+            response.contains("request_header_not_allowed"),
+            "{response}"
+        );
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("credential leases")
+            .is_empty());
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+        assert!(state.grants.lock().expect("grants").is_empty());
+
+        server.join().expect("downstream server");
+        assert_eq!(contact_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
     fn generic_adapter_enforces_headers_and_literal_zero_body_cap() {
         let route = Route {
             id: "generic".to_string(),
@@ -33767,6 +36579,7 @@ mod tests {
             scheme: "https".to_string(),
             host: "example.test".to_string(),
             port: 443,
+            resolved_address_policy: ResolvedAddressPolicy::PublicOnly,
             methods: HashSet::from(["POST".to_string()]),
             paths: vec![compile_template("/resource").expect("template")],
             credential_ref: None,
@@ -34009,6 +36822,184 @@ mod tests {
             strict_json_value_from_slice(input)
                 .expect("strings, floating negative zero, and integer zero remain valid");
         }
+    }
+
+    fn json_array_redaction_result(
+        payload: &[u8],
+        allowed_fields: &[Vec<String>],
+    ) -> Result<Vec<u8>, String> {
+        let mut document = Vec::with_capacity(payload.len() + 2);
+        document.push(b'[');
+        document.extend_from_slice(payload);
+        document.push(b']');
+        let mut core = JsonArrayRedactorCore::new(16 * 1024, allowed_fields.to_vec());
+        let mut chunks = core.push(&document)?;
+        chunks.extend(core.finish()?);
+        Ok(chunks.concat())
+    }
+
+    fn json_sse_redaction_result(
+        payload: &[u8],
+        allowed_fields: &[Vec<String>],
+    ) -> Result<Vec<u8>, String> {
+        let mut event = b"data: ".to_vec();
+        event.extend_from_slice(payload);
+        event.extend_from_slice(b"\n\n");
+        let mut core = JsonSseRedactorCore::new(16 * 1024, 16 * 1024, allowed_fields.to_vec());
+        let mut chunks = core.push(&event)?;
+        chunks.extend(core.finish()?);
+        Ok(chunks.concat())
+    }
+
+    fn json_nested_redaction_result(
+        reader: impl Read,
+        allowed_fields: &[Vec<String>],
+    ) -> Result<Vec<u8>, String> {
+        let mut output = Vec::new();
+        redact_json_nested_to_writer(reader, &mut output, allowed_fields, 16 * 1024)?;
+        Ok(output)
+    }
+
+    #[test]
+    fn structured_json_unit_parsers_match_buffered_strict_json() {
+        let allowed_fields = vec![vec!["safe".to_string()]];
+        let invalid_payloads = [
+            br#"{"safe":1,"safe":2}"#.as_slice(),
+            br#"{"safe":{"nested":1,"nested":2}}"#.as_slice(),
+            br#"{"safe":1,"s\u0061fe":2}"#.as_slice(),
+            br#"{"safe":1,"denied":{"hidden":1,"hidden":2}}"#.as_slice(),
+            br#"{"safe":-0}"#.as_slice(),
+            br#"{"safe":1,"denied":{"hidden":-0}}"#.as_slice(),
+            br#"{"safe":01}"#.as_slice(),
+            br#"{"safe":1e9999}"#.as_slice(),
+            br#"{"safe":"\x"}"#.as_slice(),
+            b"{\"safe\":\"\xff\"}".as_slice(),
+            br#"{"safe":"truncated}"#.as_slice(),
+            br#"{"safe":1}{"safe":2}"#.as_slice(),
+        ];
+
+        for payload in invalid_payloads {
+            assert!(
+                strict_json_value_from_slice(payload).is_err(),
+                "buffered strict parser unexpectedly accepted {}",
+                String::from_utf8_lossy(payload)
+            );
+            assert!(
+                redact_json_line(payload, &allowed_fields).is_err(),
+                "JSONL parser unexpectedly accepted {}",
+                String::from_utf8_lossy(payload)
+            );
+            assert!(
+                json_array_redaction_result(payload, &allowed_fields).is_err(),
+                "JSON array parser unexpectedly accepted {}",
+                String::from_utf8_lossy(payload)
+            );
+            assert!(
+                json_sse_redaction_result(payload, &allowed_fields).is_err(),
+                "JSON SSE parser unexpectedly accepted {}",
+                String::from_utf8_lossy(payload)
+            );
+            assert!(
+                json_nested_redaction_result(Cursor::new(payload), &allowed_fields).is_err(),
+                "nested JSON parser unexpectedly accepted {}",
+                String::from_utf8_lossy(payload)
+            );
+        }
+
+        for payload in [
+            br#"{"safe":-0.0,"denied":{"text":"-0"}}"#.as_slice(),
+            br#"{"safe":-0e0,"denied":{"items":[{"value":1}]}}"#.as_slice(),
+            br#"{"s\u0061fe":1,"denied":true}"#.as_slice(),
+        ] {
+            strict_json_value_from_slice(payload).expect("buffered valid strict JSON");
+            redact_json_line(payload, &allowed_fields).expect("valid JSONL unit");
+            json_array_redaction_result(payload, &allowed_fields).expect("valid JSON array item");
+            json_sse_redaction_result(payload, &allowed_fields).expect("valid JSON SSE event");
+            json_nested_redaction_result(Cursor::new(payload), &allowed_fields)
+                .expect("valid nested JSON document");
+        }
+    }
+
+    #[test]
+    fn nested_strict_negative_zero_lexing_is_chunk_boundary_invariant() {
+        let cases = [
+            (br#"{"safe":-0}"#.as_slice(), true),
+            (br#"{"safe":{"hidden":-0}}"#.as_slice(), true),
+            (br#"{"safe":-0.0}"#.as_slice(), false),
+            (br#"{"safe":-0e0}"#.as_slice(), false),
+            (br#"{"safe":"-0"}"#.as_slice(), false),
+            (br#"{"safe":"escaped \\\"-0\\\""}"#.as_slice(), false),
+        ];
+        let allowed_fields = vec![vec!["safe".to_string()]];
+
+        for (input, rejected) in cases {
+            for split in 0..=input.len() {
+                let mut detector = IntegerNegativeZeroDetector::default();
+                let detected = detector.scan(&input[..split])
+                    || detector.scan(&input[split..])
+                    || detector.finish();
+                assert_eq!(detected, rejected, "split {split} for {input:?}");
+
+                let reader = Cursor::new(input[..split].to_vec())
+                    .chain(Cursor::new(input[split..].to_vec()));
+                let result = json_nested_redaction_result(reader, &allowed_fields);
+                assert_eq!(
+                    result.is_err(),
+                    rejected,
+                    "nested split {split} for {input:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn structured_redactors_withhold_failing_units_and_deferred_terminal() {
+        let allowed_fields = vec![vec!["safe".to_string()]];
+
+        let stats = Arc::new(Mutex::new(RequestBodyStreamStats::new()));
+        let source = b"{\"safe\":1}\n{\"safe\":2,\"safe\":3}\n".to_vec();
+        let mut jsonl = JsonLinesRedactorReader::new(
+            Box::new(Cursor::new(source)),
+            1024,
+            allowed_fields.clone(),
+            stats,
+        );
+        let mut first = [0u8; 64];
+        let read = jsonl.read(&mut first).expect("first JSONL unit");
+        assert_eq!(&first[..read], b"{\"safe\":1}\n");
+        assert!(jsonl.read(&mut first).is_err());
+
+        let mut array = JsonArrayRedactorCore::new(1024, allowed_fields.clone());
+        let released = array
+            .push(b"[{\"safe\":1},")
+            .expect("valid JSON array prefix")
+            .concat();
+        assert_eq!(released, b"[{\"safe\":1}");
+        assert!(array.push(b"{\"safe\":2,\"safe\":3}]").is_err());
+
+        let mut sse = JsonSseRedactorCore::new(1024, 2048, allowed_fields.clone());
+        let released = sse
+            .push(b"data: {\"safe\":1}\n\n")
+            .expect("valid SSE prefix")
+            .concat();
+        assert_eq!(released, b"data: {\"safe\":1}\n\n");
+        assert!(sse.push(b"data: {\"safe\":2,\"safe\":3}\n\n").is_err());
+
+        let mut wire = Vec::new();
+        {
+            let mut chunks = ChunkedHashWriter::new_with_deferred_terminal(&mut wire);
+            redact_json_nested_to_writer(
+                Cursor::new(br#"{"safe":1}{"safe":2}"#),
+                &mut chunks,
+                &allowed_fields,
+                1024,
+            )
+            .expect_err("malformed final nested tail must fail");
+        }
+        assert!(!wire.windows(5).any(|window| window == b"0\r\n\r\n"));
+        assert!(!wire
+            .windows(STREAM_RESPONSE_PROOF_B64_TRAILER.len())
+            .any(|window| window == STREAM_RESPONSE_PROOF_B64_TRAILER.as_bytes()));
     }
 
     #[test]
@@ -35424,6 +38415,14 @@ mod tests {
         }
     }
 
+    fn gmail_test_prepared_upstream(
+        state: &GateState,
+        snapshot: &Arc<Snapshot>,
+    ) -> PreparedUpstream {
+        prepare_upstream(state, snapshot, &snapshot.routes[0], "GET")
+            .expect("prepare Gmail test upstream")
+    }
+
     #[test]
     fn gmail_metadata_child_url_is_same_origin_and_encodes_path_segments() {
         let parent =
@@ -35464,10 +38463,12 @@ mod tests {
             ]
         });
         let injection = json!({"type":"bearer"});
+        let prepared_upstream = gmail_test_prepared_upstream(&state, &snapshot);
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: None,
             injection_plan: &injection,
             dispatch_expires_at_epoch_ms: None,
+            prepared_upstream: &prepared_upstream,
         };
         let error = hydrate_gmail_list_metadata(
             &state,
@@ -35508,10 +38509,12 @@ mod tests {
         };
         let mut payload = json!({"messages":[{"id":"message-1","threadId":"thread-1"}]});
         let injection = json!({"type":"bearer"});
+        let prepared_upstream = gmail_test_prepared_upstream(&state, &snapshot);
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: None,
             injection_plan: &injection,
             dispatch_expires_at_epoch_ms: None,
+            prepared_upstream: &prepared_upstream,
         };
         let error = hydrate_gmail_list_metadata(
             &state,
@@ -35591,7 +38594,12 @@ mod tests {
             },
         );
         let snapshot = Arc::new(snapshot_value);
-        let state = test_gate_state(Arc::clone(&snapshot));
+        let resolver = Arc::new(SequencedUpstreamResolver::new(vec![
+            Ok(vec![address]),
+            Ok(vec!["10.0.0.1:443".parse().unwrap()]),
+        ]));
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.upstream_resolver = resolver.clone();
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
         let lease = SecretLease {
             scope: scope.clone(),
@@ -35606,10 +38614,12 @@ mod tests {
         cache_scoped_credential_lease(&state, &snapshot, &scope, lease)
             .expect("cache Gmail credential lease");
         let injection = json!({"type":"bearer"});
+        let prepared_upstream = gmail_test_prepared_upstream(&state, &snapshot);
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: Some(&parent_binding),
             injection_plan: &injection,
             dispatch_expires_at_epoch_ms: None,
+            prepared_upstream: &prepared_upstream,
         };
         let decision = json!({
             "principal_id":"agent:test",
@@ -35664,6 +38674,8 @@ mod tests {
         assert!(request_lower.contains("accept: application/json\r\n"));
         assert!(request_lower.contains("authorization: bearer upstream-secret\r\n"));
         assert!(!request_lower.contains("x-serverware-"));
+        assert_eq!(resolver.calls(), 1);
+        assert_eq!(resolver.remaining_answers(), 1);
     }
 
     #[test]
@@ -35741,6 +38753,11 @@ mod tests {
             requests
         });
         let mut state = test_gate_state(Arc::clone(&snapshot));
+        let resolver = Arc::new(SequencedUpstreamResolver::new(vec![
+            Ok(vec![metadata_address]),
+            Ok(vec!["10.0.0.1:443".parse().unwrap()]),
+        ]));
+        state.upstream_resolver = resolver.clone();
         state.server_instance_id = Some("test-instance".to_string());
         state.audit_url = Some(format!("http://{audit_address}/api/data-plane/audit"));
         state.audit_token = Some("audit-token".to_string());
@@ -35774,10 +38791,12 @@ mod tests {
             params: BTreeMap::from([("user".to_string(), "me".to_string())]),
         };
         let injection = json!({"type":"bearer"});
+        let prepared_upstream = gmail_test_prepared_upstream(&state, &snapshot);
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: Some(&parent_binding),
             injection_plan: &injection,
             dispatch_expires_at_epoch_ms: None,
+            prepared_upstream: &prepared_upstream,
         };
         let parent_url = Url::parse(&format!(
             "http://{metadata_address}/gmail/v1/users/me/messages"
@@ -35816,6 +38835,8 @@ mod tests {
             .all(|item| item.get("internalDate").and_then(Value::as_str).is_some()));
         let metadata_requests = metadata_server.join().expect("metadata server");
         assert_eq!(metadata_requests.len(), 2);
+        assert_eq!(resolver.calls(), 1);
+        assert_eq!(resolver.remaining_answers(), 1);
         let audit_requests = audit_server.join().expect("audit server");
         assert_eq!(audit_requests.len(), 2);
         let started =
@@ -35894,10 +38915,12 @@ mod tests {
         let url = Url::parse("https://gmail.example.test/gmail/v1/users/me/messages")
             .expect("Gmail list URL");
         let injection = json!({"type":"bearer"});
+        let prepared_upstream = gmail_test_prepared_upstream(&state, &snapshot);
         let execution = GmailMetadataFanoutExecution {
             parent_credential_binding: None,
             injection_plan: &injection,
             dispatch_expires_at_epoch_ms: None,
+            prepared_upstream: &prepared_upstream,
         };
         let body = serde_json::to_vec(&json!({
             "messages":[{
@@ -36731,6 +39754,7 @@ mod tests {
             "credentialRef":"credential:x",
             "adapter":{"type":"x.v2","config":{
                 "mode":"recentSearchOnly",
+                "request":provider_request_profile_json("x.v2", Some("recentSearchOnly")),
                 "blockWrites":true,
                 "appIds":["approved-app"],
                 "allowedReadOperations":["search.read"],
@@ -39470,7 +42494,7 @@ mod tests {
     }
 
     #[test]
-    fn signed_npm_publish_public_registry_exception_is_exact_and_all_or_nothing() {
+    fn npm_public_registry_receipt_admission_is_exact_and_all_or_nothing() {
         let publish_route = |host: &str, constraints: Value| {
             json!({
                 "id":"npm:public-exception",
@@ -39482,9 +42506,11 @@ mod tests {
                 "credentialRef":"credential:npm",
                 "adapter":{"type":"npm.registry","config":{
                     "operations":["publish"],
+                    "request":provider_request_profile_json("npm.registry", None),
+                    "publishResponseContract":"npm-public-registry-receipt-v1",
                     "response":{
                         "mode":"json","maxBodyBytes":65536,
-                        "allowedFields":["package","version","published"],
+                        "allowedFields":["ok","published"],
                         "allowedHeaders":[],
                         "error":{
                             "mode":"json","maxBodyBytes":65536,
@@ -39530,13 +42556,26 @@ mod tests {
             "registry.npmjs.org",
             json!([operation_constraint.clone()]),
         )))
-        .expect("exact public npm host may omit both response assertions");
+        .expect("exact public npm host admits the fixed receipt contract");
 
-        let non_public_error = validate_policy_capabilities(&signed_policy(publish_route(
-            "registry.example.test",
+        validate_policy_capabilities(&policy_with_route(publish_route(
+            "registry.npmjs.org",
             json!([operation_constraint.clone()]),
         )))
-        .expect_err("compatible non-public registry must provide both response assertions");
+        .expect("unsigned local policies use the same public receipt admission contract");
+
+        let mut non_public_route = publish_route(
+            "registry.example.test",
+            json!([operation_constraint.clone()]),
+        );
+        non_public_route["adapter"]["config"]
+            .as_object_mut()
+            .expect("npm adapter config")
+            .remove("publishResponseContract");
+        non_public_route["adapter"]["config"]["response"]["allowedFields"] =
+            json!(["package", "version", "published"]);
+        let non_public_error = validate_policy_capabilities(&signed_policy(non_public_route))
+            .expect_err("compatible non-public registry must provide both response assertions");
         assert_eq!(
             non_public_error,
             "route npm:public-exception signed npm.publish requires a responseBinding scoped only to npm.publish"
@@ -39545,12 +42584,11 @@ mod tests {
         let partial_public_error = validate_policy_capabilities(&signed_policy(publish_route(
             "registry.npmjs.org",
             json!([
-                operation_constraint,
+                operation_constraint.clone(),
                 {
                     "id":"npm-publish-success",
                     "type":"responseJson",
                     "phase":"response",
-                    "operations":["npm.publish"],
                     "required":true,
                     "fields":{"published":{"required":true,"type":"boolean","equals":true}}
                 }
@@ -39559,7 +42597,38 @@ mod tests {
         .expect_err("partial public npm response assertion must fail closed");
         assert_eq!(
             partial_public_error,
-            "route npm:public-exception signed npm.publish requires a responseBinding scoped only to npm.publish"
+            "route npm:public-exception public npm.publish receipt must not use responseBinding or responseJson"
+        );
+
+        let mut missing_contract =
+            publish_route("registry.npmjs.org", json!([operation_constraint.clone()]));
+        missing_contract["adapter"]["config"]
+            .as_object_mut()
+            .expect("npm adapter config")
+            .remove("publishResponseContract");
+        assert_eq!(
+            validate_policy_capabilities(&policy_with_route(missing_contract))
+                .expect_err("public npm publish without the receipt contract must fail"),
+            "route npm:public-exception public npm.publish requires publishResponseContract npm-public-registry-receipt-v1"
+        );
+
+        let mut identity_projection =
+            publish_route("registry.npmjs.org", json!([operation_constraint.clone()]));
+        identity_projection["adapter"]["config"]["response"]["allowedFields"] =
+            json!(["package", "version", "published"]);
+        assert_eq!(
+            validate_policy_capabilities(&policy_with_route(identity_projection))
+                .expect_err("public npm identity projection must fail"),
+            "route npm:public-exception public npm.publish response must project exactly ok and published"
+        );
+
+        let mut released_header =
+            publish_route("registry.npmjs.org", json!([operation_constraint]));
+        released_header["adapter"]["config"]["response"]["allowedHeaders"] = json!(["etag"]);
+        assert_eq!(
+            validate_policy_capabilities(&policy_with_route(released_header))
+                .expect_err("public npm receipt headers must fail"),
+            "route npm:public-exception public npm.publish response must not release upstream headers"
         );
     }
 
@@ -39574,6 +42643,7 @@ mod tests {
             },
             "credentialRef":"credential:gmail",
             "adapter":{"type":"gmail.v1","config":{
+                "request":provider_request_profile_json("gmail.v1", None),
                 "maxAgeDays":30,
                 "maxResults":25,
                 "forceQuery":true,
@@ -39649,12 +42719,13 @@ mod tests {
             "id":"npm:test",
             "principals":["agent:test"],
             "match":{
-                "scheme":"https","host":"registry.npmjs.org","port":443,
+                "scheme":"https","host":"registry.example.test","port":443,
                 "methods":["PUT"],"paths":["/{package}"]
             },
             "credentialRef":"credential:npm",
             "adapter":{"type":"npm.registry","config":{
                 "operations":["publish"],
+                "request":provider_request_profile_json("npm.registry", None),
                 "response":{
                     "mode":"json",
                     "maxBodyBytes":65536,
@@ -39824,6 +42895,7 @@ mod tests {
             "credentialRef":"credential:x",
             "adapter":{"type":"x.v2","config":{
                 "mode":"readOnly",
+                "request":provider_request_profile_json("x.v2", Some("readOnly")),
                 "blockWrites":true,
                 "appIds":["approved-app"],
                 "allowedReadOperations":["tweets.read","users.read"],
@@ -39855,6 +42927,7 @@ mod tests {
             "credentialRef":"credential:x",
             "adapter":{"type":"x.v2","config":{
                 "mode":"controlledWrite",
+                "request":provider_request_profile_json("x.v2", Some("controlledWrite")),
                 "blockWrites":false,
                 "appIds":["approved-app"],
                 "response":{"mode":"json","maxBodyBytes":65536,"allowedFields":["data"]}
@@ -41401,8 +44474,7 @@ mod tests {
             .set_nonblocking(true)
             .expect("nonblocking buffered upstream listener");
         let address = listener.local_addr().expect("buffered upstream address");
-        let builder = state
-            .one_shot_upstream_client
+        let builder = test_upstream_client()
             .post(format!("http://{address}/resource"))
             .body(br#"{"safe":true}"#.to_vec());
 
@@ -41447,9 +44519,7 @@ mod tests {
             .set_nonblocking(true)
             .expect("nonblocking proof upstream listener");
         let address = listener.local_addr().expect("proof upstream address");
-        let builder = state
-            .one_shot_upstream_client
-            .get(format!("http://{address}/resource"));
+        let builder = test_upstream_client().get(format!("http://{address}/resource"));
         let error =
             send_upstream_request_with_current_lease(&state, &snapshot, None, builder, true)
                 .expect_err("unhealthy custody must block the final upstream send");
@@ -41516,9 +44586,7 @@ mod tests {
         let worker_snapshot = Arc::clone(&snapshot);
         let worker_binding = binding.clone();
         let send = thread::spawn(move || {
-            let builder = worker_state
-                .one_shot_upstream_client
-                .get(format!("http://{address}/resource"));
+            let builder = test_upstream_client().get(format!("http://{address}/resource"));
             send_upstream_request_with_current_lease(
                 &worker_state,
                 &worker_snapshot,
@@ -41593,9 +44661,7 @@ mod tests {
         let worker_state = Arc::clone(&state);
         let worker_snapshot = Arc::clone(&snapshot);
         let send = thread::spawn(move || {
-            let builder = worker_state
-                .one_shot_upstream_client
-                .get(format!("http://{address}/resource"));
+            let builder = test_upstream_client().get(format!("http://{address}/resource"));
             send_upstream_request_with_current_lease(
                 &worker_state,
                 &worker_snapshot,
@@ -41670,9 +44736,7 @@ mod tests {
         let worker_state = Arc::clone(&state);
         let worker_snapshot = Arc::clone(&snapshot);
         let send = thread::spawn(move || {
-            let builder = worker_state
-                .one_shot_upstream_client
-                .get(format!("http://{address}/resource"));
+            let builder = test_upstream_client().get(format!("http://{address}/resource"));
             send_upstream_request_with_current_lease(
                 &worker_state,
                 &worker_snapshot,
@@ -41740,8 +44804,7 @@ mod tests {
             .expect("nonblocking streaming upstream listener");
         let address = listener.local_addr().expect("streaming upstream address");
         let body = Body::sized(Cursor::new(br#"{"safe":true}"#.to_vec()), 13);
-        let builder = state
-            .one_shot_upstream_client
+        let builder = test_upstream_client()
             .post(format!("http://{address}/resource"))
             .body(body);
 
@@ -42160,9 +45223,7 @@ mod tests {
         let send_snapshot = Arc::clone(&snapshot);
         let send_binding = binding.clone();
         let send = thread::spawn(move || {
-            let builder = send_state
-                .one_shot_upstream_client
-                .get(format!("http://{address}/resource"));
+            let builder = test_upstream_client().get(format!("http://{address}/resource"));
             send_upstream_request_with_current_lease(
                 &send_state,
                 &send_snapshot,
@@ -42518,6 +45579,284 @@ mod tests {
                 )
             ]
         );
+    }
+
+    #[test]
+    fn upstream_json_media_type_enforces_generic_success_without_response_binding() {
+        let snapshot = test_snapshot(1);
+        let route = &snapshot.routes[0];
+        assert!(route.constraints.is_empty());
+        let policy = response_policy_for_route(route);
+        assert_eq!(policy.adapter_type, "generic.rest");
+        assert!(!policy.has_response_binding);
+        let profile = response_config_for_status(&policy.response_config, StatusCode::OK)
+            .expect("generic success profile");
+
+        let headers = |values: &[&'static str]| {
+            let mut headers = HeaderMap::new();
+            for value in values {
+                headers.append("content-type", HeaderValue::from_static(value));
+            }
+            headers
+        };
+        validate_selected_json_response_content_type(
+            &profile,
+            &headers(&["Application/JSON; charset=\"utf-8\""]),
+            &policy.adapter_type,
+        )
+        .expect("JSON media type with charset");
+
+        for (values, expected_error) in [
+            (
+                Vec::<&'static str>::new(),
+                "response_json_content_type_missing",
+            ),
+            (vec!["text/json"], "response_json_content_type_mismatch"),
+            (
+                vec!["application/json", "application/json; charset=utf-8"],
+                "response_json_content_type_duplicate",
+            ),
+            (
+                vec!["application/json; charset"],
+                "response_json_content_type_malformed",
+            ),
+        ] {
+            let error = validate_selected_json_response_content_type(
+                &profile,
+                &headers(&values),
+                &policy.adapter_type,
+            )
+            .expect_err("invalid JSON response content type must fail closed");
+            assert_eq!(error["error"], expected_error);
+            assert_eq!(error["adapter"], "generic.rest");
+        }
+    }
+
+    #[test]
+    fn upstream_json_media_type_enforces_specialized_success_and_error_profiles() {
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.adapter_type = "x.v2".to_string();
+        route.adapter_config["response"] = json!({
+            "mode":"json",
+            "maxBodyBytes":1024,
+            "allowedFields":["safe"],
+            "error":{
+                "mode":"json",
+                "maxBodyBytes":512,
+                "allowedFields":["error"],
+                "onInvalid":"block"
+            }
+        });
+        let policy = response_policy_for_route(&route);
+        assert_eq!(policy.adapter_type, "x.v2");
+        let mut charset = HeaderMap::new();
+        charset.append(
+            "content-type",
+            HeaderValue::from_static("application/json; charset=UTF-8"),
+        );
+        for status in [StatusCode::OK, StatusCode::BAD_REQUEST] {
+            let profile = response_config_for_status(&policy.response_config, status)
+                .expect("specialized selected response profile");
+            validate_selected_json_response_content_type(&profile, &charset, &policy.adapter_type)
+                .expect("specialized JSON profile accepts a charset parameter");
+        }
+
+        let error_profile =
+            response_config_for_status(&policy.response_config, StatusCode::BAD_REQUEST)
+                .expect("specialized error profile");
+        let missing = validate_selected_json_response_content_type(
+            &error_profile,
+            &HeaderMap::new(),
+            &policy.adapter_type,
+        )
+        .expect_err("specialized JSON error response requires content type");
+        assert_eq!(missing["error"], "response_json_content_type_missing");
+        assert_eq!(missing["adapter"], "x.v2");
+    }
+
+    #[test]
+    fn upstream_json_media_type_failure_precedes_body_parsing_and_release() {
+        let valid = finalize_test_upstream_response(
+            test_snapshot(1),
+            b"HTTP/1.1 200 OK\r\nContent-Type: Application/JSON; charset=utf-8\r\nContent-Length: 13\r\nConnection: close\r\n\r\n{\"safe\":true}"
+                .to_vec(),
+        );
+        assert!(valid.starts_with("HTTP/1.1 200"), "{valid}");
+        assert!(valid.contains("{\"safe\":true}"), "{valid}");
+
+        for (header, expected_error) in [
+            ("", "response_json_content_type_missing"),
+            (
+                "Content-Type: text/plain\r\n",
+                "response_json_content_type_mismatch",
+            ),
+            (
+                "Content-Type: application/json; charset\r\n",
+                "response_json_content_type_malformed",
+            ),
+        ] {
+            let raw = format!(
+                "HTTP/1.1 200 OK\r\n{header}Content-Length: 25\r\nConnection: close\r\n\r\nnot-json-must-not-release"
+            )
+            .into_bytes();
+            let generic = finalize_test_upstream_response(test_snapshot(1), raw);
+            assert!(generic.starts_with("HTTP/1.1 502"), "{generic}");
+            assert!(generic.contains(expected_error), "{generic}");
+            assert!(!generic.contains("response_invalid_json"), "{generic}");
+            assert!(!generic.contains("must-not-release"), "{generic}");
+        }
+
+        let mut specialized_snapshot = (*test_snapshot(1)).clone();
+        specialized_snapshot.routes[0].adapter_type = "x.v2".to_string();
+        specialized_snapshot.routes[0].adapter_config["response"]["error"] = json!({
+            "mode":"json",
+            "maxBodyBytes":512,
+            "allowedFields":["error"],
+            "onInvalid":"block"
+        });
+        let specialized = finalize_test_upstream_response(
+            Arc::new(specialized_snapshot),
+            b"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Type: text/plain\r\nContent-Length: 28\r\nConnection: close\r\n\r\n{\"error\":\"must-not-release\"}"
+                .to_vec(),
+        );
+        assert!(specialized.starts_with("HTTP/1.1 502"), "{specialized}");
+        assert!(
+            specialized.contains("response_json_content_type_duplicate"),
+            "{specialized}"
+        );
+        assert!(!specialized.contains("must-not-release"), "{specialized}");
+    }
+
+    #[test]
+    fn public_npm_publish_receipt_is_fail_closed_and_projects_no_identity() {
+        let raw_response = |status: &str, headers: &str, body: &str| {
+            format!(
+                "HTTP/1.1 {status}\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .into_bytes()
+        };
+
+        for status in ["200 OK", "201 Created"] {
+            let empty = finalize_public_npm_test_upstream_response(raw_response(
+                status,
+                "Content-Type: application/json\r\n",
+                "{}",
+            ));
+            assert!(
+                empty.starts_with(&format!("HTTP/1.1 {}", &status[..3])),
+                "{empty}"
+            );
+            assert!(empty.contains("\r\n\r\n{}"), "{empty}");
+        }
+
+        let projected = finalize_public_npm_test_upstream_response(raw_response(
+            "200 OK",
+            "Content-Type: application/json; charset=utf-8\r\n",
+            r#"{"ok":true,"published":true,"package":"other","version":"9.9.9"}"#,
+        ));
+        assert!(projected.starts_with("HTTP/1.1 200"), "{projected}");
+        assert!(
+            projected.contains(r#"{"ok":true,"published":true}"#),
+            "{projected}"
+        );
+        assert!(!projected.contains("other"), "{projected}");
+        assert!(!projected.contains("9.9.9"), "{projected}");
+
+        let wrong_identity_only = finalize_public_npm_test_upstream_response(raw_response(
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            r#"{"package":"other","version":"9.9.9"}"#,
+        ));
+        assert!(
+            wrong_identity_only.starts_with("HTTP/1.1 200"),
+            "{wrong_identity_only}"
+        );
+        assert!(
+            wrong_identity_only.contains("\r\n\r\n{}"),
+            "{wrong_identity_only}"
+        );
+        assert!(
+            !wrong_identity_only.contains("other"),
+            "{wrong_identity_only}"
+        );
+        assert!(
+            !wrong_identity_only.contains("9.9.9"),
+            "{wrong_identity_only}"
+        );
+
+        for body in [
+            r#"{"published":false,"package":"other","version":"9.9.9"}"#,
+            r#"{"ok":false}"#,
+            r#"{"ok":true,"published":false}"#,
+            r#"{"published":"true"}"#,
+        ] {
+            let denied = finalize_public_npm_test_upstream_response(raw_response(
+                "200 OK",
+                "Content-Type: application/json\r\n",
+                body,
+            ));
+            assert!(denied.starts_with("HTTP/1.1 502"), "{denied}");
+            assert!(
+                denied.contains("npm_public_publish_receipt_success_denied"),
+                "{denied}"
+            );
+            assert!(!denied.contains("other"), "{denied}");
+            assert!(!denied.contains("9.9.9"), "{denied}");
+        }
+
+        let duplicate_boolean = finalize_public_npm_test_upstream_response(raw_response(
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            r#"{"published":true,"published":false}"#,
+        ));
+        assert!(
+            duplicate_boolean.starts_with("HTTP/1.1 502"),
+            "{duplicate_boolean}"
+        );
+        assert!(
+            duplicate_boolean.contains("npm_public_publish_receipt_invalid_json"),
+            "{duplicate_boolean}"
+        );
+
+        let non_object = finalize_public_npm_test_upstream_response(raw_response(
+            "200 OK",
+            "Content-Type: application/json\r\n",
+            "[]",
+        ));
+        assert!(non_object.starts_with("HTTP/1.1 502"), "{non_object}");
+        assert!(
+            non_object.contains("npm_public_publish_receipt_object_required"),
+            "{non_object}"
+        );
+
+        let status_202 = finalize_public_npm_test_upstream_response(raw_response(
+            "202 Accepted",
+            "Content-Type: application/json\r\n",
+            "{}",
+        ));
+        assert!(status_202.starts_with("HTTP/1.1 502"), "{status_202}");
+        assert!(
+            status_202.contains("npm_public_publish_receipt_status_denied"),
+            "{status_202}"
+        );
+
+        for (headers, expected_error) in [
+            ("", "response_json_content_type_missing"),
+            (
+                "Content-Type: text/plain\r\n",
+                "response_json_content_type_mismatch",
+            ),
+            (
+                "Content-Type: application/json\r\nContent-Type: application/json\r\n",
+                "response_json_content_type_duplicate",
+            ),
+        ] {
+            let denied =
+                finalize_public_npm_test_upstream_response(raw_response("200 OK", headers, "{}"));
+            assert!(denied.starts_with("HTTP/1.1 502"), "{denied}");
+            assert!(denied.contains(expected_error), "{denied}");
+        }
     }
 
     #[test]

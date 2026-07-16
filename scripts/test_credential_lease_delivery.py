@@ -295,12 +295,12 @@ def verify_response_signature(
         raise AssertionError("response statement body digest mismatch")
     if response.headers["x-serverware-response-statement-sha256"] != sha256_prefixed(statement_bytes):
         raise AssertionError("response statement digest header mismatch")
-    if statement.get("version") != "serverware.responseSignature/v1":
+    if statement.get("version") != "serverware.responseSignature/v2":
         raise AssertionError(f"unexpected response signature version: {statement}")
     if statement.get("request") != {
         "method": method.upper(),
         "path": parsed.path,
-        "query": parsed.query,
+        "query_sha256": sha256_prefixed(parsed.query.encode("utf-8")),
     }:
         raise AssertionError(f"response statement request binding mismatch: {statement}")
     if statement.get("status_code") != response.status_code:

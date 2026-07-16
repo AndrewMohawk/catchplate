@@ -4839,12 +4839,12 @@ mod tests {
         let control_plane_nonce = general_purpose::URL_SAFE_NO_PAD.encode([20u8; 32]);
         let control_plane_key_id = digest(21);
         let control_plane_response_statement = json!({
-            "version":"serverware.responseSignature/v1",
+            "version":"serverware.responseSignature/v2",
             "issued_at_ms":dispatch_started_at_epoch_ms,
             "request":{
                 "method":"POST",
                 "path":"/api/data-plane/release-authorizations/dispatch",
-                "query":"",
+                "query_sha256":sha256_prefixed(b""),
             },
             "status_code":200,
             "body_sha256":sha256_prefixed(&dispatch_body),

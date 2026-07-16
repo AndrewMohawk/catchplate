@@ -599,19 +599,21 @@ def _fetch_provider_identity(
 
     if provider.id == "google":
         subject = payload.get("sub")
-        account = payload.get("email") or subject
-        if (
-            not isinstance(subject, str)
-            or not subject
-            or not isinstance(account, str)
-            or not account
-        ):
-            raise OAuthError("Google account identity response is missing sub or email")
+        if not isinstance(subject, str) or not subject:
+            raise OAuthError(
+                "Google account identity response is missing or has malformed sub"
+            )
+        email = payload.get("email")
+        email_verified = (
+            isinstance(email, str)
+            and bool(email)
+            and payload.get("email_verified") is True
+        )
         return {
             "provider_subject": subject,
-            "provider_account": account,
+            "provider_account": email if email_verified else subject,
             "provider_identity_verified": True,
-            "provider_email_verified": payload.get("email_verified") is True,
+            "provider_email_verified": email_verified,
         }
 
     data = payload.get("data")

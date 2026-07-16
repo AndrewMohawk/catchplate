@@ -22,7 +22,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
-from urllib.parse import urlencode, urlunsplit
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from fastapi import (
     Body,
@@ -262,6 +262,11 @@ _SETUP_HARDWARE_ASSURANCE_JSON_LIMITS = JsonLimits(
     max_string_bytes=256 * 1024,
 )
 _recipient_attestation_verifier_slots = threading.BoundedSemaphore(value=4)
+_OIDC_RETURN_TARGET_MAX_BYTES = 512
+_OIDC_APPROVAL_TARGET_RE = re.compile(r"/approvals/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
+_OIDC_SETUP_TARGET_ID_RE = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+)
 
 
 @app.middleware("http")
@@ -321,12 +326,28 @@ async def signed_response_middleware(request: Request, call_next):
     response = await call_next(request)
     body_buffer = bytearray()
     async for chunk in response.body_iterator:
-        body_buffer.extend(chunk)
-        if len(body_buffer) > _SIGNED_RESPONSE_MAX_BYTES:
-            return JSONResponse(
-                status_code=503, content={"detail": "signed response exceeds 8 MiB"}
+        if len(chunk) > _SIGNED_RESPONSE_MAX_BYTES - len(body_buffer):
+            synthetic = JSONResponse(
+                status_code=503,
+                content={"detail": "signed response exceeds 8 MiB"},
             )
+            return _signed_control_plane_response(
+                request=request,
+                response=synthetic,
+                body=synthetic.body,
+            )
+        body_buffer.extend(chunk)
     body = bytes(body_buffer)
+    return _signed_control_plane_response(
+        request=request,
+        response=response,
+        body=body,
+    )
+
+
+def _signed_control_plane_response(
+    *, request: Request, response: Response, body: bytes
+) -> Response:
     snapshot = get_policy_snapshot()
     statement = response_statement(
         method=request.method,
@@ -1210,8 +1231,97 @@ def _operator_oidc_source_key(request: Request) -> str:
     )
 
 
+def _operator_oidc_return_target(value: Any) -> str:
+    if not isinstance(value, str):
+        return "/"
+    try:
+        if len(value.encode("utf-8")) > _OIDC_RETURN_TARGET_MAX_BYTES:
+            return "/"
+    except UnicodeEncodeError:
+        return "/"
+    if (
+        not value.startswith("/")
+        or value.startswith("//")
+        or "\\" in value
+        or "%" in value
+        or "#" in value
+        or any(ord(character) < 32 or ord(character) == 127 for character in value)
+    ):
+        return "/"
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return "/"
+    if parsed.scheme or parsed.netloc or parsed.fragment:
+        return "/"
+    if value in {"/", "/approvals"}:
+        return value
+    if not parsed.query and value == parsed.path:
+        if _OIDC_APPROVAL_TARGET_RE.fullmatch(parsed.path):
+            return parsed.path
+        return "/"
+    if parsed.path != "/" or not parsed.query or value.count("?") != 1:
+        return "/"
+    try:
+        query = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+            strict_parsing=True,
+            max_num_fields=2,
+            separator="&",
+        )
+    except (UnicodeDecodeError, ValueError):
+        return "/"
+    if len(query) != 1 or query[0][0] != "setup":
+        return "/"
+    setup_id = query[0][1]
+    if _OIDC_SETUP_TARGET_ID_RE.fullmatch(setup_id) is None:
+        return "/"
+    return "/?" + urlencode({"setup": setup_id})
+
+
+def _operator_oidc_consumed_return_target(state_hash: str) -> str:
+    cutoff = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=OIDC_LOGIN_STATE_TTL_SECONDS + 60)
+    ).isoformat()
+    try:
+        result = db.search_audit_events(
+            limit=2,
+            scan_limit=5000,
+            event_type="control_plane.oidc_login.started",
+            start=cutoff,
+            q=state_hash,
+        )
+    except (db.AuditStoreError, db.MetadataStoreError, ValueError):
+        return "/"
+    matches: list[str] = []
+    for item in result.get("items", []):
+        event = item.get("event")
+        if not isinstance(event, dict):
+            continue
+        recorded_state_hash = event.get("state_hash")
+        if not isinstance(recorded_state_hash, str) or not hmac.compare_digest(
+            recorded_state_hash, state_hash
+        ):
+            continue
+        target = event.get("return_target")
+        if (
+            not isinstance(target, str)
+            or _operator_oidc_return_target(target) != target
+        ):
+            continue
+        matches.append(target)
+    return matches[0] if len(matches) == 1 else "/"
+
+
 @app.get("/api/auth/oidc/start")
-def operator_oidc_start(response: Response, request: Request) -> dict[str, Any]:
+def operator_oidc_start(
+    response: Response,
+    request: Request,
+    return_to: str | None = None,
+) -> dict[str, Any]:
+    return_target = _operator_oidc_return_target(return_to)
     source_key = _operator_oidc_source_key(request)
     try:
         with db.oidc_login_source(source_key):
@@ -1237,6 +1347,7 @@ def operator_oidc_start(response: Response, request: Request) -> dict[str, Any]:
             "state_hash": started["state_hash"],
             "expires_at": started["expires_at"],
             "source_key": source_key,
+            "return_target": return_target,
         },
     )
     return {
@@ -1266,7 +1377,9 @@ def operator_oidc_callback(
     except OperatorOIDCError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
     identity = completed["identity"]
-    response = RedirectResponse(url="/", status_code=303)
+    state_hash = "sha256:" + hashlib.sha256(state.encode("ascii")).hexdigest()
+    return_target = _operator_oidc_consumed_return_target(state_hash)
+    response = RedirectResponse(url=return_target, status_code=303)
     response.set_cookie(
         OIDC_SESSION_COOKIE_NAME,
         completed["session_token"],
@@ -1286,6 +1399,7 @@ def operator_oidc_callback(
             "expires_at_epoch": completed["expires_at"],
             "session_id": completed["session"]["id"],
             "session_status": completed["session"]["status"],
+            "return_target": return_target,
         },
         actor_id=identity.user_id,
     )
@@ -2516,6 +2630,7 @@ def _policy_candidate_report(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if enforce_monotonic:
         _assert_policy_publish_monotonic(current_raw, signed)
+    _assert_policy_candidate_credential_bindings(candidate)
     dry_run_result = _run_policy_dry_runs(candidate, dry_run)
     if POLICY_PUBLISH_DRY_RUN_REQUIRED and not dry_run:
         raise HTTPException(
@@ -3347,7 +3462,7 @@ def _policy_canary_monitor(
         timezone.utc
     )
     route_filter = _policy_canary_route_filter(state)
-    candidate_policy_hash = state.get("candidate_policy_hash")
+    baseline_policy_hash = state.get("previous_policy_hash")
     events = db.list_audit_events(limit=limit)
     matched = 0
     denials = 0
@@ -3361,7 +3476,7 @@ def _policy_canary_monitor(
         event_type = str(item.get("event_type") or "")
         if event_type not in _POLICY_CANARY_EVIDENCE_EVENT_TYPES:
             continue
-        if event.get("policy_hash") != candidate_policy_hash:
+        if event.get("policy_hash") != baseline_policy_hash:
             continue
         route_id = _audit_event_route_id(event)
         if route_filter and route_id not in route_filter:
@@ -3384,6 +3499,7 @@ def _policy_canary_monitor(
         "observationSeconds": max(
             0, int((datetime.now(timezone.utc) - started_at).total_seconds())
         ),
+        "policyHash": baseline_policy_hash,
         "routeFilter": sorted(route_filter),
         "auditEvents": matched,
         "denials": denials,
@@ -3819,6 +3935,7 @@ def _approval_review_document(approval: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": approval["id"],
         "status": approval.get("status"),
+        "decision_note": approval.get("decision_note"),
         "principal_id": approval.get("principal_id"),
         "source_identity": _approval_source_identity(canonical),
         "route_id": approval.get("route_id"),
@@ -4657,6 +4774,7 @@ def policy_canary_activate(
         raise HTTPException(
             status_code=409, detail="policy canary bundle hash no longer matches state"
         )
+    _assert_policy_candidate_credential_bindings(candidate)
     current = get_policy_snapshot()
     current_hash = current.hash if current else None
     if current_hash != state.get("previous_policy_hash"):
@@ -4736,6 +4854,7 @@ def policy_canary_activate(
                 status_code=409,
                 detail="policy canary bundle hash no longer matches state",
             )
+        _assert_policy_candidate_credential_bindings(locked_candidate)
         locked_current = get_policy_snapshot()
         locked_current_hash = locked_current.hash if locked_current else None
         if locked_current_hash != locked_state.get("previous_policy_hash"):
@@ -10696,6 +10815,110 @@ def _assert_credential_policy_binding(
         )
 
 
+def _assert_credential_injection_binding(
+    credential: dict[str, Any], credential_policy: Any
+) -> None:
+    metadata = credential.get("metadata") or {}
+    if not isinstance(metadata, dict):
+        raise HTTPException(status_code=503, detail="credential metadata is invalid")
+    stored_kind = str(credential.get("kind") or "")
+    injection = (
+        credential_policy.injection
+        if isinstance(credential_policy.injection, dict)
+        else {}
+    )
+    injection_type = str(injection.get("type") or "")
+    expected_type = "bearer" if stored_kind == "oauth2" else stored_kind
+    if not expected_type or injection_type != expected_type:
+        raise HTTPException(
+            status_code=409,
+            detail="stored credential kind does not match the signed policy injection type",
+        )
+    if stored_kind == "oauth2" and (
+        str(injection.get("header") or "Authorization").lower() != "authorization"
+        or injection.get("field") != "access_token"
+        or injection.get("prefix", "Bearer ") != "Bearer "
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="managed OAuth credentials require canonical access-token-only bearer injection",
+        )
+    if injection_type in {"header", "query", "cookie"} and injection.get(
+        "name"
+    ) != metadata.get("injection_name"):
+        raise HTTPException(
+            status_code=409,
+            detail="stored credential injection name does not match the signed policy",
+        )
+    if injection_type == "basic" and injection.get("username") != metadata.get(
+        "username"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="stored credential Basic username does not match the signed policy",
+        )
+    if metadata.get("injection_field") is not None and injection.get(
+        "field"
+    ) != metadata.get("injection_field"):
+        raise HTTPException(
+            status_code=409,
+            detail="stored credential injection field does not match the signed policy",
+        )
+    if metadata.get("injection_prefix") is not None and injection.get(
+        "prefix"
+    ) != metadata.get("injection_prefix"):
+        raise HTTPException(
+            status_code=409,
+            detail="stored credential injection prefix does not match the signed policy",
+        )
+
+
+def _assert_policy_candidate_credential_bindings(snapshot: Any) -> None:
+    stored_credentials: dict[str, dict[str, Any]] = {}
+    for credential_id, credential_policy in snapshot.credentials.items():
+        credential = db.get_credential(credential_id)
+        if credential is None:
+            raise HTTPException(
+                status_code=409,
+                detail=f"credential {credential_id} is missing or inactive",
+            )
+        try:
+            _assert_credential_policy_binding(credential, credential_policy)
+            _assert_credential_injection_binding(credential, credential_policy)
+        except HTTPException as exc:
+            raise HTTPException(
+                status_code=exc.status_code,
+                detail=f"credential {credential_id}: {exc.detail}",
+            ) from exc
+        stored_credentials[credential_id] = credential
+
+    for route in snapshot.routes:
+        credential_id = route.credential_ref
+        if not credential_id:
+            continue
+        credential = stored_credentials.get(credential_id)
+        if credential is None or credential.get("kind") != "oauth2":
+            continue
+        metadata = credential.get("metadata") or {}
+        if _normalized_credential_provider(metadata.get("provider_id")) != "x":
+            continue
+        app_id = metadata.get("x_app_id") or metadata.get("app_id")
+        allowed_app_ids = route.adapter_config.get("appIds")
+        if (
+            not isinstance(app_id, str)
+            or not app_id
+            or not isinstance(allowed_app_ids, list)
+            or app_id not in allowed_app_ids
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"credential {credential_id}: stored X OAuth app is not allowed "
+                    f"by route {route.id}"
+                ),
+            )
+
+
 def _credential_secret_for_lease(
     credential: dict[str, Any], credential_policy: Any
 ) -> str:
@@ -12510,6 +12733,58 @@ UI_HTML = r"""
     .pending-mutation:empty { display: none; }
     .section-kicker { margin: -5px 0 10px; color: var(--muted); font-size: 12px; }
     .policy-result { min-height: 220px; }
+    .policy-effect {
+      margin: 10px 0 12px;
+      padding: 10px 0;
+      border-top: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+    }
+    .policy-effect-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .policy-effect-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+      gap: 8px 14px;
+    }
+    .policy-effect-field { min-width: 0; }
+    .policy-effect-field > span {
+      display: block;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+    .policy-effect-field code,
+    .policy-effect-field strong {
+      display: block;
+      margin-top: 3px;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+    .policy-effect-rules {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+      margin-top: 9px;
+    }
+    .policy-effect-rule {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 4px 6px;
+      background: #fbfcfa;
+      color: var(--text);
+      font-size: 12px;
+      overflow-wrap: anywhere;
+    }
     aside section { overflow: hidden; }
     .approval-review { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
     .review-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 10px; }
@@ -12519,6 +12794,13 @@ UI_HTML = r"""
     .review-block { margin-top: 12px; display: grid; gap: 6px; }
     .review-block h3 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; }
     .review-actions input { width: 72px; flex: 0 0 72px; }
+    .approval-review-actions { border-top: 1px solid var(--line); margin-top: 12px; padding-top: 12px; }
+    .approval-review-actions h3 { margin: 0; font-size: 13px; color: var(--muted); text-transform: uppercase; }
+    .approval-review-decision { display: grid; grid-template-columns: minmax(220px, 1fr) auto; gap: 10px; align-items: end; margin-top: 8px; }
+    .approval-review-denial label { color: var(--muted); font-size: 12px; font-weight: 800; text-transform: uppercase; }
+    .approval-review-denial input { width: 100%; min-height: 40px; }
+    .approval-review-buttons { justify-content: flex-end; }
+    .approval-review-buttons button { min-width: 96px; min-height: 40px; }
     .approval-block-reason { flex-basis: 100%; color: var(--bad); font-size: 12px; line-height: 1.35; }
     .selected-row > td { background: #f0fdfa; }
     .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
@@ -12618,6 +12900,9 @@ UI_HTML = r"""
       .approval-table .empty-row td::before { content: none; }
       .approval-table .review-actions { align-items: stretch; }
       .approval-table .review-actions input { width: 100%; flex-basis: 100%; }
+      .approval-review-decision { grid-template-columns: minmax(0, 1fr); }
+      .approval-review-buttons { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+      .approval-review-buttons button { width: 100%; min-height: 44px; }
       .mobile-table,
       .mobile-table tbody,
       .mobile-table tr,
@@ -12729,6 +13014,7 @@ UI_HTML = r"""
             <div><label for="setup-route-id">Route ID</label><input id="setup-route-id" name="routeId" required maxlength="256"></div>
             <div id="setup-approvers-row" hidden><label for="setup-approvers">JIT approvers</label><input id="setup-approvers" name="approvers" maxlength="4096" placeholder="user:release-manager"></div>
           </div>
+          <div id="setup-template-summary" class="policy-effect" role="region" aria-label="Selected restriction effect" aria-live="polite"></div>
           <div class="setup-actions">
             <button id="setup-connect-button" class="secondary" type="button" onclick="runUiAction('Prepare provider login', prepareSetupProviderLogin)">Connect credential</button>
             <button id="setup-preview-button" class="secondary" type="button" onclick="runUiAction('Preview setup assignment', previewSetupAssignment)">Preview assignment</button>
@@ -12765,7 +13051,10 @@ UI_HTML = r"""
           <thead><tr><th>Status</th><th>Route</th><th>Request</th><th>Until</th><th></th></tr></thead>
           <tbody id="approvals"></tbody>
         </table>
-        <div id="approval-review" class="approval-review" tabindex="-1" aria-label="Selected approval review"></div>
+        <div class="approval-review-context">
+          <div id="approval-review" class="approval-review" tabindex="-1" aria-label="Selected approval review"></div>
+          <div id="approval-review-actions" class="approval-review-actions" role="group" aria-labelledby="approval-review-actions-heading" hidden></div>
+        </div>
       </section>
       <section class="control-plane-approvals-section">
         <h2>Control-plane approval queue</h2>
@@ -12866,6 +13155,7 @@ UI_HTML = r"""
           <form id="policy-route-form">
             <label for="policy-template">Restriction template</label>
             <select id="policy-template" name="template"></select>
+            <div id="policy-template-summary" class="policy-effect" role="region" aria-label="Selected policy effect" aria-live="polite"></div>
             <label id="policy-custom-route-label" for="policy-custom-route" hidden>Route policy JSON</label>
             <textarea id="policy-custom-route" name="customRoute" class="policy-result" spellcheck="false" hidden></textarea>
             <label for="policy-route-id">Route ID</label>
@@ -13058,7 +13348,7 @@ UI_HTML = r"""
         requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'gmail.googleapis.com', port: 443, methods: ['GET'], paths: ['/gmail/v1/users/{user}/messages', '/gmail/v1/users/{user}/messages/{message_id}']},
-        adapter: {type: 'gmail.v1', config: {maxAgeDays: 30, maxResults: 10, forceQuery: true, allowMessageGetOnlyFromPriorSearch: true, cacheTtlSeconds: 1800, denyEquivalentEndpoints: ['threads', 'history', 'attachments', 'imap'], response: {validateInternalDate: true, validateListByMetadataFetch: true, metadataFetch: {maxMessages: 10, perRequestTimeoutMs: 1500, totalTimeoutMs: 8000, maxBodyBytes: 4096}, maxBodyBytes: 1048576, allowedFields: ['id', 'threadId', 'labelIds', 'snippet', 'internalDate', 'payload.headers'], allowedHeaders: [], allowedMessageHeaderNames: ['From', 'Subject', 'Date'], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.code', 'error.status', 'error.message', 'error.errors.reason', 'error.errors.domain'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}, onViolation: 'block'}}},
+        adapter: {type: 'gmail.v1', config: {maxAgeDays: 30, maxResults: 10, forceQuery: true, allowMessageGetOnlyFromPriorSearch: true, cacheTtlSeconds: 1800, denyEquivalentEndpoints: ['threads', 'history', 'attachments', 'imap'], request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent', 'x-goog-api-client', 'x-goog-request-params', 'x-goog-user-project'], allowedQueryKeys: ['$.xgafv', 'alt', 'fields', 'format', 'includeSpamTrash', 'labelIds', 'maxResults', 'metadataHeaders', 'pageToken', 'prettyPrint', 'q', 'quotaUser'], allowedMediaTypes: [], maxBodyBytes: 0}, response: {validateInternalDate: true, validateListByMetadataFetch: true, metadataFetch: {maxMessages: 10, perRequestTimeoutMs: 1500, totalTimeoutMs: 8000, maxBodyBytes: 4096}, maxBodyBytes: 1048576, allowedFields: ['id', 'threadId', 'labelIds', 'snippet', 'internalDate', 'payload.headers'], allowedHeaders: [], allowedMessageHeaderNames: ['From', 'Subject', 'Date'], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.code', 'error.status', 'error.message', 'error.errors.reason', 'error.errors.domain'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}, onViolation: 'block'}}},
         constraints: [
           {id: 'gmail-max-page-size', type: 'queryNumericBounds', parameters: ['maxResults'], min: 1, max: 10, integer: true},
           {id: 'gmail-response-last-30-days', type: 'responseDateWindow', phase: 'response', operations: ['gmail.messages.list'], items: ['messages'], dateFields: ['internalDate'], formats: ['epochMillis'], maxAgeDays: 30, required: true}
@@ -13071,7 +13361,7 @@ UI_HTML = r"""
         requiredScopes: ['tweet.read', 'users.read'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['GET'], paths: ['/2/tweets/search/recent']},
-        adapter: {type: 'x.v2', config: {mode: 'recentSearchOnly', blockWrites: true, allowedReadOperations: ['search.read'], response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text', 'data.created_at', 'meta.result_count'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        adapter: {type: 'x.v2', config: {mode: 'recentSearchOnly', blockWrites: true, allowedReadOperations: ['search.read'], request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'], allowedQueryKeys: ['end_time', 'expansions', 'granularity', 'max_results', 'media.fields', 'next_token', 'pagination_token', 'place.fields', 'poll.fields', 'query', 'search_count.fields', 'since_id', 'sort_order', 'start_time', 'tweet.fields', 'until_id', 'user.fields'], allowedMediaTypes: [], maxBodyBytes: 0}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text', 'data.created_at', 'meta.result_count'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
           {id: 'x-search-last-7-days', type: 'queryDateWindow', parameters: ['start_time', 'end_time'], maxAgeDays: 7, formats: ['rfc3339', 'date'], required: false},
           {id: 'x-search-page-cap', type: 'queryNumericBounds', parameters: ['max_results'], min: 1, max: 100, integer: true},
@@ -13085,7 +13375,7 @@ UI_HTML = r"""
         requiredScopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'api.x.com', port: 443, methods: ['POST'], paths: ['/2/tweets']},
-        adapter: {type: 'x.v2', config: {mode: 'controlledWrite', blockWrites: false, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        adapter: {type: 'x.v2', config: {mode: 'controlledWrite', blockWrites: false, request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'user-agent'], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 65536}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['data.id', 'data.text'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['title', 'detail', 'type', 'status', 'errors.title', 'errors.detail', 'errors.type', 'errors.value'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
           {id: 'x-only-tweet-create', type: 'operationPolicy', allowedOperations: ['tweets.write']},
           {id: 'x-one-post-per-day', type: 'rateLimit', max: 1, calendarWindow: 'utcDay', store: 'shared', key: {scope: ['route', 'operation'], operationFields: ['providerAccount']}},
@@ -13097,9 +13387,9 @@ UI_HTML = r"""
         routeId: 'npm.publish.yubikey-jit',
         provider: 'npm',
         injection: {type: 'bearer'},
-        match: {scheme: 'https', host: 'registry.npmjs.org', port: 443, methods: ['PUT', 'POST'], paths: ['/{package}', '/-/package/{package}/dist-tags/{tag}']},
-        adapter: {type: 'npm.registry', config: {operations: ['publish', 'distTagWrite'], response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['package', 'published', 'tag', 'dist_tag_written'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'reason', 'code'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}}}},
-        constraints: [{id: 'npm-only-publish-or-dist-tag', type: 'operationPolicy', allowedOperations: ['npm.publish', 'npm.distTagWrite'], deniedOperations: ['npm.tokenWrite', 'npm.metadataWrite']}],
+        match: {scheme: 'https', host: 'registry.npmjs.org', port: 443, methods: ['PUT'], paths: ['/{package}']},
+        adapter: {type: 'npm.registry', config: {request: {allowedHeaders: ['accept', 'accept-encoding', 'content-type', 'npm-auth-type', 'npm-command', 'npm-in-ci', 'npm-otp', 'npm-scope', 'npm-session', 'user-agent'], allowedQueryKeys: [], allowedMediaTypes: ['application/json'], maxBodyBytes: 16777216}, operations: ['publish'], publishResponseContract: 'npm-public-registry-receipt-v1', response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'published'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'reason', 'code'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}}}},
+        constraints: [{id: 'npm-only-publish', type: 'operationPolicy', allowedOperations: ['npm.publish'], deniedOperations: ['npm.unpublish', 'npm.distTagWrite', 'npm.tokenWrite', 'npm.metadataWrite']}],
         jit: {required: true, mode: 'perOperation', ttlSeconds: 30, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'operationDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256', 'packageName', 'packageVersion', 'tarballIntegrity']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
       },
       slack_chat_post: {
@@ -13234,7 +13524,9 @@ UI_HTML = r"""
     }
 
     async function signInWithOIDC() {
-      const response = await fetch('/api/auth/oidc/start', {credentials: 'same-origin', cache: 'no-store'});
+      const returnTo = `${window.location.pathname}${window.location.search}`;
+      const query = new URLSearchParams({return_to: returnTo});
+      const response = await fetch(`/api/auth/oidc/start?${query}`, {credentials: 'same-origin', cache: 'no-store'});
       const payload = await response.json();
       if (!response.ok) throw new ApiError(response.status, payload);
       window.location.assign(payload.authorizationUrl);
@@ -14150,6 +14442,7 @@ UI_HTML = r"""
       if (savedApprovers != null) $('setup-approvers').value = savedApprovers;
       $('setup-approvers-row').hidden = !template?.jit;
       $('setup-approvers').required = Boolean(template?.jit);
+      renderPolicyEffect('setup-template-summary', template);
       const bindingsLocked = Boolean(setupSession && setupSession.phase !== 'created');
       $('setup-template').disabled = bindingsLocked;
       $('setup-principal').disabled = bindingsLocked;
@@ -14385,7 +14678,7 @@ UI_HTML = r"""
         .filter((item) => !query || [item.id, item.route_id, item.principal_id, item.method, item.url].some((value) => String(value || '').toLowerCase().includes(query)))
         .sort((left, right) => queueStatusRank(left.status) - queueStatusRank(right.status) || String(right.requested_at || '').localeCompare(String(left.requested_at || '')));
       $('approvals').innerHTML = rows.map((item) => {
-        const approvalBlockReason = approvalReviewBlockReason(item);
+        const approvalBlockReason = approvalReviewActionBlockReason(item);
         const approvalBlockReasonId = `jit-approval-block-reason-${item.id}`;
         const approvalBlockAttributes = approvalBlockReason ? `disabled aria-disabled="true" aria-describedby="${approvalBlockReasonId}"` : '';
         const approvalBlockMessage = approvalBlockReason ? `<span id="${approvalBlockReasonId}" class="approval-block-reason" role="status">${esc(approvalBlockReason)}</span>` : '';
@@ -14658,6 +14951,81 @@ UI_HTML = r"""
       return JSON.parse(JSON.stringify(candidateInjection));
     }
 
+    function policyWindowLabel(constraint) {
+      const calendar = {
+        utcDay: 'UTC calendar day (resets 00:00 UTC)',
+        utcIsoWeek: 'UTC ISO week (resets Monday 00:00 UTC)',
+        utcMonth: 'UTC calendar month (resets on day 1)'
+      };
+      if (constraint.calendarWindow) return calendar[constraint.calendarWindow] || constraint.calendarWindow;
+      return `${constraint.windowSeconds} second rolling window`;
+    }
+
+    function policyConstraintLabel(constraint) {
+      if (constraint.type === 'operationPolicy') {
+        const allowed = (constraint.allowedOperations || []).join(', ');
+        const denied = (constraint.deniedOperations || []).join(', ');
+        return [allowed ? `Operations: ${allowed}` : '', denied ? `Denied: ${denied}` : ''].filter(Boolean).join('; ');
+      }
+      if (constraint.type === 'rateLimit') return `Quota: ${constraint.max} per ${policyWindowLabel(constraint)}`;
+      if (constraint.type === 'queryDateWindow') return `Request lookback: at most ${constraint.maxAgeDays} days`;
+      if (constraint.type === 'queryNumericBounds') return `Query ${constraint.parameters?.join(', ') || 'value'}: ${constraint.min ?? 'unbounded'}-${constraint.max ?? 'unbounded'}`;
+      if (constraint.type === 'requestTimeWindow') {
+        const days = (constraint.weekdays || []).join(', ');
+        const windows = (constraint.dailyWindows || []).map((item) => `${item.start}-${item.end} UTC`).join(', ');
+        return `Time window: ${[days, windows].filter(Boolean).join(' / ') || 'bounded UTC schedule'}`;
+      }
+      if (constraint.type === 'requestValue') return `Request values: ${constraint.rules?.length || 0} exact or bounded checks`;
+      if (constraint.type === 'jsonBody' || constraint.type === 'formBody') {
+        const denied = (constraint.deniedFields || []).length;
+        return `Request body: ${(constraint.allowedFields || []).length} allowed fields${denied ? `; ${denied} explicitly denied` : ''}`;
+      }
+      if (constraint.type === 'responseDateWindow') return `Response age: at most ${constraint.maxAgeDays} days`;
+      if (constraint.type === 'responseJson') return `Response shape: ${Object.keys(constraint.fields || {}).length} typed checks`;
+      if (constraint.type === 'responseBinding') return `Response binding: ${(constraint.bindings || []).length} request values must match`;
+      return constraint.description || `Enforces ${constraint.type}`;
+    }
+
+    function renderPolicyEffect(targetId, template) {
+      const target = $(targetId);
+      if (!target) return;
+      if (!template) {
+        target.textContent = 'No restriction template selected.';
+        return;
+      }
+      const match = template.match || {};
+      const endpoint = match.host
+        ? `${(match.methods || []).join(', ') || 'No methods'} https://${match.host}${match.port && match.port !== 443 ? `:${match.port}` : ''}${(match.paths || []).length === 1 ? match.paths[0] : ` (${(match.paths || []).join(', ')})`}`
+        : 'Custom endpoint from the typed route policy';
+      const scopes = (template.requiredScopes || []).length
+        ? template.requiredScopes.join(', ')
+        : 'Static credential; no OAuth scopes';
+      const response = template.adapter?.config?.response;
+      const responseLabel = response
+        ? `${response.mode || 'bounded'}; ${(response.allowedFields || []).length} released fields; invalid responses ${response.error?.onInvalid || response.onInvalid || 'block'}`
+        : 'Defined by the custom typed adapter; validation failure blocks';
+      const authn = template.jit?.approvers?.authn;
+      const approvalLabel = template.jit?.required
+        ? `${template.jit.mode || 'per-operation'}; ${template.jit.maxUses || 1} use; ${template.jit.ttlSeconds || 0}s; ${authn?.webauthnRequired ? 'WebAuthn required' : 'approval required'}${authn?.requireHardwareAttestation ? '; hardware attestation required' : ''}`
+        : 'No JIT approval; every request must still pass the signed policy';
+      const rules = (template.constraints || []).map(policyConstraintLabel).filter(Boolean);
+      target.innerHTML = `
+        <div class="policy-effect-header">
+          <strong>${esc(template.label || 'Custom typed route policy')}</strong>
+          <span class="pill ${template.jit?.required ? 'warn' : 'good'}">${template.jit?.required ? 'Human approval required' : 'Policy gated'}</span>
+        </div>
+        <div class="policy-effect-grid">
+          <div class="policy-effect-field"><span>Destination</span><code>${esc(endpoint)}</code></div>
+          <div class="policy-effect-field"><span>Credential authority</span><code>${esc(`${template.provider || 'custom'} / ${scopes}`)}</code></div>
+          <div class="policy-effect-field"><span>Approval</span><strong>${esc(approvalLabel)}</strong></div>
+          <div class="policy-effect-field"><span>Response release</span><strong>${esc(responseLabel)}</strong></div>
+        </div>
+        <div class="policy-effect-rules" aria-label="Enforced controls">
+          ${rules.map((rule) => `<span class="policy-effect-rule">${esc(rule)}</span>`).join('') || '<span class="policy-effect-rule">Custom constraints are validated before staging</span>'}
+          <span class="policy-effect-rule">Unknown host, path, method, or validation result is denied</span>
+        </div>`;
+    }
+
     function syncPolicyTemplateEditor(reset = false) {
       const template = policyTemplates[$('policy-template').value];
       const custom = Boolean(template?.custom);
@@ -14675,6 +15043,7 @@ UI_HTML = r"""
           ...(template.jit ? {jit: template.jit} : {})
         }, null, 2);
       }
+      renderPolicyEffect('policy-template-summary', template);
     }
 
     function buildPolicyCandidate() {
@@ -15418,17 +15787,32 @@ UI_HTML = r"""
       if (flags.has('policy_hash_not_current')) return 'Policy changed; request a new approval';
       return '';
     }
+    function approvalReviewActionBlockReason(item) {
+      const blockReason = approvalReviewBlockReason(item);
+      if (blockReason) return blockReason;
+      if (!state.approvalReview?.review_receipt?.id) return 'Review receipt unavailable or expired; refresh the review';
+      return '';
+    }
     function reviewPill(flag) {
       const cls = flag === 'policy_hash_not_current' || flag === 'approval_expired' ? 'bad' : flag === 'policy_hash_current' || flag === 'one_use_grant' ? 'good' : 'warn';
       return `<span class="pill ${cls}">${esc(flag)}</span>`;
     }
     function renderApprovalReview() {
       const target = $('approval-review');
+      const actionsTarget = $('approval-review-actions');
       const review = state.approvalReview;
       if (!review) {
         target.innerHTML = '<p class="muted">No approval selected</p>';
+        actionsTarget.innerHTML = '';
+        actionsTarget.hidden = true;
         return;
       }
+      const approvalItem = state.approvals.find((item) => item.id === review.id) || review;
+      const actionBlockReason = approvalReviewActionBlockReason(approvalItem);
+      const actionBlockReasonId = `approval-review-block-reason-${review.id}`;
+      const actionBlockAttributes = actionBlockReason ? `disabled aria-disabled="true" aria-describedby="${actionBlockReasonId}"` : '';
+      const actionBlockMessage = actionBlockReason ? `<span id="${actionBlockReasonId}" class="approval-block-reason" role="status">${esc(actionBlockReason)}</span>` : '';
+      const denialNoteId = `approval-review-deny-note-${review.id}`;
       const retry = review.retry_semantics || {};
       const previous = (review.previous_similar_approvals || []).map((item) => `
         <tr>
@@ -15453,6 +15837,7 @@ UI_HTML = r"""
           <div class="review-field"><span>Operation digest</span><code>${esc(retry.operation_digest || '')}</code></div>
           <div class="review-field"><span>Review digest</span><code>${esc(review.review_digest || '')}</code></div>
           <div class="review-field"><span>Review receipt expires</span><code>${esc(review.review_receipt?.expires_at || 'not approvable')}</code></div>
+          ${review.status === 'pending' ? '' : `<div class="review-field"><span>Decision note</span><code>${esc(review.decision_note || 'No decision note')}</code></div>`}
         </div>
         <div class="review-block">
           <h3>Risk flags</h3>
@@ -15477,6 +15862,20 @@ UI_HTML = r"""
             <tbody>${previous}</tbody>
           </table>
         </div>`;
+      actionsTarget.hidden = review.status !== 'pending';
+      actionsTarget.innerHTML = review.status === 'pending' ? `
+        <h3 id="approval-review-actions-heading">Decision</h3>
+        <div class="approval-review-decision">
+          <div class="review-field approval-review-denial">
+            <label for="${denialNoteId}">Denial note</label>
+            <input id="${denialNoteId}" maxlength="500" autocomplete="off" placeholder="Reason for denial">
+          </div>
+          <div class="toolbar approval-review-buttons">
+            <button id="approval-review-approve-${review.id}" type="button" onclick="runUiAction('Approve request from review', () => approve('${review.id}'))" ${actionBlockAttributes}>Approve</button>
+            <button id="approval-review-deny-${review.id}" class="danger" type="button" onclick="runUiAction('Deny request from review', () => deny('${review.id}'))">Deny</button>
+          </div>
+          ${actionBlockMessage}
+        </div>` : '';
     }
     async function approve(id) {
       const item = state.approvals.find((approval) => approval.id === id) || {id};
@@ -15511,11 +15910,15 @@ UI_HTML = r"""
         body: JSON.stringify(body)
       });
       await refresh();
+      await loadApprovalReview(id);
     }
     async function deny(id) {
-      const reason = $(`jit-deny-note-${id}`)?.value.trim() || null;
+      const reviewNote = $(`approval-review-deny-note-${id}`);
+      const reason = (reviewNote || $(`jit-deny-note-${id}`))?.value.trim() || null;
+      const reviewed = state.approvalReview?.id === id;
       await api(`/api/approvals/${id}/deny`, {method: 'POST', body: JSON.stringify({reason})});
       await refresh();
+      if (reviewed) await loadApprovalReview(id);
     }
     function cancelledAction(label) {
       setStatus(`${label} cancelled.`);

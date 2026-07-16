@@ -188,11 +188,11 @@ assert receipt_statement_bytes == json.dumps(
     json.loads(receipt_statement_bytes), sort_keys=True, separators=(",", ":"), ensure_ascii=True
 ).encode(), receipt_response
 receipt_statement = json.loads(receipt_statement_bytes)
-assert receipt_statement["version"] == "serverware.responseSignature/v1", receipt_statement
+assert receipt_statement["version"] == "serverware.responseSignature/v2", receipt_statement
 assert receipt_statement["request"] == {
     "method": receipt_request["method"],
     "path": receipt_request["path"],
-    "query": receipt_request["query"],
+    "query_sha256": "sha256:" + hashlib.sha256(receipt_request["query"].encode()).hexdigest(),
 }, receipt_statement
 assert receipt_statement["nonce"] == receipt_request["nonce"], receipt_statement
 assert receipt_statement["status_code"] == receipt_response["status"], receipt_statement

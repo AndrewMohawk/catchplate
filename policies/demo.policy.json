@@ -144,6 +144,9 @@
           "/echo"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -185,6 +188,9 @@
           "/stream-bytes"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -231,6 +237,9 @@
           "/upload-bytes"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -284,6 +293,9 @@
           "/jsonl-redact"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -337,6 +349,9 @@
           "/json-array-redact"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -392,6 +407,9 @@
           "/json-sse-redact"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -451,6 +469,9 @@
           "/json-nested-redact"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -502,6 +523,9 @@
           "/form-redact"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -555,6 +579,9 @@
           "/csv-redact"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -599,6 +626,9 @@
           "/proof-stream/jsonl"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -641,6 +671,9 @@
           "/proof-stream/json-array"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -684,6 +717,9 @@
           "/proof-stream/json-sse"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -729,6 +765,9 @@
           "/proof-stream/json-nested"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -770,6 +809,9 @@
           "/proof-stream/form"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -812,6 +854,9 @@
           "/proof-stream/csv"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -832,6 +877,33 @@
           "forceQuery": true,
           "maxAgeDays": 30,
           "maxResults": 10,
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "accept-encoding",
+              "content-type",
+              "user-agent",
+              "x-goog-api-client",
+              "x-goog-request-params",
+              "x-goog-user-project"
+            ],
+            "allowedMediaTypes": [],
+            "allowedQueryKeys": [
+              "$.xgafv",
+              "alt",
+              "fields",
+              "format",
+              "includeSpamTrash",
+              "labelIds",
+              "maxResults",
+              "metadataHeaders",
+              "pageToken",
+              "prettyPrint",
+              "q",
+              "quotaUser"
+            ],
+            "maxBodyBytes": 0
+          },
           "response": {
             "allowedFields": [
               "id",
@@ -911,6 +983,9 @@
           "/gmail/v1/users/{user}/messages/{message_id}"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -925,6 +1000,19 @@
           ],
           "blockWrites": false,
           "mode": "controlledWrite",
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "accept-encoding",
+              "content-type",
+              "user-agent"
+            ],
+            "allowedMediaTypes": [
+              "application/json"
+            ],
+            "allowedQueryKeys": [],
+            "maxBodyBytes": 65536
+          },
           "response": {
             "allowedFields": [
               "data.id",
@@ -1008,6 +1096,9 @@
           "/2/tweets"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -1025,6 +1116,35 @@
           ],
           "blockWrites": true,
           "mode": "recentSearchOnly",
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "accept-encoding",
+              "content-type",
+              "user-agent"
+            ],
+            "allowedMediaTypes": [],
+            "allowedQueryKeys": [
+              "end_time",
+              "expansions",
+              "granularity",
+              "max_results",
+              "media.fields",
+              "next_token",
+              "pagination_token",
+              "place.fields",
+              "poll.fields",
+              "query",
+              "search_count.fields",
+              "since_id",
+              "sort_order",
+              "start_time",
+              "tweet.fields",
+              "until_id",
+              "user.fields"
+            ],
+            "maxBodyBytes": 0
+          },
           "response": {
             "allowedFields": [
               "data.id",
@@ -1097,6 +1217,9 @@
           "/2/tweets/search/recent"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -1135,6 +1258,73 @@
           ],
           "blockWrites": true,
           "mode": "readOnly",
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "accept-encoding",
+              "content-type",
+              "user-agent"
+            ],
+            "allowedMediaTypes": [],
+            "allowedQueryKeys": [
+              "analytics.fields",
+              "chat_conversation.fields",
+              "chat_message_event.fields",
+              "command",
+              "community.fields",
+              "compliance_job.fields",
+              "connection.fields",
+              "days",
+              "dm_event.fields",
+              "end_time",
+              "endpoints",
+              "engagement.fields",
+              "event_types",
+              "exclude",
+              "expansions",
+              "granularity",
+              "ids",
+              "list.fields",
+              "max_age_hours",
+              "max_results",
+              "max_trends",
+              "media.fields",
+              "media_analytics.fields",
+              "media_id",
+              "media_keys",
+              "news.fields",
+              "next_token",
+              "note.fields",
+              "pagination_token",
+              "personalized_trend.fields",
+              "place.fields",
+              "poll.fields",
+              "post_selection",
+              "public_key.fields",
+              "query",
+              "requested_metrics",
+              "search_count.fields",
+              "since_id",
+              "sort_order",
+              "space.fields",
+              "start_time",
+              "state",
+              "status",
+              "test_mode",
+              "topic.fields",
+              "trend.fields",
+              "tweet.fields",
+              "tweet_ids",
+              "type",
+              "until_id",
+              "usage.fields",
+              "user.fields",
+              "user_ids",
+              "usernames",
+              "webhook_config.fields"
+            ],
+            "maxBodyBytes": 0
+          },
           "response": {
             "allowedFields": [
               "data",
@@ -1196,6 +1386,9 @@
           "/2/**"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [
@@ -1209,6 +1402,25 @@
             "publish",
             "distTagWrite"
           ],
+          "request": {
+            "allowedHeaders": [
+              "accept",
+              "accept-encoding",
+              "content-type",
+              "npm-auth-type",
+              "npm-command",
+              "npm-in-ci",
+              "npm-otp",
+              "npm-scope",
+              "npm-session",
+              "user-agent"
+            ],
+            "allowedMediaTypes": [
+              "application/json"
+            ],
+            "allowedQueryKeys": [],
+            "maxBodyBytes": 16777216
+          },
           "response": {
             "allowedFields": [
               "package",
@@ -1353,6 +1565,9 @@
           "/npm/-/package/{package}/dist-tags/{tag}"
         ],
         "port": 8443,
+        "resolvedCidrs": [
+          "172.16.0.0/12"
+        ],
         "scheme": "https"
       },
       "principals": [

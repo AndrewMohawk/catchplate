@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
@@ -125,7 +124,7 @@ PROXY_STREAM_OPERATION_CONTEXT_DIGEST_ENV_KEY = (
 MAX_PROXY_STREAM_BODY_BYTES = 64 * 1024 * 1024
 STREAMING_TLS_EXPORTER_LABEL = "EXPORTER-Serverware-Proxy-Stream-v1"
 CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION = "serverware.controlPlaneAuthorizationReceipt/v1"
-CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION = "serverware.responseSignature/v1"
+CONTROL_PLANE_RESPONSE_SIGNATURE_API_VERSION = "serverware.responseSignature/v2"
 CONTROL_PLANE_DISPATCH_PATH = "/api/data-plane/release-authorizations/dispatch"
 HARDWARE_PROOF_API_VERSION = "serverware.hardwareAssurance/v1"
 HARDWARE_PROOF_MAX_AGE_SECONDS = 900
@@ -6030,13 +6029,17 @@ def verify_control_plane_authorization_receipt(
 
     signed_request = response_statement.get("request")
     require(isinstance(signed_request, dict), f"{label} signed request must be an object")
-    require_exact_object_fields(signed_request, {"method", "path", "query"}, f"{label} signed request")
+    require_exact_object_fields(
+        signed_request,
+        {"method", "path", "query_sha256"},
+        f"{label} signed request",
+    )
     require(
         signed_request
         == {
             "method": request["method"],
             "path": request["path"],
-            "query": request["query"],
+            "query_sha256": sha256_prefixed_bytes(request["query"].encode("utf-8")),
         },
         f"{label} signed request context mismatch",
     )

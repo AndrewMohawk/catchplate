@@ -570,12 +570,12 @@ mod tests {
         let response_nonce = general_purpose::URL_SAFE_NO_PAD.encode([13u8; 32]);
         let response_signing_key_id = control_plane_response_signing_key_id();
         let signed_response_statement = canonical_json_bytes(&json!({
-            "version":"serverware.responseSignature/v1",
+            "version":"serverware.responseSignature/v2",
             "issued_at_ms":dispatch_started_at_epoch_ms,
             "request":{
                 "method":"POST",
                 "path":"/api/data-plane/release-authorizations/dispatch",
-                "query":"",
+                "query_sha256":format!("sha256:{}", hex::encode(Sha256::digest(b""))),
             },
             "status_code":200,
             "body_sha256":format!(

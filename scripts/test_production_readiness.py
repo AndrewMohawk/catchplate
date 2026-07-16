@@ -906,6 +906,15 @@ def run_shared_store_probe_helper() -> None:
         raise AssertionError(f"metadata probe did not require policy rollback state: {calls}")
     if "control_plane_approvals" not in required_by_label.get("metadata", set()):
         raise AssertionError(f"metadata probe did not require two-person approval table: {calls}")
+    setup_ledger_tables = {
+        "setup_sessions",
+        "setup_session_evidence",
+        "setup_session_events",
+    }
+    if not setup_ledger_tables.issubset(required_by_label.get("metadata", set())):
+        raise AssertionError(
+            f"metadata probe did not require the complete Setup ledger: {calls}"
+        )
     if "approval_grant_consumptions" not in required_by_label.get("grant", set()):
         raise AssertionError(f"grant probe did not require consumption outbox table: {calls}")
     if "serverware_audit_events" not in required_by_label.get("audit", set()):
@@ -957,8 +966,18 @@ def assert_atomic_release_compose_gate() -> None:
                 )
         if compose_name == "docker-compose.production.yml":
             serverware = model["services"]["serverware"]
+            production_policy_env = serverware.get("environment") or {}
+            for name in (
+                "SERVERWARE_POLICY_CANARY_MIN_OBSERVATION_SECONDS",
+                "SERVERWARE_POLICY_CANARY_MIN_AUDIT_EVENTS",
+                "SERVERWARE_POLICY_CANARY_MAX_DENIALS",
+            ):
+                if not production_policy_env.get(name):
+                    raise AssertionError(
+                        f"production Compose does not forward required policy staging control {name}"
+                    )
             if (
-                (serverware.get("environment") or {}).get(
+                production_policy_env.get(
                     "SERVERWARE_RESPONSE_SIGNING_KEY"
                 )
                 != "/run/secrets/serverware-response-signing-key"

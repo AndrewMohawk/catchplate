@@ -15,8 +15,10 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 
-def candidate_bundle(policy_bundle: Any, sequence: int) -> dict[str, Any]:
-    bundle = policy_bundle.demo_policy_bundle("cred-demo-bearer")
+def candidate_bundle(
+    policy_bundle: Any, sequence: int, credential_id: str
+) -> dict[str, Any]:
+    bundle = policy_bundle.demo_policy_bundle(credential_id)
     bundle["metadata"]["sequence"] = sequence
     return bundle
 
@@ -142,12 +144,58 @@ def main() -> None:
         user_id = "user:publisher"
         identity = AdminIdentity(user_id, frozenset({"policy_publisher", "policy_author", "auditor"}), "admin-token-header")
         webauthn.create_dev_credential(user_id)
-        initial = policy_bundle.write_policy_bundle(candidate_bundle(policy_bundle, 1))
+        credential = db.create_credential(
+            "Canary demo",
+            "bearer",
+            "demo-token-from-vault",
+            {"provider": "demo", "scopes": ["demo"]},
+        )
+        credential_id = credential["id"]
+        initial = policy_bundle.write_policy_bundle(
+            candidate_bundle(policy_bundle, 1, credential_id)
+        )
         policy_bundle.enforce_policy_high_water(initial)
         active_before = policy_bundle.get_policy_snapshot()
 
+        missing_credential_payload = app_module.PolicyCandidateRequest(
+            bundle=candidate_bundle(policy_bundle, 2, "cred-does-not-exist"),
+            dryRun=[dry_run_case(app_module)],
+        )
+        expect_http_error(
+            "candidate with missing stored credential",
+            lambda: app_module.policy_candidate(
+                missing_credential_payload, _=identity
+            ),
+            409,
+            "credential cred-does-not-exist",
+        )
+        wrong_injection_credential = db.create_credential(
+            "Wrong injection",
+            "header",
+            "demo-token-from-vault",
+            {
+                "provider": "demo",
+                "scopes": ["demo"],
+                "injection_name": "x-api-key",
+            },
+        )
+        wrong_injection_payload = app_module.PolicyCandidateRequest(
+            bundle=candidate_bundle(
+                policy_bundle, 2, wrong_injection_credential["id"]
+            ),
+            dryRun=[dry_run_case(app_module)],
+        )
+        expect_http_error(
+            "candidate with incompatible stored injection",
+            lambda: app_module.policy_candidate(
+                wrong_injection_payload, _=identity
+            ),
+            409,
+            "injection type",
+        )
+
         full_payload = app_module.PolicyPublishRequest(
-            bundle=candidate_bundle(policy_bundle, 2),
+            bundle=candidate_bundle(policy_bundle, 2, credential_id),
             dryRun=[dry_run_case(app_module)],
         )
         expect_http_error(
@@ -162,13 +210,13 @@ def main() -> None:
             raise AssertionError(f"empty canary status was not idempotent: {empty_status}")
 
         canary_payload = app_module.PolicyPublishRequest(
-            bundle=candidate_bundle(policy_bundle, 2),
+            bundle=candidate_bundle(policy_bundle, 2, credential_id),
             dryRun=[dry_run_case(app_module)],
             activationMode="canary",
         )
         try:
             app_module.PolicyPublishRequest(
-                bundle=candidate_bundle(policy_bundle, 2),
+                bundle=candidate_bundle(policy_bundle, 2, credential_id),
                 dryRun=[dry_run_case(app_module)],
                 activationMode="canary",
                 canaryPercent=10.0,
@@ -222,7 +270,7 @@ def main() -> None:
         status = app_module.policy_canary_status(_=identity)
         if status["monitoring"]["auditEvents"] != 1 or status["monitoring"]["denials"] != 0:
             raise AssertionError(f"canary monitoring did not include audit evidence: {status}")
-        if status["monitoring"]["latencyMsP95"] != 12.5:
+        if status["monitoring"]["latencyMsP95"] != 1:
             raise AssertionError(f"canary monitoring did not report latency evidence: {status}")
 
         activation = app_module.PolicyCanaryActivationRequest(canaryId=canary_id)
@@ -305,7 +353,7 @@ def main() -> None:
             raise AssertionError(f"published audit event did not bind canary activation: {published_event}")
 
         second_payload = app_module.PolicyPublishRequest(
-            bundle=candidate_bundle(policy_bundle, 3),
+            bundle=candidate_bundle(policy_bundle, 3, credential_id),
             dryRun=[dry_run_case(app_module)],
             activationMode="canary",
         )
@@ -318,7 +366,7 @@ def main() -> None:
                 "route_id": "demo.echo",
                 "decision": "allow",
                 "latency_ms": 8,
-                "policy_hash": second_candidate_hash,
+                "policy_hash": second_canary["policyHash"],
             },
             actor_id="decision-gate-rs",
         )
@@ -420,12 +468,12 @@ def main() -> None:
             )
 
         first_start_payload = app_module.PolicyPublishRequest(
-            bundle=candidate_bundle(policy_bundle, 4),
+            bundle=candidate_bundle(policy_bundle, 4, credential_id),
             dryRun=[dry_run_case(app_module)],
             activationMode="canary",
         )
         second_start_payload = app_module.PolicyPublishRequest(
-            bundle=candidate_bundle(policy_bundle, 5),
+            bundle=candidate_bundle(policy_bundle, 5, credential_id),
             dryRun=[dry_run_case(app_module)],
             activationMode="canary",
         )

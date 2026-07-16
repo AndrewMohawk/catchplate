@@ -533,7 +533,7 @@ struct SignedResponseStatement {
 struct SignedResponseRequest {
     method: String,
     path: String,
-    query: String,
+    query_sha256: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -3434,11 +3434,11 @@ fn validate_control_plane_authorization_receipt(
     }
     let signed_statement: SignedResponseStatement = decode_canonical_json(&statement_bytes)
         .map_err(|error| invalid_statement(format!("signed dispatch statement: {error}")))?;
-    if signed_statement.version != "serverware.responseSignature/v1"
+    if signed_statement.version != "serverware.responseSignature/v2"
         || signed_statement.nonce.as_deref() != Some(request.nonce.as_str())
         || signed_statement.request.method != request.method
         || signed_statement.request.path != request.path
-        || signed_statement.request.query != request.query
+        || signed_statement.request.query_sha256 != sha256_prefixed(request.query.as_bytes())
         || signed_statement.status_code != response.status
         || signed_statement.body_sha256 != response.body_sha256
         || signed_statement.response_signing_key_id != response.response_signing_key_id
@@ -4106,12 +4106,12 @@ mod tests {
         let response_signing_key_id =
             control_plane_response_key_id(&response_signing_key.verifying_key());
         let signed_response_statement = SignedResponseStatement {
-            version: "serverware.responseSignature/v1".to_string(),
+            version: "serverware.responseSignature/v2".to_string(),
             issued_at_ms: dispatch_started_at_epoch_ms,
             request: SignedResponseRequest {
                 method: "POST".to_string(),
                 path: RELEASE_AUTHORIZATION_DISPATCH_PATH.to_string(),
-                query: String::new(),
+                query_sha256: sha256_prefixed(b""),
             },
             status_code: 200,
             body_sha256: sha256_prefixed(&dispatch_body),

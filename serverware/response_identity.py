@@ -829,12 +829,12 @@ def response_statement(
 ) -> dict[str, Any]:
     key_info = response_public_key_info()
     return {
-        "version": "serverware.responseSignature/v1",
+        "version": "serverware.responseSignature/v2",
         "issued_at_ms": int(time.time() * 1000),
         "request": {
             "method": method.upper(),
             "path": path,
-            "query": query,
+            "query_sha256": sha256_prefixed(query.encode("utf-8")),
         },
         "status_code": status_code,
         "body_sha256": sha256_prefixed(body),

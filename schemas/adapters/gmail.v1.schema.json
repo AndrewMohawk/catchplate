@@ -42,9 +42,41 @@
         "allowedHeaders": {"$ref": "#/$defs/allowedHeaders"},
         "onInvalid": {"const": "block"}
       }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes"],
+      "properties": {
+        "allowedHeaders": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"
+          }
+        },
+        "allowedQueryKeys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256}
+        },
+        "allowedMediaTypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+/[a-z0-9!#$%&'*+.^_`|~-]+$"
+          }
+        },
+        "maxBodyBytes": {"type": "integer", "minimum": 0}
+      }
     }
   },
   "required": [
+    "request",
     "maxAgeDays",
     "maxResults",
     "forceQuery",
@@ -54,6 +86,7 @@
   ],
   "additionalProperties": false,
   "properties": {
+    "request": {"$ref": "#/$defs/request"},
     "maxAgeDays": {"type": "integer", "minimum": 1, "maximum": 3650},
     "maxResults": {"type": "integer", "minimum": 1, "maximum": 500},
     "forceQuery": {"const": true},

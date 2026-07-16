@@ -42,17 +42,52 @@
         "allowedHeaders": {"$ref": "#/$defs/allowedHeaders"},
         "onInvalid": {"const": "block"}
       }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowedHeaders", "allowedQueryKeys", "allowedMediaTypes", "maxBodyBytes"],
+      "properties": {
+        "allowedHeaders": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+$"
+          }
+        },
+        "allowedQueryKeys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256}
+        },
+        "allowedMediaTypes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9!#$%&'*+.^_`|~-]+/[a-z0-9!#$%&'*+.^_`|~-]+$"
+          }
+        },
+        "maxBodyBytes": {"type": "integer", "minimum": 0, "maximum": 16777216}
+      }
     }
   },
-  "required": ["operations", "response"],
+  "required": ["request", "operations", "response"],
   "additionalProperties": false,
   "properties": {
+    "request": {"$ref": "#/$defs/request"},
     "operations": {
       "type": "array",
       "minItems": 1,
       "maxItems": 6,
       "uniqueItems": true,
       "items": {"enum": ["publish", "unpublish", "distTagWrite", "tokenWrite", "metadataWrite", "read"]}
+    },
+    "publishResponseContract": {
+      "const": "npm-public-registry-receipt-v1"
     },
     "response": {
       "type": "object",
@@ -82,6 +117,26 @@
           "response": {
             "properties": {"mode": {"const": "json"}},
             "required": ["mode"]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": ["publishResponseContract"]
+      },
+      "then": {
+        "properties": {
+          "operations": {
+            "contains": {"const": "publish"}
+          },
+          "response": {
+            "properties": {
+              "mode": {"const": "json"},
+              "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 65536},
+              "allowedFields": {"const": ["ok", "published"]},
+              "allowedHeaders": {"const": []}
+            }
           }
         }
       }

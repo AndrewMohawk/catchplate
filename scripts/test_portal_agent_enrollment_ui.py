@@ -101,24 +101,26 @@ def main() -> None:
             'id="enrollment-copy-agent-instructions"',
             "function agentInstructionText(packet)",
             "function copyAgentInstructions()",
-            "handoff.requiredProxyHeaders",
-            "handoff.requiredProviderHeaders",
-            "Never retry through a direct provider connection.",
+            "packet.agentHandoff?.instructionsText",
+            "Enrollment packet is missing signed agent instructions",
             "state.enrollmentPacket",
             "copyEnrollmentVerifier",
             "Generate an enrollment packet first so the verifier is bound to its pins",
+            "async function downloadEnrollmentBinding()",
             "const packetFilename = downloadEnrollment(packetText);",
             "crypto.subtle.digest('SHA-256'",
-            "set -euo pipefail",
+            "set -eu",
+            "SERVERWARE_PACKET_SHA256",
+            "--emit-verified-instructions",
             "SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/",
-            'scripts/generate_agent_enrollment.py --verify-packet "$ENROLLMENT_PACKET"',
+            'serverware-enrollment --verify-packet "$ENROLLMENT_PACKET"',
             "--expected-packet-sha256",
             "--expected-principal",
             "--expected-nonce",
             '> "$VERIFIED_ENROLLMENT_PACKET"',
             "pinning.policySigningKeyId",
             "pinning.rollbackEpoch",
-            "scripts/verify_attestation.py --base",
+            "serverware-attestation --base",
             '--enrollment-packet "$VERIFIED_ENROLLMENT_PACKET"',
             "--expected-policy-key-hash",
             "--expected-rollback-epoch",
@@ -163,15 +165,41 @@ def main() -> None:
                 raise AssertionError(f"portal workspace UX marker missing: {marker}")
 
         try:
+            enrollment_binding_fn = ui_html.split(
+                "async function downloadEnrollmentBinding()", 1
+            )[1].split("\n\n    async function deleteCredential", 1)[0]
+            agent_instruction_copy_fn = ui_html.split(
+                "async function copyAgentInstructions()", 1
+            )[1].split("\n\n    function enrollmentFilename", 1)[0]
             enrollment_verifier_fn = ui_html.split("async function copyEnrollmentVerifier()", 1)[1].split(
                 "$('admin-token').value", 1
             )[0]
         except IndexError as exc:
             raise AssertionError("could not isolate enrollment verifier handoff") from exc
-        ordered_enrollment_handoff = (
+        binding_order = (
+            "enrollmentPacketText(packet)",
             "downloadEnrollment(packetText)",
-            "scripts/generate_agent_enrollment.py --verify-packet",
-            "scripts/verify_attestation.py --base",
+            "crypto.subtle.digest('SHA-256'",
+        )
+        binding_positions = [enrollment_binding_fn.index(marker) for marker in binding_order]
+        if binding_positions != sorted(binding_positions):
+            raise AssertionError("portal must hash the exact bytes written to the enrollment download")
+        agent_instruction_order = (
+            "await downloadEnrollmentBinding()",
+            "SERVERWARE_PACKET_SHA256",
+            "--verify-packet",
+            "--emit-verified-instructions",
+            "navigator.clipboard.writeText(command.join('\\n'))",
+        )
+        instruction_positions = [agent_instruction_copy_fn.index(marker) for marker in agent_instruction_order]
+        if instruction_positions != sorted(instruction_positions):
+            raise AssertionError("portal agent instructions must be emitted only after exact packet verification")
+        if "navigator.clipboard.writeText(instructions)" in agent_instruction_copy_fn:
+            raise AssertionError("portal must not copy unauthenticated packet instruction text")
+        ordered_enrollment_handoff = (
+            "await downloadEnrollmentBinding()",
+            "serverware-enrollment --verify-packet",
+            "serverware-attestation --base",
             "install -D -m 0644",
         )
         handoff_positions = [enrollment_verifier_fn.index(marker) for marker in ordered_enrollment_handoff]
@@ -825,21 +853,18 @@ const packet={
   apiVersion:'serverware.agentEnrollment/v1',principalId:'agent:test',
   ca:{installPath:'/etc/serverware/ca.pem'},secret:'DO_NOT_COPY',
   agentHandoff:{
-    proxyEnvironment:{HTTPS_PROXY:'http://proxy:8080'},
-    requiredProxyHeaders:{'X-Serverware-Agent':'test'},
-    requiredProviderHeaders:{'X-Serverware-Agent':'test'},
-    proxyAuthorization:{required:true,tokenId:'agent-token',tokenValue:'DO_NOT_COPY'},
-    allowedUrls:['https://api.example.test/v1/**'],
-    requestHandling:{approvalRequired:{statusCode:428}}
+    instructionsText:'SIGNED HANDOFF\nDENY-BY-DEFAULT EGRESS\nALLOW CANARY\nHTTP 428: retry only the identical request.\n'
   }
 };
 const output=agentInstructionText(packet);
-for(const expected of ['agent:test','HTTPS_PROXY=http://proxy:8080','X-Serverware-Agent','agent-token','https://api.example.test/v1/**','HTTP 428','identical request','Never retry through a direct provider connection.']){
+for(const expected of ['SIGNED HANDOFF','DENY-BY-DEFAULT EGRESS','ALLOW CANARY','HTTP 428','identical request']){
   if(!output.includes(expected))process.exit(20);
 }
 if(output.includes('DO_NOT_COPY'))process.exit(21);
 let failed=false;try{agentInstructionText({apiVersion:'wrong'})}catch(_){failed=true}
 if(!failed)process.exit(22);
+failed=false;try{agentInstructionText({apiVersion:'serverware.agentEnrollment/v1',agentHandoff:{}})}catch(_){failed=true}
+if(!failed)process.exit(23);
 """,
                 ],
                 text=True,
@@ -1148,7 +1173,7 @@ function credentialToJson(value){return value;}
                 "bindings": [
                     {
                         "id": "customer-id",
-                        "operationField": "customer_id",
+                        "operationField": "approvedCustomerId",
                         "responseField": "id",
                         "comparison": "exactString",
                     }
@@ -1165,7 +1190,9 @@ function credentialToJson(value){return value;}
                 raise AssertionError(
                     "Object-store template does not capture artifact identity and the computed body digest"
                 )
-            if templates["object_store_put"]["match"]["paths"] != ["/v1/objects/{artifact_id}"]:
+            if templates["object_store_put"]["match"]["paths"] != [
+                "/v1/buckets/{bucket}/objects/{artifact_id}"
+            ]:
                 raise AssertionError("Object-store template is not scoped to the bounded object PUT route")
             if template_constraint("object_store_put", "object-store-response-binding") != {
                 "id": "object-store-response-binding",
@@ -1177,7 +1204,7 @@ function credentialToJson(value){return value;}
                 "bindings": [
                     {
                         "id": "artifact-id",
-                        "operationField": "artifact_id",
+                        "operationField": "validatedObjectKey",
                         "responseField": "id",
                         "comparison": "exactString",
                     },

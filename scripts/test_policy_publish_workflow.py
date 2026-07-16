@@ -186,6 +186,9 @@ def main() -> None:
         )
 
         no_dry_run_payload = app_module.PolicyPublishRequest(bundle=candidate_bundle(policy_bundle, 3), dryRun=[])
+        no_dry_run_payload.mfa = {
+            "assertion": sign_publish_assertion(app_module, webauthn, no_dry_run_payload, user_id)
+        }
         expect_http_error(
             "policy publish without dry-run",
             lambda: app_module.policy_publish(no_dry_run_payload, identity=identity),
@@ -197,6 +200,9 @@ def main() -> None:
             bundle=candidate_bundle(policy_bundle, 3),
             dryRun=[dry_run_case(app_module, expect="deny")],
         )
+        failing_dry_run_payload.mfa = {
+            "assertion": sign_publish_assertion(app_module, webauthn, failing_dry_run_payload, user_id)
+        }
         expect_http_error(
             "policy publish with failing dry-run",
             lambda: app_module.policy_publish(failing_dry_run_payload, identity=identity),

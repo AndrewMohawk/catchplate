@@ -12,6 +12,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -60,6 +61,26 @@ class LogEvent:
     event: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class CredentialLeaseBinding:
+    credential_id: str
+    credential_version: int
+    secret_fingerprint: str
+    expires_at_monotonic: float
+
+
+@dataclass(frozen=True)
+class BoundCredentialLease:
+    credential: dict[str, Any]
+    binding: CredentialLeaseBinding
+
+
+@dataclass(frozen=True)
+class _GmailProofExpiry:
+    expires_at_monotonic: float
+    expires_at_epoch_ms: int
+
+
 class ReleaseAuthorizationClientError(RuntimeError):
     pass
 
@@ -70,6 +91,7 @@ _RELEASE_AUTHORIZATION_RETRY_MAX_SECONDS = 31_536_000
 _DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
 _SHA256_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _UINT64_MAX = (1 << 64) - 1
+_GMAIL_DIRECT_READ_PROOF_CACHE_MAX_ENTRIES = 4096
 _RELEASE_AUTHORIZATION_RESPONSE_FIELDS = {
     "apiVersion",
     "ok",
@@ -121,7 +143,9 @@ _anchor_inflight = False
 _credential_lock = threading.Lock()
 _credential_cache: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
 _gmail_lock = threading.Lock()
-_gmail_cache: dict[tuple[str, str, str, int, str, str, int, str], float] = {}
+_gmail_cache: OrderedDict[
+    tuple[str, str, str, int, str, str, int, str], _GmailProofExpiry
+] = OrderedDict()
 _metrics_lock = threading.Lock()
 _metrics: dict[str, int] = {
     "audit_events_enqueued": 0,
@@ -155,7 +179,8 @@ def metrics() -> dict[str, int]:
         data["audit_anchor_inflight"] = 1 if _anchor_inflight else 0
     with _credential_lock:
         data["credential_lease_count"] = len(_credential_cache)
-    data["gmail_cache_entry_count"] = len(_gmail_cache)
+    with _gmail_lock:
+        data["gmail_cache_entry_count"] = len(_gmail_cache)
     return data
 
 
@@ -1463,34 +1488,159 @@ def get_credential(credential_id: str | None) -> dict[str, Any] | None:
     return copy.deepcopy(credential)
 
 
-def _gmail_key(context: dict[str, Any], message_id: str) -> tuple[str, str, str, int, str, str, int, str]:
-    return (
-        str(context.get("route_id") or ""),
-        str(context.get("principal_id") or ""),
-        str(context.get("credential_id") or ""),
-        int(context.get("credential_version") or 0),
-        str(context.get("policy_hash") or ""),
-        str(context.get("gmail_user") or ""),
-        int(context.get("cutoff_epoch_ms") or 0),
-        message_id,
+def _credential_secret_fingerprint(credential: dict[str, Any]) -> str | None:
+    secret = credential.get("secret")
+    if not isinstance(secret, str) or not secret:
+        return None
+    return "sha256:" + hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def get_bound_credential_lease(credential_id: str | None) -> BoundCredentialLease | None:
+    credential = get_credential(credential_id)
+    if not credential_id or not isinstance(credential, dict):
+        return None
+    credential_version = credential.get("credential_version")
+    fingerprint = _credential_secret_fingerprint(credential)
+    if (
+        type(credential_version) is not int
+        or not 1 <= credential_version <= _UINT64_MAX
+        or fingerprint is None
+    ):
+        return None
+    now = time.monotonic()
+    cache_key = (credential_id, credential_version)
+    with _credential_lock:
+        cached = _credential_cache.get(cache_key)
+        if cached is None or cached[0] <= now:
+            _credential_cache.pop(cache_key, None)
+            return None
+        cached_fingerprint = _credential_secret_fingerprint(cached[1])
+        if cached_fingerprint is None or not hmac.compare_digest(
+            cached_fingerprint, fingerprint
+        ):
+            return None
+        expires_at = cached[0]
+    return BoundCredentialLease(
+        credential=copy.deepcopy(credential),
+        binding=CredentialLeaseBinding(
+            credential_id=credential_id,
+            credential_version=credential_version,
+            secret_fingerprint=fingerprint,
+            expires_at_monotonic=expires_at,
+        ),
     )
 
 
-def cache_gmail_message_ids(context: dict[str, Any], message_ids: list[str], ttl_seconds: int) -> None:
-    if not message_ids:
-        return
-    expires = time.monotonic() + ttl_seconds
+def _gmail_cache_string(value: Any, *, label: str, max_bytes: int) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"Gmail proof {label} is invalid")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"Gmail proof {label} is invalid") from exc
+    if len(encoded) > max_bytes or any(byte < 32 or byte == 127 for byte in encoded):
+        raise ValueError(f"Gmail proof {label} is invalid")
+    return value
+
+
+def _gmail_key(context: dict[str, Any], message_id: str) -> tuple[str, str, str, int, str, str, int, str]:
+    if not isinstance(context, dict):
+        raise ValueError("Gmail proof context is invalid")
+    credential_version = context.get("credential_version")
+    cutoff_epoch_ms = context.get("cutoff_epoch_ms")
+    policy_hash = context.get("policy_hash")
+    if (
+        type(credential_version) is not int
+        or not 1 <= credential_version <= _UINT64_MAX
+        or type(cutoff_epoch_ms) is not int
+        or not 0 <= cutoff_epoch_ms <= _UINT64_MAX
+        or not isinstance(policy_hash, str)
+        or _SHA256_DIGEST_RE.fullmatch(policy_hash) is None
+    ):
+        raise ValueError("Gmail proof context is invalid")
+    return (
+        _gmail_cache_string(context.get("route_id"), label="route ID", max_bytes=512),
+        _gmail_cache_string(context.get("principal_id"), label="principal ID", max_bytes=512),
+        _gmail_cache_string(context.get("credential_id"), label="credential ID", max_bytes=512),
+        credential_version,
+        policy_hash,
+        _gmail_cache_string(context.get("gmail_user"), label="user", max_bytes=512),
+        cutoff_epoch_ms,
+        _gmail_cache_string(message_id, label="message ID", max_bytes=512),
+    )
+
+
+def cache_gmail_message_ids(
+    context: dict[str, Any],
+    message_ids: list[str],
+    ttl_seconds: int,
+    *,
+    max_age_expires_at_epoch_ms: dict[str, int],
+) -> None:
+    if type(ttl_seconds) is not int or not 1 <= ttl_seconds <= 86_400:
+        raise ValueError("Gmail proof TTL is invalid")
+    if not isinstance(message_ids, list) or not 1 <= len(message_ids) <= 32:
+        raise ValueError("Gmail proof message IDs are invalid")
+    keys = [_gmail_key(context, message_id) for message_id in message_ids]
+    if (
+        not isinstance(max_age_expires_at_epoch_ms, dict)
+        or set(max_age_expires_at_epoch_ms) != set(message_ids)
+        or any(
+            type(expiry) is not int or not 0 <= expiry <= _UINT64_MAX
+            for expiry in max_age_expires_at_epoch_ms.values()
+        )
+    ):
+        raise ValueError("Gmail proof max-age boundaries are invalid")
+    now_monotonic = time.monotonic()
+    now_epoch_ms = int(time.time() * 1000)
+    ttl_expires_at_epoch_ms = min(
+        _UINT64_MAX,
+        now_epoch_ms + ttl_seconds * 1000,
+    )
+    expiries = {
+        message_id: min(
+            ttl_expires_at_epoch_ms,
+            max_age_expires_at_epoch_ms[message_id],
+        )
+        for message_id in set(message_ids)
+    }
     with _gmail_lock:
-        for message_id in message_ids:
-            _gmail_cache[_gmail_key(context, message_id)] = expires
+        for key in [
+            key
+            for key, expiry in _gmail_cache.items()
+            if expiry.expires_at_monotonic <= now_monotonic
+            or expiry.expires_at_epoch_ms <= now_epoch_ms
+        ]:
+            _gmail_cache.pop(key, None)
+        for key, message_id in zip(keys, message_ids, strict=True):
+            _gmail_cache.pop(key, None)
+            expires_at_epoch_ms = expiries[message_id]
+            if expires_at_epoch_ms <= now_epoch_ms:
+                continue
+            _gmail_cache[key] = _GmailProofExpiry(
+                expires_at_monotonic=now_monotonic
+                + (expires_at_epoch_ms - now_epoch_ms) / 1000,
+                expires_at_epoch_ms=expires_at_epoch_ms,
+            )
+            while len(_gmail_cache) > _GMAIL_DIRECT_READ_PROOF_CACHE_MAX_ENTRIES:
+                _gmail_cache.popitem(last=False)
 
 
 def gmail_message_allowed(context: dict[str, Any], message_id: str) -> bool:
-    now = time.monotonic()
-    key = _gmail_key(context, message_id)
+    now_monotonic = time.monotonic()
+    now_epoch_ms = int(time.time() * 1000)
+    try:
+        key = _gmail_key(context, message_id)
+    except ValueError:
+        _inc("gmail_cache_misses")
+        return False
     with _gmail_lock:
         expires = _gmail_cache.get(key)
-        if expires and expires > now:
+        if (
+            expires
+            and expires.expires_at_monotonic > now_monotonic
+            and expires.expires_at_epoch_ms > now_epoch_ms
+        ):
             _inc("gmail_cache_hits")
             return True
         if expires:
@@ -1506,6 +1656,12 @@ def prune_expired_caches() -> None:
         for key in expired_credentials:
             _credential_cache.pop(key, None)
     with _gmail_lock:
-        expired_messages = [key for key, expires in _gmail_cache.items() if expires <= now]
+        now_epoch_ms = int(time.time() * 1000)
+        expired_messages = [
+            key
+            for key, expires in _gmail_cache.items()
+            if expires.expires_at_monotonic <= now
+            or expires.expires_at_epoch_ms <= now_epoch_ms
+        ]
         for key in expired_messages:
             _gmail_cache.pop(key, None)

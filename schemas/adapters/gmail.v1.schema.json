@@ -75,6 +75,26 @@
       "properties": {
         "validateInternalDate": {"const": true},
         "validateListByMetadataFetch": {"type": "boolean"},
+        "metadataFetch": {
+          "type": "object",
+          "additionalProperties": false,
+          "x-serverware-less-than-or-equal": {
+            "left": "perRequestTimeoutMs",
+            "right": "totalTimeoutMs"
+          },
+          "required": [
+            "maxMessages",
+            "perRequestTimeoutMs",
+            "totalTimeoutMs",
+            "maxBodyBytes"
+          ],
+          "properties": {
+            "maxMessages": {"type": "integer", "minimum": 1, "maximum": 32},
+            "perRequestTimeoutMs": {"type": "integer", "minimum": 1, "maximum": 3000},
+            "totalTimeoutMs": {"type": "integer", "minimum": 1, "maximum": 10000},
+            "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 8192}
+          }
+        },
         "maxBodyBytes": {"type": "integer", "minimum": 1, "maximum": 1048576},
         "allowedFields": {"$ref": "#/$defs/allowedFields"},
         "allowedHeaders": {"$ref": "#/$defs/allowedHeaders"},
@@ -103,6 +123,20 @@
           },
           "then": {"required": ["allowedMessageHeaderNames"]},
           "else": {"not": {"required": ["allowedMessageHeaderNames"]}}
+        },
+        {
+          "if": {
+            "properties": {
+              "validateListByMetadataFetch": {"const": true}
+            },
+            "required": ["validateListByMetadataFetch"]
+          },
+          "then": {
+            "required": ["metadataFetch"],
+            "properties": {
+              "allowedFields": {"contains": {"const": "id"}}
+            }
+          }
         }
       ]
     }

@@ -173,6 +173,14 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         tmp_path = Path(tmp)
         os.environ["SERVERWARE_DATA_DIR"] = str(tmp_path / "data")
+        os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
+        os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
+        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
+        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
         os.environ["SERVERWARE_WEBAUTHN_TRUST_BUNDLE"] = str(tmp_path / "data" / "webauthn-trust-bundle.json")
         os.environ["SERVERWARE_WEBAUTHN_TRUST_BUNDLE_STATE"] = str(tmp_path / "data" / "webauthn-trust-bundle-state.json")
         os.environ["SERVERWARE_WEBAUTHN_TRUST_SIGNING_KEY"] = str(tmp_path / "data" / "webauthn-trust-signing-ed25519.pem")

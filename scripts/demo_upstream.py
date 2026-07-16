@@ -85,6 +85,10 @@ def gmail_message_view(message_id: str, *, internal_date: str | None) -> dict[st
     return item
 
 
+def gmail_list_item(message_id: str) -> dict[str, str]:
+    return {"id": message_id, "threadId": f"thread-{message_id}"}
+
+
 def ensure_cert() -> None:
     CERT_DIR.mkdir(parents=True, exist_ok=True)
     if _existing_cert_is_fresh():
@@ -545,26 +549,60 @@ async def csv_redact(request: Request) -> StreamingResponse:
 
 @app.get("/gmail/v1/users/me/messages")
 async def gmail_messages(request: Request) -> dict[str, Any]:
+    _record_request(request)
     view = request_view(request)
     if request.query_params.get("omitInternalDate") == "1":
         view["messages"] = [
-            gmail_message_view("pending-message-1", internal_date=None),
-            gmail_message_view("pending-message-2", internal_date=None),
+            gmail_list_item("pending-message-1"),
+            gmail_list_item("pending-message-2"),
         ]
     elif request.query_params.get("oldInternalDate") == "1":
+        view["messages"] = [gmail_list_item("old-list-message-1")]
+    elif request.query_params.get("metadataNotFound") == "1":
         view["messages"] = [
-            gmail_message_view("old-list-message-1", internal_date=_old_gmail_internal_date()),
+            gmail_list_item("recent-message-1"),
+            gmail_list_item("missing-message-1"),
+        ]
+    elif request.query_params.get("duplicateMessageId") == "1":
+        view["messages"] = [
+            gmail_list_item("duplicate-message-1"),
+            gmail_list_item("duplicate-message-1"),
         ]
     else:
         view["messages"] = [
-            gmail_message_view("recent-message-1", internal_date=_recent_gmail_internal_date()),
-            gmail_message_view("recent-message-2", internal_date=_recent_gmail_internal_date()),
+            gmail_list_item("recent-message-1"),
+            gmail_list_item("recent-message-2"),
         ]
     return view
 
 
 @app.get("/gmail/v1/users/me/messages/{message_id}")
-async def gmail_message(message_id: str, request: Request) -> dict[str, Any]:
+async def gmail_message(message_id: str, request: Request) -> Any:
+    _record_request(request)
+    if request.query_params.get("format") == "metadata":
+        if request.headers.get("authorization") not in {
+            "Bearer demo-token-from-vault",
+            "Bearer rotated-token-from-vault",
+        }:
+            return Response(
+                content=json.dumps({"error": "metadata credential missing"}),
+                status_code=401,
+                media_type="application/json",
+            )
+        if message_id.startswith("missing"):
+            return Response(
+                content=json.dumps({"error": "not found"}),
+                status_code=404,
+                media_type="application/json",
+            )
+        return {
+            "id": message_id,
+            "internalDate": (
+                _old_gmail_internal_date()
+                if message_id.startswith("old")
+                else _recent_gmail_internal_date()
+            ),
+        }
     view = request_view(request)
     view.update(
         gmail_message_view(

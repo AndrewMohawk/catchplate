@@ -13,6 +13,7 @@ import sqlite3
 import stat
 import time
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from pathlib import Path
@@ -409,6 +410,14 @@ class ManagedOAuthCredentialError(ValueError):
     pass
 
 
+class OAuthGrantCollisionError(ManagedOAuthCredentialError):
+    def __init__(self, detail: dict[str, Any]):
+        self.detail = detail
+        super().__init__(
+            "Google OAuth grant already exists for this client and provider subject"
+        )
+
+
 class SetupSessionError(MetadataStoreError):
     pass
 
@@ -454,6 +463,13 @@ _AUDIT_LOCK_WAIT_MS = max(
     100,
     min(60_000, int(os.getenv("SERVERWARE_AUDIT_LOCK_WAIT_MS", "5000"))),
 )
+_POLICY_AUTHORITY_LOCK_WAIT_MS = max(
+    100,
+    min(
+        60_000,
+        int(os.getenv("SERVERWARE_POLICY_AUTHORITY_LOCK_WAIT_MS", "500")),
+    ),
+)
 _AUDIT_CHAIN_LOCK_KEY = 0x5357524155444348
 _AUDIT_MIGRATION_LOCK_KEY = 0x5357524155444D47
 _CREDENTIAL_LEASE_REPLAY_LOCK_KEY = 0x5357524C45415345
@@ -464,6 +480,7 @@ _CREDENTIAL_METADATA_MAX_DEPTH = 8
 _CREDENTIAL_SECRET_MAX_BYTES = 1024 * 1024
 _PENDING_APPROVAL_CREATION_LOCK_KEY = 0x53575250454E4447
 _PENDING_OAUTH_CREATION_LOCK_KEY = 0x5357524F41555448
+_GOOGLE_OAUTH_GRANT_FAMILY_LOCK_KEY = 0x535752474F4F474C
 _OIDC_LOGIN_STATE_CREATION_LOCK_KEY = 0x5357524F49444353
 _OAUTH_REVOCATION_WORK_LOCK_KEY = 0x5357524F41555257
 _POLICY_HIGH_WATER_LOCK_KEY = 0x535752504F4C4943
@@ -7582,13 +7599,34 @@ def finish_setup_session_audit_outbox(
     return result.rowcount == 1
 
 
+def _lock_policy_high_water(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.execute(
+            f"SET LOCAL lock_timeout = '{_POLICY_AUTHORITY_LOCK_WAIT_MS}ms'"
+        )
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)", (_POLICY_HIGH_WATER_LOCK_KEY,)
+        )
+    elif not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def lock_policy_publication(conn: Any) -> None:
+    """Serialize active-policy validation and publication for one metadata store."""
+    _lock_policy_high_water(conn)
+
+
+def _policy_high_water_row(conn: Any) -> Any | None:
+    return conn.execute(
+        "SELECT policy_id, sequence, rollback_epoch, policy_hash, updated_at "
+        "FROM policy_high_water WHERE scope = ?",
+        ("active",),
+    ).fetchone()
+
+
 def get_policy_high_water() -> dict[str, Any] | None:
     with connect() as conn:
-        row = conn.execute(
-            "SELECT policy_id, sequence, rollback_epoch, policy_hash, updated_at "
-            "FROM policy_high_water WHERE scope = ?",
-            ("active",),
-        ).fetchone()
+        row = _policy_high_water_row(conn)
     if not row:
         return None
     return {
@@ -7624,17 +7662,8 @@ def advance_policy_high_water(
         connect() if _connection is None else contextlib.nullcontext(_connection)
     )
     with connection_scope as conn:
-        if isinstance(conn, PostgresMetadataConnection):
-            conn.execute(
-                "SELECT pg_advisory_xact_lock(?)", (_POLICY_HIGH_WATER_LOCK_KEY,)
-            )
-        elif not conn.in_transaction:
-            conn.execute("BEGIN IMMEDIATE")
-        current = conn.execute(
-            "SELECT policy_id, sequence, rollback_epoch, policy_hash, updated_at "
-            "FROM policy_high_water WHERE scope = ?",
-            ("active",),
-        ).fetchone()
+        _lock_policy_high_water(conn)
+        current = _policy_high_water_row(conn)
         if current:
             current_policy_id = str(current["policy_id"])
             current_sequence = int(current["sequence"])
@@ -7868,6 +7897,393 @@ def validate_managed_oauth_account_identity(metadata: Any) -> tuple[str, str, st
     return provider_id, provider_subject, provider_account
 
 
+def _google_oauth_grant_family(
+    metadata: dict[str, Any],
+) -> tuple[str | None, str] | None:
+    if metadata.get("oauth") is not True or metadata.get("provider_id") != "google":
+        return None
+    provider_id, provider_subject = validate_managed_oauth_identity(metadata)
+    if provider_id != "google":
+        raise ManagedOAuthCredentialError(
+            "Google OAuth credential provider identity is inconsistent"
+        )
+    oauth_client_id = metadata.get("oauth_client_id")
+    if oauth_client_id is not None and (
+        not isinstance(oauth_client_id, str)
+        or not oauth_client_id
+        or oauth_client_id != oauth_client_id.strip()
+        or len(oauth_client_id.encode("utf-8")) > 2048
+        or any(
+            ord(character) < 32 or ord(character) == 127
+            for character in oauth_client_id
+        )
+    ):
+        raise ManagedOAuthCredentialError(
+            "Google OAuth credential client binding is invalid"
+        )
+    return oauth_client_id, provider_subject
+
+
+def _lock_google_oauth_grant_families(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (_GOOGLE_OAUTH_GRANT_FAMILY_LOCK_KEY,),
+        )
+    elif not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def _google_oauth_client_bindings_collide(
+    candidate_client_id: str | None,
+    existing_client_id: str | None,
+) -> bool:
+    # Rows created before the client binding was persisted are ambiguous and
+    # therefore collide with every configured client for the same subject.
+    return (
+        candidate_client_id is None
+        or existing_client_id is None
+        or hmac.compare_digest(candidate_client_id, existing_client_id)
+    )
+
+
+def _google_oauth_grant_families_collide(
+    candidate: tuple[str | None, str],
+    existing: tuple[str | None, str],
+) -> bool:
+    candidate_client_id, candidate_subject = candidate
+    existing_client_id, existing_subject = existing
+    return hmac.compare_digest(candidate_subject, existing_subject) and (
+        _google_oauth_client_bindings_collide(
+            candidate_client_id,
+            existing_client_id,
+        )
+    )
+
+
+def _credential_assignment_impact(
+    conn: Any,
+    credential_id: str,
+    *,
+    maximum_routes: int = 32,
+) -> dict[str, Any]:
+    count_row = conn.execute(
+        "SELECT COUNT(*) AS count FROM routes WHERE credential_id = ?",
+        (credential_id,),
+    ).fetchone()
+    route_count = int(count_row["count"] if count_row else 0)
+    rows = conn.execute(
+        "SELECT id, name, enabled, match_host, match_path_prefix "
+        "FROM routes WHERE credential_id = ? ORDER BY id LIMIT ?",
+        (credential_id, maximum_routes),
+    ).fetchall()
+    return {
+        "routeCount": route_count,
+        "routes": [
+            {
+                "id": str(row["id"]),
+                "name": str(row["name"]),
+                "enabled": bool(row["enabled"]),
+                "matchHost": str(row["match_host"]),
+                "matchPathPrefix": str(row["match_path_prefix"]),
+            }
+            for row in rows
+        ],
+        "truncated": route_count > len(rows),
+    }
+
+
+def _raise_for_google_oauth_grant_collision(
+    conn: Any,
+    metadata: dict[str, Any],
+    *,
+    exclude_credential_id: str | None = None,
+    exclude_pending_credential_id: str | None = None,
+) -> None:
+    family = _google_oauth_grant_family(metadata)
+    if family is None:
+        return
+    candidate_client_id, provider_subject = family
+    _lock_google_oauth_grant_families(conn)
+
+    for row in conn.execute(
+        "SELECT * FROM credentials ORDER BY created_at, id"
+    ).fetchall():
+        credential_id = str(row["id"])
+        if exclude_credential_id is not None and credential_id == exclude_credential_id:
+            continue
+        existing_metadata = loads(row["metadata"], {})
+        try:
+            existing_family = _google_oauth_grant_family(existing_metadata)
+        except ManagedOAuthCredentialError:
+            if (
+                isinstance(existing_metadata, dict)
+                and existing_metadata.get("provider_id") == "google"
+            ):
+                raise ManagedOAuthCredentialError(
+                    "stored Google OAuth credential identity is invalid"
+                )
+            continue
+        if existing_family is None:
+            continue
+        if not _google_oauth_grant_families_collide(family, existing_family):
+            continue
+        raise OAuthGrantCollisionError(
+            {
+                "error": "oauth_google_grant_collision",
+                "provider": "google",
+                "grantFamily": {
+                    "oauthClientId": candidate_client_id,
+                    "providerSubject": provider_subject,
+                },
+                "existing": {
+                    "type": "credential",
+                    "id": credential_id,
+                    "name": str(row["name"]),
+                    "providerAccount": existing_metadata.get("provider_account"),
+                    "lifecycleStatus": str(row["lifecycle_status"] or "active"),
+                    "assignmentImpact": _credential_assignment_impact(
+                        conn,
+                        credential_id,
+                    ),
+                },
+                "resolution": "reuse_or_disconnect_existing_credential",
+            }
+        )
+
+    for row in conn.execute(
+        "SELECT * FROM pending_oauth_credentials ORDER BY created_at, id"
+    ).fetchall():
+        pending_id = str(row["id"])
+        if (
+            exclude_pending_credential_id is not None
+            and pending_id == exclude_pending_credential_id
+        ):
+            continue
+        existing_metadata = loads(row["metadata"], {})
+        try:
+            existing_family = _google_oauth_grant_family(existing_metadata)
+        except ManagedOAuthCredentialError:
+            if (
+                isinstance(existing_metadata, dict)
+                and existing_metadata.get("provider_id") == "google"
+            ):
+                raise ManagedOAuthCredentialError(
+                    "stored pending Google OAuth credential identity is invalid"
+                )
+            continue
+        if existing_family is None:
+            continue
+        if not _google_oauth_grant_families_collide(family, existing_family):
+            continue
+        raise OAuthGrantCollisionError(
+            {
+                "error": "oauth_google_grant_collision",
+                "provider": "google",
+                "grantFamily": {
+                    "oauthClientId": candidate_client_id,
+                    "providerSubject": provider_subject,
+                },
+                "existing": {
+                    "type": "pendingCredential",
+                    "id": pending_id,
+                    "name": str(row["name"]),
+                    "providerAccount": existing_metadata.get("provider_account"),
+                    "status": str(row["status"] or "pending"),
+                },
+                "resolution": "complete_or_cancel_existing_pending_credential",
+            }
+        )
+
+
+def quarantine_google_oauth_grant_family(
+    *,
+    oauth_client_id: str | None,
+    provider_subject: str,
+    actor_id: str,
+    reason: str = "google_oauth_grant_collision",
+    revocation_work_id: str | None = None,
+) -> dict[str, Any]:
+    if not isinstance(actor_id, str) or not actor_id or len(actor_id) > 512:
+        raise ManagedOAuthCredentialError("Google OAuth quarantine actor is invalid")
+    if (
+        not isinstance(reason, str)
+        or not reason
+        or len(reason) > 128
+        or re.fullmatch(r"[A-Za-z0-9._-]+", reason) is None
+    ):
+        raise ManagedOAuthCredentialError("Google OAuth quarantine reason is invalid")
+    if revocation_work_id is not None and (
+        not isinstance(revocation_work_id, str)
+        or re.fullmatch(r"[0-9a-f-]{36}", revocation_work_id) is None
+    ):
+        raise ManagedOAuthCredentialError(
+            "Google OAuth quarantine revocation work is invalid"
+        )
+    family_metadata = {
+        "oauth": True,
+        "provider_id": "google",
+        "provider_subject": provider_subject,
+        "provider_identity_verified": True,
+        "oauth_client_id": oauth_client_id,
+    }
+    family = _google_oauth_grant_family(family_metadata)
+    if family is None:
+        raise ManagedOAuthCredentialError("Google OAuth quarantine family is invalid")
+
+    now_s = iso_now()
+    quarantined_credentials: list[dict[str, Any]] = []
+    quarantined_pending: list[str] = []
+    with connect() as conn:
+        # Preserve the creation lock order so callbacks cannot insert a sibling
+        # while the family is being made unusable.
+        _lock_pending_oauth_creation(conn)
+        _lock_google_oauth_grant_families(conn)
+        for row in conn.execute(
+            "SELECT * FROM credentials ORDER BY created_at, id"
+        ).fetchall():
+            metadata = loads(row["metadata"], {})
+            try:
+                existing_family = _google_oauth_grant_family(metadata)
+            except ManagedOAuthCredentialError:
+                if (
+                    isinstance(metadata, dict)
+                    and metadata.get("provider_id") == "google"
+                ):
+                    raise ManagedOAuthCredentialError(
+                        "stored Google OAuth credential identity is invalid"
+                    )
+                continue
+            if existing_family is None or not _google_oauth_grant_families_collide(
+                family, existing_family
+            ):
+                continue
+            credential_id = str(row["id"])
+            lifecycle_status = str(row["lifecycle_status"] or "active")
+            if lifecycle_status != "active":
+                continue
+            _lock_credential_mutation(conn, credential_id)
+            current_version = int(row["credential_version"] or 1)
+            next_version = _next_credential_generation(conn, credential_id)
+            encrypted = _envelope_values(
+                credential_id,
+                decrypt_secret_envelope(row),
+                next_version,
+            )
+            conn.execute(
+                """
+                UPDATE credentials
+                SET encrypted_secret = ?, encrypted_dek = ?, secret_nonce = ?,
+                    secret_ciphertext = ?, secret_kek_id = ?, credential_version = ?,
+                    secret_updated_at = ?, lifecycle_status = 'revocation_pending',
+                    revocation_error = NULL, revocation_requested_at = ?, updated_at = ?
+                WHERE id = ? AND lifecycle_status = 'active'
+                """,
+                (
+                    encrypted["encrypted_secret"],
+                    encrypted["encrypted_dek"],
+                    encrypted["secret_nonce"],
+                    encrypted["secret_ciphertext"],
+                    encrypted["secret_kek_id"],
+                    encrypted["credential_version"],
+                    encrypted["secret_updated_at"],
+                    now_s,
+                    now_s,
+                    credential_id,
+                ),
+            )
+            quarantined_credentials.append(
+                {
+                    "id": credential_id,
+                    "previousCredentialVersion": current_version,
+                    "credentialVersion": next_version,
+                    "assignmentImpact": _credential_assignment_impact(
+                        conn,
+                        credential_id,
+                    ),
+                }
+            )
+
+        for row in conn.execute(
+            "SELECT * FROM pending_oauth_credentials ORDER BY created_at, id"
+        ).fetchall():
+            metadata = loads(row["metadata"], {})
+            try:
+                existing_family = _google_oauth_grant_family(metadata)
+            except ManagedOAuthCredentialError:
+                if (
+                    isinstance(metadata, dict)
+                    and metadata.get("provider_id") == "google"
+                ):
+                    raise ManagedOAuthCredentialError(
+                        "stored pending Google OAuth credential identity is invalid"
+                    )
+                continue
+            if existing_family is None or not _google_oauth_grant_families_collide(
+                family, existing_family
+            ):
+                continue
+            if str(row["status"] or "pending") != "pending":
+                continue
+            pending_id = str(row["id"])
+            _lock_credential_mutation(conn, pending_id)
+            updated = conn.execute(
+                """
+                UPDATE pending_oauth_credentials
+                SET status = 'rejected', revocation_status = 'pending',
+                    revocation_error = ?, revocation_next_attempt_at = ?,
+                    revocation_lease_owner = NULL, revocation_lease_until = NULL,
+                    updated_at = ?
+                WHERE id = ? AND status = 'pending'
+                """,
+                (reason, now_s, now_s, pending_id),
+            )
+            if updated.rowcount == 1:
+                quarantined_pending.append(pending_id)
+
+        if revocation_work_id is not None:
+            retained = conn.execute(
+                """
+                UPDATE oauth_revocation_work
+                SET status = 'pending', last_error = ?, next_attempt_at = ?,
+                    lease_owner = NULL, lease_until = NULL, updated_at = ?
+                WHERE id = ? AND provider_id = 'google'
+                  AND status IN ('held', 'pending')
+                """,
+                (reason, now_s, now_s, revocation_work_id),
+            )
+            if retained.rowcount != 1:
+                raise ManagedOAuthCredentialError(
+                    "Google OAuth collision revocation work is unavailable"
+                )
+
+        append_audit_event(
+            conn,
+            event_type="credential.oauth_google_grant_family_quarantined",
+            actor_type="admin",
+            actor_id=actor_id,
+            event={
+                "provider": "google",
+                "oauth_client_id": oauth_client_id,
+                "provider_subject": provider_subject,
+                "reason": reason,
+                "revocation_work_id": revocation_work_id,
+                "credentials": quarantined_credentials,
+                "pending_credential_ids": quarantined_pending,
+            },
+        )
+    return {
+        "provider": "google",
+        "oauthClientId": oauth_client_id,
+        "providerSubject": provider_subject,
+        "credentials": quarantined_credentials,
+        "pendingCredentialIds": quarantined_pending,
+        "credentialCount": len(quarantined_credentials),
+        "pendingCredentialCount": len(quarantined_pending),
+        "revocationWorkId": revocation_work_id,
+    }
+
+
 def _credential_mutation_lock_key(item_id: str) -> int:
     digest = hashlib.sha256(
         f"serverware:credential-mutation:{item_id}".encode("utf-8")
@@ -8082,6 +8498,7 @@ def create_credential(
     with connection_scope as conn:
         if setup_binding is not None:
             _lock_setup_oauth_callback_binding(conn, setup_binding)
+        _raise_for_google_oauth_grant_collision(conn, metadata)
         _lock_credential_mutation(conn, item_id)
         credential_version = _next_credential_generation(conn, item_id)
         encrypted = _envelope_values(item_id, secret, credential_version)
@@ -8369,6 +8786,11 @@ def create_pending_oauth_credential(
             _lock_setup_oauth_callback_binding(conn, setup_binding)
         _lock_pending_oauth_creation(conn)
         _mark_expired_pending_oauth_credentials(conn, created_at)
+        _raise_for_google_oauth_grant_collision(
+            conn,
+            metadata,
+            exclude_credential_id=target_credential_id,
+        )
         if target_credential_id is not None:
             _lock_credential_mutation(conn, target_credential_id)
             target = conn.execute(
@@ -10695,6 +11117,8 @@ def activate_pending_oauth_credential(
     setup_session_id: str | None = None,
     setup_expected_revision: int | None = None,
     require_webauthn: bool = False,
+    required_requester_roles: set[str] | None = None,
+    required_approver_roles: set[str] | None = None,
 ) -> dict[str, Any]:
     if (setup_session_id is None) != (setup_expected_revision is None):
         raise SetupSessionValidationError(
@@ -10713,6 +11137,23 @@ def activate_pending_oauth_credential(
             )
     now = utcnow()
     action = "credential.oauth.activate"
+    try:
+        normalized_requester_roles = set(
+            normalize_rbac_roles(
+                required_requester_roles or set(),
+                require_nonempty=required_requester_roles is not None,
+            )
+        )
+        normalized_approver_roles = set(
+            normalize_rbac_roles(
+                required_approver_roles or {"credential_owner"},
+                require_nonempty=True,
+            )
+        )
+    except RBACRoleValidationError as exc:
+        raise RBACBindingStoreError(
+            "pending OAuth activation role requirements are invalid"
+        ) from exc
     if setup_id is not None:
         _expire_setup_sessions_before_mutation(now)
     with connect() as conn:
@@ -10745,9 +11186,21 @@ def activate_pending_oauth_credential(
                 raise SetupSessionValidationError(
                     "pending OAuth grant no longer matches the setup session"
                 )
-        _lock_credential_mutation(conn, item_id)
-        pending = conn.execute(
+        pending_preview = conn.execute(
             "SELECT * FROM pending_oauth_credentials WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if pending_preview is not None:
+            pending_metadata = loads(pending_preview["metadata"], {})
+            if _google_oauth_grant_family(pending_metadata) is not None:
+                _lock_google_oauth_grant_families(conn)
+        _lock_credential_mutation(conn, item_id)
+        pending_lock_suffix = (
+            " FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""
+        )
+        pending = conn.execute(
+            "SELECT * FROM pending_oauth_credentials WHERE id = ?"
+            + pending_lock_suffix,
             (item_id,),
         ).fetchone()
         if pending is None:
@@ -10765,6 +11218,27 @@ def activate_pending_oauth_credential(
             return {"ok": False, "reason": f"pending_credential_{pending['status']}"}
         if pending["requester_id"] != actor_id:
             return {"ok": False, "reason": "requester_mismatch"}
+        if (
+            normalized_requester_roles
+            and actor_id.startswith("oidc:")
+            and not _rbac_subject_has_any_role_on_connection(
+                conn,
+                actor_id,
+                normalized_requester_roles,
+            )
+        ):
+            return {"ok": False, "reason": "approval_requester_role_revoked"}
+        pending_metadata = loads(pending["metadata"], {})
+        _raise_for_google_oauth_grant_collision(
+            conn,
+            pending_metadata,
+            exclude_credential_id=(
+                str(pending["target_credential_id"])
+                if pending["target_credential_id"]
+                else None
+            ),
+            exclude_pending_credential_id=item_id,
+        )
         if setup_row is not None:
             review = loads(pending["review_json"], {})
             pending_provider = (
@@ -10834,15 +11308,15 @@ def activate_pending_oauth_credential(
         if approval["expires_at"] <= now_s:
             return {"ok": False, "reason": "approval_expired"}
         approved_by = str(approval["approved_by"] or "")
-        if approved_by.startswith("oidc:") and not _rbac_subject_has_any_role_on_connection(
+        if approved_by.startswith(
+            "oidc:"
+        ) and not _rbac_subject_has_any_role_on_connection(
             conn,
             approved_by,
-            {"credential_owner"},
+            normalized_approver_roles,
         ):
             return {"ok": False, "reason": "approval_approver_role_revoked"}
-        approver_webauthn_credential_id = approval[
-            "approver_webauthn_credential_id"
-        ]
+        approver_webauthn_credential_id = approval["approver_webauthn_credential_id"]
         if require_webauthn and not approver_webauthn_credential_id:
             return {
                 "ok": False,
@@ -11978,11 +12452,10 @@ def approve_control_plane_approval(
     note: str | None = None,
     authn: dict[str, Any] | None = None,
     require_webauthn: bool = False,
+    required_approver_roles: set[str] | None = None,
 ) -> dict[str, Any] | None:
     authn_evidence = authn or {}
-    approver_webauthn_credential_id = authn_evidence.get(
-        "credential_record_id"
-    )
+    approver_webauthn_credential_id = authn_evidence.get("credential_record_id")
     if approver_webauthn_credential_id is not None and (
         not isinstance(approver_webauthn_credential_id, str)
         or not approver_webauthn_credential_id
@@ -11994,8 +12467,18 @@ def approve_control_plane_approval(
         raise MetadataStoreError(
             "control-plane approval requires verified WebAuthn evidence"
         )
+    normalized_approver_roles: set[str] = set()
+    if required_approver_roles is not None:
+        try:
+            normalized_approver_roles = set(
+                normalize_rbac_roles(required_approver_roles, require_nonempty=True)
+            )
+        except RBACRoleValidationError as exc:
+            raise RBACBindingStoreError("required approval roles are invalid") from exc
     with connect() as conn:
         _lock_webauthn_authority(conn)
+        if normalized_approver_roles:
+            _lock_rbac_authority(conn)
         now_s = _metadata_utcnow(conn).isoformat()
         existing = conn.execute(
             "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
@@ -12005,6 +12488,16 @@ def approve_control_plane_approval(
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
             return None
         if existing["requester_id"] == actor_id:
+            return None
+        if (
+            normalized_approver_roles
+            and actor_id.startswith("oidc:")
+            and not _rbac_subject_has_any_role_on_connection(
+                conn,
+                actor_id,
+                normalized_approver_roles,
+            )
+        ):
             return None
         if approver_webauthn_credential_id:
             expected_evidence = {
@@ -12102,6 +12595,7 @@ def consume_control_plane_approval(
     payload_digest: str,
     actor_id: str,
     require_webauthn: bool = False,
+    required_requester_roles: set[str] | None = None,
     required_approver_roles: set[str] | None = None,
     _connection: Any | None = None,
     _now: datetime | None = None,
@@ -12111,6 +12605,16 @@ def consume_control_plane_approval(
     )
     with connection_scope as conn:
         _lock_webauthn_authority(conn)
+        normalized_requester_roles: set[str] = set()
+        if required_requester_roles is not None:
+            try:
+                normalized_requester_roles = set(
+                    normalize_rbac_roles(required_requester_roles, require_nonempty=True)
+                )
+            except RBACRoleValidationError as exc:
+                raise RBACBindingStoreError(
+                    "required requester roles are invalid"
+                ) from exc
         normalized_approver_roles: set[str] = set()
         if required_approver_roles is not None:
             try:
@@ -12121,6 +12625,7 @@ def consume_control_plane_approval(
                 raise RBACBindingStoreError(
                     "required approval roles are invalid"
                 ) from exc
+        if normalized_requester_roles or normalized_approver_roles:
             _lock_rbac_authority(conn)
         now = _metadata_utcnow(conn)
         if _now is not None:
@@ -12148,6 +12653,16 @@ def consume_control_plane_approval(
             return {"ok": False, "reason": f"approval_{existing['status']}"}
         if existing["expires_at"] <= now_s:
             return {"ok": False, "reason": "approval_expired"}
+        if (
+            normalized_requester_roles
+            and actor_id.startswith("oidc:")
+            and not _rbac_subject_has_any_role_on_connection(
+                conn,
+                actor_id,
+                normalized_requester_roles,
+            )
+        ):
+            return {"ok": False, "reason": "approval_requester_role_revoked"}
         approved_by = str(existing["approved_by"] or "")
         if (
             normalized_approver_roles
@@ -12236,10 +12751,26 @@ def consume_control_plane_approval(
 
 
 def deny_control_plane_approval(
-    item_id: str, *, actor_id: str, note: str | None = None
+    item_id: str,
+    *,
+    actor_id: str,
+    note: str | None = None,
+    required_approver_roles: set[str] | None = None,
 ) -> dict[str, Any] | None:
+    normalized_approver_roles: set[str] = set()
+    if required_approver_roles is not None:
+        try:
+            normalized_approver_roles = set(
+                normalize_rbac_roles(required_approver_roles, require_nonempty=True)
+            )
+        except RBACRoleValidationError as exc:
+            raise RBACBindingStoreError(
+                "required denial roles are invalid"
+            ) from exc
     with connect() as conn:
         _lock_webauthn_authority(conn)
+        if normalized_approver_roles and actor_id.startswith("oidc:"):
+            _lock_rbac_authority(conn)
         now_s = _metadata_utcnow(conn).isoformat()
         existing = conn.execute(
             "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
@@ -12247,6 +12778,16 @@ def deny_control_plane_approval(
         if not existing:
             return None
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
+            return None
+        if (
+            normalized_approver_roles
+            and actor_id.startswith("oidc:")
+            and not _rbac_subject_has_any_role_on_connection(
+                conn,
+                actor_id,
+                normalized_approver_roles,
+            )
+        ):
             return None
         cur = conn.execute(
             """
@@ -12760,8 +13301,54 @@ def approve_request(
     review_receipt_id: str | None = None,
     review_digest: str | None = None,
     require_review_receipt: bool = False,
+    required_approver_roles: set[str] | None = None,
+    authority_policy_hash: str | None = None,
+    authority_route_id: str | None = None,
+    allowed_approver_ids: set[str] | None = None,
 ) -> dict[str, Any] | None:
+    authn_evidence = authn or {}
+    approver_webauthn_credential_id = authn_evidence.get("credential_record_id")
+    if approver_webauthn_credential_id is not None and (
+        not isinstance(approver_webauthn_credential_id, str)
+        or not approver_webauthn_credential_id
+    ):
+        raise MetadataStoreError("approval WebAuthn credential record is invalid")
+    normalized_approver_roles: set[str] = set()
+    if required_approver_roles is not None:
+        try:
+            normalized_approver_roles = set(
+                normalize_rbac_roles(required_approver_roles, require_nonempty=True)
+            )
+        except RBACRoleValidationError as exc:
+            raise RBACBindingStoreError(
+                "required JIT approval roles are invalid"
+            ) from exc
+    route_authority = (
+        authority_policy_hash,
+        authority_route_id,
+        allowed_approver_ids,
+    )
+    if any(value is not None for value in route_authority) and any(
+        value is None for value in route_authority
+    ):
+        raise MetadataStoreError("JIT approval route authority is incomplete")
+    if authority_policy_hash is not None:
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", authority_policy_hash) is None:
+            raise MetadataStoreError("JIT approval policy authority is invalid")
+        if not authority_route_id or len(authority_route_id.encode("utf-8")) > 256:
+            raise MetadataStoreError("JIT approval route authority is invalid")
+        if not allowed_approver_ids or any(
+            not isinstance(value, str) or not value
+            for value in allowed_approver_ids
+        ):
+            raise MetadataStoreError("JIT approval approver authority is invalid")
     with connect() as conn:
+        if authority_policy_hash is not None:
+            _lock_policy_high_water(conn)
+        if approver_webauthn_credential_id:
+            _lock_webauthn_authority(conn)
+        if normalized_approver_roles and actor_id.startswith("oidc:"):
+            _lock_rbac_authority(conn)
         _lock_pending_approval_creation(conn)
         now = _metadata_utcnow(conn)
         now_s = now.isoformat()
@@ -12772,6 +13359,49 @@ def approve_request(
             return None
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
             return None
+        if authority_policy_hash is not None:
+            current_policy = _policy_high_water_row(conn)
+            if (
+                current_policy is None
+                or not hmac.compare_digest(
+                    str(current_policy["policy_hash"]), authority_policy_hash
+                )
+                or not hmac.compare_digest(
+                    str(existing["policy_hash"] or ""), authority_policy_hash
+                )
+                or not hmac.compare_digest(
+                    str(existing["route_id"] or ""), authority_route_id or ""
+                )
+                or actor_id not in (allowed_approver_ids or set())
+            ):
+                raise MetadataStoreError(
+                    "JIT approval route authority is no longer current"
+                )
+        if approver_webauthn_credential_id:
+            approver_credential = conn.execute(
+                "SELECT user_id, revoked_at FROM webauthn_credentials WHERE id = ?",
+                (approver_webauthn_credential_id,),
+            ).fetchone()
+            if (
+                approver_credential is None
+                or approver_credential["user_id"] != actor_id
+                or approver_credential["revoked_at"] is not None
+            ):
+                raise MetadataStoreError(
+                    "approval WebAuthn credential is not active for the approver"
+                )
+        if (
+            normalized_approver_roles
+            and actor_id.startswith("oidc:")
+            and not _rbac_subject_has_any_role_on_connection(
+                conn,
+                actor_id,
+                normalized_approver_roles,
+            )
+        ):
+            raise MetadataStoreError(
+                "JIT approval approver role is no longer authorized"
+            )
         review_receipt = None
         if require_review_receipt:
             if not review_receipt_id or not review_digest:
@@ -12815,11 +13445,6 @@ def approve_request(
                     "postgres approval and grant stores must use the same DSN for atomic issuance"
                 )
         approved_until = (now + timedelta(seconds=grant_ttl_seconds)).isoformat()
-        approver_webauthn_credential_id = (
-            (authn or {}).get("credential_record_id")
-            if isinstance(authn, dict)
-            else None
-        )
         cur = conn.execute(
             """
             UPDATE approval_requests
@@ -12831,6 +13456,15 @@ def approve_request(
                 approver_webauthn_credential_id = ?,
                 approval_challenge_id = ?
             WHERE id = ? AND status = 'pending' AND expires_at > ?
+              AND (
+                ? = 0
+                OR EXISTS (
+                    SELECT 1 FROM webauthn_credentials
+                    WHERE webauthn_credentials.id = ?
+                      AND webauthn_credentials.user_id = ?
+                      AND webauthn_credentials.revoked_at IS NULL
+                )
+              )
             """,
             (
                 approved_until,
@@ -12841,6 +13475,9 @@ def approve_request(
                 challenge_id,
                 item_id,
                 now_s,
+                1 if approver_webauthn_credential_id else 0,
+                approver_webauthn_credential_id,
+                actor_id,
             ),
         )
         if cur.rowcount != 1:
@@ -14068,6 +14705,176 @@ def _begin_release_transaction(conn: Any) -> None:
         conn.execute("BEGIN IMMEDIATE")
 
 
+def _revalidate_release_policy_authority(
+    conn: Any,
+    *,
+    policy_hash: str,
+    route_id: str,
+) -> bool:
+    _lock_policy_high_water(conn)
+    current = _policy_high_water_row(conn)
+    return bool(
+        current is not None
+        and hmac.compare_digest(str(current["policy_hash"]), policy_hash)
+        and route_id
+    )
+
+
+def _normalize_release_approver_roles(
+    required_approver_roles: set[str] | None,
+) -> set[str]:
+    if required_approver_roles is None:
+        return set()
+    try:
+        return set(
+            normalize_rbac_roles(required_approver_roles, require_nonempty=True)
+        )
+    except RBACRoleValidationError as exc:
+        raise ReleaseAuthorizationError(
+            "release authorization approver roles are invalid"
+        ) from exc
+
+
+def _validate_release_credential_authority(
+    conn: Any,
+    *,
+    credential_id: str,
+    credential_version: int,
+) -> str | None:
+    if not credential_id:
+        return None if credential_version == 0 else "credential_generation_changed"
+    credential = conn.execute(
+        "SELECT credential_version, lifecycle_status FROM credentials WHERE id = ?",
+        (credential_id,),
+    ).fetchone()
+    if credential is None:
+        return "credential_revoked"
+    if str(credential["lifecycle_status"] or "active") != "active":
+        return "credential_revoked"
+    if int(credential["credential_version"] or 0) != credential_version:
+        return "credential_generation_changed"
+    return None
+
+
+def _release_grant_authority_reason(
+    conn: Any,
+    grant: Any,
+    *,
+    now_epoch_ms: int,
+    required_approver_roles: set[str],
+    allowed_approver_ids: set[str] | None,
+    require_approver_webauthn: bool,
+    reserved_attempt_id: str | None,
+) -> str | None:
+    if grant is None or str(grant["state"]) != "active":
+        return "jit_grant_revoked"
+    if int(grant["uses_remaining"] or 0) < 1:
+        return "jit_grant_consumed"
+    if (
+        _release_timestamp_epoch_ms(grant["valid_from"]) > now_epoch_ms
+        or _release_timestamp_epoch_ms(grant["expires_at"]) <= now_epoch_ms
+    ):
+        return "jit_grant_expired"
+    actual_reservation = grant["reserved_attempt_id"]
+    if reserved_attempt_id is None:
+        if actual_reservation is not None:
+            return "jit_grant_reserved"
+    elif actual_reservation != reserved_attempt_id:
+        return "jit_grant_revoked"
+
+    approval = conn.execute(
+        "SELECT * FROM approval_requests WHERE id = ?",
+        (grant["approval_request_id"],),
+    ).fetchone()
+    if approval is None or str(approval["status"]) != "approved":
+        return "jit_approval_invalidated"
+    for field in (
+        "principal_id",
+        "route_id",
+        "credential_id",
+        "credential_version",
+        "policy_hash",
+        "request_digest",
+        "operation_digest",
+    ):
+        left = int(grant[field]) if field == "credential_version" else grant[field]
+        right = int(approval[field]) if field == "credential_version" else approval[field]
+        if left != right:
+            return "jit_grant_binding_changed"
+
+    approved_by = str(approval["approved_by"] or "")
+    if not approved_by:
+        return "jit_approver_missing"
+    if allowed_approver_ids is not None and approved_by not in allowed_approver_ids:
+        return "jit_approver_not_allowed"
+    if (
+        required_approver_roles
+        and approved_by.startswith("oidc:")
+        and not _rbac_subject_has_any_role_on_connection(
+            conn,
+            approved_by,
+            required_approver_roles,
+        )
+    ):
+        return "jit_approver_role_revoked"
+
+    webauthn_credential_id = grant["approver_webauthn_credential_id"]
+    if require_approver_webauthn and not webauthn_credential_id:
+        return "jit_approver_webauthn_required"
+    if webauthn_credential_id:
+        credential = conn.execute(
+            "SELECT user_id, revoked_at FROM webauthn_credentials WHERE id = ?",
+            (webauthn_credential_id,),
+        ).fetchone()
+        if (
+            credential is None
+            or credential["revoked_at"] is not None
+            or str(credential["user_id"]) != approved_by
+        ):
+            return "jit_approver_webauthn_revoked"
+    return None
+
+
+def _release_attempt_authority_reason(
+    conn: Any,
+    attempt: Any,
+    *,
+    now_epoch_ms: int,
+    required_approver_roles: set[str],
+    allowed_approver_ids: set[str] | None,
+    require_approver_webauthn: bool,
+) -> str | None:
+    if not _revalidate_release_policy_authority(
+        conn,
+        policy_hash=str(attempt["policy_hash"]),
+        route_id=str(attempt["route_id"]),
+    ):
+        return "active_policy_changed"
+    credential_reason = _validate_release_credential_authority(
+        conn,
+        credential_id=str(attempt["credential_id"] or ""),
+        credential_version=int(attempt["credential_version"]),
+    )
+    if credential_reason is not None:
+        return credential_reason
+    if attempt["grant_id"] is None:
+        return None
+    grant = conn.execute(
+        "SELECT * FROM approval_grants WHERE id = ?"
+        + (" FOR UPDATE" if isinstance(conn, PostgresMetadataConnection) else ""),
+        (attempt["grant_id"],),
+    ).fetchone()
+    return _release_grant_authority_reason(
+        conn,
+        grant,
+        now_epoch_ms=now_epoch_ms,
+        required_approver_roles=required_approver_roles,
+        allowed_approver_ids=allowed_approver_ids,
+        require_approver_webauthn=require_approver_webauthn,
+        reserved_attempt_id=str(attempt["attempt_id"]),
+    )
+
+
 def _release_lock_id(resource: str) -> int:
     return int.from_bytes(
         hashlib.sha256(resource.encode("utf-8")).digest()[:8],
@@ -14325,6 +15132,11 @@ def reserve_release_authorization(
     jit_approval_request: dict[str, Any] | None = None,
     now_epoch_ms: int | None = None,
     actor_id: str | None = None,
+    authority_policy_hash: str | None = None,
+    authority_route_id: str | None = None,
+    required_approver_roles: set[str] | None = None,
+    allowed_approver_ids: set[str] | None = None,
+    require_approver_webauthn: bool = False,
 ) -> dict[str, Any]:
     require_atomic_release_writer()
     attempt_id = _release_text(
@@ -14354,6 +15166,48 @@ def reserve_release_authorization(
         operation_digest,
         required=False,
     )
+    if (authority_policy_hash is None) != (authority_route_id is None):
+        raise ReleaseAuthorizationError(
+            "release authorization policy authority is incomplete"
+        )
+    if authority_policy_hash is not None:
+        authority_policy_hash = (
+            _release_digest(
+                "release authorization authority_policy_hash",
+                authority_policy_hash,
+            )
+            or ""
+        )
+        authority_route_id = _release_text(
+            "release authorization authority_route_id", authority_route_id
+        )
+        if not hmac.compare_digest(authority_policy_hash, policy_hash):
+            raise ReleaseAuthorizationError(
+                "release authorization policy authority hash does not match request"
+            )
+        if not hmac.compare_digest(authority_route_id, route_id):
+            raise ReleaseAuthorizationError(
+                "release authorization route authority does not match request"
+            )
+    normalized_approver_roles = _normalize_release_approver_roles(
+        required_approver_roles
+    )
+    if allowed_approver_ids is not None and (
+        not allowed_approver_ids
+        or any(
+            not isinstance(value, str)
+            or not value
+            or len(value.encode("utf-8")) > 512
+            for value in allowed_approver_ids
+        )
+    ):
+        raise ReleaseAuthorizationError(
+            "release authorization allowed approvers are invalid"
+        )
+    if (normalized_approver_roles or allowed_approver_ids or require_approver_webauthn) and not require_jit_grant:
+        raise ReleaseAuthorizationError(
+            "release authorization approver authority requires JIT"
+        )
     if not isinstance(operation_context, dict):
         raise ReleaseAuthorizationError("operation_context must be an object")
     canonical_operation_context = dumps(operation_context)
@@ -14398,6 +15252,33 @@ def reserve_release_authorization(
     try:
         with connect() as conn:
             _begin_release_transaction(conn)
+            if authority_policy_hash is not None and not _revalidate_release_policy_authority(
+                conn,
+                policy_hash=authority_policy_hash,
+                route_id=authority_route_id or "",
+            ):
+                raise _release_denial(
+                    attempt_id=attempt_id,
+                    binding_digest=binding_digest,
+                    reason="active_policy_changed",
+                )
+            if require_jit_grant:
+                _lock_webauthn_authority(conn)
+                if normalized_approver_roles:
+                    _lock_rbac_authority(conn)
+            if credential_id:
+                _lock_credential_mutation(conn, credential_id)
+            credential_reason = _validate_release_credential_authority(
+                conn,
+                credential_id=credential_id,
+                credential_version=credential_version,
+            )
+            if credential_reason is not None:
+                raise _release_denial(
+                    attempt_id=attempt_id,
+                    binding_digest=binding_digest,
+                    reason=credential_reason,
+                )
             existing = _release_attempt_row(conn, attempt_id, for_update=True)
             if existing is not None:
                 if not hmac.compare_digest(str(existing["binding_digest"]), binding_digest):
@@ -14405,6 +15286,30 @@ def reserve_release_authorization(
                         "release authorization attempt_id is bound to a different request"
                     )
                 _validate_release_consumption_state(conn, existing)
+                if existing["state"] == "reserved":
+                    authority_reason = _release_attempt_authority_reason(
+                        conn,
+                        existing,
+                        now_epoch_ms=now_ms,
+                        required_approver_roles=normalized_approver_roles,
+                        allowed_approver_ids=allowed_approver_ids,
+                        require_approver_webauthn=require_approver_webauthn,
+                    )
+                    if authority_reason is not None:
+                        existing = _cancel_release_attempt(
+                            conn,
+                            existing,
+                            now_ms=now_ms,
+                            actor_id=actor_id,
+                            reason=authority_reason,
+                        )
+                        return _release_authorization_result(
+                            conn,
+                            existing,
+                            idempotent_replay=True,
+                            reason=authority_reason,
+                            keyring=keyring,
+                        )
                 return _release_authorization_result(
                     conn, existing, idempotent_replay=True, keyring=keyring
                 )
@@ -14426,6 +15331,30 @@ def reserve_release_authorization(
                         "release authorization attempt_id is bound to a different request"
                     )
                 _validate_release_consumption_state(conn, existing)
+                if existing["state"] == "reserved":
+                    authority_reason = _release_attempt_authority_reason(
+                        conn,
+                        existing,
+                        now_epoch_ms=now_ms,
+                        required_approver_roles=normalized_approver_roles,
+                        allowed_approver_ids=allowed_approver_ids,
+                        require_approver_webauthn=require_approver_webauthn,
+                    )
+                    if authority_reason is not None:
+                        existing = _cancel_release_attempt(
+                            conn,
+                            existing,
+                            now_ms=now_ms,
+                            actor_id=actor_id,
+                            reason=authority_reason,
+                        )
+                        return _release_authorization_result(
+                            conn,
+                            existing,
+                            idempotent_replay=True,
+                            reason=authority_reason,
+                            keyring=keyring,
+                        )
                 return _release_authorization_result(
                     conn, existing, idempotent_replay=True, keyring=keyring
                 )
@@ -14442,7 +15371,7 @@ def reserve_release_authorization(
                 lock_suffix = ""
                 if isinstance(conn, PostgresMetadataConnection):
                     lock_suffix = " FOR UPDATE SKIP LOCKED"
-                grant = conn.execute(
+                candidates = conn.execute(
                     """
                     SELECT * FROM approval_grants
                     WHERE state = 'active'
@@ -14457,7 +15386,6 @@ def reserve_release_authorization(
                       AND uses_remaining > 0
                       AND reserved_attempt_id IS NULL
                     ORDER BY created_at ASC, id ASC
-                    LIMIT 1
                     """
                     + lock_suffix,
                     (
@@ -14470,15 +15398,31 @@ def reserve_release_authorization(
                         operation_digest,
                         now_s,
                     ),
-                ).fetchone()
-                if (
-                    grant is None
-                    or grant["state"] != "active"
-                    or int(grant["uses_remaining"]) < 1
-                    or grant["reserved_attempt_id"] is not None
-                    or _release_timestamp_epoch_ms(grant["valid_from"]) > now_ms
-                    or _release_timestamp_epoch_ms(grant["expires_at"]) <= now_ms
-                ):
+                ).fetchall()
+                for candidate in candidates:
+                    authority_reason = _release_grant_authority_reason(
+                        conn,
+                        candidate,
+                        now_epoch_ms=now_ms,
+                        required_approver_roles=normalized_approver_roles,
+                        allowed_approver_ids=allowed_approver_ids,
+                        require_approver_webauthn=require_approver_webauthn,
+                        reserved_attempt_id=None,
+                    )
+                    if authority_reason is None:
+                        grant = candidate
+                        break
+                    conn.execute(
+                        """
+                        UPDATE approval_grants
+                        SET state = 'revoked', uses_remaining = 0,
+                            reserved_attempt_id = NULL,
+                            reservation_expires_at_epoch_ms = NULL
+                        WHERE id = ? AND state = 'active'
+                        """,
+                        (candidate["id"],),
+                    )
+                if grant is None:
                     if jit_approval_request is not None:
                         try:
                             approval = _ensure_jit_approval_request_on_connection(
@@ -15026,13 +15970,42 @@ def dispatch_release_authorization(
     dispatch_ttl_seconds: int,
     now_epoch_ms: int | None = None,
     actor_id: str | None = None,
+    required_approver_roles: set[str] | None = None,
 ) -> dict[str, Any]:
     require_atomic_release_writer()
     if not isinstance(dispatch_ttl_seconds, int) or not 1 <= dispatch_ttl_seconds <= 300:
         raise ReleaseAuthorizationError("dispatch TTL must be between 1 and 300 seconds")
+    attempt_id = _release_text(
+        "release authorization attempt_id",
+        attempt_id,
+        maximum=_RELEASE_AUTHORIZATION_ATTEMPT_ID_MAX_BYTES,
+    )
+    binding_digest = (
+        _release_digest("release authorization binding_digest", binding_digest) or ""
+    )
+    normalized_approver_roles = _normalize_release_approver_roles(
+        required_approver_roles
+    )
     now_ms = _release_now_epoch_ms(now_epoch_ms)
     with connect() as conn:
         _begin_release_transaction(conn)
+        preview = _release_attempt_row(conn, attempt_id)
+        if preview is None:
+            raise ReleaseAuthorizationError(
+                "release authorization attempt was not found"
+            )
+        if not hmac.compare_digest(str(preview["binding_digest"]), binding_digest):
+            raise ReleaseAuthorizationConflictError(
+                "release authorization binding does not match the durable attempt"
+            )
+        if preview["state"] == "reserved":
+            _lock_policy_high_water(conn)
+            if preview["grant_id"] is not None:
+                _lock_webauthn_authority(conn)
+                if normalized_approver_roles:
+                    _lock_rbac_authority(conn)
+            if preview["credential_id"]:
+                _lock_credential_mutation(conn, str(preview["credential_id"]))
         row = _bound_release_attempt(conn, attempt_id, binding_digest)
         if row["state"] in {"committed", "cancelled", "committed_indeterminate"}:
             return _release_authorization_result(conn, row, idempotent_replay=True)
@@ -15069,6 +16042,28 @@ def dispatch_release_authorization(
                 reason="reservation_ttl_expired",
             )
         now_s = datetime.fromtimestamp(now_ms / 1000, timezone.utc).isoformat()
+        authority_reason = _release_attempt_authority_reason(
+            conn,
+            row,
+            now_epoch_ms=now_ms,
+            required_approver_roles=normalized_approver_roles,
+            allowed_approver_ids=None,
+            require_approver_webauthn=False,
+        )
+        if authority_reason is not None:
+            row = _cancel_release_attempt(
+                conn,
+                row,
+                now_ms=now_ms,
+                actor_id=actor_id,
+                reason=authority_reason,
+            )
+            return _release_authorization_result(
+                conn,
+                row,
+                idempotent_replay=False,
+                reason=authority_reason,
+            )
         dispatch_expires_at_ms = now_ms + dispatch_ttl_seconds * 1000
         updated = conn.execute(
             """
@@ -15334,9 +16329,49 @@ def drain_release_authorization_audit_outbox(limit: int = 100) -> dict[str, Any]
 
 
 def deny_request(
-    item_id: str, note: str | None = None, actor_id: str = "admin"
+    item_id: str,
+    note: str | None = None,
+    actor_id: str = "admin",
+    *,
+    required_approver_roles: set[str] | None = None,
+    authority_policy_hash: str | None = None,
+    authority_route_id: str | None = None,
+    allowed_approver_ids: set[str] | None = None,
 ) -> dict[str, Any] | None:
+    normalized_approver_roles: set[str] = set()
+    if required_approver_roles is not None:
+        try:
+            normalized_approver_roles = set(
+                normalize_rbac_roles(required_approver_roles, require_nonempty=True)
+            )
+        except RBACRoleValidationError as exc:
+            raise RBACBindingStoreError(
+                "required JIT denial roles are invalid"
+            ) from exc
+    route_authority = (
+        authority_policy_hash,
+        authority_route_id,
+        allowed_approver_ids,
+    )
+    if any(value is not None for value in route_authority) and any(
+        value is None for value in route_authority
+    ):
+        raise MetadataStoreError("JIT denial route authority is incomplete")
+    if authority_policy_hash is not None:
+        if re.fullmatch(r"sha256:[0-9a-f]{64}", authority_policy_hash) is None:
+            raise MetadataStoreError("JIT denial policy authority is invalid")
+        if not authority_route_id or len(authority_route_id.encode("utf-8")) > 256:
+            raise MetadataStoreError("JIT denial route authority is invalid")
+        if not allowed_approver_ids or any(
+            not isinstance(value, str) or not value
+            for value in allowed_approver_ids
+        ):
+            raise MetadataStoreError("JIT denial approver authority is invalid")
     with connect() as conn:
+        if authority_policy_hash is not None:
+            _lock_policy_high_water(conn)
+        if normalized_approver_roles and actor_id.startswith("oidc:"):
+            _lock_rbac_authority(conn)
         _lock_pending_approval_creation(conn)
         now_s = _metadata_utcnow(conn).isoformat()
         existing = conn.execute(
@@ -15345,6 +16380,32 @@ def deny_request(
         if not existing:
             return None
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
+            return None
+        if authority_policy_hash is not None:
+            current_policy = _policy_high_water_row(conn)
+            if (
+                current_policy is None
+                or not hmac.compare_digest(
+                    str(current_policy["policy_hash"]), authority_policy_hash
+                )
+                or not hmac.compare_digest(
+                    str(existing["policy_hash"] or ""), authority_policy_hash
+                )
+                or not hmac.compare_digest(
+                    str(existing["route_id"] or ""), authority_route_id or ""
+                )
+                or actor_id not in (allowed_approver_ids or set())
+            ):
+                return None
+        if (
+            normalized_approver_roles
+            and actor_id.startswith("oidc:")
+            and not _rbac_subject_has_any_role_on_connection(
+                conn,
+                actor_id,
+                normalized_approver_roles,
+            )
+        ):
             return None
         cur = conn.execute(
             """

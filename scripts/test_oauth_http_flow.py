@@ -117,7 +117,9 @@ class ASGIHTTPClient:
             raise ValueError("request cannot contain both JSON and raw body")
         request_headers = dict(headers or {})
         if json_body is not None:
-            body = json.dumps(json_body, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+            body = json.dumps(
+                json_body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+            ).encode("utf-8")
             request_headers.setdefault("Content-Type", "application/json")
         body = body or b""
         if len(body) > MAX_ASGI_REQUEST_BYTES:
@@ -125,8 +127,12 @@ class ASGIHTTPClient:
         if body:
             request_headers["Content-Length"] = str(len(body))
         if self.cookies:
-            request_headers["Cookie"] = "; ".join(f"{name}={value}" for name, value in sorted(self.cookies.items()))
-        response = self._runner.run(self._request(method.upper(), target, request_headers, body))
+            request_headers["Cookie"] = "; ".join(
+                f"{name}={value}" for name, value in sorted(self.cookies.items())
+            )
+        response = self._runner.run(
+            self._request(method.upper(), target, request_headers, body)
+        )
         if len(response.content) > MAX_ASGI_RESPONSE_BYTES:
             raise AssertionError("ASGI endpoint returned an oversized response")
         self._update_cookies(response.headers_all("set-cookie"))
@@ -141,7 +147,11 @@ class ASGIHTTPClient:
     ) -> ASGIResponse:
         parsed = urllib.parse.urlsplit(target)
         if parsed.scheme:
-            if parsed.scheme != self.scheme or parsed.hostname != self.host or (parsed.port or 443) != self.port:
+            if (
+                parsed.scheme != self.scheme
+                or parsed.hostname != self.host
+                or (parsed.port or 443) != self.port
+            ):
                 raise ValueError("ASGI request target escaped the configured origin")
             path = parsed.path or "/"
             query = parsed.query
@@ -149,7 +159,9 @@ class ASGIHTTPClient:
             relative = urllib.parse.urlsplit(target)
             path = relative.path or "/"
             query = relative.query
-        raw_headers: list[tuple[bytes, bytes]] = [(b"host", f"{self.host}:{self.port}".encode("ascii"))]
+        raw_headers: list[tuple[bytes, bytes]] = [
+            (b"host", f"{self.host}:{self.port}".encode("ascii"))
+        ]
         for name, value in headers.items():
             if any(character in name + value for character in "\r\n"):
                 raise ValueError("ASGI request header contains a control character")
@@ -185,7 +197,9 @@ class ASGIHTTPClient:
             nonlocal response_status, response_headers
             if message["type"] == "http.response.start":
                 if response_status is not None:
-                    raise AssertionError("ASGI application emitted duplicate response start")
+                    raise AssertionError(
+                        "ASGI application emitted duplicate response start"
+                    )
                 response_status = int(message["status"])
                 response_headers = tuple(
                     (name.decode("latin-1"), value.decode("latin-1"))
@@ -193,7 +207,9 @@ class ASGIHTTPClient:
                 )
                 return
             if message["type"] != "http.response.body" or response_status is None:
-                raise AssertionError(f"unexpected ASGI response frame: {message['type']}")
+                raise AssertionError(
+                    f"unexpected ASGI response frame: {message['type']}"
+                )
             chunks.extend(message.get("body", b""))
             if len(chunks) > MAX_ASGI_RESPONSE_BYTES:
                 raise AssertionError("ASGI response exceeded the test transport bound")
@@ -215,7 +231,9 @@ class ASGIHTTPClient:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+    def redirect_request(
+        self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str
+    ) -> None:
         return None
 
 
@@ -261,7 +279,9 @@ def https_request(
     *,
     context: Any,
 ) -> tuple[int, dict[str, str], bytes]:
-    opener = urllib.request.build_opener(_NoRedirect(), urllib.request.HTTPSHandler(context=context))
+    opener = urllib.request.build_opener(
+        _NoRedirect(), urllib.request.HTTPSHandler(context=context)
+    )
     try:
         response = opener.open(request, timeout=5)
     except urllib.error.HTTPError as exc:
@@ -279,7 +299,9 @@ def https_request(
 
 
 def provider_redirect(simulator: OAuthProviderSimulator, authorization_url: str) -> str:
-    request = urllib.request.Request(authorization_url, headers={"Accept": "text/html"}, method="GET")
+    request = urllib.request.Request(
+        authorization_url, headers={"Accept": "text/html"}, method="GET"
+    )
     status, headers, body = https_request(request, context=simulator.client_ssl_context)
     simulator.assert_no_token_values(body)
     location = headers.get("location")
@@ -287,8 +309,14 @@ def provider_redirect(simulator: OAuthProviderSimulator, authorization_url: str)
         raise AssertionError(f"provider authorization did not redirect: HTTP {status}")
     simulator.assert_no_token_values(location)
     parsed = urllib.parse.urlsplit(location)
-    if parsed.scheme != "https" or parsed.netloc != "serverware.test" or len(location) > 8192:
-        raise AssertionError(f"provider redirected outside the expected callback origin: {location}")
+    if (
+        parsed.scheme != "https"
+        or parsed.netloc != "serverware.test"
+        or len(location) > 8192
+    ):
+        raise AssertionError(
+            f"provider redirected outside the expected callback origin: {location}"
+        )
     return location
 
 
@@ -302,15 +330,22 @@ def provider_form_request(
     encoded = urllib.parse.urlencode(form).encode("ascii")
     if len(encoded) > 16 * 1024:
         raise AssertionError("provider form request exceeded the test bound")
-    request_headers = {"Content-Type": "application/x-www-form-urlencoded", **(headers or {})}
-    request = urllib.request.Request(url, data=encoded, headers=request_headers, method="POST")
+    request_headers = {
+        "Content-Type": "application/x-www-form-urlencoded",
+        **(headers or {}),
+    }
+    request = urllib.request.Request(
+        url, data=encoded, headers=request_headers, method="POST"
+    )
     status, _, body = https_request(request, context=simulator.client_ssl_context)
     return status, body
 
 
 def expect_status(response: ASGIResponse, expected: int, label: str) -> None:
     if response.status_code != expected:
-        raise AssertionError(f"{label}: expected HTTP {expected}, got {response.status_code}: {response.text[:500]}")
+        raise AssertionError(
+            f"{label}: expected HTTP {expected}, got {response.status_code}: {response.text[:500]}"
+        )
 
 
 def b64url(value: bytes) -> str:
@@ -328,7 +363,11 @@ def main() -> None:
             from serverware import app as app_module
             from serverware import db, oauth
             from serverware.auth import AdminIdentity, require_admin
-            from serverware.policy_bundle import CredentialPolicy, PolicySnapshot, RoutePolicy
+            from serverware.policy_bundle import (
+                CredentialPolicy,
+                PolicySnapshot,
+                RoutePolicy,
+            )
 
             original_providers = oauth._providers
             configured = original_providers()
@@ -336,7 +375,11 @@ def main() -> None:
             x_urls = simulator.provider_urls("x")
             google_provider = replace(configured["google"], **google_urls)
             x_provider = replace(configured["x"], **x_urls)
-            oauth._providers = lambda: {"google": google_provider, "x": x_provider, "twitter": x_provider}
+            oauth._providers = lambda: {
+                "google": google_provider,
+                "x": x_provider,
+                "twitter": x_provider,
+            }
 
             original_request_bytes = oauth.request_bytes
 
@@ -368,7 +411,9 @@ def main() -> None:
                 actor = request.headers.get("X-Test-Actor", "")
                 identity = identities.get(actor)
                 if identity is None:
-                    raise HTTPException(status_code=401, detail="recognized test actor required")
+                    raise HTTPException(
+                        status_code=401, detail="recognized test actor required"
+                    )
                 return identity
 
             test_require_admin.__annotations__["request"] = Request
@@ -392,9 +437,13 @@ def main() -> None:
                 headers = dict(extra_headers or {})
                 if actor:
                     headers["X-Test-Actor"] = actor
-                response = client.request(method, target, headers=headers, json_body=json_body)
+                response = client.request(
+                    method, target, headers=headers, json_body=json_body
+                )
                 simulator.assert_no_token_values(response.content)
-                for value in response.headers_all("location") + response.headers_all("set-cookie"):
+                for value in response.headers_all("location") + response.headers_all(
+                    "set-cookie"
+                ):
                     simulator.assert_no_token_values(value)
                 asgi_responses.append(response)
                 return response
@@ -412,21 +461,36 @@ def main() -> None:
                     payload["scopes"] = scopes
                 if credential_id is not None:
                     payload["credentialId"] = credential_id
-                response = request(client, "POST", "/api/oauth/start", actor="operator", json_body=payload)
+                response = request(
+                    client,
+                    "POST",
+                    "/api/oauth/start",
+                    actor="operator",
+                    json_body=payload,
+                )
                 expect_status(response, 200, f"{provider} authorization start")
                 started = response.json()
                 state = started.get("state")
-                if not isinstance(state, str) or re.fullmatch(r"[A-Za-z0-9_-]{43}", state) is None:
-                    raise AssertionError(f"{provider} authorization start returned malformed state")
+                if (
+                    not isinstance(state, str)
+                    or re.fullmatch(r"[A-Za-z0-9_-]{43}", state) is None
+                ):
+                    raise AssertionError(
+                        f"{provider} authorization start returned malformed state"
+                    )
                 cookie_name = oauth.browser_cookie_name(state)
                 set_cookie_headers = response.headers_all("set-cookie")
                 if len(set_cookie_headers) != 1:
-                    raise AssertionError(f"{provider} authorization start returned unexpected cookies")
+                    raise AssertionError(
+                        f"{provider} authorization start returned unexpected cookies"
+                    )
                 parsed_cookie = SimpleCookie()
                 parsed_cookie.load(set_cookie_headers[0])
                 morsel = parsed_cookie.get(cookie_name)
                 if morsel is None:
-                    raise AssertionError(f"{provider} authorization did not bind its state cookie")
+                    raise AssertionError(
+                        f"{provider} authorization did not bind its state cookie"
+                    )
                 if (
                     not morsel["secure"]
                     or not morsel["httponly"]
@@ -436,14 +500,24 @@ def main() -> None:
                     or not morsel["max-age"].isdigit()
                     or not 1 <= int(morsel["max-age"]) <= 600
                 ):
-                    raise AssertionError(f"{provider} OAuth cookie attributes are unsafe: {morsel.OutputString()}")
-                state_payload = json.loads(oauth.OAUTH_STATE_PATH.read_text(encoding="utf-8"))
+                    raise AssertionError(
+                        f"{provider} OAuth cookie attributes are unsafe: {morsel.OutputString()}"
+                    )
+                state_payload = json.loads(
+                    oauth.OAUTH_STATE_PATH.read_text(encoding="utf-8")
+                )
                 record = state_payload.get("states", {}).get(state)
-                if not isinstance(record, dict) or not isinstance(record.get("code_verifier"), str):
-                    raise AssertionError(f"{provider} OAuth state did not retain a PKCE verifier")
+                if not isinstance(record, dict) or not isinstance(
+                    record.get("code_verifier"), str
+                ):
+                    raise AssertionError(
+                        f"{provider} OAuth state did not retain a PKCE verifier"
+                    )
                 return started, cookie_name, morsel.value, record["code_verifier"]
 
-            def callback_from_location(client: ASGIHTTPClient, location: str) -> ASGIResponse:
+            def callback_from_location(
+                client: ASGIHTTPClient, location: str
+            ) -> ASGIResponse:
                 parsed = urllib.parse.urlsplit(location)
                 target = parsed.path + ("?" + parsed.query if parsed.query else "")
                 response = request(client, "GET", target)
@@ -452,11 +526,19 @@ def main() -> None:
                 return response
 
             def pending_named(client: ASGIHTTPClient, name: str) -> dict[str, Any]:
-                response = request(client, "GET", "/api/oauth/pending", actor="operator")
+                response = request(
+                    client, "GET", "/api/oauth/pending", actor="operator"
+                )
                 expect_status(response, 200, "pending OAuth listing")
-                matches = [item for item in response.json()["pendingCredentials"] if item.get("name") == name]
+                matches = [
+                    item
+                    for item in response.json()["pendingCredentials"]
+                    if item.get("name") == name
+                ]
                 if len(matches) != 1:
-                    raise AssertionError(f"expected one pending OAuth credential named {name!r}: {matches}")
+                    raise AssertionError(
+                        f"expected one pending OAuth credential named {name!r}: {matches}"
+                    )
                 return matches[0]
 
             def approve_and_activate(
@@ -468,14 +550,26 @@ def main() -> None:
                 pending_id = str(pending["id"])
                 activate_path = f"/api/oauth/pending/{pending_id}/activate"
                 if exercise_denials:
-                    wrong_requester = request(client, "POST", activate_path, actor="reviewer", json_body={})
-                    expect_status(wrong_requester, 403, "wrong requester pending activation")
-                approval_required = request(client, "POST", activate_path, actor="operator", json_body={})
-                expect_status(approval_required, 428, "pending activation approval request")
+                    wrong_requester = request(
+                        client, "POST", activate_path, actor="reviewer", json_body={}
+                    )
+                    expect_status(
+                        wrong_requester, 403, "wrong requester pending activation"
+                    )
+                approval_required = request(
+                    client, "POST", activate_path, actor="operator", json_body={}
+                )
+                expect_status(
+                    approval_required, 428, "pending activation approval request"
+                )
                 detail = approval_required.json().get("detail")
-                approval_id = detail.get("approvalId") if isinstance(detail, dict) else None
+                approval_id = (
+                    detail.get("approvalId") if isinstance(detail, dict) else None
+                )
                 if not isinstance(approval_id, str):
-                    raise AssertionError("pending activation did not identify its approval")
+                    raise AssertionError(
+                        "pending activation did not identify its approval"
+                    )
                 if exercise_denials:
                     self_approval = request(
                         client,
@@ -494,7 +588,9 @@ def main() -> None:
                 )
                 expect_status(approved, 200, "distinct reviewer approval")
                 if approved.json().get("approved_by") != "user:reviewer":
-                    raise AssertionError("approval was not attributed to the distinct reviewer")
+                    raise AssertionError(
+                        "approval was not attributed to the distinct reviewer"
+                    )
                 activated = request(
                     client,
                     "POST",
@@ -504,7 +600,9 @@ def main() -> None:
                 )
                 expect_status(activated, 200, "approved pending activation")
                 if activated.json().get("approval", {}).get("status") != "consumed":
-                    raise AssertionError("OAuth activation did not consume its approval")
+                    raise AssertionError(
+                        "OAuth activation did not consume its approval"
+                    )
                 replay = request(
                     client,
                     "POST",
@@ -528,11 +626,17 @@ def main() -> None:
                     actor="operator",
                     json_body={},
                 )
-                expect_status(approval_required, 428, f"{label} disconnect approval request")
+                expect_status(
+                    approval_required, 428, f"{label} disconnect approval request"
+                )
                 detail = approval_required.json().get("detail")
-                approval_id = detail.get("approvalId") if isinstance(detail, dict) else None
+                approval_id = (
+                    detail.get("approvalId") if isinstance(detail, dict) else None
+                )
                 if not isinstance(approval_id, str):
-                    raise AssertionError(f"{label} disconnect did not identify its approval")
+                    raise AssertionError(
+                        f"{label} disconnect did not identify its approval"
+                    )
                 approved = request(
                     client,
                     "POST",
@@ -554,19 +658,33 @@ def main() -> None:
                         f"{label} disconnect did not revoke the provider grant: {disconnected.json()}"
                     )
                 if db.get_credential(credential_id) is not None:
-                    raise AssertionError(f"disconnected {label} OAuth credential remained active")
+                    raise AssertionError(
+                        f"disconnected {label} OAuth credential remained active"
+                    )
 
-            with ASGIHTTPClient(app_module.app, base_url="https://serverware.test") as client:
+            with ASGIHTTPClient(
+                app_module.app, base_url="https://serverware.test"
+            ) as client:
                 unauthenticated = request(client, "GET", "/api/oauth/providers")
                 expect_status(unauthenticated, 401, "missing test actor")
-                unknown_actor = request(client, "GET", "/api/oauth/providers", actor="unknown")
+                unknown_actor = request(
+                    client, "GET", "/api/oauth/providers", actor="unknown"
+                )
                 expect_status(unknown_actor, 401, "unknown test actor")
 
-                providers_response = request(client, "GET", "/api/oauth/providers", actor="operator")
+                providers_response = request(
+                    client, "GET", "/api/oauth/providers", actor="operator"
+                )
                 expect_status(providers_response, 200, "OAuth provider listing")
-                providers = {item["id"]: item for item in providers_response.json()["providers"]}
-                if set(providers) != {"google", "x"} or not all(item["configured"] for item in providers.values()):
-                    raise AssertionError(f"OAuth providers were not configured: {providers}")
+                providers = {
+                    item["id"]: item for item in providers_response.json()["providers"]
+                }
+                if set(providers) != {"google", "x"} or not all(
+                    item["configured"] for item in providers.values()
+                ):
+                    raise AssertionError(
+                        f"OAuth providers were not configured: {providers}"
+                    )
                 for provider_id in ("google", "x"):
                     expected_urls = simulator.provider_urls(provider_id)
                     listed = providers[provider_id]
@@ -588,14 +706,23 @@ def main() -> None:
                     scopes=GOOGLE_SCOPES,
                 )
                 location = provider_redirect(simulator, started["authorizationUrl"])
-                callback_query = urllib.parse.parse_qs(urllib.parse.urlsplit(location).query)
+                callback_query = urllib.parse.parse_qs(
+                    urllib.parse.urlsplit(location).query
+                )
                 code = callback_query.get("code", [None])[0]
                 if not isinstance(code, str):
-                    raise AssertionError("Google authorization redirect omitted its code")
+                    raise AssertionError(
+                        "Google authorization redirect omitted its code"
+                    )
                 callback = callback_from_location(client, location)
                 expect_status(callback, 200, "Google OAuth callback")
-                if "OAuth account verified" not in callback.text or "operator@example.test" not in callback.text:
-                    raise AssertionError("Google callback did not stage the exact verified account")
+                if (
+                    "OAuth account verified" not in callback.text
+                    or "operator@example.test" not in callback.text
+                ):
+                    raise AssertionError(
+                        "Google callback did not stage the exact verified account"
+                    )
 
                 replay_status, replay_body = provider_form_request(
                     simulator,
@@ -609,8 +736,13 @@ def main() -> None:
                         "code_verifier": verifier,
                     },
                 )
-                if replay_status != 400 or json.loads(replay_body).get("error") != "invalid_grant":
-                    raise AssertionError("OAuth simulator accepted a replayed authorization code")
+                if (
+                    replay_status != 400
+                    or json.loads(replay_body).get("error") != "invalid_grant"
+                ):
+                    raise AssertionError(
+                        "OAuth simulator accepted a replayed authorization code"
+                    )
 
                 pending = pending_named(client, google_name)
                 review = pending.get("review") or {}
@@ -620,9 +752,192 @@ def main() -> None:
                     or review.get("provider_account") != "operator@example.test"
                     or review.get("scopes") != sorted(GOOGLE_SCOPES)
                 ):
-                    raise AssertionError(f"pending OAuth activation was not exact-account bound: {review}")
-                google_credential = approve_and_activate(client, pending, exercise_denials=True)
+                    raise AssertionError(
+                        f"pending OAuth activation was not exact-account bound: {review}"
+                    )
+
+                simulator.queue_authorization_outcome("google", "success")
+                (
+                    pending_collision_start,
+                    pending_collision_cookie_name,
+                    pending_collision_cookie_value,
+                    _,
+                ) = start_authorization(
+                    client,
+                    provider="google",
+                    name="Duplicate pending Google grant",
+                    scopes=GOOGLE_SCOPES,
+                )
+                pending_collision_location = provider_redirect(
+                    simulator, pending_collision_start["authorizationUrl"]
+                )
+                pending_collision = callback_from_location(
+                    client, pending_collision_location
+                )
+                expect_status(
+                    pending_collision, 409, "pending Google grant-family collision"
+                )
+                pending_collision_detail = pending_collision.json().get("detail") or {}
+                pending_existing = pending_collision_detail.get("existing") or {}
+                pending_disposition = (
+                    pending_collision_detail.get("newGrantDisposition") or {}
+                )
+                pending_quarantine = (
+                    pending_collision_detail.get("grantFamilyQuarantine") or {}
+                )
+                if not (
+                    pending_collision_detail.get("error")
+                    == "oauth_google_grant_collision"
+                    and pending_existing.get("type") == "pendingCredential"
+                    and pending_existing.get("id") == pending["id"]
+                    and pending_quarantine.get("credentialCount") == 0
+                    and pending_quarantine.get("pendingCredentialIds")
+                    == [pending["id"]]
+                    and pending_disposition.get("status") == "revoked"
+                    and pending_disposition.get("durableRetryRetained") is False
+                ):
+                    raise AssertionError(
+                        "pending Google collision did not identify and revoke the sibling: "
+                        f"{pending_collision_detail}"
+                    )
+                client.set_cookie(
+                    pending_collision_cookie_name,
+                    pending_collision_cookie_value,
+                )
+                pending_collision_replay = callback_from_location(
+                    client, pending_collision_location
+                )
+                expect_status(
+                    pending_collision_replay,
+                    400,
+                    "pending Google collision state replay",
+                )
+                if "unknown or expired" not in pending_collision_replay.text:
+                    raise AssertionError(
+                        "pending Google collision did not consume its OAuth state"
+                    )
+
+                if db.get_pending_oauth_credential(str(pending["id"])) is not None:
+                    raise AssertionError(
+                        "Google family collision left the original pending grant activatable"
+                    )
+                rejected_pending_activation = request(
+                    client,
+                    "POST",
+                    f"/api/oauth/pending/{pending['id']}/activate",
+                    actor="operator",
+                    json_body={},
+                )
+                expect_status(
+                    rejected_pending_activation,
+                    404,
+                    "quarantined pending Google activation",
+                )
+                observations = simulator.observations()
+                if observations["active"]["grants"] != 0 or not any(
+                    event.get("type") == "grant_family_revoked"
+                    and event.get("family_grant_count") == 2
+                    for event in observations["events"]
+                ):
+                    raise AssertionError(
+                        "Google revocation did not invalidate the complete provider grant family"
+                    )
+
+                simulator.queue_authorization_outcome("google", "success")
+                replacement_start, _, _, _ = start_authorization(
+                    client,
+                    provider="google",
+                    name=google_name,
+                    scopes=GOOGLE_SCOPES,
+                )
+                replacement_location = provider_redirect(
+                    simulator, replacement_start["authorizationUrl"]
+                )
+                replacement_callback = callback_from_location(
+                    client, replacement_location
+                )
+                expect_status(
+                    replacement_callback,
+                    200,
+                    "replacement Google grant after family quarantine",
+                )
+                pending = pending_named(client, google_name)
+                google_credential = approve_and_activate(
+                    client, pending, exercise_denials=True
+                )
                 google_credential_id = str(google_credential["id"])
+                google_credential_version = int(google_credential["credential_version"])
+
+                collision_route = db.create_route(
+                    {
+                        "name": "Google collision impact route",
+                        "match_host": "gmail.googleapis.com",
+                        "match_path_prefix": "/gmail/v1/users/me/",
+                        "credential_id": google_credential_id,
+                    }
+                )
+                simulator.queue_authorization_outcome("google", "success")
+                active_collision_start, _, _, _ = start_authorization(
+                    client,
+                    provider="google",
+                    name="Duplicate active Google grant",
+                    scopes=GOOGLE_SCOPES,
+                )
+                active_collision_location = provider_redirect(
+                    simulator, active_collision_start["authorizationUrl"]
+                )
+                active_collision = callback_from_location(
+                    client, active_collision_location
+                )
+                expect_status(
+                    active_collision, 409, "active Google grant-family collision"
+                )
+                active_collision_detail = active_collision.json().get("detail") or {}
+                active_existing = active_collision_detail.get("existing") or {}
+                assignment_impact = active_existing.get("assignmentImpact") or {}
+                active_quarantine = (
+                    active_collision_detail.get("grantFamilyQuarantine") or {}
+                )
+                if not (
+                    active_existing.get("type") == "credential"
+                    and active_existing.get("id") == google_credential_id
+                    and assignment_impact.get("routeCount") == 1
+                    and (assignment_impact.get("routes") or [{}])[0].get("id")
+                    == collision_route["id"]
+                    and active_quarantine.get("credentialCount") == 1
+                    and active_quarantine.get("pendingCredentialCount") == 0
+                    and (active_collision_detail.get("newGrantDisposition") or {}).get(
+                        "status"
+                    )
+                    == "revoked"
+                ):
+                    raise AssertionError(
+                        "active Google collision omitted assignment impact or cleanup: "
+                        f"{active_collision_detail}"
+                    )
+                if db.get_credential(google_credential_id) is not None:
+                    raise AssertionError(
+                        "active Google collision left the original credential usable"
+                    )
+                quarantined_google = db.get_credential(
+                    google_credential_id,
+                    include_secret=True,
+                    include_inactive=True,
+                )
+                if not (
+                    quarantined_google is not None
+                    and quarantined_google.get("lifecycle_status")
+                    == "revocation_pending"
+                    and int(quarantined_google.get("credential_version") or 0)
+                    == google_credential_version + 1
+                ):
+                    raise AssertionError(
+                        f"active Google collision did not rotate and quarantine its generation: {quarantined_google}"
+                    )
+                if not db.delete_route(str(collision_route["id"])):
+                    raise AssertionError(
+                        "Google collision impact route was not removed"
+                    )
 
                 google_reconnect = request(
                     client,
@@ -635,36 +950,45 @@ def main() -> None:
                         "credentialId": google_credential_id,
                     },
                 )
-                expect_status(google_reconnect, 409, "Google in-place reconnect rejection")
-                google_reconnect_detail = google_reconnect.json().get("detail", "")
-                if (
-                    "Disconnect this credential" not in google_reconnect_detail
-                    or "connect" not in google_reconnect_detail
-                ):
-                    raise AssertionError(
-                        f"Google reconnect did not require disconnect then connect: {google_reconnect_detail}"
-                    )
+                expect_status(
+                    google_reconnect,
+                    404,
+                    "quarantined Google reconnect rejection",
+                )
 
                 simulator.queue_authorization_outcome("google", "denial")
-                denied_start, denied_cookie_name, denied_cookie_value, _ = start_authorization(
+                (
+                    denied_start,
+                    denied_cookie_name,
+                    denied_cookie_value,
+                    _,
+                ) = start_authorization(
                     client,
                     provider="google",
                     name="Denied Google test",
                     scopes=GOOGLE_SCOPES,
                 )
-                denied_location = provider_redirect(simulator, denied_start["authorizationUrl"])
+                denied_location = provider_redirect(
+                    simulator, denied_start["authorizationUrl"]
+                )
                 denied = callback_from_location(client, denied_location)
                 expect_status(denied, 400, "provider denial callback")
                 if "OAuth denied" not in denied.text:
-                    raise AssertionError("provider denial was not represented as a denial")
-                state_after_denial = json.loads(oauth.OAUTH_STATE_PATH.read_text(encoding="utf-8"))
+                    raise AssertionError(
+                        "provider denial was not represented as a denial"
+                    )
+                state_after_denial = json.loads(
+                    oauth.OAUTH_STATE_PATH.read_text(encoding="utf-8")
+                )
                 if denied_start["state"] in state_after_denial.get("states", {}):
                     raise AssertionError("provider denial did not consume OAuth state")
                 client.set_cookie(denied_cookie_name, denied_cookie_value)
                 denied_replay = callback_from_location(client, denied_location)
                 expect_status(denied_replay, 400, "provider denial state replay")
                 if "unknown or expired" not in denied_replay.text:
-                    raise AssertionError("provider denial replay did not fail as consumed state")
+                    raise AssertionError(
+                        "provider denial replay did not fail as consumed state"
+                    )
                 disconnect_credential(client, google_credential_id, label="Google")
 
                 x_name = "X reconnect and refresh test"
@@ -678,8 +1002,13 @@ def main() -> None:
                 x_location = provider_redirect(simulator, x_start["authorizationUrl"])
                 x_callback = callback_from_location(client, x_location)
                 expect_status(x_callback, 200, "X OAuth callback")
-                if "OAuth account verified" not in x_callback.text or "@operator_x" not in x_callback.text:
-                    raise AssertionError("X callback did not stage the exact verified account")
+                if (
+                    "OAuth account verified" not in x_callback.text
+                    or "@operator_x" not in x_callback.text
+                ):
+                    raise AssertionError(
+                        "X callback did not stage the exact verified account"
+                    )
                 x_pending = pending_named(client, x_name)
                 x_review = x_pending.get("review") or {}
                 if (
@@ -688,11 +1017,17 @@ def main() -> None:
                     or x_review.get("provider_account") != "@operator_x"
                     or x_review.get("scopes") != sorted(X_SCOPES)
                 ):
-                    raise AssertionError(f"pending X activation was not exact-account bound: {x_review}")
-                x_credential = approve_and_activate(client, x_pending, exercise_denials=False)
+                    raise AssertionError(
+                        f"pending X activation was not exact-account bound: {x_review}"
+                    )
+                x_credential = approve_and_activate(
+                    client, x_pending, exercise_denials=False
+                )
                 x_credential_id = str(x_credential["id"])
                 x_initial_version = int(x_credential["credential_version"])
-                x_initial_stored = db.get_credential(x_credential_id, include_secret=True)
+                x_initial_stored = db.get_credential(
+                    x_credential_id, include_secret=True
+                )
                 if x_initial_stored is None:
                     raise AssertionError("initial X credential could not be reloaded")
                 x_initial_secret = json.loads(x_initial_stored["secret"])
@@ -735,7 +1070,9 @@ def main() -> None:
                     serialization.Encoding.Raw,
                     serialization.PublicFormat.Raw,
                 )
-                recipient_nonce = hashlib.sha256(b"oauth-http-flow-recipient-nonce").digest()
+                recipient_nonce = hashlib.sha256(
+                    b"oauth-http-flow-recipient-nonce"
+                ).digest()
                 lease = request(
                     client,
                     "POST",
@@ -746,7 +1083,8 @@ def main() -> None:
                         "routeId": route.id,
                         "credentialId": x_credential_id,
                         "recipientPublicKey": b64url(recipient_public),
-                        "recipientKeyId": "sha256:" + hashlib.sha256(recipient_public).hexdigest(),
+                        "recipientKeyId": "sha256:"
+                        + hashlib.sha256(recipient_public).hexdigest(),
                         "recipientNonce": b64url(recipient_nonce),
                         "policyHash": POLICY_HASH,
                         "dataPlaneBinaryDigest": DATA_PLANE_DIGEST,
@@ -756,22 +1094,41 @@ def main() -> None:
                 )
                 expect_status(lease, 200, "managed X OAuth credential lease")
                 x_refreshed = db.get_credential(x_credential_id)
-                if x_refreshed is None or int(x_refreshed["credential_version"]) <= x_initial_version:
-                    raise AssertionError("credential lease did not use the managed X OAuth refresh path")
+                if (
+                    x_refreshed is None
+                    or int(x_refreshed["credential_version"]) <= x_initial_version
+                ):
+                    raise AssertionError(
+                        "credential lease did not use the managed X OAuth refresh path"
+                    )
                 x_refreshed_version = int(x_refreshed["credential_version"])
-                if simulator.observations()["counts"]["x"].get("refresh_exchanges") != 1:
-                    raise AssertionError("X provider did not observe exactly one rotated refresh exchange")
+                if (
+                    simulator.observations()["counts"]["x"].get("refresh_exchanges")
+                    != 1
+                ):
+                    raise AssertionError(
+                        "X provider did not observe exactly one rotated refresh exchange"
+                    )
                 with db.connect() as connection:
                     refresh_retirement_rows = connection.execute(
                         "SELECT * FROM oauth_revocation_work WHERE provider_id = ? AND source = ?",
                         ("x", "refresh_superseded"),
                     ).fetchall()
-                if len(refresh_retirement_rows) != 1 or refresh_retirement_rows[0]["status"] != "pending":
-                    raise AssertionError("X refresh did not queue superseded token material")
+                if (
+                    len(refresh_retirement_rows) != 1
+                    or refresh_retirement_rows[0]["status"] != "pending"
+                ):
+                    raise AssertionError(
+                        "X refresh did not queue superseded token material"
+                    )
                 refresh_retirement = app_module._reconcile_oauth_revocations(limit=1)
                 if refresh_retirement != {"claimed": 1, "revoked": 1, "failed": 0}:
-                    raise AssertionError(f"superseded X refresh material did not reconcile: {refresh_retirement}")
-                x_refreshed_stored = db.get_credential(x_credential_id, include_secret=True)
+                    raise AssertionError(
+                        f"superseded X refresh material did not reconcile: {refresh_retirement}"
+                    )
+                x_refreshed_stored = db.get_credential(
+                    x_credential_id, include_secret=True
+                )
                 if x_refreshed_stored is None:
                     raise AssertionError("refreshed X credential could not be reloaded")
                 x_refreshed_secret = json.loads(x_refreshed_stored["secret"])
@@ -800,35 +1157,57 @@ def main() -> None:
                     name=x_name,
                     credential_id=x_credential_id,
                 )
-                x_reconnect_location = provider_redirect(simulator, x_reconnect_start["authorizationUrl"])
-                x_reconnect_callback = callback_from_location(client, x_reconnect_location)
+                x_reconnect_location = provider_redirect(
+                    simulator, x_reconnect_start["authorizationUrl"]
+                )
+                x_reconnect_callback = callback_from_location(
+                    client, x_reconnect_location
+                )
                 expect_status(x_reconnect_callback, 200, "X reconnect callback")
                 x_reconnect_pending = pending_named(client, x_name)
                 x_reconnect_review = x_reconnect_pending.get("review") or {}
                 if (
                     x_reconnect_review.get("reconnect_credential_id") != x_credential_id
-                    or x_reconnect_review.get("reconnect_credential_version") != x_refreshed_version
+                    or x_reconnect_review.get("reconnect_credential_version")
+                    != x_refreshed_version
                 ):
                     raise AssertionError(
                         f"X reconnect was not bound to the active generation: {x_reconnect_review}"
                     )
-                x_reconnected = approve_and_activate(client, x_reconnect_pending, exercise_denials=False)
+                x_reconnected = approve_and_activate(
+                    client, x_reconnect_pending, exercise_denials=False
+                )
                 if (
                     x_reconnected["id"] != x_credential_id
                     or int(x_reconnected["credential_version"]) <= x_refreshed_version
                 ):
-                    raise AssertionError("X reconnect did not preserve the credential ID and increase its version")
+                    raise AssertionError(
+                        "X reconnect did not preserve the credential ID and increase its version"
+                    )
 
                 with db.connect() as connection:
                     superseded_rows = connection.execute(
                         "SELECT * FROM oauth_revocation_work WHERE provider_id = ? AND source = ?",
                         ("x", "reconnect_superseded"),
                     ).fetchall()
-                if len(superseded_rows) != 1 or superseded_rows[0]["status"] != "pending":
-                    raise AssertionError("X reconnect did not queue superseded token material")
-                simulator.assert_no_token_values(json.dumps(dict(superseded_rows[0]), sort_keys=True))
-                superseded_reconciliation = app_module._reconcile_oauth_revocations(limit=1)
-                if superseded_reconciliation != {"claimed": 1, "revoked": 1, "failed": 0}:
+                if (
+                    len(superseded_rows) != 1
+                    or superseded_rows[0]["status"] != "pending"
+                ):
+                    raise AssertionError(
+                        "X reconnect did not queue superseded token material"
+                    )
+                simulator.assert_no_token_values(
+                    json.dumps(dict(superseded_rows[0]), sort_keys=True)
+                )
+                superseded_reconciliation = app_module._reconcile_oauth_revocations(
+                    limit=1
+                )
+                if superseded_reconciliation != {
+                    "claimed": 1,
+                    "revoked": 1,
+                    "failed": 0,
+                }:
                     raise AssertionError(
                         f"superseded X OAuth material did not reconcile: {superseded_reconciliation}"
                     )
@@ -838,21 +1217,35 @@ def main() -> None:
                         (superseded_rows[0]["id"],),
                     ).fetchone()
                 if superseded_remaining is not None:
-                    raise AssertionError("reconciled superseded X OAuth work remained queued")
+                    raise AssertionError(
+                        "reconciled superseded X OAuth work remained queued"
+                    )
                 x_after_superseded = simulator.observations()
                 if x_after_superseded["counts"]["x"].get("successful_revocations") != 4:
-                    raise AssertionError("superseded X access and refresh tokens were not both revoked")
+                    raise AssertionError(
+                        "superseded X access and refresh tokens were not both revoked"
+                    )
                 superseded_hints = {
                     event.get("token_type_hint")
                     for event in x_after_superseded["events"]
-                    if event.get("provider") == "x" and event.get("type") == "token_revoked"
+                    if event.get("provider") == "x"
+                    and event.get("type") == "token_revoked"
                 }
                 if superseded_hints != {"access_token", "refresh_token"}:
-                    raise AssertionError(f"X superseded revocation omitted a token type: {superseded_hints}")
+                    raise AssertionError(
+                        f"X superseded revocation omitted a token type: {superseded_hints}"
+                    )
 
                 disconnect_credential(client, x_credential_id, label="X")
-                if simulator.observations()["counts"]["x"].get("successful_revocations") != 6:
-                    raise AssertionError("X disconnect did not revoke distinct access and refresh tokens")
+                if (
+                    simulator.observations()["counts"]["x"].get(
+                        "successful_revocations"
+                    )
+                    != 6
+                ):
+                    raise AssertionError(
+                        "X disconnect did not revoke distinct access and refresh tokens"
+                    )
 
                 simulator.queue_authorization_outcome("google", "scope_expansion")
                 expanded_start, _, _, _ = start_authorization(
@@ -861,39 +1254,64 @@ def main() -> None:
                     name="Google expanded-scope rejection",
                     scopes=GOOGLE_SCOPES,
                 )
-                expanded_location = provider_redirect(simulator, expanded_start["authorizationUrl"])
+                expanded_location = provider_redirect(
+                    simulator, expanded_start["authorizationUrl"]
+                )
                 expanded_callback = callback_from_location(client, expanded_location)
-                expect_status(expanded_callback, 400, "expanded-scope callback rejection")
+                expect_status(
+                    expanded_callback, 400, "expanded-scope callback rejection"
+                )
                 if "expanded or omitted" not in expanded_callback.text:
-                    raise AssertionError("expanded provider scopes were not rejected fail closed")
+                    raise AssertionError(
+                        "expanded provider scopes were not rejected fail closed"
+                    )
                 with db.connect() as connection:
                     revocation_rows = connection.execute(
                         "SELECT * FROM oauth_revocation_work WHERE provider_id = ? AND source = ?",
                         ("google", "authorization_code_exchange"),
                     ).fetchall()
-                if len(revocation_rows) != 1 or revocation_rows[0]["status"] != "pending":
-                    raise AssertionError("scope-expansion failure did not retain durable revocation work")
-                simulator.assert_no_token_values(json.dumps(dict(revocation_rows[0]), sort_keys=True))
+                if (
+                    len(revocation_rows) != 1
+                    or revocation_rows[0]["status"] != "pending"
+                ):
+                    raise AssertionError(
+                        "scope-expansion failure did not retain durable revocation work"
+                    )
+                simulator.assert_no_token_values(
+                    json.dumps(dict(revocation_rows[0]), sort_keys=True)
+                )
                 reconciliation = app_module._reconcile_oauth_revocations(limit=1)
                 if reconciliation != {"claimed": 1, "revoked": 1, "failed": 0}:
-                    raise AssertionError(f"durable OAuth revocation did not reconcile: {reconciliation}")
+                    raise AssertionError(
+                        f"durable OAuth revocation did not reconcile: {reconciliation}"
+                    )
                 with db.connect() as connection:
                     remaining = connection.execute(
                         "SELECT 1 FROM oauth_revocation_work WHERE id = ?",
                         (revocation_rows[0]["id"],),
                     ).fetchone()
                 if remaining is not None:
-                    raise AssertionError("reconciled OAuth revocation work remained queued")
+                    raise AssertionError(
+                        "reconciled OAuth revocation work remained queued"
+                    )
 
                 bootstrap = request(client, "GET", "/api/bootstrap", actor="operator")
                 expect_status(bootstrap, 200, "credential listing")
-                listed_ids = {item.get("id") for item in bootstrap.json().get("credentials", [])}
+                listed_ids = {
+                    item.get("id") for item in bootstrap.json().get("credentials", [])
+                }
                 if listed_ids.intersection({google_credential_id, x_credential_id}):
-                    raise AssertionError("credential listing retained a disconnected OAuth credential")
-                pending_listing = request(client, "GET", "/api/oauth/pending", actor="operator")
+                    raise AssertionError(
+                        "credential listing retained a disconnected OAuth credential"
+                    )
+                pending_listing = request(
+                    client, "GET", "/api/oauth/pending", actor="operator"
+                )
                 expect_status(pending_listing, 200, "final pending OAuth listing")
                 if pending_listing.json().get("pendingCredentials"):
-                    raise AssertionError("terminal OAuth flow left a pending credential")
+                    raise AssertionError(
+                        "terminal OAuth flow left a pending credential"
+                    )
                 audit = request(client, "GET", "/api/audit?limit=500", actor="reviewer")
                 expect_status(audit, 200, "OAuth audit listing")
                 audit_events = audit.json()
@@ -908,9 +1326,13 @@ def main() -> None:
                 }
                 if not required_audit_types.issubset(audit_types):
                     missing_audits = sorted(required_audit_types - audit_types)
-                    raise AssertionError(f"OAuth HTTP flow omitted audit events: {missing_audits}")
+                    raise AssertionError(
+                        f"OAuth HTTP flow omitted audit events: {missing_audits}"
+                    )
 
-                observation_request = urllib.request.Request(simulator.observations_url, method="GET")
+                observation_request = urllib.request.Request(
+                    simulator.observations_url, method="GET"
+                )
                 observation_status, _, observation_body = https_request(
                     observation_request,
                     context=simulator.client_ssl_context,
@@ -921,20 +1343,36 @@ def main() -> None:
                 observations = json.loads(observation_body)
                 google_counts = observations["counts"]["google"]
                 x_counts = observations["counts"]["x"]
-                if google_counts.get("successful_revocations") != 2:
-                    raise AssertionError("Google disconnect and rejected exchange were not both revoked")
+                if google_counts.get("successful_revocations") != 5:
+                    raise AssertionError(
+                        "Google family quarantines, disconnect, and rejected exchange were not all revoked"
+                    )
                 if x_counts.get("successful_revocations") != 6:
-                    raise AssertionError("X refresh, reconnect, and disconnect token pairs were not fully revoked")
+                    raise AssertionError(
+                        "X refresh, reconnect, and disconnect token pairs were not fully revoked"
+                    )
                 if x_counts.get("authorization_code_exchanges") != 2:
-                    raise AssertionError("X initial and reconnect confidential-client exchanges were not exercised")
+                    raise AssertionError(
+                        "X initial and reconnect confidential-client exchanges were not exercised"
+                    )
                 if x_counts.get("refresh_exchanges") != 1:
-                    raise AssertionError("X managed credential refresh did not rotate exactly once")
+                    raise AssertionError(
+                        "X managed credential refresh did not rotate exactly once"
+                    )
 
-                combined_public = b"\n".join(response.content for response in asgi_responses)
+                combined_public = b"\n".join(
+                    response.content for response in asgi_responses
+                )
                 simulator.assert_no_token_values(combined_public)
-                simulator.assert_no_token_values(json.dumps(audit_events, sort_keys=True))
-                simulator.assert_no_token_values(json.dumps(bootstrap.json(), sort_keys=True))
-                simulator.assert_no_token_values(json.dumps(pending_listing.json(), sort_keys=True))
+                simulator.assert_no_token_values(
+                    json.dumps(audit_events, sort_keys=True)
+                )
+                simulator.assert_no_token_values(
+                    json.dumps(bootstrap.json(), sort_keys=True)
+                )
+                simulator.assert_no_token_values(
+                    json.dumps(pending_listing.json(), sort_keys=True)
+                )
 
             app_module.app.dependency_overrides.pop(require_admin, None)
             oauth._providers = original_providers

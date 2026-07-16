@@ -25,7 +25,9 @@ RUN if [ "$SERVERWARE_INSTALL_PROTOTYPE_MITMPROXY" = "1" ]; then \
     fi
 
 COPY serverware ./serverware
+COPY serverware_agent_trust ./serverware_agent_trust
 COPY scripts ./scripts
+COPY pyproject.toml ./pyproject.toml
 COPY schemas ./schemas
 COPY policies ./policies
 COPY security ./security

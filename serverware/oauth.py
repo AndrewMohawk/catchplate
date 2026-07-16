@@ -819,6 +819,8 @@ def exchange_authorization_code(
         }
         if provider.id == "x":
             metadata["x_app_id"] = provider.client_id
+        elif provider.id == "google":
+            metadata["oauth_client_id"] = provider.client_id
         result = {
             "name": str(
                 record.get("credential_name")

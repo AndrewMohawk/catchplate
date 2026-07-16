@@ -1,31 +1,72 @@
+FROM scratch AS rust-production-dependency-cache
+COPY data-plane/decision-gate-rs/Cargo.toml /dependency-cache/data-plane/decision-gate-rs/Cargo.toml
+COPY data-plane/decision-gate-rs/Cargo.lock /dependency-cache/data-plane/decision-gate-rs/Cargo.lock
+COPY production-dependencies/rust-linux-amd64.sha256 /dependency-cache/rust-linux-amd64.sha256
+COPY production-dependencies/cache/cargo-vendor.tar.gz /dependency-cache/cache/cargo-vendor.tar.gz
+COPY production-dependencies/cache/musl-1.2.5-r12.apk /dependency-cache/cache/musl-1.2.5-r12.apk
+COPY production-dependencies/cache/musl-dev-1.2.5-r12.apk /dependency-cache/cache/musl-dev-1.2.5-r12.apk
+
 FROM rust:1.88-slim-bookworm@sha256:38bc5a86d998772d4aec2348656ed21438d20fcdce2795b56ca434cf21430d89 AS build
 
 ARG SOURCE_DATE_EPOCH="0"
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    CARGO_NET_OFFLINE=true \
     RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
 
 WORKDIR /src
-COPY data-plane/decision-gate-rs/Cargo.toml ./Cargo.toml
-COPY data-plane/decision-gate-rs/Cargo.lock ./Cargo.lock
+COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache
+RUN --network=none set -eu; \
+    cd /dependency-cache; \
+    sha256sum -c rust-linux-amd64.sha256; \
+    tar -xzf cache/cargo-vendor.tar.gz -C /src; \
+    mkdir -p /src/.cargo; \
+    printf '%s\n' \
+        '[source.crates-io]' \
+        'replace-with = "vendored-sources"' \
+        '' \
+        '[source.vendored-sources]' \
+        'directory = "/src/vendor"' \
+        > /src/.cargo/config.toml; \
+    cp data-plane/decision-gate-rs/Cargo.toml /src/Cargo.toml; \
+    cp data-plane/decision-gate-rs/Cargo.lock /src/Cargo.lock
 COPY data-plane/decision-gate-rs/src ./src
 COPY data-plane/decision-gate-rs/trust ./trust
 COPY schemas /schemas
-RUN cargo build --release --locked
+RUN --network=none cargo build --release --frozen
 
 FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build
 
 ARG SOURCE_DATE_EPOCH="0"
 ENV SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH} \
+    CARGO_NET_OFFLINE=true \
     RUSTFLAGS="-C link-arg=-Wl,--build-id=none"
 
 WORKDIR /src
-RUN apk add --no-cache musl=1.2.5-r12 musl-dev=1.2.5-r12
-COPY data-plane/decision-gate-rs/Cargo.toml ./Cargo.toml
-COPY data-plane/decision-gate-rs/Cargo.lock ./Cargo.lock
+COPY --from=rust-production-dependency-cache /dependency-cache /dependency-cache
+RUN --network=none set -eu; \
+    cd /dependency-cache; \
+    sha256sum -c rust-linux-amd64.sha256; \
+    apk \
+        --no-network \
+        --repositories-file /dev/null \
+        add \
+        cache/musl-1.2.5-r12.apk \
+        cache/musl-dev-1.2.5-r12.apk; \
+    tar -xzf cache/cargo-vendor.tar.gz -C /src; \
+    mkdir -p /src/.cargo; \
+    printf '%s\n' \
+        '[source.crates-io]' \
+        'replace-with = "vendored-sources"' \
+        '' \
+        '[source.vendored-sources]' \
+        'directory = "/src/vendor"' \
+        > /src/.cargo/config.toml; \
+    cp data-plane/decision-gate-rs/Cargo.toml /src/Cargo.toml; \
+    cp data-plane/decision-gate-rs/Cargo.lock /src/Cargo.lock
 COPY data-plane/decision-gate-rs/src ./src
 COPY data-plane/decision-gate-rs/trust ./trust
 COPY schemas /schemas
-RUN cargo build --release --locked --bin serverware-production-launcher \
+RUN --network=none cargo build --release --frozen --bin serverware-production-launcher \
     && test "$(readelf -l /src/target/release/serverware-production-launcher | grep -c INTERP)" -eq 0 \
     && test "$(readelf -d /src/target/release/serverware-production-launcher | grep -c NEEDED)" -eq 0
 

@@ -29,7 +29,8 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, Cursor, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::RawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -44,8 +45,18 @@ use url::{form_urlencoded, Url};
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::{Zeroize, Zeroizing};
 
-const MAX_CREDENTIAL_LEASE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
+#[cfg(target_os = "linux")]
+use std::ffi::CString;
+#[cfg(target_os = "linux")]
+use std::io::{Seek, SeekFrom};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd};
+
+const MAX_CREDENTIAL_LEASE_RESPONSE_BYTES: u64 = 256 * 1024;
 const MAX_CONTROL_PLANE_ATTESTATION_BYTES: u64 = 64 * 1024;
+const MAX_CONTROL_PLANE_GRANT_RESPONSE_BYTES: u64 = 32 * 1024;
+const MAX_CONTROL_PLANE_RATE_LIMIT_RESPONSE_BYTES: u64 = 32 * 1024;
+const MAX_CONTROL_PLANE_RELEASE_AUTHORIZATION_RESPONSE_BYTES: u64 = 32 * 1024;
 const MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
 const MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES: u64 = 32 * 1024;
 const MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES: usize = 1536 * 1024;
@@ -53,7 +64,18 @@ const MAX_CONTROL_PLANE_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
 const MAX_CONTROL_PLANE_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION: &str =
     "serverware.controlPlaneAuthorizationReceipt/v1";
+const POLICY_TRUST_ROOT_ATTESTATION_PATH: &str = "/attestation";
+const CREDENTIAL_LEASE_PATH: &str = "/api/data-plane/credential-leases";
+const AUDIT_INGEST_PATH: &str = "/api/data-plane/audit";
+const GRANT_CONSUME_PATH: &str = "/api/data-plane/grants/consume";
+const RATE_LIMIT_CONSUME_PATH: &str = "/api/data-plane/rate-limits/consume";
+const RELEASE_AUTHORIZATION_BASE_PATH: &str = "/api/data-plane/release-authorizations";
 const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
+const ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV: &str =
+    "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST";
+const CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV: &str =
+    "SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND";
+const MAX_CONTROL_PLANE_ATTESTATION_VERIFIER_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RELEASE_AUTHORIZATION_CANONICAL_REQUEST_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_HEADER_BYTES: usize = 64 * 1024;
 const MAX_REQUEST_HEADER_COUNT: usize = 128;
@@ -70,6 +92,11 @@ const CREDENTIAL_LEASE_SINGLEFLIGHT_TIMEOUT: Duration = Duration::from_secs(15);
 const CREDENTIAL_LEASE_RENEW_BEFORE: Duration = Duration::from_secs(4);
 const CREDENTIAL_LEASE_HOT_WINDOW: Duration = Duration::from_secs(30);
 const CREDENTIAL_LEASE_RECIPIENT_ATTESTATION_TIMEOUT: Duration = Duration::from_secs(2);
+const MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW: Duration = Duration::from_millis(250);
+const GMAIL_METADATA_FETCH_MAX_MESSAGES: u64 = 32;
+const GMAIL_METADATA_FETCH_MAX_PER_REQUEST_TIMEOUT_MS: u64 = 3_000;
+const GMAIL_METADATA_FETCH_MAX_TOTAL_TIMEOUT_MS: u64 = 10_000;
+const GMAIL_METADATA_FETCH_MAX_BODY_BYTES: u64 = 8 * 1024;
 const SAFE_RESPONSE_HEADERS: [&str; 6] = [
     "cache-control",
     "content-language",
@@ -345,6 +372,8 @@ enum GenericOperationSource {
     Form,
     Json,
     Path,
+    RequestValueString,
+    RequestValueInteger,
 }
 
 #[derive(Deserialize)]
@@ -537,6 +566,7 @@ struct GateState {
     grant_consume_token: Option<String>,
     rate_limit_consume_url: Option<String>,
     rate_limit_consume_token: Option<String>,
+    is_production: bool,
     atomic_release_authorization_enabled: bool,
     release_authorization_base_url: Option<String>,
     release_authorization_token: Option<String>,
@@ -728,6 +758,20 @@ struct GmailProofKey {
     message_id: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct GmailMetadataFetchConfig {
+    max_messages: u64,
+    per_request_timeout: Duration,
+    total_timeout: Duration,
+    max_body_bytes: u64,
+}
+
+struct GmailMetadataFanoutExecution<'a> {
+    parent_credential_binding: Option<&'a CredentialLeaseReleaseBinding>,
+    injection_plan: &'a Value,
+    dispatch_expires_at_epoch_ms: Option<u64>,
+}
+
 struct CredentialLeaseFlight {
     result: Mutex<Option<Result<(), String>>>,
     completed: Condvar,
@@ -779,6 +823,7 @@ impl Drop for CredentialLeaseRenewalPendingGuard {
 struct CredentialLeaseReleaseBinding {
     scope: CredentialLeaseScope,
     version: u64,
+    secret_fingerprint: String,
     expires_at_monotonic: Instant,
 }
 
@@ -993,13 +1038,27 @@ impl<T: ConfigureIoTimeout + Write> Write for DeadlineIo<T> {
     }
 }
 
+#[derive(Clone, Debug)]
+struct PinnedVerifierCommand {
+    executable: PathBuf,
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    arguments: Vec<String>,
+    expected_sha256: String,
+}
+
+#[derive(Clone, Debug)]
+enum ControlPlaneAttestationVerifier {
+    Development(String),
+    Pinned(PinnedVerifierCommand),
+}
+
 #[derive(Clone)]
 enum PolicyTrustRootSource {
     File(String),
     AttestedControlPlane {
         url: String,
         expected_quote_key_id: Option<String>,
-        verify_command: Option<String>,
+        verifier: Option<ControlPlaneAttestationVerifier>,
     },
 }
 
@@ -2264,7 +2323,7 @@ fn verify_dev_quote_signature(
 fn fetch_attested_policy_trust_root(
     url: &str,
     expected_quote_key_id: &Option<String>,
-    verify_command: &Option<String>,
+    verifier: &Option<ControlPlaneAttestationVerifier>,
 ) -> Result<PolicyTrustRoot, String> {
     let nonce = format!(
         "decision-gate-policy-trust-{}-{}",
@@ -2279,16 +2338,13 @@ fn fetch_attested_policy_trust_root(
             Ok(response) => match response.error_for_status() {
                 Ok(response) => {
                     let peer_spki_sha256 = response_peer_spki_sha256(&response)?;
-                    let mut body = Vec::new();
-                    match response
-                        .take(MAX_CONTROL_PLANE_ATTESTATION_BYTES + 1)
-                        .read_to_end(&mut body)
-                    {
-                        Ok(_) if body.len() as u64 <= MAX_CONTROL_PLANE_ATTESTATION_BYTES => {
-                            break (body, peer_spki_sha256)
-                        }
-                        Ok(_) => "control-plane attestation exceeds 64 KiB".to_string(),
-                        Err(err) => format!("read control-plane attestation: {err}"),
+                    match read_bounded_control_plane_response_body(
+                        response,
+                        MAX_CONTROL_PLANE_ATTESTATION_BYTES,
+                        "control-plane attestation",
+                    ) {
+                        Ok(body) => break (body, peer_spki_sha256),
+                        Err(err) => err,
                     }
                 }
                 Err(err) => format!("control-plane attestation HTTP error: {err}"),
@@ -2310,12 +2366,18 @@ fn fetch_attested_policy_trust_root(
     let quote = attestation
         .get("quote")
         .ok_or("control-plane attestation missing quote")?;
-    let claims = if let Some(command) = verify_command.as_deref() {
-        let verified = run_bounded_json_command(
-            command,
-            &json!({"attestation":attestation}),
-            "control-plane attestation verifier",
-        )?;
+    let claims = if let Some(verifier) = verifier {
+        let request = json!({"attestation":attestation});
+        let verified = match verifier {
+            ControlPlaneAttestationVerifier::Development(command) => {
+                run_bounded_json_command(command, &request, "control-plane attestation verifier")?
+            }
+            ControlPlaneAttestationVerifier::Pinned(command) => run_pinned_bounded_json_command(
+                command,
+                &request,
+                "control-plane attestation verifier",
+            )?,
+        };
         if verified.get("ok").and_then(Value::as_bool) != Some(true) {
             return Err("control-plane attestation verifier rejected quote".to_string());
         }
@@ -2493,8 +2555,8 @@ fn load_policy_trust_root(source: &PolicyTrustRootSource) -> Result<PolicyTrustR
         PolicyTrustRootSource::AttestedControlPlane {
             url,
             expected_quote_key_id,
-            verify_command,
-        } => fetch_attested_policy_trust_root(url, expected_quote_key_id, verify_command),
+            verifier,
+        } => fetch_attested_policy_trust_root(url, expected_quote_key_id, verifier),
     }
 }
 
@@ -2776,6 +2838,310 @@ fn generic_operation_sources<'a>(
         }
     }
     Ok(sources)
+}
+
+fn request_value_capture_sources(constraints: &[Value]) -> HashMap<String, GenericOperationSource> {
+    let mut captures = HashMap::new();
+    for rule in constraints
+        .iter()
+        .filter(|constraint| constraint.get("type").and_then(Value::as_str) == Some("requestValue"))
+        .flat_map(|constraint| {
+            constraint
+                .get("rules")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+    {
+        let Some(capture) = rule.get("capture").and_then(Value::as_str) else {
+            continue;
+        };
+        let predicate = rule.get("predicate").and_then(Value::as_object);
+        let kind = if predicate
+            .and_then(|value| value.get("kind"))
+            .and_then(Value::as_str)
+            == Some("numeric")
+            && predicate
+                .and_then(|value| value.get("integer"))
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
+            GenericOperationSource::RequestValueInteger
+        } else {
+            GenericOperationSource::RequestValueString
+        };
+        captures.insert(capture.to_string(), kind);
+    }
+    captures
+}
+
+fn validate_request_value_constraints(
+    route_id: &str,
+    route: &Map<String, Value>,
+    constraints: &[Value],
+    request: &Map<String, Value>,
+    operation_sources: &HashMap<&str, GenericOperationSource>,
+) -> Result<(), String> {
+    let request_value_constraints = constraints
+        .iter()
+        .filter(|constraint| constraint.get("type").and_then(Value::as_str) == Some("requestValue"))
+        .collect::<Vec<_>>();
+    if request_value_constraints.is_empty() {
+        return Ok(());
+    }
+    let allowed_query = request
+        .get("allowedQueryKeys")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<HashSet<_>>();
+    let allowed_headers = request
+        .get("allowedHeaders")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_ascii_lowercase)
+        .collect::<HashSet<_>>();
+    let paths = route
+        .get("match")
+        .and_then(Value::as_object)
+        .and_then(|matcher| matcher.get("paths"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("route {route_id} paths missing"))?;
+    let mut path_placeholders = Vec::with_capacity(paths.len());
+    for raw_path in paths {
+        let path = raw_path
+            .as_str()
+            .ok_or_else(|| format!("route {route_id} paths must contain strings"))?;
+        let template =
+            compile_template(path).map_err(|error| format!("route {route_id} {error}"))?;
+        let mut placeholders = HashSet::new();
+        for segment in template.segments {
+            if let PathSegment::Variable(name) = segment {
+                if !placeholders.insert(name.clone()) {
+                    return Err(format!(
+                        "route {route_id} path {path} repeats placeholder {name}"
+                    ));
+                }
+            }
+        }
+        path_placeholders.push(placeholders);
+    }
+
+    let mut seen_sources = HashSet::new();
+    let mut captures = operation_sources
+        .keys()
+        .map(|source| (*source).to_string())
+        .collect::<HashSet<_>>();
+    captures.insert("operation".to_string());
+    captures.insert(PROVIDER_ACCOUNT_OPERATION_FIELD.to_string());
+    for constraint in request_value_constraints {
+        let constraint_id = constraint
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("unnamed");
+        let rules = constraint
+            .get("rules")
+            .and_then(Value::as_array)
+            .filter(|rules| (1..=16).contains(&rules.len()))
+            .ok_or_else(|| {
+                format!("route {route_id} requestValue {constraint_id} must define 1-16 rules")
+            })?;
+        for (rule_index, raw_rule) in rules.iter().enumerate() {
+            let label = format!("route {route_id} requestValue {constraint_id} rule {rule_index}");
+            let rule = raw_rule
+                .as_object()
+                .ok_or_else(|| format!("{label} must be an object"))?;
+            if let Some(field) = rule.keys().find(|field| {
+                !matches!(field.as_str(), "source" | "name" | "predicate" | "capture")
+            }) {
+                return Err(format!("{label} has unsupported field {field}"));
+            }
+            let source = rule
+                .get("source")
+                .and_then(Value::as_str)
+                .filter(|source| matches!(*source, "pathParam" | "query" | "header"))
+                .ok_or_else(|| format!("{label} has unsupported source"))?;
+            let name = rule
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.is_empty() && name.len() <= 256)
+                .ok_or_else(|| format!("{label} name must contain 1-256 bytes"))?;
+            if !seen_sources.insert((source.to_string(), name.to_string())) {
+                return Err(format!("{label} duplicates route source {source}:{name}"));
+            }
+            match source {
+                "pathParam" => {
+                    let valid_name = name
+                        .bytes()
+                        .next()
+                        .is_some_and(|byte| byte.is_ascii_alphabetic() || byte == b'_')
+                        && name
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+                    if !valid_name
+                        || path_placeholders
+                            .iter()
+                            .any(|placeholders| !placeholders.contains(name))
+                    {
+                        return Err(format!(
+                            "{label} pathParam {name} must be a placeholder in every matched path"
+                        ));
+                    }
+                }
+                "query" if !allowed_query.contains(name) => {
+                    return Err(format!(
+                        "{label} query {name} is not admitted by generic.rest allowedQueryKeys"
+                    ));
+                }
+                "header"
+                    if name != name.to_ascii_lowercase()
+                        || HeaderName::from_bytes(name.as_bytes()).is_err()
+                        || !allowed_headers.contains(name) =>
+                {
+                    return Err(format!(
+                        "{label} header {name} is not a lower-case admitted generic.rest header"
+                    ));
+                }
+                _ => {}
+            }
+
+            let predicate = rule
+                .get("predicate")
+                .and_then(Value::as_object)
+                .ok_or_else(|| format!("{label} predicate must be an object"))?;
+            let kind = predicate
+                .get("kind")
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("{label} predicate kind missing"))?;
+            let allowed_fields: &[&str] = match kind {
+                "equals" => &["kind", "value"],
+                "enum" => &["kind", "values"],
+                "pattern" => &["kind", "pattern", "maxLength"],
+                "stringLength" => &["kind", "minLength", "maxLength"],
+                "numeric" => &["kind", "min", "max", "integer"],
+                _ => return Err(format!("{label} has unsupported predicate kind {kind}")),
+            };
+            if let Some(field) = predicate
+                .keys()
+                .find(|field| !allowed_fields.contains(&field.as_str()))
+            {
+                return Err(format!("{label} predicate has unsupported field {field}"));
+            }
+            match kind {
+                "equals" => {
+                    if predicate
+                        .get("value")
+                        .and_then(Value::as_str)
+                        .is_none_or(|value| value.len() > 4096)
+                    {
+                        return Err(format!(
+                            "{label} equals value must be a string of at most 4096 bytes"
+                        ));
+                    }
+                }
+                "enum" => {
+                    let values = predicate
+                        .get("values")
+                        .and_then(Value::as_array)
+                        .filter(|values| (1..=32).contains(&values.len()))
+                        .ok_or_else(|| format!("{label} enum must contain 1-32 values"))?;
+                    let mut unique = HashSet::new();
+                    if values.iter().any(|value| {
+                        value
+                            .as_str()
+                            .is_none_or(|value| value.len() > 4096 || !unique.insert(value))
+                    }) {
+                        return Err(format!(
+                            "{label} enum must contain unique strings of at most 4096 bytes"
+                        ));
+                    }
+                }
+                "pattern" => {
+                    let pattern = predicate.get("pattern").and_then(Value::as_str);
+                    let maximum = predicate.get("maxLength").and_then(Value::as_u64);
+                    if pattern.is_none_or(|value| simple_bounded_pattern(value).is_none())
+                        || maximum.is_none_or(|value| !(1..=4096).contains(&value))
+                    {
+                        return Err(format!(
+                            "{label} pattern must use the anchored bounded runtime grammar with maxLength 1-4096"
+                        ));
+                    }
+                }
+                "stringLength" => {
+                    let minimum = predicate.get("minLength").map(Value::as_u64);
+                    let maximum = predicate.get("maxLength").map(Value::as_u64);
+                    if minimum == Some(None)
+                        || maximum == Some(None)
+                        || minimum.is_none() && maximum.is_none()
+                        || minimum.flatten().is_some_and(|value| value > 4096)
+                        || maximum.flatten().is_some_and(|value| value > 4096)
+                        || minimum
+                            .flatten()
+                            .zip(maximum.flatten())
+                            .is_some_and(|(min, max)| min > max)
+                    {
+                        return Err(format!("{label} has invalid stringLength bounds"));
+                    }
+                }
+                "numeric" => {
+                    let integer = predicate.get("integer").and_then(Value::as_bool);
+                    if predicate
+                        .get("integer")
+                        .is_some_and(|value| !value.is_boolean())
+                    {
+                        return Err(format!("{label} has invalid numeric bounds"));
+                    }
+                    if integer == Some(true) {
+                        let minimum = predicate.get("min").map(Value::as_i64);
+                        let maximum = predicate.get("max").map(Value::as_i64);
+                        if minimum == Some(None)
+                            || maximum == Some(None)
+                            || minimum.is_none() && maximum.is_none()
+                            || minimum
+                                .flatten()
+                                .zip(maximum.flatten())
+                                .is_some_and(|(min, max)| min > max)
+                        {
+                            return Err(format!(
+                                "{label} has invalid signed 64-bit integer bounds"
+                            ));
+                        }
+                    } else {
+                        let minimum = predicate.get("min").map(Value::as_f64);
+                        let maximum = predicate.get("max").map(Value::as_f64);
+                        if minimum == Some(None)
+                            || maximum == Some(None)
+                            || minimum.is_none() && maximum.is_none()
+                            || minimum.flatten().is_some_and(|value| !value.is_finite())
+                            || maximum.flatten().is_some_and(|value| !value.is_finite())
+                            || minimum
+                                .flatten()
+                                .zip(maximum.flatten())
+                                .is_some_and(|(min, max)| min > max)
+                        {
+                            return Err(format!("{label} has invalid numeric bounds"));
+                        }
+                    }
+                }
+                _ => unreachable!(),
+            }
+            if let Some(capture) = rule.get("capture") {
+                let capture = capture
+                    .as_str()
+                    .filter(|capture| valid_operation_field(capture) && *capture != "operation")
+                    .ok_or_else(|| format!("{label} capture is invalid or reserved"))?;
+                if !captures.insert(capture.to_string()) {
+                    return Err(format!(
+                        "{label} capture {capture} collides with another operation field"
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_response_binding_constraint(
@@ -3464,6 +3830,113 @@ fn valid_jit_approver_user(value: &str) -> bool {
         })
 }
 
+fn gmail_metadata_fetch_config(
+    route_id: &str,
+    response: &Map<String, Value>,
+    max_results: u64,
+) -> Result<Option<GmailMetadataFetchConfig>, String> {
+    let enabled = response
+        .get("validateListByMetadataFetch")
+        .and_then(Value::as_bool)
+        .ok_or_else(|| {
+            format!(
+                "route {route_id} Gmail policy must explicitly configure list metadata age proof"
+            )
+        })?;
+    let raw = response.get("metadataFetch");
+    if !enabled && raw.is_none() {
+        return Ok(None);
+    }
+    let config = raw.and_then(Value::as_object).ok_or_else(|| {
+        format!("route {route_id} Gmail validateListByMetadataFetch=true requires metadataFetch")
+    })?;
+    let allowed = [
+        "maxMessages",
+        "perRequestTimeoutMs",
+        "totalTimeoutMs",
+        "maxBodyBytes",
+    ];
+    if let Some(field) = config
+        .keys()
+        .find(|field| !allowed.contains(&field.as_str()))
+    {
+        return Err(format!(
+            "route {route_id} Gmail metadataFetch has unsupported field {field}"
+        ));
+    }
+    if config.len() != allowed.len() {
+        return Err(format!(
+            "route {route_id} Gmail metadataFetch requires maxMessages, perRequestTimeoutMs, totalTimeoutMs, and maxBodyBytes"
+        ));
+    }
+    let bounded = |field: &str, maximum: u64| -> Result<u64, String> {
+        config
+            .get(field)
+            .and_then(Value::as_u64)
+            .filter(|value| (1..=maximum).contains(value))
+            .ok_or_else(|| {
+                format!(
+                    "route {route_id} Gmail metadataFetch {field} must be an integer between 1 and {maximum}"
+                )
+            })
+    };
+    let max_messages = bounded("maxMessages", GMAIL_METADATA_FETCH_MAX_MESSAGES)?;
+    if max_messages > max_results {
+        return Err(format!(
+            "route {route_id} Gmail metadataFetch maxMessages cannot exceed maxResults"
+        ));
+    }
+    let per_request_timeout_ms = bounded(
+        "perRequestTimeoutMs",
+        GMAIL_METADATA_FETCH_MAX_PER_REQUEST_TIMEOUT_MS,
+    )?;
+    let total_timeout_ms = bounded("totalTimeoutMs", GMAIL_METADATA_FETCH_MAX_TOTAL_TIMEOUT_MS)?;
+    if per_request_timeout_ms > total_timeout_ms {
+        return Err(format!(
+            "route {route_id} Gmail metadataFetch perRequestTimeoutMs cannot exceed totalTimeoutMs"
+        ));
+    }
+    let max_body_bytes = bounded("maxBodyBytes", GMAIL_METADATA_FETCH_MAX_BODY_BYTES)?;
+    let releases_id = response
+        .get("allowedFields")
+        .and_then(Value::as_array)
+        .is_some_and(|fields| fields.iter().any(|field| field.as_str() == Some("id")));
+    if enabled && !releases_id {
+        return Err(format!(
+            "route {route_id} Gmail metadataFetch requires id in response allowedFields"
+        ));
+    }
+    if !enabled {
+        return Ok(None);
+    }
+    Ok(Some(GmailMetadataFetchConfig {
+        max_messages,
+        per_request_timeout: Duration::from_millis(per_request_timeout_ms),
+        total_timeout: Duration::from_millis(total_timeout_ms),
+        max_body_bytes,
+    }))
+}
+
+fn gmail_metadata_fetch_for_route(route: &Route) -> Option<GmailMetadataFetchConfig> {
+    if route.adapter_type != "gmail.v1" {
+        return None;
+    }
+    let response = route.adapter_config.get("response")?.as_object()?;
+    let max_results = route.adapter_config.get("maxResults")?.as_u64()?;
+    gmail_metadata_fetch_config(&route.id, response, max_results)
+        .ok()
+        .flatten()
+}
+
+fn gmail_metadata_fetch_for_list_route_match(
+    route_match: &RouteMatch<'_>,
+) -> Option<GmailMetadataFetchConfig> {
+    if route_match.params.contains_key("message_id") {
+        return None;
+    }
+    gmail_metadata_fetch_for_route(route_match.route)
+}
+
 fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
     const DEFAULTS: [(&str, &str); 5] = [
         ("action", "deny"),
@@ -3851,14 +4324,11 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     "route {route_id} Gmail policy must validate response internalDate"
                 ));
             }
-            if !response
-                .get("validateListByMetadataFetch")
-                .is_some_and(Value::is_boolean)
-            {
-                return Err(format!(
-                    "route {route_id} Gmail policy must explicitly configure list metadata age proof"
-                ));
-            }
+            let max_results = adapter_config
+                .get("maxResults")
+                .and_then(Value::as_u64)
+                .expect("positive Gmail maxResults was validated above");
+            gmail_metadata_fetch_config(route_id, response, max_results)?;
             if response.get("onViolation").and_then(Value::as_str) != Some("block") {
                 return Err(format!(
                     "route {route_id} Gmail response violations must block"
@@ -4225,6 +4695,18 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     }
                 }
             }
+            let operation_sources = match request.get("operation").and_then(Value::as_object) {
+                Some(operation) => generic_operation_sources(operation, body_mode)
+                    .map_err(|error| format!("route {route_id} generic.rest {error}"))?,
+                None => HashMap::new(),
+            };
+            validate_request_value_constraints(
+                route_id,
+                route,
+                constraints,
+                request,
+                &operation_sources,
+            )?;
         }
 
         if adapter_type == "x.v2" {
@@ -4390,7 +4872,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     })?;
             let supported_phase = match constraint_type {
                 "rateLimit" | "operationPolicy" | "queryDateWindow" | "queryNumericBounds"
-                | "requestTimeWindow" | "jsonBody" | "formBody" => "request",
+                | "requestTimeWindow" | "requestValue" | "jsonBody" | "formBody" => "request",
                 "responseDateWindow" | "responseJson" | "responseBinding" => "response",
                 _ => {
                     return Err(format!(
@@ -4430,6 +4912,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     "weekdays",
                     "dailyWindows",
                 ],
+                "requestValue" => &["rules"],
                 "jsonBody" | "formBody" => &[
                     "contentTypes",
                     "allowedFields",
@@ -4696,6 +5179,11 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     }
                 }
             }
+            if constraint_type == "requestValue" && adapter_type != "generic.rest" {
+                return Err(format!(
+                    "route {route_id} requestValue {constraint_id} is supported only by generic.rest"
+                ));
+            }
             if constraint_type == "responseDateWindow" {
                 require_string_array("dateFields")?;
                 let formats = require_string_array("formats")?;
@@ -4904,8 +5392,12 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                     .get("bodyMode")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let available = generic_operation_sources(operation, body_mode)
-                    .map_err(|error| format!("route {route_id} generic.rest {error}"))?;
+                let mut available = generic_operation_sources(operation, body_mode)
+                    .map_err(|error| format!("route {route_id} generic.rest {error}"))?
+                    .into_iter()
+                    .map(|(field, source)| (field.to_string(), source))
+                    .collect::<HashMap<_, _>>();
+                available.extend(request_value_capture_sources(constraints));
                 for binding in constraint
                     .get("bindings")
                     .and_then(Value::as_array)
@@ -4942,11 +5434,31 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                         }
                         continue;
                     }
+                    if matches!(
+                        *source_kind,
+                        GenericOperationSource::RequestValueString
+                            | GenericOperationSource::RequestValueInteger
+                    ) {
+                        let expected =
+                            if *source_kind == GenericOperationSource::RequestValueInteger {
+                                "canonicalInteger"
+                            } else {
+                                "exactString"
+                            };
+                        if binding.get("comparison").and_then(Value::as_str) != Some(expected) {
+                            return Err(format!(
+                                "route {route_id} responseBinding {constraint_id} requestValue source {source} supports only {expected}"
+                            ));
+                        }
+                        continue;
+                    }
                     let body_constraint_type = match source_kind {
                         GenericOperationSource::BodySha256 => unreachable!(),
                         GenericOperationSource::Form => "formBody",
                         GenericOperationSource::Json => "jsonBody",
                         GenericOperationSource::Path => unreachable!(),
+                        GenericOperationSource::RequestValueString
+                        | GenericOperationSource::RequestValueInteger => unreachable!(),
                     };
                     let body_constraints = constraints
                         .iter()
@@ -6165,6 +6677,25 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
         &state.binary_digest,
     ) {
         Ok(mut snapshot) => {
+            if let Err(err) = validate_production_release_authorization_policy(
+                &snapshot,
+                state.is_production,
+                state.atomic_release_authorization_enabled,
+            ) {
+                state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
+                enqueue_audit(
+                    state,
+                    "data_plane.policy.reload_failed",
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "error":err.clone(),
+                        "candidate_policy_id":snapshot.policy_id,
+                        "candidate_sequence":snapshot.policy_sequence,
+                        "candidate_rollback_epoch":snapshot.rollback_epoch,
+                    }),
+                );
+                return Err(err);
+            }
             let previous = current_snapshot(state);
             let high_water_update = (|| -> Result<(), String> {
                 let mut high_water = state
@@ -8176,14 +8707,11 @@ fn fetch_scoped_credential_lease(
         .map_err(|err| format!("fetch credential leases: {err}"))?;
     let status = response.status();
     let headers = response.headers().clone();
-    let mut body = Zeroizing::new(Vec::new());
-    response
-        .take(MAX_CREDENTIAL_LEASE_RESPONSE_BYTES + 1)
-        .read_to_end(body.as_mut())
-        .map_err(|err| format!("read credential lease response: {err}"))?;
-    if body.len() as u64 > MAX_CREDENTIAL_LEASE_RESPONSE_BYTES {
-        return Err("credential lease response exceeds 8 MiB".to_string());
-    }
+    let body = Zeroizing::new(read_bounded_control_plane_response_body(
+        response,
+        MAX_CREDENTIAL_LEASE_RESPONSE_BYTES,
+        "credential lease response",
+    )?);
     verify_credential_lease_response(
         snapshot,
         request_url,
@@ -8218,6 +8746,36 @@ fn run_bounded_json_command(command: &str, request: &Value, label: &str) -> Resu
     run_bounded_json_command_with_timeout(command, request, label, Duration::from_secs(10))
 }
 
+fn run_pinned_bounded_json_command(
+    command: &PinnedVerifierCommand,
+    request: &Value,
+    label: &str,
+) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let snapshot = sealed_authenticated_verifier_snapshot(command)?;
+        let result = run_bounded_json_program_with_timeout(
+            &command.executable,
+            &command.arguments,
+            request,
+            label,
+            Duration::from_secs(10),
+            true,
+            Some(snapshot.as_raw_fd()),
+        );
+        drop(snapshot);
+        result
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        verify_pinned_verifier_executable(command)?;
+        let _ = request;
+        Err(format!(
+            "{label}: descriptor-pinned control-plane attestation verifier execution requires Linux"
+        ))
+    }
+}
+
 fn run_bounded_json_command_with_timeout(
     command: &str,
     request: &Value,
@@ -8229,7 +8787,38 @@ fn run_bounded_json_command_with_timeout(
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| format!("{label} command is empty"))?;
-    let mut process = Command::new(program);
+    run_bounded_json_program_with_timeout(
+        Path::new(program),
+        args,
+        request,
+        label,
+        timeout,
+        false,
+        None,
+    )
+}
+
+fn run_bounded_json_program_with_timeout(
+    program: &Path,
+    args: &[String],
+    request: &Value,
+    label: &str,
+    timeout: Duration,
+    restricted_environment: bool,
+    authenticated_executable_fd: Option<RawFd>,
+) -> Result<Value, String> {
+    #[cfg(not(target_os = "linux"))]
+    if authenticated_executable_fd.is_some() {
+        return Err(format!(
+            "start {label} command: descriptor-pinned execution requires Linux"
+        ));
+    }
+    let spawn_program = if authenticated_executable_fd.is_some() {
+        Path::new("/proc/self/exe")
+    } else {
+        program
+    };
+    let mut process = Command::new(spawn_program);
     process
         .args(args)
         .env_clear()
@@ -8237,9 +8826,63 @@ fn run_bounded_json_command_with_timeout(
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .process_group(0);
-    for name in ["PATH", "LANG", "LC_ALL", "TZ"] {
-        if let Some(value) = env::var_os(name) {
-            process.env(name, value);
+    if restricted_environment {
+        process.env("LANG", "C").env("LC_ALL", "C").env("TZ", "UTC");
+    } else {
+        for name in ["PATH", "LANG", "LC_ALL", "TZ"] {
+            if let Some(value) = env::var_os(name) {
+                process.env(name, value);
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if let Some(executable_fd) = authenticated_executable_fd {
+        if !restricted_environment {
+            return Err(format!(
+                "start {label} command: authenticated execution requires a restricted environment"
+            ));
+        }
+        let argv = std::iter::once(
+            program
+                .to_str()
+                .ok_or_else(|| format!("{label} executable path is not UTF-8"))?
+                .to_string(),
+        )
+        .chain(args.iter().cloned())
+        .map(|value| {
+            CString::new(value).map_err(|_| format!("{label} argument contains an embedded NUL"))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+        let argv_pointers = argv
+            .iter()
+            .map(|value| value.as_ptr() as usize)
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        let environment = ["LANG=C", "LC_ALL=C", "TZ=UTC"]
+            .into_iter()
+            .map(|value| CString::new(value).expect("fixed environment contains no NUL"))
+            .collect::<Vec<_>>();
+        let environment_pointers = environment
+            .iter()
+            .map(|value| value.as_ptr() as usize)
+            .chain(std::iter::once(0))
+            .collect::<Vec<_>>();
+        unsafe {
+            process.pre_exec(move || {
+                let _keep_storage_alive = (&argv, &environment);
+                if libc::fcntl(executable_fd, libc::F_SETFD, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                libc::syscall(
+                    libc::SYS_execveat,
+                    executable_fd,
+                    c"".as_ptr(),
+                    argv_pointers.as_ptr() as *const *const libc::c_char,
+                    environment_pointers.as_ptr() as *const *const libc::c_char,
+                    libc::AT_EMPTY_PATH,
+                );
+                Err(io::Error::last_os_error())
+            });
         }
     }
     let mut child = process
@@ -8663,6 +9306,7 @@ fn credential_lease_release_binding(lease: &SecretLease) -> CredentialLeaseRelea
     CredentialLeaseReleaseBinding {
         scope: lease.scope.clone(),
         version: lease.version,
+        secret_fingerprint: credential_secret_fingerprint(lease.secret.as_str()),
         expires_at_monotonic: lease.expires_at_monotonic,
     }
 }
@@ -8686,6 +9330,99 @@ fn credential_lease_still_releasable(
                 && lease.policy_hash == snapshot.hash
                 && lease.expires_at_monotonic > Instant::now()
         })
+}
+
+fn credential_lease_upstream_send_timeout(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    binding: Option<&CredentialLeaseReleaseBinding>,
+) -> Result<Option<Duration>, &'static str> {
+    let Some(binding) = binding else {
+        return Ok(None);
+    };
+    let active = state
+        .snapshot
+        .read()
+        .expect("policy snapshot lock poisoned");
+    if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
+        return Err("policy_snapshot_revoked_before_upstream_send");
+    }
+    let now = Instant::now();
+    let leases = state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned");
+    let generations = state
+        .credential_generations
+        .lock()
+        .expect("credential generation mutex poisoned");
+    let lease = leases
+        .get(&binding.scope)
+        .filter(|lease| {
+            lease.scope == binding.scope
+                && lease.version == binding.version
+                && lease.policy_hash == snapshot.hash
+        })
+        .ok_or("credential_lease_changed_before_upstream_send")?;
+    let generation = generations
+        .get(&binding.scope)
+        .filter(|generation| {
+            generation.version == binding.version && generation.policy_hash == snapshot.hash
+        })
+        .ok_or("credential_generation_changed_before_upstream_send")?;
+    if generation.secret_fingerprint != binding.secret_fingerprint
+        || generation.metadata != lease.metadata
+    {
+        return Err("credential_generation_changed_before_upstream_send");
+    }
+    let effective_expiry = binding.expires_at_monotonic.min(lease.expires_at_monotonic);
+    let remaining = effective_expiry
+        .checked_duration_since(now)
+        .ok_or("credential_lease_expired_before_upstream_send")?;
+    if remaining < MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW {
+        return Err("credential_lease_lifetime_insufficient_for_upstream_send");
+    }
+    Ok(Some(remaining))
+}
+
+#[derive(Debug)]
+enum UpstreamSendError {
+    CredentialAuthority(&'static str),
+    Request(String),
+}
+
+fn send_upstream_request_with_current_lease(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    binding: Option<&CredentialLeaseReleaseBinding>,
+    builder: reqwest::blocking::RequestBuilder,
+) -> Result<reqwest::blocking::Response, UpstreamSendError> {
+    send_upstream_request_with_current_lease_and_timeout(state, snapshot, binding, builder, None)
+}
+
+fn send_upstream_request_with_current_lease_and_timeout(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    binding: Option<&CredentialLeaseReleaseBinding>,
+    builder: reqwest::blocking::RequestBuilder,
+    maximum_timeout: Option<Duration>,
+) -> Result<reqwest::blocking::Response, UpstreamSendError> {
+    let send_timeout = credential_lease_upstream_send_timeout(state, snapshot, binding)
+        .map_err(UpstreamSendError::CredentialAuthority)?;
+    let send_timeout = match (send_timeout, maximum_timeout) {
+        (Some(lease), Some(maximum)) => Some(lease.min(maximum)),
+        (Some(lease), None) => Some(lease),
+        (None, Some(maximum)) => Some(maximum),
+        (None, None) => None,
+    };
+    let builder = match send_timeout {
+        Some(timeout) => builder.timeout(timeout),
+        None => builder,
+    };
+    builder
+        .send()
+        .map_err(redacted_reqwest_error)
+        .map_err(UpstreamSendError::Request)
 }
 
 fn earliest_credential_lease_expiry_epoch_ms(state: &GateState) -> Option<u128> {
@@ -8957,6 +9694,7 @@ fn pem_certificates(bundle: &str) -> Vec<Vec<u8>> {
 fn build_upstream_client(reuse_idle_connections: bool) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(10))
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none());
     if !reuse_idle_connections {
         builder = builder.pool_max_idle_per_host(0);
@@ -8996,6 +9734,7 @@ fn build_audit_client() -> Result<Client, String> {
 fn build_control_plane_client(timeout: Duration) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(timeout)
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .tls_info(true);
     if let Ok(path) = env::var("SERVERWARE_CONTROL_PLANE_CA_BUNDLE") {
@@ -9058,6 +9797,33 @@ fn discard_unsendable_queued_audit_event(state: &GateState, event: &AuditEvent) 
 
 fn enqueue_audit(state: &GateState, event_type: &str, event: Value) {
     let _ = enqueue_audit_event(state, event_type, event, false);
+}
+
+fn post_required_audit_event(state: &GateState, event_type: &str, event: Value) -> bool {
+    if state.audit_url.is_none() || state.audit_token.is_none() {
+        state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
+    let audit_event = match AuditEvent::new(event_type, event, true) {
+        Ok(event) => event,
+        Err(err) => {
+            state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+            eprintln!("required audit event ID generation failed: {err}");
+            return false;
+        }
+    };
+    match post_audit_batch(state, &[audit_event]) {
+        Ok(()) => {
+            state.audit_sent.fetch_add(1, Ordering::Relaxed);
+            true
+        }
+        Err(err) => {
+            state.audit_send_failed.fetch_add(1, Ordering::Relaxed);
+            state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+            eprintln!("required audit acknowledgement failed: {err}");
+            false
+        }
+    }
 }
 
 fn record_required_credential_release_start(
@@ -9293,16 +10059,12 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
         .map_err(|err| AuditPostError::other(format!("send audit batch: {err}")))?;
     let status = response.status();
     let headers = response.headers().clone();
-    let mut response_body = Vec::new();
-    response
-        .take(MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES + 1)
-        .read_to_end(&mut response_body)
-        .map_err(|err| AuditPostError::other(format!("read audit acknowledgement: {err}")))?;
-    if response_body.len() as u64 > MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES {
-        return Err(AuditPostError::other(format!(
-            "audit acknowledgement exceeds {MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES} bytes"
-        )));
-    }
+    let response_body = read_bounded_control_plane_response_body(
+        response,
+        MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES,
+        "audit acknowledgement",
+    )
+    .map_err(AuditPostError::other)?;
     if !snapshot_is_active(state, &snapshot) {
         return Err(AuditPostError::other(
             "policy snapshot changed while audit acknowledgement was fetched",
@@ -10040,7 +10802,7 @@ fn consume_shared_grant(
     );
     let body = serde_json::to_vec(&request)
         .map_err(|err| format!("serialize shared grant consume request: {err}"))?;
-    let (status, text) = {
+    let (status, response_body) = {
         let mut attempt = 0;
         loop {
             let response = state
@@ -10053,15 +10815,17 @@ fn consume_shared_grant(
             match response {
                 Ok(response) => {
                     let status = response.status();
-                    let text = response
-                        .text()
-                        .map_err(|err| format!("read shared grant consume response: {err}"))?;
+                    let response_body = read_bounded_control_plane_response_body(
+                        response,
+                        MAX_CONTROL_PLANE_GRANT_RESPONSE_BYTES,
+                        "shared grant consume response",
+                    )?;
                     if consume && status == StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
                         attempt += 1;
                         thread::sleep(Duration::from_millis(50));
                         continue;
                     }
-                    break (status, text);
+                    break (status, response_body);
                 }
                 Err(_err) if consume && attempt == 0 => {
                     attempt += 1;
@@ -10075,12 +10839,12 @@ fn consume_shared_grant(
         }
     };
     if !status.is_success() {
-        return Err(format!("shared grant consume returned {status}: {text}"));
+        return Err(format!("shared grant consume returned {status}"));
     }
-    let value = strict_json_value_from_str(&text)
-        .map_err(|err| format!("parse shared grant consume response: {err}: {text}"))?;
+    let value = strict_json_value_from_slice(&response_body)
+        .map_err(|err| format!("parse shared grant consume response: {err}"))?;
     if value.get("ok").and_then(Value::as_bool) != Some(true) {
-        return Err(format!("shared grant consume response was not ok: {value}"));
+        return Err("shared grant consume response has an invalid contract".to_string());
     }
     let grant_available = value.get("available").and_then(Value::as_bool) == Some(true);
     if value.get("consumed").and_then(Value::as_bool) != Some(true) && !grant_available {
@@ -10101,7 +10865,7 @@ fn consume_shared_grant(
     let id = value
         .get("grant_id")
         .and_then(Value::as_str)
-        .ok_or_else(|| format!("shared grant consume response missing grant_id: {value}"))?
+        .ok_or("shared grant consume response is missing grant_id")?
         .to_string();
     let approval_id = value
         .get("approval_id")
@@ -10220,14 +10984,11 @@ fn post_release_authorization(
             }
         };
         let status = response.status();
-        let bytes = response
-            .bytes()
-            .map_err(|err| format!("read release authorization {operation} response: {err}"))?;
-        if bytes.len() > MAX_CONTROL_PLANE_ATTESTATION_BYTES as usize {
-            return Err(format!(
-                "release authorization {operation} response exceeds {MAX_CONTROL_PLANE_ATTESTATION_BYTES} bytes"
-            ));
-        }
+        let bytes = read_bounded_control_plane_response_body(
+            response,
+            MAX_CONTROL_PLANE_RELEASE_AUTHORIZATION_RESPONSE_BYTES,
+            &format!("release authorization {operation} response"),
+        )?;
         if status == StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
             last_error = Some(format!(
                 "release authorization {operation} returned {status}"
@@ -10236,9 +10997,8 @@ fn post_release_authorization(
             continue;
         }
         if !status.is_success() {
-            let detail = String::from_utf8_lossy(&bytes);
             return Err(format!(
-                "release authorization {operation} returned {status}: {detail}"
+                "release authorization {operation} returned {status}"
             ));
         }
         let response = strict_json_from_slice::<ReleaseAuthorizationResponse>(&bytes)
@@ -10312,24 +11072,18 @@ fn post_dispatch_release_authorization(
         };
         let status = response.status();
         let headers = response.headers().clone();
-        let response_body = response
-            .bytes()
-            .map_err(|err| format!("read release authorization dispatch response: {err}"))?;
-        if response_body.len() > MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES {
-            return Err(format!(
-                "release authorization dispatch response exceeds {MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES} bytes"
-            ));
-        }
+        let response_body = read_bounded_control_plane_response_body(
+            response,
+            MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES as u64,
+            "release authorization dispatch response",
+        )?;
         if status == StatusCode::SERVICE_UNAVAILABLE && attempt == 0 {
             last_error = Some(format!("release authorization dispatch returned {status}"));
             thread::sleep(Duration::from_millis(50));
             continue;
         }
         if !status.is_success() {
-            let detail = String::from_utf8_lossy(&response_body);
-            return Err(format!(
-                "release authorization dispatch returned {status}: {detail}"
-            ));
+            return Err(format!("release authorization dispatch returned {status}"));
         }
         let signed = verify_control_plane_signed_response(
             snapshot,
@@ -13102,14 +13856,16 @@ fn enforce_shared_rate_limit(
             )
         })?;
     let status = response.status();
-    let text = response.text().map_err(|err| {
+    let response_body = read_bounded_control_plane_response_body(
+        response,
+        MAX_CONTROL_PLANE_RATE_LIMIT_RESPONSE_BYTES,
+        "shared rate-limit response",
+    )
+    .map_err(|err| {
         let mut extra = Map::new();
         extra.insert("status_code".to_string(), json!(503));
         extra.insert("store".to_string(), Value::String("shared".to_string()));
-        extra.insert(
-            "detail".to_string(),
-            Value::String(format!("read shared rate-limit response: {err}")),
-        );
+        extra.insert("detail".to_string(), Value::String(err));
         constraint_payload(
             constraint,
             "shared_rate_limit_store_unavailable",
@@ -13123,9 +13879,7 @@ fn enforce_shared_rate_limit(
         extra.insert("store".to_string(), Value::String("shared".to_string()));
         extra.insert(
             "detail".to_string(),
-            Value::String(format!(
-                "shared rate-limit endpoint returned {status}: {text}"
-            )),
+            Value::String(format!("shared rate-limit endpoint returned {status}")),
         );
         return Err(constraint_payload(
             constraint,
@@ -13134,13 +13888,13 @@ fn enforce_shared_rate_limit(
             extra,
         ));
     }
-    let value = strict_json_value_from_str(&text).map_err(|err| {
+    let value = strict_json_value_from_slice(&response_body).map_err(|err| {
         let mut extra = Map::new();
         extra.insert("status_code".to_string(), json!(503));
         extra.insert("store".to_string(), Value::String("shared".to_string()));
         extra.insert(
             "detail".to_string(),
-            Value::String(format!("parse shared rate-limit response: {err}: {text}")),
+            Value::String(format!("parse shared rate-limit response: {err}")),
         );
         constraint_payload(
             constraint,
@@ -13155,7 +13909,7 @@ fn enforce_shared_rate_limit(
         extra.insert("store".to_string(), Value::String("shared".to_string()));
         extra.insert(
             "detail".to_string(),
-            Value::String(format!("shared rate-limit response was not ok: {value}")),
+            Value::String("shared rate-limit response has an invalid contract".to_string()),
         );
         return Err(constraint_payload(
             constraint,
@@ -13170,17 +13924,17 @@ fn enforce_shared_rate_limit(
         extra.insert("windowSeconds".to_string(), json!(window_seconds));
         extra.insert(
             "retry_after_seconds".to_string(),
-            value
+            json!(value
                 .get("retry_after_seconds")
-                .cloned()
-                .unwrap_or_else(|| json!(1)),
+                .and_then(Value::as_u64)
+                .unwrap_or(1)),
         );
         extra.insert(
             "remaining".to_string(),
-            value.get("remaining").cloned().unwrap_or_else(|| json!(0)),
+            json!(value.get("remaining").and_then(Value::as_u64).unwrap_or(0)),
         );
-        if let Some(count) = value.get("count").cloned() {
-            extra.insert("count".to_string(), count);
+        if let Some(count) = value.get("count").and_then(Value::as_u64) {
+            extra.insert("count".to_string(), json!(count));
         }
         extra.insert("store".to_string(), Value::String("shared".to_string()));
         return Err(constraint_payload(
@@ -13688,6 +14442,265 @@ fn enforce_query_numeric_bounds(constraint: &Value, url: &Url) -> Result<(), Val
                 ));
             }
         }
+    }
+    Ok(())
+}
+
+fn request_value_predicate_matches(predicate: &Map<String, Value>, value: &str) -> bool {
+    if value.len() > 4096 {
+        return false;
+    }
+    let Some(kind) = predicate.get("kind").and_then(Value::as_str) else {
+        return false;
+    };
+    let allowed_fields: &[&str] = match kind {
+        "equals" => &["kind", "value"],
+        "enum" => &["kind", "values"],
+        "pattern" => &["kind", "pattern", "maxLength"],
+        "stringLength" => &["kind", "minLength", "maxLength"],
+        "numeric" => &["kind", "min", "max", "integer"],
+        _ => return false,
+    };
+    if predicate
+        .keys()
+        .any(|field| !allowed_fields.contains(&field.as_str()))
+    {
+        return false;
+    }
+
+    match kind {
+        "equals" => predicate
+            .get("value")
+            .and_then(Value::as_str)
+            .is_some_and(|expected| expected.len() <= 4096 && value == expected),
+        "enum" => {
+            let Some(values) = predicate
+                .get("values")
+                .and_then(Value::as_array)
+                .filter(|values| (1..=32).contains(&values.len()))
+            else {
+                return false;
+            };
+            let mut unique = HashSet::new();
+            values.iter().all(|candidate| {
+                candidate
+                    .as_str()
+                    .is_some_and(|candidate| candidate.len() <= 4096 && unique.insert(candidate))
+            }) && unique.contains(value)
+        }
+        "pattern" => {
+            let Some(pattern) = predicate.get("pattern").and_then(Value::as_str) else {
+                return false;
+            };
+            let Some(maximum) = predicate
+                .get("maxLength")
+                .and_then(Value::as_u64)
+                .filter(|maximum| (1..=4096).contains(maximum))
+            else {
+                return false;
+            };
+            value.len() as u64 <= maximum
+                && simple_bounded_pattern(pattern).is_some()
+                && bounded_pattern_matches(pattern, value) == Some(true)
+        }
+        "stringLength" => {
+            if predicate
+                .get("minLength")
+                .is_some_and(|value| value.as_u64().is_none_or(|value| value > 4096))
+                || predicate
+                    .get("maxLength")
+                    .is_some_and(|value| value.as_u64().is_none_or(|value| value > 4096))
+            {
+                return false;
+            }
+            let minimum = predicate.get("minLength").and_then(Value::as_u64);
+            let maximum = predicate.get("maxLength").and_then(Value::as_u64);
+            if minimum.is_none() && maximum.is_none()
+                || minimum.zip(maximum).is_some_and(|(min, max)| min > max)
+            {
+                return false;
+            }
+            let length = value.len() as u64;
+            minimum.is_none_or(|minimum| length >= minimum)
+                && maximum.is_none_or(|maximum| length <= maximum)
+        }
+        "numeric" => {
+            if predicate
+                .get("integer")
+                .is_some_and(|value| !value.is_boolean())
+            {
+                return false;
+            }
+            if predicate.get("integer").and_then(Value::as_bool) == Some(true) {
+                let minimum = predicate.get("min").map(Value::as_i64);
+                let maximum = predicate.get("max").map(Value::as_i64);
+                if minimum == Some(None)
+                    || maximum == Some(None)
+                    || minimum.is_none() && maximum.is_none()
+                    || minimum
+                        .flatten()
+                        .zip(maximum.flatten())
+                        .is_some_and(|(min, max)| min > max)
+                {
+                    return false;
+                }
+                canonical_i64(value).is_some_and(|parsed| {
+                    minimum.flatten().is_none_or(|minimum| parsed >= minimum)
+                        && maximum.flatten().is_none_or(|maximum| parsed <= maximum)
+                })
+            } else {
+                if predicate
+                    .get("min")
+                    .is_some_and(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+                    || predicate
+                        .get("max")
+                        .is_some_and(|value| value.as_f64().is_none_or(|value| !value.is_finite()))
+                {
+                    return false;
+                }
+                let minimum = predicate.get("min").and_then(Value::as_f64);
+                let maximum = predicate.get("max").and_then(Value::as_f64);
+                if minimum.is_none() && maximum.is_none()
+                    || minimum.zip(maximum).is_some_and(|(min, max)| min > max)
+                {
+                    return false;
+                }
+                let parsed = if value.trim() == value {
+                    serde_json::from_str::<Value>(value)
+                        .ok()
+                        .filter(Value::is_number)
+                        .and_then(|value| value.as_f64())
+                        .filter(|value| value.is_finite())
+                } else {
+                    None
+                };
+                parsed.is_some_and(|parsed| {
+                    minimum.is_none_or(|minimum| parsed >= minimum)
+                        && maximum.is_none_or(|maximum| parsed <= maximum)
+                })
+            }
+        }
+        _ => false,
+    }
+}
+
+fn enforce_request_value(
+    constraint: &Value,
+    headers: &BTreeMap<String, String>,
+    url: &Url,
+    route_params: &BTreeMap<String, String>,
+    operation: &mut Value,
+) -> Result<(), Value> {
+    let rules = constraint
+        .get("rules")
+        .and_then(Value::as_array)
+        .filter(|rules| (1..=16).contains(&rules.len()))
+        .ok_or_else(|| {
+            let mut extra = Map::new();
+            extra.insert("status_code".to_string(), json!(500));
+            constraint_payload(
+                constraint,
+                "constraint_invalid_request_value",
+                "request value constraint is invalid",
+                extra,
+            )
+        })?;
+    let mut captures = Vec::new();
+    for (rule_index, rule) in rules.iter().enumerate() {
+        let Some(rule) = rule.as_object() else {
+            return Err(constraint_error(
+                constraint,
+                "constraint_invalid_request_value",
+                "request value rule is invalid",
+            ));
+        };
+        let source = rule.get("source").and_then(Value::as_str).unwrap_or("");
+        let name = rule.get("name").and_then(Value::as_str).unwrap_or("");
+        let values = match source {
+            "pathParam" => route_params
+                .get(name)
+                .cloned()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            "query" => url
+                .query_pairs()
+                .filter(|(key, _)| key.as_ref() == name)
+                .map(|(_, value)| value.to_string())
+                .collect::<Vec<_>>(),
+            "header" => headers.get(name).cloned().into_iter().collect::<Vec<_>>(),
+            _ => Vec::new(),
+        };
+        if values.is_empty() {
+            let mut extra = Map::new();
+            extra.insert("source".to_string(), Value::String(source.to_string()));
+            extra.insert("name".to_string(), Value::String(name.to_string()));
+            extra.insert("ruleIndex".to_string(), json!(rule_index));
+            return Err(constraint_payload(
+                constraint,
+                "request_value_missing",
+                "required request value is missing",
+                extra,
+            ));
+        }
+        if values.len() != 1 {
+            let mut extra = Map::new();
+            extra.insert("source".to_string(), Value::String(source.to_string()));
+            extra.insert("name".to_string(), Value::String(name.to_string()));
+            extra.insert("ruleIndex".to_string(), json!(rule_index));
+            return Err(constraint_payload(
+                constraint,
+                "request_value_ambiguous",
+                "request value must occur exactly once",
+                extra,
+            ));
+        }
+        let value = &values[0];
+        let predicate = rule.get("predicate").and_then(Value::as_object);
+        let kind = predicate
+            .and_then(|predicate| predicate.get("kind"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let matches =
+            predicate.is_some_and(|predicate| request_value_predicate_matches(predicate, value));
+        if !matches {
+            let mut extra = Map::new();
+            extra.insert("source".to_string(), Value::String(source.to_string()));
+            extra.insert("name".to_string(), Value::String(name.to_string()));
+            extra.insert("predicateKind".to_string(), Value::String(kind.to_string()));
+            extra.insert("ruleIndex".to_string(), json!(rule_index));
+            return Err(constraint_payload(
+                constraint,
+                "request_value_predicate_denied",
+                "request value is outside the allowed policy",
+                extra,
+            ));
+        }
+        if let Some(capture) = rule.get("capture").and_then(Value::as_str) {
+            captures.push((capture.to_string(), value.clone()));
+        }
+    }
+    let operation = operation.as_object_mut().ok_or_else(|| {
+        let mut extra = Map::new();
+        extra.insert("status_code".to_string(), json!(500));
+        constraint_payload(
+            constraint,
+            "constraint_invalid_request_value",
+            "request value capture requires an operation object",
+            extra,
+        )
+    })?;
+    let mut capture_names = HashSet::new();
+    if captures.iter().any(|(capture, _)| {
+        operation.contains_key(capture) || !capture_names.insert(capture.as_str())
+    }) {
+        return Err(constraint_error(
+            constraint,
+            "constraint_invalid_request_value",
+            "request value capture collides with an existing operation field",
+        ));
+    }
+    for (capture, value) in captures {
+        operation.insert(capture, Value::String(value));
     }
     Ok(())
 }
@@ -14484,11 +15497,12 @@ fn evaluate_request_constraints(
     req: &DecisionRequest,
     headers: &BTreeMap<String, String>,
     url: &Url,
+    route_params: &BTreeMap<String, String>,
     principal_id: &str,
     credential_ref: Option<&str>,
     credential_version: u64,
     policy_hash: &str,
-    operation: &Value,
+    operation: &mut Value,
     consume_rate_limits: bool,
     rate_limits_only: bool,
     skip_shared_rate_limits: bool,
@@ -14520,6 +15534,9 @@ fn evaluate_request_constraints(
             "queryDateWindow" => enforce_query_date_window(constraint, url)?,
             "queryNumericBounds" => enforce_query_numeric_bounds(constraint, url)?,
             "requestTimeWindow" => enforce_request_time_window(constraint)?,
+            "requestValue" => {
+                enforce_request_value(constraint, headers, url, route_params, operation)?
+            }
             "jsonBody" => enforce_json_body(constraint, req, headers)?,
             "formBody" => enforce_form_body(constraint, req, headers)?,
             _ => {}
@@ -14533,7 +15550,8 @@ fn evaluate_request_semantic_constraints(
     req: &DecisionRequest,
     headers: &BTreeMap<String, String>,
     url: &Url,
-    operation: &Value,
+    route_params: &BTreeMap<String, String>,
+    operation: &mut Value,
 ) -> Result<(), Value> {
     for constraint in &route.constraints {
         let Some(kind) = constraint.get("type").and_then(Value::as_str) else {
@@ -14547,6 +15565,9 @@ fn evaluate_request_semantic_constraints(
             "queryDateWindow" => enforce_query_date_window(constraint, url)?,
             "queryNumericBounds" => enforce_query_numeric_bounds(constraint, url)?,
             "requestTimeWindow" => enforce_request_time_window(constraint)?,
+            "requestValue" => {
+                enforce_request_value(constraint, headers, url, route_params, operation)?
+            }
             "jsonBody" => enforce_json_body(constraint, req, headers)?,
             "formBody" => enforce_form_body(constraint, req, headers)?,
             _ => {}
@@ -15123,7 +16144,11 @@ fn decide_internal_with_mode(
     let has_response_binding = route.constraints.iter().any(|constraint| {
         constraint.get("type").and_then(Value::as_str) == Some("responseBinding")
     });
-    let response_binding_preflight = if has_response_binding {
+    let preflight_request_semantics = has_response_binding
+        || route.constraints.iter().any(|constraint| {
+            constraint.get("type").and_then(Value::as_str) == Some("requestValue")
+        });
+    let response_binding_preflight = if preflight_request_semantics {
         let mut context =
             match prepare_request_operation_context(&req, &headers, &url, &route_match, &injection)
             {
@@ -15155,9 +16180,14 @@ fn decide_internal_with_mode(
                 .to_string();
             return deny_for_route(status, &reason, payload, route, started);
         }
-        if let Err(payload) =
-            evaluate_request_semantic_constraints(route, &req, &headers, &url, &context.operation)
-        {
+        if let Err(payload) = evaluate_request_semantic_constraints(
+            route,
+            &req,
+            &headers,
+            &url,
+            &route_match.params,
+            &mut context.operation,
+        ) {
             let status = payload
                 .get("status_code")
                 .and_then(Value::as_u64)
@@ -15169,17 +16199,19 @@ fn decide_internal_with_mode(
                 .to_string();
             return deny_for_route(status, &reason, payload, route, started);
         }
-        if let Err(payload) = validate_response_binding_sources(route, &context.operation) {
-            let status = payload
-                .get("status_code")
-                .and_then(Value::as_u64)
-                .unwrap_or(403) as u16;
-            let reason = payload
-                .get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("response_binding_source_invalid")
-                .to_string();
-            return deny_for_route(status, &reason, payload, route, started);
+        if has_response_binding {
+            if let Err(payload) = validate_response_binding_sources(route, &context.operation) {
+                let status = payload
+                    .get("status_code")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(403) as u16;
+                let reason = payload
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("response_binding_source_invalid")
+                    .to_string();
+                return deny_for_route(status, &reason, payload, route, started);
+            }
         }
         Some(context)
     } else {
@@ -15289,13 +16321,14 @@ fn decide_internal_with_mode(
         &req,
         &headers,
         &url,
+        &route_match.params,
         &principal.id,
         credential_ref.as_deref(),
         credential_version,
         &snapshot.hash,
-        &operation,
+        &mut operation,
         false,
-        has_response_binding,
+        preflight_request_semantics,
         preview || atomic_release,
     ) {
         let status = payload
@@ -15632,11 +16665,12 @@ fn decide_internal_with_mode(
             &req,
             &headers,
             &url,
+            &route_match.params,
             &principal.id,
             credential_ref.as_deref(),
             credential_version,
             &snapshot.hash,
-            &operation,
+            &mut operation,
             true,
             true,
             true,
@@ -15742,6 +16776,30 @@ fn decide_internal_with_mode(
         );
     }
 
+    if let Some(scope) = credential_scope.as_ref() {
+        if let Err(err) = preflight_cached_credential_injection(
+            state,
+            snapshot,
+            scope,
+            credential_version,
+            &req.headers,
+            &url,
+            &rewrite,
+            &injection,
+        ) {
+            return deny_for_route(
+                500,
+                "credential injection preflight failed",
+                json!({
+                    "error":"credential_injection_failed",
+                    "detail":err,
+                }),
+                route,
+                started,
+            );
+        }
+    }
+
     let flow_id = match random_request_attempt_id() {
         Ok(flow_id) => flow_id,
         Err(error) => {
@@ -15815,11 +16873,12 @@ fn decide_internal_with_mode(
             &req,
             &headers,
             &url,
+            &route_match.params,
             &principal.id,
             credential_ref.as_deref(),
             credential_version,
             &snapshot.hash,
-            &operation,
+            &mut operation,
             true,
             true,
             false,
@@ -16610,6 +17669,41 @@ fn apply_credential_injection(
     Ok(response_guard)
 }
 
+fn preflight_cached_credential_injection(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    scope: &CredentialLeaseScope,
+    credential_version: u64,
+    request_headers: &BTreeMap<String, String>,
+    request_url: &Url,
+    rewrite: &Value,
+    injection: &Value,
+) -> Result<(), String> {
+    if !snapshot_is_active(state, snapshot) {
+        return Err(
+            "policy snapshot was revoked before credential injection preflight".to_string(),
+        );
+    }
+    let lease = state
+        .credential_leases
+        .lock()
+        .expect("credential lease mutex poisoned")
+        .get(scope)
+        .filter(|lease| {
+            lease.scope == *scope
+                && lease.version == credential_version
+                && lease.policy_hash == snapshot.hash
+                && lease.expires_at_monotonic > Instant::now()
+        })
+        .cloned()
+        .ok_or("credential lease changed before credential injection preflight")?;
+    let mut headers = filtered_forward_headers(request_headers, injection)?;
+    let mut upstream_url = request_url.clone();
+    apply_rewrite(&mut upstream_url, rewrite);
+    apply_credential_injection(&mut headers, &mut upstream_url, injection, &lease)?;
+    Ok(())
+}
+
 fn internal_date_ms(value: &Value) -> Option<i128> {
     if let Some(number) = value.as_i64() {
         return Some(number as i128);
@@ -16619,6 +17713,10 @@ fn internal_date_ms(value: &Value) -> Option<i128> {
 
 fn gmail_cutoff_ms(days: u64) -> i128 {
     now_epoch_ms() as i128 - (days as i128 * 86_400_000)
+}
+
+fn gmail_cutoff_ms_at(now_ms: u128, days: u64) -> i128 {
+    now_ms as i128 - (days as i128 * 86_400_000)
 }
 
 fn gmail_cache_cutoff_epoch_ms(days: u64) -> u128 {
@@ -16632,15 +17730,641 @@ fn validate_gmail_internal_date(item: &Value, days: u64) -> Result<(), Value> {
 }
 
 fn validate_gmail_internal_date_value(raw_value: Option<&Value>, days: u64) -> Result<(), Value> {
+    validate_gmail_internal_date_value_at_cutoff(raw_value, days, gmail_cutoff_ms(days))
+}
+
+fn validate_gmail_internal_date_value_at_cutoff(
+    raw_value: Option<&Value>,
+    days: u64,
+    cutoff_ms: i128,
+) -> Result<(), Value> {
     let Some(raw_value) = raw_value else {
         return Err(json!({"error":"gmail_response_missing_internal_date"}));
     };
     let Some(value) = internal_date_ms(raw_value) else {
         return Err(json!({"error":"gmail_response_invalid_internal_date"}));
     };
-    if value < gmail_cutoff_ms(days) {
+    if value < cutoff_ms {
         return Err(json!({"error":"gmail_response_too_old","max_days":days}));
     }
+    Ok(())
+}
+
+fn gmail_metadata_fanout_audit_event(decision: &Value, details: Value) -> Value {
+    let mut event = Map::from_iter([(
+        "component".to_string(),
+        Value::String("serverware-decision-gate-rs".to_string()),
+    )]);
+    for key in [
+        "principal_id",
+        "route_id",
+        "policy_hash",
+        "credential_ref",
+        "credential_version",
+        "client_request_digest",
+        "request_digest",
+        "operation_digest",
+        "attempt_id",
+        "flow_id",
+        "grant_id",
+        "approval_id",
+        "enrollment_session_id",
+    ] {
+        if let Some(value) = decision.get(key) {
+            event.insert(key.to_string(), value.clone());
+        }
+    }
+    if let Some(details) = details.as_object() {
+        event.extend(details.clone());
+    }
+    Value::Object(event)
+}
+
+fn gmail_metadata_child_url(
+    parent_url: &Url,
+    gmail_user: &str,
+    message_id: &str,
+) -> Result<Url, Value> {
+    let mut child = parent_url.clone();
+    child.set_query(None);
+    child.set_fragment(None);
+    {
+        let mut segments = child
+            .path_segments_mut()
+            .map_err(|_| json!({"error":"gmail_metadata_fetch_origin_invalid"}))?;
+        segments.clear();
+        segments.extend(["gmail", "v1", "users", gmail_user, "messages", message_id]);
+    }
+    child
+        .query_pairs_mut()
+        .append_pair("format", "metadata")
+        .append_pair("fields", "id,internalDate");
+    if child.scheme() != parent_url.scheme()
+        || child.host_str() != parent_url.host_str()
+        || child.port_or_known_default() != parent_url.port_or_known_default()
+    {
+        return Err(json!({"error":"gmail_metadata_fetch_origin_mismatch"}));
+    }
+    Ok(child)
+}
+
+fn strict_response_content_length(headers: &HeaderMap) -> Result<Option<u64>, ()> {
+    let values = headers.get_all(CONTENT_LENGTH).iter().collect::<Vec<_>>();
+    match values.as_slice() {
+        [] => Ok(None),
+        [value] => value
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(Some)
+            .ok_or(()),
+        _ => Err(()),
+    }
+}
+
+fn read_bounded_control_plane_response_body(
+    response: reqwest::blocking::Response,
+    max_body_bytes: u64,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    let declared_length = strict_response_content_length(response.headers())
+        .map_err(|()| format!("{label} has an invalid Content-Length"))?;
+    if declared_length.is_some_and(|length| length > max_body_bytes) {
+        return Err(format!("{label} exceeds {max_body_bytes} bytes"));
+    }
+    let capacity = declared_length.unwrap_or_default().min(max_body_bytes) as usize;
+    let mut body = Vec::with_capacity(capacity);
+    response
+        .take(max_body_bytes.saturating_add(1))
+        .read_to_end(&mut body)
+        .map_err(|err| format!("read {label}: {err}"))?;
+    if body.len() as u64 > max_body_bytes {
+        return Err(format!("{label} exceeds {max_body_bytes} bytes"));
+    }
+    if declared_length.is_some_and(|length| length != body.len() as u64) {
+        return Err(format!(
+            "{label} Content-Length does not match the streamed body"
+        ));
+    }
+    Ok(body)
+}
+
+fn gmail_metadata_child_record(
+    request_digest: String,
+    response_digest: Option<String>,
+    outcome: &str,
+) -> Value {
+    json!({
+        "request_digest":request_digest,
+        "response_digest":response_digest,
+        "outcome":outcome,
+    })
+}
+
+enum GmailMetadataChildResult {
+    Hydrated {
+        internal_date: String,
+        record: Value,
+    },
+    Dropped {
+        record: Value,
+    },
+    Blocked {
+        payload: Value,
+        record: Value,
+    },
+}
+
+fn gmail_metadata_child_timeout(
+    config: GmailMetadataFetchConfig,
+    total_deadline: Instant,
+    dispatch_expires_at_epoch_ms: Option<u64>,
+) -> Result<Duration, &'static str> {
+    let remaining = total_deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or("gmail_metadata_fetch_total_deadline_exhausted")?;
+    let mut timeout = config.per_request_timeout.min(remaining);
+    if let Some(dispatch_expires_at_epoch_ms) = dispatch_expires_at_epoch_ms {
+        let now = now_epoch_ms();
+        let dispatch_remaining_ms = u128::from(dispatch_expires_at_epoch_ms)
+            .checked_sub(now)
+            .and_then(|remaining| u64::try_from(remaining).ok())
+            .filter(|remaining| {
+                Duration::from_millis(*remaining) >= MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW
+            })
+            .ok_or("gmail_metadata_fetch_release_authority_expired")?;
+        timeout = timeout.min(Duration::from_millis(dispatch_remaining_ms));
+    }
+    if timeout.is_zero() {
+        return Err("gmail_metadata_fetch_total_deadline_exhausted");
+    }
+    Ok(timeout)
+}
+
+fn fetch_gmail_metadata_child(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    parent_url: &Url,
+    gmail_user: &str,
+    message_id: &str,
+    days: u64,
+    cutoff_ms: i128,
+    config: GmailMetadataFetchConfig,
+    total_deadline: Instant,
+    execution: &GmailMetadataFanoutExecution<'_>,
+) -> GmailMetadataChildResult {
+    let mut child_url = match gmail_metadata_child_url(parent_url, gmail_user, message_id) {
+        Ok(url) => url,
+        Err(payload) => {
+            return GmailMetadataChildResult::Blocked {
+                payload,
+                record: gmail_metadata_child_record(
+                    sha256_prefixed(b"gmail-metadata-child-url-invalid"),
+                    None,
+                    "blocked_url",
+                ),
+            };
+        }
+    };
+    let request_digest = digest_json(&json!({
+        "method":"GET",
+        "scheme":child_url.scheme(),
+        "authority":child_url.host_str().map(|host| match child_url.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_string(),
+        }),
+        "path":child_url.path(),
+        "query":[["fields","id,internalDate"],["format","metadata"]],
+    }));
+    let timeout = match gmail_metadata_child_timeout(
+        config,
+        total_deadline,
+        execution.dispatch_expires_at_epoch_ms,
+    ) {
+        Ok(timeout) => timeout,
+        Err("gmail_metadata_fetch_release_authority_expired") => {
+            return GmailMetadataChildResult::Blocked {
+                payload: json!({"error":"gmail_metadata_fetch_release_authority_expired"}),
+                record: gmail_metadata_child_record(
+                    request_digest,
+                    None,
+                    "blocked_release_authority",
+                ),
+            };
+        }
+        Err(error) => {
+            return GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(request_digest, None, error),
+            };
+        }
+    };
+    let Some(credential_ref) = decision
+        .get("credential_ref")
+        .and_then(Value::as_str)
+        .filter(|credential_ref| !credential_ref.is_empty())
+    else {
+        return GmailMetadataChildResult::Blocked {
+            payload: json!({"error":"gmail_metadata_fetch_credential_context_missing"}),
+            record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
+        };
+    };
+    let credential_version = decision
+        .get("credential_version")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    let lease = match credential_lease_for_release(
+        state,
+        snapshot,
+        decision,
+        credential_ref,
+        credential_version,
+    ) {
+        Ok(lease) => lease,
+        Err(_) => {
+            return GmailMetadataChildResult::Blocked {
+                payload: json!({"error":"gmail_metadata_fetch_credential_authority_changed"}),
+                record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
+            };
+        }
+    };
+    let Some(parent_binding) = execution.parent_credential_binding else {
+        return GmailMetadataChildResult::Blocked {
+            payload: json!({"error":"gmail_metadata_fetch_credential_binding_missing"}),
+            record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
+        };
+    };
+    let mut child_binding = credential_lease_release_binding(&lease);
+    if child_binding.scope != parent_binding.scope
+        || child_binding.version != parent_binding.version
+        || child_binding.secret_fingerprint != parent_binding.secret_fingerprint
+    {
+        return GmailMetadataChildResult::Blocked {
+            payload: json!({"error":"gmail_metadata_fetch_credential_authority_changed"}),
+            record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
+        };
+    }
+    child_binding.expires_at_monotonic = child_binding
+        .expires_at_monotonic
+        .min(parent_binding.expires_at_monotonic);
+    let mut headers = HeaderMap::new();
+    headers.insert("accept", HeaderValue::from_static("application/json"));
+    let response_secret_guard = match apply_credential_injection(
+        &mut headers,
+        &mut child_url,
+        execution.injection_plan,
+        &lease,
+    ) {
+        Ok(guard) => guard,
+        Err(_) => {
+            return GmailMetadataChildResult::Blocked {
+                payload: json!({"error":"gmail_metadata_fetch_credential_injection_failed"}),
+                record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
+            };
+        }
+    };
+    let builder = state
+        .upstream_client
+        .get(child_url.as_str())
+        .headers(headers);
+    let response = match send_upstream_request_with_current_lease_and_timeout(
+        state,
+        snapshot,
+        Some(&child_binding),
+        builder,
+        Some(timeout),
+    ) {
+        Ok(response) => response,
+        Err(UpstreamSendError::CredentialAuthority(_)) => {
+            return GmailMetadataChildResult::Blocked {
+                payload: json!({"error":"gmail_metadata_fetch_credential_authority_changed"}),
+                record: gmail_metadata_child_record(request_digest, None, "blocked_credential"),
+            };
+        }
+        Err(UpstreamSendError::Request(_)) => {
+            return GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(request_digest, None, "dropped_transport"),
+            };
+        }
+    };
+    let status = response.status();
+    let response_headers = response.headers().clone();
+    let header_digest = digest_json(&json!({
+        "status":status.as_u16(),
+        "content_type":response_headers
+            .get_all("content-type")
+            .iter()
+            .map(|value| general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes()))
+            .collect::<Vec<_>>(),
+        "content_length":response_headers
+            .get_all(CONTENT_LENGTH)
+            .iter()
+            .map(|value| general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes()))
+            .collect::<Vec<_>>(),
+        "content_encoding":response_headers
+            .get_all("content-encoding")
+            .iter()
+            .map(|value| general_purpose::URL_SAFE_NO_PAD.encode(value.as_bytes()))
+            .collect::<Vec<_>>(),
+    }));
+    if status != StatusCode::OK
+        || !response_content_encoding_is_identity_or_absent(&response_headers)
+    {
+        return GmailMetadataChildResult::Dropped {
+            record: gmail_metadata_child_record(
+                request_digest,
+                Some(header_digest),
+                "dropped_status_or_encoding",
+            ),
+        };
+    }
+    let content_types = response_headers
+        .get_all("content-type")
+        .iter()
+        .collect::<Vec<_>>();
+    if content_types.len() != 1
+        || content_types[0]
+            .to_str()
+            .ok()
+            .map(|value| canonical_response_content_type(Some(value)))
+            .as_deref()
+            != Some("application/json")
+    {
+        return GmailMetadataChildResult::Dropped {
+            record: gmail_metadata_child_record(
+                request_digest,
+                Some(header_digest),
+                "dropped_content_type",
+            ),
+        };
+    }
+    let declared_length = match strict_response_content_length(&response_headers) {
+        Ok(length) => length,
+        Err(()) => {
+            return GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest,
+                    Some(header_digest),
+                    "dropped_content_length",
+                ),
+            };
+        }
+    };
+    if declared_length.is_some_and(|length| length > config.max_body_bytes) {
+        return GmailMetadataChildResult::Dropped {
+            record: gmail_metadata_child_record(
+                request_digest,
+                Some(header_digest),
+                "dropped_body_too_large",
+            ),
+        };
+    }
+    let mut body = Vec::new();
+    let read_result = response
+        .take(config.max_body_bytes.saturating_add(1))
+        .read_to_end(&mut body);
+    let response_digest = digest_json(&json!({
+        "headers_digest":header_digest,
+        "body_sha256":sha256_prefixed(&body),
+        "body_bytes":body.len(),
+    }));
+    if read_result.is_err()
+        || body.len() as u64 > config.max_body_bytes
+        || declared_length.is_some_and(|length| length != body.len() as u64)
+        || response_secret_guard.detects(&body)
+    {
+        return GmailMetadataChildResult::Dropped {
+            record: gmail_metadata_child_record(
+                request_digest,
+                Some(response_digest),
+                "dropped_body_invalid",
+            ),
+        };
+    }
+    let payload = match strict_json_value_from_slice(&body) {
+        Ok(Value::Object(payload)) => payload,
+        _ => {
+            return GmailMetadataChildResult::Dropped {
+                record: gmail_metadata_child_record(
+                    request_digest,
+                    Some(response_digest),
+                    "dropped_json_invalid",
+                ),
+            };
+        }
+    };
+    if payload.get("id").and_then(Value::as_str) != Some(message_id) {
+        return GmailMetadataChildResult::Dropped {
+            record: gmail_metadata_child_record(
+                request_digest,
+                Some(response_digest),
+                "dropped_id_mismatch",
+            ),
+        };
+    }
+    let Some(internal_date) = payload.get("internalDate").and_then(Value::as_str) else {
+        return GmailMetadataChildResult::Dropped {
+            record: gmail_metadata_child_record(
+                request_digest,
+                Some(response_digest),
+                "dropped_internal_date_invalid",
+            ),
+        };
+    };
+    if internal_date.is_empty()
+        || !internal_date.bytes().all(|byte| byte.is_ascii_digit())
+        || internal_date.parse::<i128>().is_err()
+    {
+        return GmailMetadataChildResult::Dropped {
+            record: gmail_metadata_child_record(
+                request_digest,
+                Some(response_digest),
+                "dropped_internal_date_invalid",
+            ),
+        };
+    }
+    if validate_gmail_internal_date_value_at_cutoff(
+        Some(&Value::String(internal_date.to_string())),
+        days,
+        cutoff_ms,
+    )
+    .is_err()
+    {
+        return GmailMetadataChildResult::Blocked {
+            payload: json!({"error":"gmail_response_too_old","max_days":days}),
+            record: gmail_metadata_child_record(
+                request_digest,
+                Some(response_digest),
+                "blocked_too_old",
+            ),
+        };
+    }
+    GmailMetadataChildResult::Hydrated {
+        internal_date: internal_date.to_string(),
+        record: gmail_metadata_child_record(request_digest, Some(response_digest), "hydrated"),
+    }
+}
+
+fn hydrate_gmail_list_metadata(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    parent_url: &Url,
+    route_match: &RouteMatch<'_>,
+    payload: &mut Value,
+    days: u64,
+    cutoff_ms: i128,
+    config: GmailMetadataFetchConfig,
+    execution: &GmailMetadataFanoutExecution<'_>,
+) -> Result<(), Value> {
+    let Some(messages_value) = payload.get_mut("messages") else {
+        return Ok(());
+    };
+    let Some(messages) = messages_value.as_array_mut() else {
+        return Err(json!({"error":"gmail_metadata_fetch_messages_invalid"}));
+    };
+    if messages.len() as u64 > config.max_messages {
+        return Err(json!({
+            "error":"gmail_metadata_fetch_message_limit_exceeded",
+            "max_messages":config.max_messages,
+        }));
+    }
+    let mut seen = HashSet::new();
+    let mut planned = 0_u64;
+    for item in messages.iter() {
+        let Some(object) = item.as_object() else {
+            continue;
+        };
+        let Some(id) = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 512)
+        else {
+            continue;
+        };
+        if !seen.insert(id.to_string()) {
+            return Err(json!({"error":"gmail_metadata_fetch_duplicate_id"}));
+        }
+        if object.get("internalDate").is_some() {
+            validate_gmail_internal_date_value_at_cutoff(
+                object.get("internalDate"),
+                days,
+                cutoff_ms,
+            )?;
+        } else {
+            planned = planned.saturating_add(1);
+        }
+    }
+    if planned == 0 {
+        return Ok(());
+    }
+    let config_digest = digest_json(&json!({
+        "max_messages":config.max_messages,
+        "per_request_timeout_ms":config.per_request_timeout.as_millis(),
+        "total_timeout_ms":config.total_timeout.as_millis(),
+        "max_body_bytes":config.max_body_bytes,
+    }));
+    let started = gmail_metadata_fanout_audit_event(
+        decision,
+        json!({
+            "outcome":"started",
+            "planned_count":planned,
+            "cutoff_epoch_ms":cutoff_ms,
+            "metadata_fetch_config_digest":config_digest,
+        }),
+    );
+    if !post_required_audit_event(state, "data_plane.gmail.metadata_fanout.started", started) {
+        return Err(json!({"error":"gmail_metadata_fetch_start_audit_unavailable"}));
+    }
+    let gmail_user = route_match
+        .params
+        .get("user")
+        .map(String::as_str)
+        .unwrap_or("me");
+    let total_deadline = Instant::now()
+        .checked_add(config.total_timeout)
+        .unwrap_or_else(Instant::now);
+    let original = std::mem::take(messages);
+    let mut released = Vec::with_capacity(original.len());
+    let mut child_records = Vec::with_capacity(planned as usize);
+    let mut hydrated_count = 0_u64;
+    let mut dropped_count = 0_u64;
+    let mut blocked_payload = None;
+    for mut item in original {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        let Some(id) = object
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty() && id.len() <= 512)
+            .map(str::to_string)
+        else {
+            continue;
+        };
+        if object.get("internalDate").is_some() {
+            released.push(item);
+            continue;
+        }
+        match fetch_gmail_metadata_child(
+            state,
+            snapshot,
+            decision,
+            parent_url,
+            gmail_user,
+            &id,
+            days,
+            cutoff_ms,
+            config,
+            total_deadline,
+            execution,
+        ) {
+            GmailMetadataChildResult::Hydrated {
+                internal_date,
+                record,
+            } => {
+                object.insert("internalDate".to_string(), Value::String(internal_date));
+                child_records.push(record);
+                hydrated_count = hydrated_count.saturating_add(1);
+                released.push(item);
+            }
+            GmailMetadataChildResult::Dropped { record } => {
+                child_records.push(record);
+                dropped_count = dropped_count.saturating_add(1);
+            }
+            GmailMetadataChildResult::Blocked { payload, record } => {
+                child_records.push(record);
+                blocked_payload = Some(payload);
+                break;
+            }
+        }
+    }
+    let ordered_child_digest = digest_json(&Value::Array(child_records.clone()));
+    let completed = gmail_metadata_fanout_audit_event(
+        decision,
+        json!({
+            "outcome":if blocked_payload.is_some() {"blocked"} else {"completed"},
+            "planned_count":planned,
+            "attempted_count":child_records.len(),
+            "hydrated_count":hydrated_count,
+            "dropped_count":dropped_count,
+            "blocked_count":u64::from(blocked_payload.is_some()),
+            "ordered_child_digest":ordered_child_digest,
+            "metadata_fetch_config_digest":config_digest,
+        }),
+    );
+    if !post_required_audit_event(
+        state,
+        "data_plane.gmail.metadata_fanout.completed",
+        completed,
+    ) {
+        return Err(json!({"error":"gmail_metadata_fetch_completion_audit_unavailable"}));
+    }
+    if let Some(payload) = blocked_payload {
+        return Err(payload);
+    }
+    *messages = released;
     Ok(())
 }
 
@@ -16763,6 +18487,48 @@ fn remember_gmail_proofs(
             },
         );
     }
+}
+
+fn commit_gmail_response_proofs(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+    message_ids: Vec<String>,
+) {
+    let Ok(route_match) = decision_route_context(snapshot, decision, method, url) else {
+        return;
+    };
+    if route_match.route.adapter_type != "gmail.v1" || route_match.params.contains_key("message_id")
+    {
+        return;
+    }
+    remember_gmail_proofs(
+        state,
+        snapshot,
+        decision
+            .get("principal_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        decision
+            .get("credential_ref")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        decision
+            .get("credential_version")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+        route_match
+            .params
+            .get("user")
+            .map(String::as_str)
+            .unwrap_or("me"),
+        &route_match.route.id,
+        route_match.route,
+        config_u64(&route_match.route.adapter_config, "maxAgeDays", 30),
+        message_ids,
+    );
 }
 
 fn allowed_field_paths(response_config: &Value) -> Vec<Vec<String>> {
@@ -18570,25 +20336,18 @@ fn release_forward_response(
     response_secret_guard: &ResponseSecretGuard,
     validation: Value,
 ) -> Vec<u8> {
-    if let Err(payload) = validate_response_release_context(state, snapshot, decision, method, url)
-    {
+    if let Err(payload) = validate_forward_release_material(
+        state,
+        snapshot,
+        decision,
+        method,
+        url,
+        content_type,
+        released_headers,
+        &body,
+        response_secret_guard,
+    ) {
         return block_forward_response(state, decision, method, url, status, payload);
-    }
-    if response_secret_guard.detects(&body)
-        || content_type.is_some_and(|value| response_secret_guard.detects(value.as_bytes()))
-        || released_headers.iter().any(|(name, value)| {
-            response_secret_guard.detects(name.as_bytes())
-                || response_secret_guard.detects(value.as_bytes())
-        })
-    {
-        return block_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            json!({"error":"response_credential_reflection"}),
-        );
     }
     enqueue_audit(
         state,
@@ -18648,6 +20407,30 @@ fn release_forward_response(
         ),
     ]);
     http_binary_response_with_headers(status, content_type, body, &headers)
+}
+
+fn validate_forward_release_material(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    decision: &Value,
+    method: &str,
+    url: &Url,
+    content_type: Option<&str>,
+    released_headers: &[(String, String)],
+    body: &[u8],
+    response_secret_guard: &ResponseSecretGuard,
+) -> Result<(), Value> {
+    validate_response_release_context(state, snapshot, decision, method, url)?;
+    if response_secret_guard.detects(body)
+        || content_type.is_some_and(|value| response_secret_guard.detects(value.as_bytes()))
+        || released_headers.iter().any(|(name, value)| {
+            response_secret_guard.detects(name.as_bytes())
+                || response_secret_guard.detects(value.as_bytes())
+        })
+    {
+        return Err(json!({"error":"response_credential_reflection"}));
+    }
+    Ok(())
 }
 
 fn block_forward_response(
@@ -18913,10 +20696,14 @@ fn streaming_response_policy(policy: &ResponsePolicy) -> Option<StreamingRespons
 }
 
 fn validate_response_proof_route_preflight(
-    route: &Route,
+    route_match: &RouteMatch<'_>,
     proof_kind: ResponseProofKind,
 ) -> Result<(), &'static str> {
-    let streaming = streaming_response_policy(&response_policy_for_route(route)).is_some();
+    if gmail_metadata_fetch_for_list_route_match(route_match).is_some() {
+        return Err("gmail_metadata_fetch_response_proof_unsupported");
+    }
+    let streaming =
+        streaming_response_policy(&response_policy_for_route(route_match.route)).is_some();
     match (proof_kind, streaming) {
         (ResponseProofKind::Buffered, true) => {
             Err("response_proof_requires_buffered_response_route")
@@ -18932,7 +20719,7 @@ fn matched_response_proof_route<'a>(
     snapshot: &'a Snapshot,
     request: &IncomingRequest,
     authenticated_principal_id: Option<&str>,
-) -> Option<&'a Route> {
+) -> Option<RouteMatch<'a>> {
     let url = Url::parse(&request.target).ok()?;
     let headers = lower_headers(&request.headers);
     let principal = if let Some(principal_id) = authenticated_principal_id {
@@ -18943,9 +20730,7 @@ fn matched_response_proof_route<'a>(
     } else {
         snapshot.identify_principal(request.client_ip.as_deref(), &headers)
     }?;
-    snapshot
-        .match_route(&principal.id, &request.method, &url)
-        .map(|route_match| route_match.route)
+    snapshot.match_route(&principal.id, &request.method, &url)
 }
 
 fn response_content_length(headers: &HeaderMap) -> Option<u64> {
@@ -20145,6 +21930,8 @@ fn validate_forward_response(
     released_headers: &[(String, String)],
     body: Vec<u8>,
     response_secret_guard: &ResponseSecretGuard,
+    gmail_metadata_fanout: Option<&GmailMetadataFanoutExecution<'_>>,
+    gmail_proof_commit_output: Option<&mut Option<Vec<String>>>,
 ) -> Vec<u8> {
     let route_match =
         match validate_response_release_context(state, snapshot, decision, method, url) {
@@ -20153,14 +21940,6 @@ fn validate_forward_response(
                 return block_forward_response(state, decision, method, url, status, payload)
             }
         };
-    let principal_id = decision
-        .get("principal_id")
-        .and_then(Value::as_str)
-        .expect("validated response principal context");
-    let route_id = decision
-        .get("route_id")
-        .and_then(Value::as_str)
-        .expect("validated response route context");
     let base_response_config = route_match
         .route
         .adapter_config
@@ -20278,29 +22057,6 @@ fn validate_forward_response(
             response_secret_guard,
         );
     }
-    if let Err(payload) = validate_response_constraints_for_type(
-        route_match.route,
-        &body,
-        operation,
-        Some("responseBinding"),
-    ) {
-        return block_forward_response(
-            state,
-            decision,
-            method,
-            url,
-            status,
-            bind_response_validation_evidence(decision, &body, payload),
-        );
-    }
-    if let Err(payload) = validate_response_constraints_for_type(
-        route_match.route,
-        &body,
-        operation,
-        Some("responseJson"),
-    ) {
-        return block_forward_response(state, decision, method, url, status, payload);
-    }
     let validate_internal_date = response_config
         .get("validateInternalDate")
         .and_then(Value::as_bool)
@@ -20347,17 +22103,41 @@ fn validate_forward_response(
     };
     let days = config_u64(&route_match.route.adapter_config, "maxAgeDays", 30);
     let is_list_response = !route_match.params.contains_key("message_id");
-    let mut validated_message_ids = Vec::new();
+    let cutoff_ms = gmail_cutoff_ms_at(now_epoch_ms(), days);
+    if validate_internal_date && is_list_response {
+        if let Some(config) = gmail_metadata_fetch_for_list_route_match(&route_match) {
+            let Some(execution) = gmail_metadata_fanout else {
+                return block_forward_response(
+                    state,
+                    decision,
+                    method,
+                    url,
+                    status,
+                    json!({"error":"gmail_metadata_fetch_execution_context_missing"}),
+                );
+            };
+            if let Err(payload) = hydrate_gmail_list_metadata(
+                state,
+                snapshot,
+                decision,
+                url,
+                &route_match,
+                &mut payload,
+                days,
+                cutoff_ms,
+                config,
+                execution,
+            ) {
+                return block_forward_response(state, decision, method, url, status, payload);
+            }
+        }
+    }
     if validate_internal_date {
         if !is_list_response {
             if let Err(payload) = validate_gmail_internal_date(&payload, days) {
                 return block_forward_response(state, decision, method, url, status, payload);
             }
         } else {
-            let validate_missing_by_metadata = response_config
-                .get("validateListByMetadataFetch")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
             if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
                 let original_messages = std::mem::take(messages);
                 let mut released_messages = Vec::with_capacity(original_messages.len());
@@ -20365,16 +22145,19 @@ fn validate_forward_response(
                     let Some(object) = item.as_object_mut() else {
                         continue;
                     };
-                    let Some(id) = object.get("id").and_then(Value::as_str).map(str::to_string)
-                    else {
-                        continue;
-                    };
-                    if object.get("internalDate").is_none() && validate_missing_by_metadata {
+                    if object
+                        .get("id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty() && id.len() <= 512)
+                        .is_none()
+                    {
                         continue;
                     }
-                    if let Err(payload) =
-                        validate_gmail_internal_date_value(object.get("internalDate"), days)
-                    {
+                    if let Err(payload) = validate_gmail_internal_date_value_at_cutoff(
+                        object.get("internalDate"),
+                        days,
+                        cutoff_ms,
+                    ) {
                         return block_forward_response(
                             state, decision, method, url, status, payload,
                         );
@@ -20383,7 +22166,6 @@ fn validate_forward_response(
                         "serverwareAgeProof".to_string(),
                         Value::String("validated".to_string()),
                     );
-                    validated_message_ids.push(id);
                     released_messages.push(item);
                 }
                 *messages = released_messages;
@@ -20407,51 +22189,76 @@ fn validate_forward_response(
         route_match.route,
         &constraint_body,
         operation,
-        Some("responseDateWindow"),
+        Some("responseBinding"),
     ) {
-        return block_forward_response(state, decision, method, url, status, payload);
-    }
-    if is_list_response {
-        let credential_ref = decision
-            .get("credential_ref")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let credential_version = decision
-            .get("credential_version")
-            .and_then(Value::as_u64)
-            .unwrap_or_default();
-        remember_gmail_proofs(
+        return block_forward_response(
             state,
-            snapshot,
-            principal_id,
-            credential_ref,
-            credential_version,
-            route_match
-                .params
-                .get("user")
-                .map(String::as_str)
-                .unwrap_or("me"),
-            route_id,
-            route_match.route,
-            days,
-            validated_message_ids,
-        );
-    }
-    let redacted = apply_gmail_allowed_fields(&mut payload, &response_config, is_list_response);
-    match serde_json::to_vec(&payload) {
-        Ok(bytes) => release_forward_response(
-            state,
-            snapshot,
             decision,
             method,
             url,
             status,
-            Some("application/json"),
-            released_headers,
-            bytes,
-            response_secret_guard,
-            json!({"ok":true,"mode":"gmail_internal_date","allowed_fields_redacted":redacted}),
-        ),
+            bind_response_validation_evidence(decision, &constraint_body, payload),
+        );
+    }
+    if let Err(payload) = validate_response_constraints_for_type(
+        route_match.route,
+        &constraint_body,
+        operation,
+        Some("responseJson"),
+    ) {
+        return block_forward_response(state, decision, method, url, status, payload);
+    }
+    if let Err(payload) = validate_response_constraints_for_type(
+        route_match.route,
+        &constraint_body,
+        operation,
+        Some("responseDateWindow"),
+    ) {
+        return block_forward_response(state, decision, method, url, status, payload);
+    }
+    let redacted = apply_gmail_allowed_fields(&mut payload, &response_config, is_list_response);
+    match serde_json::to_vec(&payload) {
+        Ok(bytes) => {
+            if let Err(payload) = validate_forward_release_material(
+                state,
+                snapshot,
+                decision,
+                method,
+                url,
+                Some("application/json"),
+                released_headers,
+                &bytes,
+                response_secret_guard,
+            ) {
+                return block_forward_response(state, decision, method, url, status, payload);
+            }
+            if is_list_response {
+                if let Some(output) = gmail_proof_commit_output {
+                    let emitted_ids = payload
+                        .get("messages")
+                        .and_then(Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|item| item.get("id").and_then(Value::as_str))
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>();
+                    *output = Some(emitted_ids);
+                }
+            }
+            release_forward_response(
+                state,
+                snapshot,
+                decision,
+                method,
+                url,
+                status,
+                Some("application/json"),
+                released_headers,
+                bytes,
+                response_secret_guard,
+                json!({"ok":true,"mode":"gmail_internal_date","allowed_fields_redacted":redacted}),
+            )
+        }
         Err(_) => block_forward_response(
             state,
             decision,
@@ -20560,6 +22367,8 @@ fn finalize_upstream_response(
     stream_writer: Option<&mut dyn TerminalDeadlineWrite>,
     response_proof_upstream_output: Option<&mut Option<ResponseProofUpstreamResponse>>,
     streaming_response_proof: Option<StreamingResponseProofExecution<'_>>,
+    gmail_metadata_fanout: Option<&GmailMetadataFanoutExecution<'_>>,
+    gmail_proof_commit_output: Option<&mut Option<Vec<String>>>,
     _keep_alive: bool,
 ) -> ForwardResult {
     let status = response.status();
@@ -20826,6 +22635,8 @@ fn finalize_upstream_response(
                 &released_headers,
                 body,
                 response_secret_guard,
+                gmail_metadata_fanout,
+                gmail_proof_commit_output,
             ))
         }
         Ok(_) => ForwardResult::Buffered(block_forward_response(
@@ -20965,11 +22776,17 @@ fn forward_absolute_request_inner<'a>(
     let route_streaming =
         response_policy_for_decision(snapshot, &decision, &request.method, &upstream_url)
             .is_some_and(|policy| streaming_response_policy(&policy).is_some());
-    let proof_route_error = match (response_proof_kind, route_streaming) {
-        (Some(ResponseProofKind::Buffered), true) => {
+    let gmail_metadata_list =
+        decision_route_context(snapshot, &decision, &request.method, &upstream_url)
+            .ok()
+            .and_then(|route_match| gmail_metadata_fetch_for_list_route_match(&route_match))
+            .is_some();
+    let proof_route_error = match (response_proof_kind, gmail_metadata_list, route_streaming) {
+        (Some(_), true, _) => Some("gmail_metadata_fetch_response_proof_unsupported"),
+        (Some(ResponseProofKind::Buffered), false, true) => {
             Some("response_proof_requires_buffered_response_route")
         }
-        (Some(ResponseProofKind::Streaming), false) => {
+        (Some(ResponseProofKind::Streaming), false, false) => {
             Some("stream_response_proof_requires_streaming_response_route")
         }
         _ => None,
@@ -21179,10 +22996,20 @@ fn forward_absolute_request_inner<'a>(
         }
         completed_response_proof_authorization = Some(authorization_context);
     }
-    let response = match builder.send() {
+    let response = match send_upstream_request_with_current_lease(
+        state,
+        snapshot,
+        credential_release_binding.as_ref(),
+        builder,
+    ) {
         Ok(response) => response,
-        Err(err) => {
-            let detail = redacted_reqwest_error(err);
+        Err(UpstreamSendError::CredentialAuthority(error)) => {
+            buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":error}),
+            ));
+        }
+        Err(UpstreamSendError::Request(detail)) => {
             enqueue_audit(
                 state,
                 "data_plane.response.blocked",
@@ -21200,12 +23027,14 @@ fn forward_absolute_request_inner<'a>(
             ));
         }
     };
-    if let Some(release) = release_authorization.as_mut() {
-        if let Err(err) = release.complete_forwarded() {
-            buffered!(json_status_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                json!({"error":"release_authorization_completion_failed","detail":err}),
-            ));
+    if !gmail_metadata_list {
+        if let Some(release) = release_authorization.as_mut() {
+            if let Err(err) = release.complete_forwarded() {
+                buffered!(json_status_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error":"release_authorization_completion_failed","detail":err}),
+                ));
+            }
         }
     }
     let (stream_writer, streaming_response_proof) = if let Some(request) =
@@ -21228,7 +23057,15 @@ fn forward_absolute_request_inner<'a>(
     } else {
         (stream_writer, None)
     };
-    finalize_upstream_response(
+    let gmail_metadata_fanout = gmail_metadata_list.then(|| GmailMetadataFanoutExecution {
+        parent_credential_binding: credential_release_binding.as_ref(),
+        injection_plan,
+        dispatch_expires_at_epoch_ms: release_dispatch_observation
+            .as_ref()
+            .map(|observation| observation.dispatch_expires_at_epoch_ms),
+    });
+    let mut gmail_proof_commit = None;
+    let result = finalize_upstream_response(
         state,
         snapshot,
         &decision,
@@ -21239,8 +23076,31 @@ fn forward_absolute_request_inner<'a>(
         stream_writer,
         response_proof_upstream_output,
         streaming_response_proof,
+        gmail_metadata_fanout.as_ref(),
+        Some(&mut gmail_proof_commit),
         keep_alive,
-    )
+    );
+    if gmail_metadata_list {
+        if let Some(release) = release_authorization.as_mut() {
+            if let Err(err) = release.complete_forwarded() {
+                buffered!(json_status_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    json!({"error":"release_authorization_completion_failed","detail":err}),
+                ));
+            }
+        }
+    }
+    if let Some(message_ids) = gmail_proof_commit {
+        commit_gmail_response_proofs(
+            state,
+            snapshot,
+            &decision,
+            &request_method,
+            &upstream_url,
+            message_ids,
+        );
+    }
+    result
 }
 
 fn forward_absolute_streaming_request_to(
@@ -21513,10 +23373,20 @@ fn forward_absolute_streaming_request_to(
             ));
         }
     }
-    let response = match builder.send() {
+    let response = match send_upstream_request_with_current_lease(
+        state,
+        snapshot,
+        credential_release_binding.as_ref(),
+        builder,
+    ) {
         Ok(response) => response,
-        Err(err) => {
-            let detail = redacted_reqwest_error(err);
+        Err(UpstreamSendError::CredentialAuthority(error)) => {
+            write_buffered!(json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":error}),
+            ));
+        }
+        Err(UpstreamSendError::Request(detail)) => {
             let (body_sha256, body_bytes) = request_stream_stats_snapshot(&stats);
             let (mutated_body_sha256, mutated_body_bytes) = output_stats
                 .as_ref()
@@ -21626,6 +23496,8 @@ fn forward_absolute_streaming_request_to(
         response,
         &response_secret_guard,
         Some(writer),
+        None,
+        None,
         None,
         None,
         keep_alive,
@@ -21896,6 +23768,9 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         .body(body);
     let (ready_sender, ready_receiver) = mpsc::sync_channel::<()>(0);
     let (start_sender, start_receiver) = mpsc::sync_channel::<()>(0);
+    let send_state = Arc::clone(state);
+    let send_snapshot = Arc::clone(snapshot);
+    let send_credential_release_binding = credential_release_binding.clone();
     let sender_thread = thread::spawn(move || {
         ready_sender
             .send(())
@@ -21903,7 +23778,16 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         start_receiver
             .recv()
             .map_err(|_| "upstream sender was cancelled before dispatch".to_string())?;
-        builder.send().map_err(redacted_reqwest_error)
+        send_upstream_request_with_current_lease(
+            &send_state,
+            &send_snapshot,
+            send_credential_release_binding.as_ref(),
+            builder,
+        )
+        .map_err(|error| match error {
+            UpstreamSendError::CredentialAuthority(error) => error.to_string(),
+            UpstreamSendError::Request(error) => error,
+        })
     });
     if ready_receiver.recv().is_err() {
         let _ = sender_thread.join();
@@ -21932,6 +23816,16 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
                 json!({"error":"release_authorization_dispatch_failed","detail":err}),
             ));
         }
+    }
+    if let Err(error) =
+        credential_lease_upstream_send_timeout(state, snapshot, credential_release_binding.as_ref())
+    {
+        drop(start_sender);
+        let _ = sender_thread.join();
+        write_buffered!(json_status_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!({"error":error}),
+        ));
     }
     if start_sender.send(()).is_err() {
         let _ = sender_thread.join();
@@ -22102,6 +23996,8 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
         Some(tls),
         None,
         None,
+        None,
+        None,
         keep_alive,
     ) {
         ForwardResult::Buffered(response) => {
@@ -22126,10 +24022,10 @@ fn forward_absolute_request_to<W: TerminalDeadlineWrite>(
         ResponseProofRequestContext::Streaming(_) => ResponseProofKind::Streaming,
     });
     if let Some(proof_kind) = proof_kind {
-        if let Some(route) =
+        if let Some(route_match) =
             matched_response_proof_route(snapshot, &request, authenticated_principal_id)
         {
-            if let Err(error) = validate_response_proof_route_preflight(route, proof_kind) {
+            if let Err(error) = validate_response_proof_route_preflight(&route_match, proof_kind) {
                 enqueue_audit(
                     state,
                     if proof_kind == ResponseProofKind::Streaming {
@@ -22524,15 +24420,6 @@ fn read_request_head_from<R: Read>(
     let mut has_content_length = false;
     let mut headers: BTreeMap<String, String> = BTreeMap::new();
     let mut header_count = 0usize;
-    let singleton_headers = [
-        "host",
-        "content-length",
-        "authorization",
-        "proxy-authorization",
-        "x-serverware-data-plane-token",
-        ENROLLMENT_SESSION_HEADER,
-        RESPONSE_PROOF_NONCE_HEADER,
-    ];
     for line in lines {
         if line.is_empty() {
             continue;
@@ -22561,15 +24448,10 @@ fn read_request_head_from<R: Read>(
         let value = raw_value.trim_matches([' ', '\t']);
         HeaderValue::from_str(value)
             .map_err(|err| format!("invalid request header value for {name}: {err}"))?;
-        if singleton_headers.contains(&name.as_str()) && headers.contains_key(&name) {
+        if headers.contains_key(&name) {
             return Err(format!("duplicate singleton request header: {name}"));
         }
-        if let Some(existing) = headers.get_mut(&name) {
-            existing.push_str(", ");
-            existing.push_str(value);
-        } else {
-            headers.insert(name.clone(), value.to_string());
-        }
+        headers.insert(name.clone(), value.to_string());
         if name == "content-length" {
             has_content_length = true;
             if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
@@ -23535,25 +25417,288 @@ fn production_mode(release_channel: Option<&str>) -> bool {
     )
 }
 
-fn validate_release_authorization_base_url(value: &str, is_production: bool) -> Result<(), String> {
-    let parsed = Url::parse(value)
-        .map_err(|err| format!("parse release authorization base URL {value}: {err}"))?;
-    if !matches!(parsed.scheme(), "http" | "https")
-        || !parsed.username().is_empty()
-        || parsed.password().is_some()
-        || parsed.query().is_some()
-        || parsed.fragment().is_some()
-        || parsed.path() != "/api/data-plane/release-authorizations"
-    {
+fn validate_production_release_authorization_policy(
+    snapshot: &Snapshot,
+    is_production: bool,
+    atomic_release_authorization_enabled: bool,
+) -> Result<(), String> {
+    if !is_production || atomic_release_authorization_enabled {
+        return Ok(());
+    }
+    for route in &snapshot.routes {
+        if route.credential_ref.is_none() {
+            continue;
+        }
+        let jit_required = route.jit.get("required").and_then(Value::as_bool) == Some(true);
+        let uses_shared_quota = route.constraints.iter().any(|constraint| {
+            constraint.get("type").and_then(Value::as_str) == Some("rateLimit")
+                && constraint.get("store").and_then(Value::as_str) == Some("shared")
+        });
+        if jit_required || uses_shared_quota {
+            return Err(format!(
+                "production credential-bearing route {} with JIT or shared quota requires atomic release authorization",
+                route.id
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_control_plane_endpoint_url(
+    label: &str,
+    value: &str,
+    canonical_path: &str,
+    is_production: bool,
+    allow_insecure_dev: bool,
+) -> Result<(), String> {
+    let parsed = Url::parse(value).map_err(|err| format!("parse {label} URL {value}: {err}"))?;
+    if parsed.host_str().is_none() || !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("{label} URL must be an absolute HTTP(S) URL"));
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(format!("{label} URL must not contain embedded credentials"));
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        return Err(format!("{label} URL must not contain a query or fragment"));
+    }
+    if parsed.path() != canonical_path || parsed.as_str() != value {
+        return Err(format!(
+            "{label} URL must use the exact canonical path {canonical_path}"
+        ));
+    }
+    if parsed.scheme() != "https" && (is_production || !allow_insecure_dev) {
+        return Err(format!(
+            "{label} URL must use HTTPS unless explicit insecure development mode is enabled"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_configured_control_plane_urls(
+    is_production: bool,
+    allow_insecure_dev: bool,
+    endpoints: &[(&str, &str, &str)],
+) -> Result<(), String> {
+    for (label, value, canonical_path) in endpoints {
+        validate_control_plane_endpoint_url(
+            label,
+            value,
+            canonical_path,
+            is_production,
+            allow_insecure_dev,
+        )?;
+    }
+    Ok(())
+}
+
+fn attestation_verifier_digest_from_manifest(raw: Option<&str>) -> Result<Option<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let manifest = strict_json_value_from_str(raw)
+        .map_err(|err| format!("parse {ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV}: {err}"))?;
+    let manifest = manifest.as_object().ok_or_else(|| {
+        format!("{ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV} must be a JSON object")
+    })?;
+    let Some(expected_sha256) = manifest.get(CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV) else {
+        return Ok(None);
+    };
+    let expected_sha256 = expected_sha256.as_str().ok_or_else(|| {
+        format!(
+            "{ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV}.{CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV} must be a SHA-256 digest"
+        )
+    })?;
+    if !is_sha256_digest(expected_sha256) {
+        return Err(format!(
+            "{ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV}.{CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV} must be a lowercase sha256 digest"
+        ));
+    }
+    Ok(Some(expected_sha256.to_string()))
+}
+
+fn validate_pinned_verifier_path(command: &PinnedVerifierCommand) -> Result<(), String> {
+    if !command.executable.is_absolute() {
         return Err(
-            "release authorization base URL must use HTTP(S) and the exact API path without embedded credentials, query, or fragment"
+            "production control-plane attestation verifier executable must be absolute".to_string(),
+        );
+    }
+    if command.executable.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::CurDir | std::path::Component::ParentDir
+        )
+    }) {
+        return Err(
+            "production control-plane attestation verifier executable path must be normalized"
                 .to_string(),
         );
     }
-    if is_production && parsed.scheme() != "https" {
-        return Err("production release authorization base URL must use HTTPS".to_string());
-    }
     Ok(())
+}
+
+fn read_authenticated_verifier_bytes(command: &PinnedVerifierCommand) -> Result<Vec<u8>, String> {
+    validate_pinned_verifier_path(command)?;
+    let path_metadata = fs::symlink_metadata(&command.executable).map_err(|err| {
+        format!("inspect production control-plane attestation verifier executable: {err}")
+    })?;
+    if path_metadata.file_type().is_symlink() {
+        return Err(
+            "production control-plane attestation verifier executable must not be a symlink"
+                .to_string(),
+        );
+    }
+    let mut executable = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(&command.executable)
+        .map_err(|err| {
+            format!(
+                "open production control-plane attestation verifier executable without following symlinks: {err}"
+            )
+        })?;
+    let before = executable.metadata().map_err(|err| {
+        format!("inspect opened control-plane attestation verifier executable: {err}")
+    })?;
+    if !before.file_type().is_file() {
+        return Err(
+            "production control-plane attestation verifier executable must be a regular file"
+                .to_string(),
+        );
+    }
+    if before.permissions().mode() & 0o111 == 0 {
+        return Err(
+            "production control-plane attestation verifier executable is not executable"
+                .to_string(),
+        );
+    }
+    if before.len() == 0 || before.len() > MAX_CONTROL_PLANE_ATTESTATION_VERIFIER_BYTES {
+        return Err(format!(
+            "production control-plane attestation verifier executable must contain 1-{MAX_CONTROL_PLANE_ATTESTATION_VERIFIER_BYTES} bytes"
+        ));
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(before.len()).unwrap_or(0));
+    Read::by_ref(&mut executable)
+        .take(MAX_CONTROL_PLANE_ATTESTATION_VERIFIER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| {
+            format!("read opened control-plane attestation verifier executable: {err}")
+        })?;
+    let after = executable.metadata().map_err(|err| {
+        format!("reinspect opened control-plane attestation verifier executable: {err}")
+    })?;
+    if bytes.len() as u64 != before.len()
+        || before.dev() != after.dev()
+        || before.ino() != after.ino()
+        || before.len() != after.len()
+        || before.mode() != after.mode()
+        || before.mtime() != after.mtime()
+        || before.mtime_nsec() != after.mtime_nsec()
+        || before.ctime() != after.ctime()
+        || before.ctime_nsec() != after.ctime_nsec()
+    {
+        return Err(
+            "production control-plane attestation verifier executable changed while it was read"
+                .to_string(),
+        );
+    }
+    let actual_sha256 = sha256_prefixed(&bytes);
+    if actual_sha256 != command.expected_sha256 {
+        return Err(
+            "production control-plane attestation verifier executable SHA-256 mismatch".to_string(),
+        );
+    }
+    Ok(bytes)
+}
+
+fn verify_pinned_verifier_executable(command: &PinnedVerifierCommand) -> Result<(), String> {
+    read_authenticated_verifier_bytes(command).map(|_| ())
+}
+
+#[cfg(target_os = "linux")]
+fn sealed_authenticated_verifier_snapshot(
+    command: &PinnedVerifierCommand,
+) -> Result<fs::File, String> {
+    let bytes = read_authenticated_verifier_bytes(command)?;
+    let name = CString::new("serverware-control-plane-attestation-verifier")
+        .expect("static memfd name contains no NUL");
+    // The sealed memfd is the exact byte snapshot whose digest was checked above.
+    let fd =
+        unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
+    if fd < 0 {
+        return Err(format!(
+            "create sealed control-plane attestation verifier snapshot: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    // SAFETY: memfd_create returned a new descriptor owned by this function.
+    let mut snapshot = unsafe { fs::File::from_raw_fd(fd) };
+    snapshot
+        .set_permissions(fs::Permissions::from_mode(0o500))
+        .map_err(|err| format!("mark attestation verifier snapshot executable: {err}"))?;
+    snapshot
+        .write_all(&bytes)
+        .map_err(|err| format!("write attestation verifier snapshot: {err}"))?;
+    snapshot
+        .seek(SeekFrom::Start(0))
+        .map_err(|err| format!("reset attestation verifier snapshot: {err}"))?;
+    let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+    if unsafe { libc::fcntl(snapshot.as_raw_fd(), libc::F_ADD_SEALS, seals) } != 0 {
+        return Err(format!(
+            "seal control-plane attestation verifier snapshot: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    Ok(snapshot)
+}
+
+fn configure_control_plane_attestation_verifier(
+    command: Option<&str>,
+    expected_sha256: Option<&str>,
+    is_production: bool,
+    attested_control_plane_configured: bool,
+) -> Result<Option<ControlPlaneAttestationVerifier>, String> {
+    let command = command.map(str::trim).filter(|value| !value.is_empty());
+    let expected_sha256 = expected_sha256
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(command) = command else {
+        if expected_sha256.is_some() {
+            return Err(format!(
+                "{ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV} configures {CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV} without the command"
+            ));
+        }
+        if is_production && attested_control_plane_configured {
+            return Err(format!(
+                "production attested control-plane trust requires {CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV}"
+            ));
+        }
+        return Ok(None);
+    };
+    let Some(expected_sha256) = expected_sha256 else {
+        if is_production {
+            return Err(format!(
+                "production {CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV} requires an independent SHA-256 pin in {ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV}"
+            ));
+        }
+        return Ok(Some(ControlPlaneAttestationVerifier::Development(
+            command.to_string(),
+        )));
+    };
+    if !is_sha256_digest(expected_sha256) {
+        return Err("control-plane attestation verifier SHA-256 pin is invalid".to_string());
+    }
+    let argv = shlex::split(command)
+        .ok_or("control-plane attestation verifier command has invalid quoting")?;
+    let (executable, arguments) = argv
+        .split_first()
+        .ok_or("control-plane attestation verifier command is empty")?;
+    let pinned = PinnedVerifierCommand {
+        executable: PathBuf::from(executable),
+        arguments: arguments.to_vec(),
+        expected_sha256: expected_sha256.to_string(),
+    };
+    verify_pinned_verifier_executable(&pinned)?;
+    Ok(Some(ControlPlaneAttestationVerifier::Pinned(pinned)))
 }
 
 fn configured_service_token(name: &str) -> Option<String> {
@@ -23691,22 +25836,52 @@ fn main() -> Result<(), String> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let policy_path = env::var("SERVERWARE_POLICY_BUNDLE")
         .unwrap_or_else(|_| "/data/policy-bundle.json".to_string());
-    let policy_trust_root_source = if let Some(url) =
+    let release_channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();
+    let is_production = production_mode(release_channel.as_deref());
+    let allow_insecure_dev_credential_leases =
+        env::var("SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES").as_deref() == Ok("1");
+    if is_production && allow_insecure_dev_credential_leases {
+        return Err(
+            "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES is forbidden outside an explicit development release channel"
+                .to_string(),
+        );
+    }
+    let policy_trust_root_attestation_url =
         env::var("SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL")
             .ok()
             .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
+            .filter(|value| !value.is_empty());
+    let verifier_command = env::var(CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let verifier_digest_manifest = env::var(ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV)
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let verifier_expected_sha256 =
+        attestation_verifier_digest_from_manifest(verifier_digest_manifest.as_deref())?;
+    if policy_trust_root_attestation_url.is_none()
+        && (verifier_command.is_some() || verifier_expected_sha256.is_some())
     {
+        return Err(format!(
+            "{CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV} and its SHA-256 pin require SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL"
+        ));
+    }
+    let verifier = configure_control_plane_attestation_verifier(
+        verifier_command.as_deref(),
+        verifier_expected_sha256.as_deref(),
+        is_production,
+        policy_trust_root_attestation_url.is_some(),
+    )?;
+    let policy_trust_root_source = if let Some(url) = policy_trust_root_attestation_url {
         PolicyTrustRootSource::AttestedControlPlane {
             url,
             expected_quote_key_id: env::var("SERVERWARE_EXPECTED_CONTROL_PLANE_QUOTE_KEY_ID")
                 .ok()
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty()),
-            verify_command: env::var("SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty()),
+            verifier,
         }
     } else {
         PolicyTrustRootSource::File(
@@ -23732,10 +25907,6 @@ fn main() -> Result<(), String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
-    let allow_insecure_dev_credential_leases =
-        env::var("SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES").as_deref() == Ok("1");
-    let release_channel = env::var("SERVERWARE_RELEASE_CHANNEL").ok();
-    let is_production = production_mode(release_channel.as_deref());
     let atomic_release_authorization_enabled =
         match env::var("SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED").as_deref() {
             Ok("1") => true,
@@ -23751,12 +25922,6 @@ fn main() -> Result<(), String> {
                 ))
             }
         };
-    if is_production && allow_insecure_dev_credential_leases {
-        return Err(
-            "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES is forbidden outside an explicit development release channel"
-                .to_string(),
-        );
-    }
     let policy_poll_seconds = env::var("SERVERWARE_POLICY_POLL_SECONDS")
         .ok()
         .and_then(|value| value.parse::<f64>().ok())
@@ -23910,7 +26075,7 @@ fn main() -> Result<(), String> {
     let release_authorization_base_url =
         env::var("SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL")
             .ok()
-            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
     if atomic_release_authorization_enabled {
         if release_authorization_base_url.is_none() {
@@ -23926,9 +26091,46 @@ fn main() -> Result<(), String> {
             );
         }
     }
-    if let Some(value) = release_authorization_base_url.as_deref() {
-        validate_release_authorization_base_url(value, is_production)?;
+    let mut control_plane_urls = Vec::new();
+    if let PolicyTrustRootSource::AttestedControlPlane { url, .. } = &policy_trust_root_source {
+        control_plane_urls.push((
+            "policy trust root",
+            url.as_str(),
+            POLICY_TRUST_ROOT_ATTESTATION_PATH,
+        ));
     }
+    for (label, value, canonical_path) in [
+        (
+            "credential lease",
+            credential_lease_url.as_deref(),
+            CREDENTIAL_LEASE_PATH,
+        ),
+        ("audit", audit_url.as_deref(), AUDIT_INGEST_PATH),
+        (
+            "grant consume",
+            grant_consume_url.as_deref(),
+            GRANT_CONSUME_PATH,
+        ),
+        (
+            "rate-limit consume",
+            rate_limit_consume_url.as_deref(),
+            RATE_LIMIT_CONSUME_PATH,
+        ),
+        (
+            "release authorization",
+            release_authorization_base_url.as_deref(),
+            RELEASE_AUTHORIZATION_BASE_PATH,
+        ),
+    ] {
+        if let Some(value) = value {
+            control_plane_urls.push((label, value, canonical_path));
+        }
+    }
+    validate_configured_control_plane_urls(
+        is_production,
+        allow_insecure_dev_credential_leases,
+        &control_plane_urls,
+    )?;
     if credential_lease_url.is_some() && !allow_insecure_dev_credential_leases {
         if credential_lease_recipient_attestation_command.is_none() {
             return Err(
@@ -23949,7 +26151,7 @@ fn main() -> Result<(), String> {
             &policy_trust_root_source,
             PolicyTrustRootSource::AttestedControlPlane {
                 expected_quote_key_id: None,
-                verify_command: None,
+                verifier: None,
                 ..
             }
         ) {
@@ -23957,33 +26159,6 @@ fn main() -> Result<(), String> {
                 "credential leases require a pinned quote key or SERVERWARE_CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND"
                     .to_string(),
             );
-        }
-        let mut control_plane_urls = Vec::new();
-        if let PolicyTrustRootSource::AttestedControlPlane { url, .. } = &policy_trust_root_source {
-            control_plane_urls.push(("policy trust root", url.as_str()));
-        }
-        for (label, value) in [
-            ("credential lease", credential_lease_url.as_deref()),
-            ("audit", audit_url.as_deref()),
-            ("grant consume", grant_consume_url.as_deref()),
-            ("rate-limit consume", rate_limit_consume_url.as_deref()),
-            (
-                "release authorization",
-                release_authorization_base_url.as_deref(),
-            ),
-        ] {
-            if let Some(value) = value {
-                control_plane_urls.push((label, value));
-            }
-        }
-        for (label, value) in control_plane_urls {
-            let parsed =
-                Url::parse(value).map_err(|err| format!("parse {label} URL {value}: {err}"))?;
-            if parsed.scheme() != "https" {
-                return Err(format!(
-                    "{label} URL must use HTTPS unless SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES=1"
-                ));
-            }
         }
     }
     let audit_queue_max = env::var("SERVERWARE_DATA_PLANE_AUDIT_QUEUE_MAX")
@@ -24143,6 +26318,11 @@ fn main() -> Result<(), String> {
         load_snapshot(&policy_path, &policy_trust_root_source, &binary_digest)?;
     initial_snapshot.epoch = 1;
     initial_snapshot.trust_generation = 1;
+    validate_production_release_authorization_policy(
+        &initial_snapshot,
+        is_production,
+        atomic_release_authorization_enabled,
+    )?;
     let policy_high_water = initialize_policy_high_water(
         &initial_snapshot,
         policy_high_water_path.as_deref(),
@@ -24202,6 +26382,7 @@ fn main() -> Result<(), String> {
         grant_consume_token,
         rate_limit_consume_url,
         rate_limit_consume_token,
+        is_production,
         atomic_release_authorization_enabled,
         release_authorization_base_url,
         release_authorization_token,
@@ -24302,6 +26483,76 @@ fn main() -> Result<(), String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn test_temp_path(label: &str) -> PathBuf {
+        static NEXT_PATH: AtomicU64 = AtomicU64::new(0);
+        env::temp_dir().join(format!(
+            "serverware-decision-gate-{label}-{}-{}",
+            std::process::id(),
+            NEXT_PATH.fetch_add(1, Ordering::Relaxed)
+        ))
+    }
+
+    fn write_test_executable(label: &str, contents: &[u8]) -> PathBuf {
+        let path = test_temp_path(label);
+        fs::write(&path, contents).expect("write test executable");
+        let mut permissions = fs::metadata(&path)
+            .expect("test executable metadata")
+            .permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&path, permissions).expect("make test fixture executable");
+        path
+    }
+
+    fn test_reqwest_response(raw_response: Vec<u8>) -> reqwest::blocking::Response {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("response test listener");
+        let address = listener.local_addr().expect("response test address");
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("response test request");
+            let mut request = [0u8; 4096];
+            let _ = stream
+                .read(&mut request)
+                .expect("read response test request");
+            stream
+                .write_all(&raw_response)
+                .expect("write response test response");
+        });
+        let response = Client::builder()
+            .no_proxy()
+            .build()
+            .expect("response test client")
+            .get(format!("http://{address}/test"))
+            .send()
+            .expect("response test send");
+        server.join().expect("response test server");
+        response
+    }
+
+    fn serve_one_control_plane_response(
+        status: &str,
+        body: &[u8],
+    ) -> (String, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("control response listener");
+        let address = listener.local_addr().expect("control response address");
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        )
+        .into_bytes();
+        let body = body.to_vec();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("control response request");
+            let mut request = [0u8; 16 * 1024];
+            let _ = stream.read(&mut request).expect("read control request");
+            stream
+                .write_all(&response)
+                .expect("write control response head");
+            stream
+                .write_all(&body)
+                .expect("write control response body");
+        });
+        (format!("http://{address}"), server)
+    }
 
     fn test_audit_event_id(marker: u64) -> String {
         format!("sha256:{marker:064x}")
@@ -24416,7 +26667,11 @@ mod tests {
     }
 
     fn test_gate_state(snapshot: Arc<Snapshot>) -> GateState {
-        let client = Client::builder().build().expect("test client");
+        let client = Client::builder()
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("test client");
         let policy_high_water = policy_high_water_for(&snapshot);
         let (
             response_proof_signing_key,
@@ -24467,6 +26722,7 @@ mod tests {
             grant_consume_token: None,
             rate_limit_consume_url: None,
             rate_limit_consume_token: None,
+            is_production: false,
             atomic_release_authorization_enabled: false,
             release_authorization_base_url: None,
             release_authorization_token: None,
@@ -24494,6 +26750,152 @@ mod tests {
             response_proof_attestation_command: None,
             server_instance_id: None,
         }
+    }
+
+    #[test]
+    fn control_plane_client_ignores_ambient_proxy_environment() {
+        if env::var("SERVERWARE_NO_PROXY_TEST_CHILD").as_deref() == Ok("1") {
+            let client = build_control_plane_client(Duration::from_millis(100))
+                .expect("control-plane client");
+            client
+                .get("http://192.0.2.1:9/no-proxy")
+                .send()
+                .expect_err("reserved direct target must be unavailable");
+            return;
+        }
+        let proxy_listener = TcpListener::bind("127.0.0.1:0").expect("ambient proxy listener");
+        proxy_listener
+            .set_nonblocking(true)
+            .expect("ambient proxy nonblocking mode");
+        let proxy_url = format!(
+            "http://{}",
+            proxy_listener.local_addr().expect("ambient proxy address")
+        );
+        let output = Command::new(env::current_exe().expect("current test executable"))
+            .args([
+                "--exact",
+                "tests::control_plane_client_ignores_ambient_proxy_environment",
+                "--nocapture",
+            ])
+            .env("SERVERWARE_NO_PROXY_TEST_CHILD", "1")
+            .env("HTTP_PROXY", proxy_url.as_str())
+            .env("HTTPS_PROXY", proxy_url.as_str())
+            .env("ALL_PROXY", proxy_url.as_str())
+            .env("http_proxy", proxy_url.as_str())
+            .env("https_proxy", proxy_url.as_str())
+            .env("all_proxy", proxy_url.as_str())
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .output()
+            .expect("run isolated no-proxy test");
+        assert!(
+            output.status.success(),
+            "isolated no-proxy test failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        thread::sleep(Duration::from_millis(25));
+        assert!(matches!(
+            proxy_listener.accept(),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock
+        ));
+    }
+
+    #[test]
+    fn bounded_control_plane_reader_rejects_declared_and_chunked_oversize() {
+        let declared = test_reqwest_response(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 33\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+        let declared_error =
+            read_bounded_control_plane_response_body(declared, 32, "test control response")
+                .expect_err("oversized Content-Length must fail before buffering");
+        assert!(declared_error.contains("exceeds 32 bytes"));
+
+        let hostile = b"hostile-control-plane-response-body";
+        let mut chunked =
+            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n".to_vec();
+        chunked.extend_from_slice(format!("{:x}\r\n", hostile.len()).as_bytes());
+        chunked.extend_from_slice(hostile);
+        chunked.extend_from_slice(b"\r\n0\r\n\r\n");
+        let chunked = test_reqwest_response(chunked);
+        let chunked_error =
+            read_bounded_control_plane_response_body(chunked, 16, "test control response")
+                .expect_err("oversized chunked body must fail during bounded streaming");
+        assert!(chunked_error.contains("exceeds 16 bytes"));
+        assert!(!chunked_error.contains("hostile-control-plane"));
+    }
+
+    #[test]
+    fn control_plane_errors_do_not_reflect_hostile_response_bodies() {
+        let marker = "HOSTILE_CONTROL_BODY_DO_NOT_REFLECT";
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        let canonical = json!({"request":{"method":"GET"}});
+        let display = json!({"method":"GET"});
+
+        let (grant_url, grant_server) =
+            serve_one_control_plane_response("500 Internal Server Error", marker.as_bytes());
+        state.grant_consume_url = Some(format!("{grant_url}/consume"));
+        state.grant_consume_token = Some("grant-token".to_string());
+        let grant_error = match consume_shared_grant(
+            &state,
+            "agent:test",
+            "route:test",
+            "credential:test",
+            7,
+            &snapshot.hash,
+            "sha256:request",
+            "sha256:operation",
+            "sha256:flow",
+            "sha256:attempt",
+            "GET",
+            "https://example.test/resource",
+            &canonical,
+            &display,
+            false,
+        ) {
+            Err(error) => error,
+            Ok(_) => panic!("hostile grant response must fail"),
+        };
+        grant_server.join().expect("grant response server");
+        assert!(!grant_error.contains(marker));
+
+        let rate_body = format!(r#"{{"ok":false,"detail":"{marker}"}}"#);
+        let (rate_url, rate_server) =
+            serve_one_control_plane_response("200 OK", rate_body.as_bytes());
+        state.rate_limit_consume_url = Some(format!("{rate_url}/consume"));
+        state.rate_limit_consume_token = Some("rate-token".to_string());
+        let rate_error = enforce_rate_limit(
+            &state,
+            &json!({
+                "id":"quota:test",
+                "type":"rateLimit",
+                "max":1,
+                "windowSeconds":60,
+                "store":"shared",
+            }),
+            &snapshot.routes[0],
+            "agent:test",
+            Some("credential:test"),
+            7,
+            &snapshot.hash,
+            &json!({"operation":"read"}),
+            true,
+            false,
+        )
+        .expect_err("hostile rate response must fail");
+        rate_server.join().expect("rate response server");
+        assert!(!rate_error.to_string().contains(marker));
+
+        let (release_url, release_server) =
+            serve_one_control_plane_response("500 Internal Server Error", marker.as_bytes());
+        state.release_authorization_base_url = Some(format!(
+            "{release_url}/api/data-plane/release-authorizations"
+        ));
+        state.release_authorization_token = Some("release-token".to_string());
+        let release_error = post_release_authorization(&state, "reserve", &json!({}))
+            .expect_err("hostile release response must fail");
+        release_server.join().expect("release response server");
+        assert!(!release_error.contains(marker));
     }
 
     #[test]
@@ -24639,6 +27041,149 @@ mod tests {
             .expect("rate counters")
             .is_empty());
         assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+    }
+
+    #[test]
+    fn legacy_injection_preflight_does_not_burn_jit_grant_or_shared_quota() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "demo".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer","field":"access_token"}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.routes[0].jit = json!({
+            "required":true,
+            "ttlSeconds":3600,
+            "maxUses":1,
+        });
+        snapshot_value.routes[0].constraints = vec![json!({
+            "id":"quota:test",
+            "type":"rateLimit",
+            "max":1,
+            "windowSeconds":60,
+            "store":"shared",
+        })];
+        let snapshot = Arc::new(snapshot_value);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("audit-token".to_string());
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        cache_scoped_credential_lease(
+            &state,
+            &snapshot,
+            &scope,
+            SecretLease {
+                scope: scope.clone(),
+                version: 7,
+                secret: Zeroizing::new("not-json".to_string()),
+                metadata: BTreeMap::new(),
+                policy_hash: snapshot.hash.clone(),
+                expires_at_epoch_ms: now_epoch_ms().saturating_add(5_000),
+                expires_at_monotonic: Instant::now() + Duration::from_secs(5),
+            },
+        )
+        .expect("cache malformed injection fixture");
+
+        let request = || correlated_test_decision_request("A_-0123456789abcdefghijk");
+        let preview = decide(&state, request());
+        let grant = create_grant(
+            &state,
+            GrantCreate {
+                grant_id: Some("grant:preflight".to_string()),
+                approval_id: Some("approval:preflight".to_string()),
+                principal_id: "agent:test".to_string(),
+                route_id: "route:test".to_string(),
+                credential_ref: "credential:test".to_string(),
+                credential_version: 7,
+                policy_hash: snapshot.hash.clone(),
+                request_digest: preview["request_digest"]
+                    .as_str()
+                    .expect("preview request digest")
+                    .to_string(),
+                operation_digest: preview["operation_digest"]
+                    .as_str()
+                    .expect("preview operation digest")
+                    .to_string(),
+                max_uses: 1,
+                ttl_seconds: 30,
+            },
+        );
+        assert_eq!(grant["ok"], true);
+
+        let quota_listener = TcpListener::bind("127.0.0.1:0").expect("shared quota listener");
+        quota_listener
+            .set_nonblocking(true)
+            .expect("shared quota nonblocking mode");
+        let quota_address = quota_listener.local_addr().expect("shared quota address");
+        state.rate_limit_consume_url = Some(format!("http://{quota_address}/consume"));
+        state.rate_limit_consume_token = Some("rate-token".to_string());
+        let quota_consumption_flags = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicU64::new(0));
+        let server_flags = Arc::clone(&quota_consumption_flags);
+        let server_stop = Arc::clone(&stop);
+        let quota_server = thread::spawn(move || loop {
+            match quota_listener.accept() {
+                Ok((mut stream, _)) => {
+                    stream
+                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .expect("shared quota read timeout");
+                    let head = read_request_head_from(&mut stream, None)
+                        .expect("shared quota request head");
+                    let request = read_request_body_from_head(
+                        &mut stream,
+                        head,
+                        MAX_CONTROL_PLANE_RATE_LIMIT_RESPONSE_BYTES,
+                    )
+                    .expect("shared quota request body");
+                    let payload = strict_json_value_from_slice(&request.body)
+                        .expect("shared quota request JSON");
+                    server_flags
+                        .lock()
+                        .expect("shared quota flags")
+                        .push(payload.get("consume").and_then(Value::as_bool));
+                    let response =
+                        http_response("200 OK", json!({"ok":true,"allowed":true,"remaining":0}));
+                    let _ = stream.write_all(&response);
+                    return;
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    if server_stop.load(Ordering::Relaxed) != 0 {
+                        return;
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(error) => panic!("shared quota accept failed: {error}"),
+            }
+        });
+
+        let denied = decide_internal(&state, &snapshot, request(), Some("agent:test"));
+        stop.store(1, Ordering::Relaxed);
+        quota_server.join().expect("shared quota server");
+        assert_eq!(denied["payload"]["error"], "credential_injection_failed");
+        assert_eq!(
+            *quota_consumption_flags.lock().expect("shared quota flags"),
+            vec![Some(false)]
+        );
+        assert_eq!(
+            state
+                .grants
+                .lock()
+                .expect("grant cache")
+                .values()
+                .next()
+                .map(|grant| grant.uses_remaining),
+            Some(1)
+        );
+        assert!(!state
+            .audit_queue
+            .lock()
+            .expect("audit queue")
+            .iter()
+            .any(|event| event.event_type == "data_plane.jit.grant_consumed"));
     }
 
     #[test]
@@ -27557,6 +30102,126 @@ mod tests {
     }
 
     #[test]
+    fn request_value_without_response_binding_precedes_credential_access() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking upstream listener");
+        let upstream = listener.local_addr().expect("test upstream address");
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok(_) => return true,
+                    Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(5));
+                    }
+                    Err(err) => panic!("accept test upstream request: {err}"),
+                }
+            }
+            false
+        });
+
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "generic".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer"}),
+            },
+        );
+        let route = &mut snapshot.routes[0];
+        route.scheme = "http".to_string();
+        route.host = upstream.ip().to_string();
+        route.port = upstream.port();
+        route.methods = HashSet::from(["GET".to_string()]);
+        route.paths = vec![compile_template("/repos/{owner}").expect("template")];
+        route.credential_ref = Some("credential:test".to_string());
+        route.adapter_config = json!({
+            "request":{
+                "allowedHeaders":[],
+                "allowedQueryKeys":[],
+                "bodyMode":"none",
+                "maxBodyBytes":0
+            },
+            "response":{"mode":"json","maxBodyBytes":1024,"allowedFields":["id"]}
+        });
+        route.constraints = vec![json!({
+            "id":"approved-owner",
+            "type":"requestValue",
+            "phase":"request",
+            "rules":[{
+                "source":"pathParam",
+                "name":"owner",
+                "predicate":{"kind":"equals","value":"approved-owner"}
+            }]
+        })];
+        let snapshot = Arc::new(snapshot);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let result = forward_absolute_request_inner(
+            &state,
+            &snapshot,
+            IncomingRequest {
+                method: "GET".to_string(),
+                target: format!("http://{upstream}/repos/denied-owner"),
+                headers: BTreeMap::new(),
+                body: Vec::new(),
+                client_ip: Some("127.0.0.1".to_string()),
+            },
+            Some("agent:test"),
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        );
+        let response = match result {
+            ForwardResult::Buffered(response) => {
+                String::from_utf8(response).expect("buffered HTTP denial")
+            }
+            ForwardResult::Streamed => panic!("denied request value unexpectedly streamed"),
+        };
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+        assert!(
+            response.contains("request_value_predicate_denied"),
+            "{response}"
+        );
+        assert!(
+            !server.join().expect("test upstream thread"),
+            "request denied by requestValue contacted the upstream"
+        );
+        assert_eq!(
+            state
+                .credential_lease_refresh_success
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            state
+                .credential_lease_refresh_failed
+                .load(Ordering::Relaxed),
+            0
+        );
+        assert!(state
+            .credential_leases
+            .lock()
+            .expect("lease cache")
+            .is_empty());
+        assert!(state
+            .credential_generations
+            .lock()
+            .expect("generation cache")
+            .is_empty());
+        assert!(state
+            .constraint_rate_counters
+            .lock()
+            .expect("rate counters")
+            .is_empty());
+    }
+
+    #[test]
     fn jit_policy_admission_matches_python_and_schema_contract() {
         let mut route = generic_policy_route("none", json!(1024));
         route["jit"] = valid_jit_policy();
@@ -28597,6 +31262,561 @@ mod tests {
         assert_eq!(error["error"], "response_date_field_missing");
     }
 
+    fn gmail_metadata_test_config() -> GmailMetadataFetchConfig {
+        GmailMetadataFetchConfig {
+            max_messages: 10,
+            per_request_timeout: Duration::from_millis(1_500),
+            total_timeout: Duration::from_millis(8_000),
+            max_body_bytes: 4_096,
+        }
+    }
+
+    #[test]
+    fn gmail_metadata_child_url_is_same_origin_and_encodes_path_segments() {
+        let parent =
+            Url::parse("https://gmail.example.test:8443/gmail/v1/users/me/messages?q=safe")
+                .expect("parent Gmail URL");
+        let child = gmail_metadata_child_url(&parent, "user/../victim", "id/?#%2f")
+            .expect("safe child URL");
+        assert_eq!(child.scheme(), "https");
+        assert_eq!(child.host_str(), Some("gmail.example.test"));
+        assert_eq!(child.port(), Some(8443));
+        assert_eq!(
+            child.path(),
+            "/gmail/v1/users/user%2F..%2Fvictim/messages/id%2F%3F%23%252f"
+        );
+        assert_eq!(
+            child.query_pairs().collect::<Vec<_>>(),
+            vec![
+                ("format".into(), "metadata".into()),
+                ("fields".into(), "id,internalDate".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn gmail_metadata_duplicate_ids_deny_before_required_audit_or_child_dispatch() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let mut route = snapshot.routes[0].clone();
+        route.adapter_type = "gmail.v1".to_string();
+        let route_match = RouteMatch {
+            route: &route,
+            params: BTreeMap::from([("user".to_string(), "me".to_string())]),
+        };
+        let mut payload = json!({
+            "messages":[
+                {"id":"duplicate","threadId":"thread-1"},
+                {"id":"duplicate","threadId":"thread-2"}
+            ]
+        });
+        let injection = json!({"type":"bearer"});
+        let execution = GmailMetadataFanoutExecution {
+            parent_credential_binding: None,
+            injection_plan: &injection,
+            dispatch_expires_at_epoch_ms: None,
+        };
+        let error = hydrate_gmail_list_metadata(
+            &state,
+            &snapshot,
+            &json!({}),
+            &Url::parse("https://gmail.example.test/gmail/v1/users/me/messages")
+                .expect("parent URL"),
+            &route_match,
+            &mut payload,
+            30,
+            gmail_cutoff_ms_at(now_epoch_ms(), 30),
+            gmail_metadata_test_config(),
+            &execution,
+        )
+        .expect_err("duplicate Gmail IDs must fail closed");
+        assert_eq!(error["error"], "gmail_metadata_fetch_duplicate_id");
+        assert_eq!(state.audit_sent.load(Ordering::Relaxed), 0);
+        assert_eq!(state.audit_required_failed.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn gmail_metadata_requires_start_audit_ack_before_any_child_dispatch() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("child listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking child listener");
+        let address = listener.local_addr().expect("child address");
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.routes[0].adapter_type = "gmail.v1".to_string();
+        snapshot_value.routes[0].scheme = "http".to_string();
+        snapshot_value.routes[0].host = address.ip().to_string();
+        snapshot_value.routes[0].port = address.port();
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let route_match = RouteMatch {
+            route: &snapshot.routes[0],
+            params: BTreeMap::from([("user".to_string(), "me".to_string())]),
+        };
+        let mut payload = json!({"messages":[{"id":"message-1","threadId":"thread-1"}]});
+        let injection = json!({"type":"bearer"});
+        let execution = GmailMetadataFanoutExecution {
+            parent_credential_binding: None,
+            injection_plan: &injection,
+            dispatch_expires_at_epoch_ms: None,
+        };
+        let error = hydrate_gmail_list_metadata(
+            &state,
+            &snapshot,
+            &json!({
+                "principal_id":"agent:test",
+                "route_id":"route:test",
+                "policy_hash":snapshot.hash,
+                "credential_ref":"credential:test",
+                "credential_version":7,
+                "request_digest":sha256_prefixed(b"request"),
+                "operation_digest":sha256_prefixed(b"operation"),
+            }),
+            &Url::parse(&format!("http://{address}/gmail/v1/users/me/messages"))
+                .expect("parent URL"),
+            &route_match,
+            &mut payload,
+            30,
+            gmail_cutoff_ms_at(now_epoch_ms(), 30),
+            gmail_metadata_test_config(),
+            &execution,
+        )
+        .expect_err("missing durable start audit must fail closed");
+        assert_eq!(
+            error["error"],
+            "gmail_metadata_fetch_start_audit_unavailable"
+        );
+        assert!(matches!(listener.accept(), Err(err) if err.kind() == io::ErrorKind::WouldBlock));
+        assert_eq!(state.audit_required_failed.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn gmail_metadata_child_uses_exact_credential_and_strict_metadata_contract() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("metadata listener");
+        let address = listener.local_addr().expect("metadata address");
+        let recent_date = now_epoch_ms().saturating_sub(86_400_000).to_string();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("metadata request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("metadata read timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut buffer).expect("read metadata request");
+                assert!(read > 0, "metadata request ended before headers");
+                request.extend_from_slice(&buffer[..read]);
+            }
+            let body = serde_json::to_vec(&json!({
+                "id":"message-1",
+                "internalDate":recent_date,
+            }))
+            .expect("metadata response JSON");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("write metadata response headers");
+            stream
+                .write_all(&body)
+                .expect("write metadata response body");
+            String::from_utf8(request).expect("metadata request is ASCII")
+        });
+
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.routes[0].scheme = "http".to_string();
+        snapshot_value.routes[0].host = address.ip().to_string();
+        snapshot_value.routes[0].port = address.port();
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "google".to_string(),
+                provider_subject: Some("user:test".to_string()),
+                injection: json!({"type":"bearer"}),
+            },
+        );
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let lease = SecretLease {
+            scope: scope.clone(),
+            version: 7,
+            secret: Zeroizing::new("upstream-secret".to_string()),
+            metadata: BTreeMap::new(),
+            policy_hash: snapshot.hash.clone(),
+            expires_at_epoch_ms: now_epoch_ms() + 10_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(10),
+        };
+        let parent_binding = credential_lease_release_binding(&lease);
+        cache_scoped_credential_lease(&state, &snapshot, &scope, lease)
+            .expect("cache Gmail credential lease");
+        let injection = json!({"type":"bearer"});
+        let execution = GmailMetadataFanoutExecution {
+            parent_credential_binding: Some(&parent_binding),
+            injection_plan: &injection,
+            dispatch_expires_at_epoch_ms: None,
+        };
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "credential_ref":"credential:test",
+            "credential_version":7,
+        });
+        let parent_url = Url::parse(&format!("http://{address}/gmail/v1/users/me/messages"))
+            .expect("parent URL");
+        let result = fetch_gmail_metadata_child(
+            &state,
+            &snapshot,
+            &decision,
+            &parent_url,
+            "me",
+            "message-1",
+            30,
+            gmail_cutoff_ms_at(now_epoch_ms(), 30),
+            gmail_metadata_test_config(),
+            Instant::now() + Duration::from_secs(8),
+            &execution,
+        );
+        match result {
+            GmailMetadataChildResult::Hydrated {
+                internal_date,
+                record,
+            } => {
+                assert!(internal_date.parse::<u128>().is_ok());
+                assert_eq!(record["outcome"], "hydrated");
+                assert!(record["request_digest"]
+                    .as_str()
+                    .is_some_and(is_sha256_digest));
+                assert!(record["response_digest"]
+                    .as_str()
+                    .is_some_and(is_sha256_digest));
+                assert!(!record.to_string().contains("message-1"));
+            }
+            GmailMetadataChildResult::Dropped { record } => {
+                panic!("metadata child unexpectedly dropped: {record}")
+            }
+            GmailMetadataChildResult::Blocked { payload, .. } => {
+                panic!("metadata child unexpectedly blocked: {payload}")
+            }
+        }
+        let request = server.join().expect("metadata server");
+        let request_lower = request.to_ascii_lowercase();
+        assert!(request.starts_with(
+            "GET /gmail/v1/users/me/messages/message-1?format=metadata&fields=id%2CinternalDate HTTP/1.1\r\n"
+        ));
+        assert!(request_lower.contains("accept: application/json\r\n"));
+        assert!(request_lower.contains("authorization: bearer upstream-secret\r\n"));
+        assert!(!request_lower.contains("x-serverware-"));
+    }
+
+    #[test]
+    fn gmail_metadata_hydration_requires_redacted_start_and_completion_acknowledgements() {
+        let metadata_listener = TcpListener::bind("127.0.0.1:0").expect("metadata listener");
+        let metadata_address = metadata_listener
+            .local_addr()
+            .expect("metadata listener address");
+        let recent_date = now_epoch_ms().saturating_sub(86_400_000).to_string();
+        let metadata_server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for index in 1..=2 {
+                let (mut stream, _) = metadata_listener.accept().expect("metadata request");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    let read = stream.read(&mut buffer).expect("read metadata request");
+                    assert!(read > 0, "metadata request ended before headers");
+                    request.extend_from_slice(&buffer[..read]);
+                }
+                let body = serde_json::to_vec(&json!({
+                    "id":format!("message-{index}"),
+                    "internalDate":recent_date,
+                }))
+                .expect("metadata response JSON");
+                write!(
+                    stream,
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                )
+                .expect("write metadata headers");
+                stream.write_all(&body).expect("write metadata body");
+                requests.push(String::from_utf8(request).expect("metadata request ASCII"));
+            }
+            requests
+        });
+
+        let response_signing_key = SigningKey::from_bytes(&[39u8; 32]);
+        let base_snapshot = test_snapshot_with_control_plane_response_key(1, &response_signing_key);
+        let mut snapshot_value = (*base_snapshot).clone();
+        snapshot_value.routes[0].adapter_type = "gmail.v1".to_string();
+        snapshot_value.routes[0].scheme = "http".to_string();
+        snapshot_value.routes[0].host = metadata_address.ip().to_string();
+        snapshot_value.routes[0].port = metadata_address.port();
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "google".to_string(),
+                provider_subject: Some("user:test".to_string()),
+                injection: json!({"type":"bearer"}),
+            },
+        );
+        let snapshot = Arc::new(snapshot_value);
+        let audit_listener = TcpListener::bind("127.0.0.1:0").expect("audit listener");
+        let audit_address = audit_listener.local_addr().expect("audit listener address");
+        let audit_snapshot = Arc::clone(&snapshot);
+        let audit_server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, request) = read_audit_test_request(&audit_listener);
+                let batch_digest = sha256_prefixed(&request.body);
+                let response = signed_audit_test_acknowledgement(
+                    &response_signing_key,
+                    &audit_snapshot,
+                    &request,
+                    1,
+                    &batch_digest,
+                );
+                stream
+                    .write_all(&response)
+                    .expect("write audit acknowledgement");
+                requests.push(request);
+            }
+            requests
+        });
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.server_instance_id = Some("test-instance".to_string());
+        state.audit_url = Some(format!("http://{audit_address}/api/data-plane/audit"));
+        state.audit_token = Some("audit-token".to_string());
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let lease = SecretLease {
+            scope: scope.clone(),
+            version: 7,
+            secret: Zeroizing::new("upstream-secret".to_string()),
+            metadata: BTreeMap::new(),
+            policy_hash: snapshot.hash.clone(),
+            expires_at_epoch_ms: now_epoch_ms() + 10_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(10),
+        };
+        let parent_binding = credential_lease_release_binding(&lease);
+        cache_scoped_credential_lease(&state, &snapshot, &scope, lease)
+            .expect("cache Gmail credential lease");
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "credential_ref":"credential:test",
+            "credential_version":7,
+            "request_digest":sha256_prefixed(b"parent-request"),
+            "operation_digest":sha256_prefixed(b"parent-operation"),
+            "attempt_id":sha256_prefixed(b"parent-attempt"),
+            "flow_id":sha256_prefixed(b"parent-flow"),
+        });
+        let route_match = RouteMatch {
+            route: &snapshot.routes[0],
+            params: BTreeMap::from([("user".to_string(), "me".to_string())]),
+        };
+        let injection = json!({"type":"bearer"});
+        let execution = GmailMetadataFanoutExecution {
+            parent_credential_binding: Some(&parent_binding),
+            injection_plan: &injection,
+            dispatch_expires_at_epoch_ms: None,
+        };
+        let parent_url = Url::parse(&format!(
+            "http://{metadata_address}/gmail/v1/users/me/messages"
+        ))
+        .expect("parent URL");
+        let mut payload = json!({
+            "messages":[
+                {"id":"message-1","threadId":"thread-1"},
+                {"id":"message-2","threadId":"thread-2"}
+            ]
+        });
+        hydrate_gmail_list_metadata(
+            &state,
+            &snapshot,
+            &decision,
+            &parent_url,
+            &route_match,
+            &mut payload,
+            30,
+            gmail_cutoff_ms_at(now_epoch_ms(), 30),
+            gmail_metadata_test_config(),
+            &execution,
+        )
+        .expect("hydrate Gmail list metadata");
+        assert_eq!(
+            payload["messages"]
+                .as_array()
+                .expect("hydrated messages")
+                .len(),
+            2
+        );
+        assert!(payload["messages"]
+            .as_array()
+            .expect("hydrated messages")
+            .iter()
+            .all(|item| item.get("internalDate").and_then(Value::as_str).is_some()));
+        let metadata_requests = metadata_server.join().expect("metadata server");
+        assert_eq!(metadata_requests.len(), 2);
+        let audit_requests = audit_server.join().expect("audit server");
+        assert_eq!(audit_requests.len(), 2);
+        let started =
+            strict_json_value_from_slice(&audit_requests[0].body).expect("start audit JSON");
+        let completed =
+            strict_json_value_from_slice(&audit_requests[1].body).expect("completion audit JSON");
+        assert_eq!(
+            started["events"][0]["eventType"],
+            "data_plane.gmail.metadata_fanout.started"
+        );
+        assert_eq!(started["events"][0]["event"]["planned_count"], 2);
+        assert_eq!(
+            completed["events"][0]["eventType"],
+            "data_plane.gmail.metadata_fanout.completed"
+        );
+        assert_eq!(completed["events"][0]["event"]["attempted_count"], 2);
+        assert_eq!(completed["events"][0]["event"]["hydrated_count"], 2);
+        assert!(completed["events"][0]["event"]["ordered_child_digest"]
+            .as_str()
+            .is_some_and(is_sha256_digest));
+        let audit_text = format!("{started}{completed}");
+        for forbidden in [
+            "message-1",
+            "message-2",
+            "gmail/v1",
+            "upstream-secret",
+            "audit-token",
+            "internalDate",
+        ] {
+            assert!(!audit_text.contains(forbidden), "audit leaked {forbidden}");
+        }
+        assert_eq!(state.audit_sent.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn gmail_direct_read_proof_commit_is_deferred_until_after_projection_and_reflection() {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        let route = &mut snapshot_value.routes[0];
+        route.adapter_type = "gmail.v1".to_string();
+        route.host = "gmail.example.test".to_string();
+        route.paths =
+            vec![compile_template("/gmail/v1/users/{user}/messages").expect("Gmail list template")];
+        route.credential_ref = Some("credential:test".to_string());
+        route.adapter_config = json!({
+            "maxAgeDays":30,
+            "maxResults":10,
+            "cacheTtlSeconds":1800,
+            "response":{
+                "validateInternalDate":true,
+                "validateListByMetadataFetch":true,
+                "metadataFetch":{
+                    "maxMessages":10,
+                    "perRequestTimeoutMs":1500,
+                    "totalTimeoutMs":8000,
+                    "maxBodyBytes":4096
+                },
+                "maxBodyBytes":1048576,
+                "allowedFields":["id","threadId","internalDate"],
+                "allowedHeaders":[],
+                "onViolation":"block"
+            }
+        });
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let decision = json!({
+            "principal_id":"agent:test",
+            "route_id":"route:test",
+            "policy_hash":snapshot.hash,
+            "snapshot_epoch":snapshot.epoch,
+            "credential_ref":"credential:test",
+            "credential_version":7,
+            "request_digest":sha256_prefixed(b"request"),
+            "operation_digest":sha256_prefixed(b"operation"),
+            "operation":{"operation":"gmail.messages.list"},
+        });
+        let url = Url::parse("https://gmail.example.test/gmail/v1/users/me/messages")
+            .expect("Gmail list URL");
+        let injection = json!({"type":"bearer"});
+        let execution = GmailMetadataFanoutExecution {
+            parent_credential_binding: None,
+            injection_plan: &injection,
+            dispatch_expires_at_epoch_ms: None,
+        };
+        let body = serde_json::to_vec(&json!({
+            "messages":[{
+                "id":"message-1",
+                "threadId":"thread-1",
+                "internalDate":now_epoch_ms().to_string(),
+                "hidden":"redact-me"
+            }]
+        }))
+        .expect("Gmail response");
+        let mut pending = None;
+        let response = validate_forward_response(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            StatusCode::OK,
+            Some("application/json"),
+            &[],
+            body,
+            &ResponseSecretGuard::default(),
+            Some(&execution),
+            Some(&mut pending),
+        );
+        let response = String::from_utf8(response).expect("Gmail response HTTP");
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(!response.contains("redact-me"));
+        assert_eq!(pending, Some(vec!["message-1".to_string()]));
+        assert!(state.gmail_proofs.lock().expect("Gmail cache").is_empty());
+        commit_gmail_response_proofs(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            pending.take().expect("pending Gmail proof commit"),
+        );
+        assert_eq!(state.gmail_proofs.lock().expect("Gmail cache").len(), 1);
+
+        let reflected_body = serde_json::to_vec(&json!({
+            "messages":[{
+                "id":"credential-from-vault",
+                "threadId":"thread-reflected",
+                "internalDate":now_epoch_ms().to_string()
+            }]
+        }))
+        .expect("reflected Gmail response");
+        let mut guard = ResponseSecretGuard::default();
+        guard.add_text_encodings("credential-from-vault");
+        let mut reflected_pending = None;
+        let blocked = validate_forward_response(
+            &state,
+            &snapshot,
+            &decision,
+            "GET",
+            &url,
+            StatusCode::OK,
+            Some("application/json"),
+            &[],
+            reflected_body,
+            &guard,
+            Some(&execution),
+            Some(&mut reflected_pending),
+        );
+        let blocked = String::from_utf8(blocked).expect("blocked Gmail response HTTP");
+        assert!(blocked.starts_with("HTTP/1.1 502"), "{blocked}");
+        assert!(blocked.contains("response_credential_reflection"));
+        assert!(reflected_pending.is_none());
+        assert_eq!(state.gmail_proofs.lock().expect("Gmail cache").len(), 1);
+    }
+
     #[test]
     fn response_json_validates_root_list_and_scalar_items() {
         let root = json!({
@@ -28837,6 +32057,8 @@ mod tests {
             &[],
             body.clone(),
             &ResponseSecretGuard::default(),
+            None,
+            None,
         );
         let blocked = String::from_utf8(blocked).expect("blocked HTTP response");
         assert!(blocked.starts_with("HTTP/1.1 502"));
@@ -28874,6 +32096,8 @@ mod tests {
                 &[],
                 br#"{"safe":{"id":"visible"}}"#.to_vec(),
                 &ResponseSecretGuard::default(),
+                None,
+                None,
             );
             let blocked = String::from_utf8(blocked).expect("blocked HTTP response");
             assert!(blocked.starts_with("HTTP/1.1 502"));
@@ -28904,6 +32128,8 @@ mod tests {
             &[],
             body,
             &ResponseSecretGuard::default(),
+            None,
+            None,
         );
         let released = String::from_utf8(released).expect("projected HTTP response");
         assert!(released.starts_with("HTTP/1.1 200"));
@@ -28940,6 +32166,8 @@ mod tests {
                 &[],
                 body.to_vec(),
                 &ResponseSecretGuard::default(),
+                None,
+                None,
             );
             let blocked = String::from_utf8(blocked).expect("blocked HTTP response");
             assert!(blocked.starts_with("HTTP/1.1 502"), "{blocked}");
@@ -29758,25 +32986,74 @@ mod tests {
     #[test]
     fn response_proof_preflight_requires_the_matching_release_mode() {
         let buffered = test_snapshot(1).routes[0].clone();
-        assert!(
-            validate_response_proof_route_preflight(&buffered, ResponseProofKind::Buffered).is_ok()
-        );
+        let buffered_match = RouteMatch {
+            route: &buffered,
+            params: BTreeMap::new(),
+        };
+        assert!(validate_response_proof_route_preflight(
+            &buffered_match,
+            ResponseProofKind::Buffered
+        )
+        .is_ok());
         assert_eq!(
-            validate_response_proof_route_preflight(&buffered, ResponseProofKind::Streaming),
+            validate_response_proof_route_preflight(&buffered_match, ResponseProofKind::Streaming),
             Err("stream_response_proof_requires_streaming_response_route")
         );
 
         let mut streaming = buffered;
         streaming.adapter_config["response"] =
             json!({"mode":"jsonArrayStream","maxBodyBytes":1024,"allowedFields":["safe"]});
-        assert!(
-            validate_response_proof_route_preflight(&streaming, ResponseProofKind::Streaming)
-                .is_ok()
-        );
+        let streaming_match = RouteMatch {
+            route: &streaming,
+            params: BTreeMap::new(),
+        };
+        assert!(validate_response_proof_route_preflight(
+            &streaming_match,
+            ResponseProofKind::Streaming
+        )
+        .is_ok());
         assert_eq!(
-            validate_response_proof_route_preflight(&streaming, ResponseProofKind::Buffered),
+            validate_response_proof_route_preflight(&streaming_match, ResponseProofKind::Buffered),
             Err("response_proof_requires_buffered_response_route")
         );
+
+        let mut gmail = streaming;
+        gmail.adapter_type = "gmail.v1".to_string();
+        gmail.adapter_config = json!({
+            "maxResults":10,
+            "response":{
+                "validateListByMetadataFetch":true,
+                "metadataFetch":{
+                    "maxMessages":10,
+                    "perRequestTimeoutMs":1500,
+                    "totalTimeoutMs":8000,
+                    "maxBodyBytes":4096
+                },
+                "allowedFields":["id","internalDate"]
+            }
+        });
+        let gmail_list_match = RouteMatch {
+            route: &gmail,
+            params: BTreeMap::from([("user".to_string(), "me".to_string())]),
+        };
+        for kind in [ResponseProofKind::Buffered, ResponseProofKind::Streaming] {
+            assert_eq!(
+                validate_response_proof_route_preflight(&gmail_list_match, kind),
+                Err("gmail_metadata_fetch_response_proof_unsupported")
+            );
+        }
+        let gmail_get_match = RouteMatch {
+            route: &gmail,
+            params: BTreeMap::from([
+                ("user".to_string(), "me".to_string()),
+                ("message_id".to_string(), "message-1".to_string()),
+            ]),
+        };
+        assert!(validate_response_proof_route_preflight(
+            &gmail_get_match,
+            ResponseProofKind::Buffered
+        )
+        .is_ok());
     }
 
     #[test]
@@ -32025,6 +35302,12 @@ mod tests {
                 "response":{
                     "validateInternalDate":true,
                     "validateListByMetadataFetch":true,
+                    "metadataFetch":{
+                        "maxMessages":10,
+                        "perRequestTimeoutMs":1500,
+                        "totalTimeoutMs":8000,
+                        "maxBodyBytes":4096
+                    },
                     "maxBodyBytes":1048576,
                     "allowedFields":["id","internalDate","payload.headers"],
                     "allowedHeaders":[],
@@ -32042,13 +35325,45 @@ mod tests {
         });
         validate_policy_capabilities(&policy_with_route(gmail_route.clone()))
             .expect("fully bounded Gmail policy");
-        let mut unsafe_gmail = gmail_route;
+        let mut unsafe_gmail = gmail_route.clone();
         unsafe_gmail["adapter"]["config"]["forceQuery"] = json!(false);
         assert!(
             validate_policy_capabilities(&policy_with_route(unsafe_gmail))
                 .expect_err("Gmail without query forcing must fail policy load")
                 .contains("forceQuery")
         );
+        for (field, value, expected) in [
+            ("maxMessages", json!(33), "between 1 and 32"),
+            ("perRequestTimeoutMs", json!(3001), "between 1 and 3000"),
+            ("totalTimeoutMs", json!(10001), "between 1 and 10000"),
+            ("maxBodyBytes", json!(8193), "between 1 and 8192"),
+        ] {
+            let mut unsafe_gmail = gmail_route.clone();
+            unsafe_gmail["adapter"]["config"]["response"]["metadataFetch"][field] = value;
+            let error = validate_policy_capabilities(&policy_with_route(unsafe_gmail))
+                .expect_err("out-of-range Gmail metadata fanout policy must fail closed");
+            assert!(error.contains(expected), "{field}: {error}");
+        }
+        let mut inverted_timeouts = gmail_route.clone();
+        inverted_timeouts["adapter"]["config"]["response"]["metadataFetch"]
+            ["perRequestTimeoutMs"] = json!(2000);
+        inverted_timeouts["adapter"]["config"]["response"]["metadataFetch"]["totalTimeoutMs"] =
+            json!(1000);
+        assert!(
+            validate_policy_capabilities(&policy_with_route(inverted_timeouts))
+                .expect_err("per-request metadata timeout cannot exceed the total timeout")
+                .contains("perRequestTimeoutMs cannot exceed totalTimeoutMs")
+        );
+        let mut too_many = gmail_route.clone();
+        too_many["adapter"]["config"]["maxResults"] = json!(5);
+        assert!(validate_policy_capabilities(&policy_with_route(too_many))
+            .expect_err("metadata maxMessages cannot exceed maxResults")
+            .contains("cannot exceed maxResults"));
+        let mut missing_id = gmail_route;
+        missing_id["adapter"]["config"]["response"]["allowedFields"] = json!(["internalDate"]);
+        assert!(validate_policy_capabilities(&policy_with_route(missing_id))
+            .expect_err("hydrated Gmail responses must release message IDs")
+            .contains("requires id"));
 
         let npm_route = json!({
             "id":"npm:test",
@@ -32681,6 +35996,297 @@ mod tests {
     }
 
     #[test]
+    fn request_value_vectors_match_python_contract() {
+        let vectors = [
+            (
+                "equals-allow",
+                json!({"kind":"equals","value":"approved"}),
+                "approved",
+                true,
+            ),
+            (
+                "equals-deny",
+                json!({"kind":"equals","value":"approved"}),
+                "other",
+                false,
+            ),
+            (
+                "enum-allow",
+                json!({"kind":"enum","values":["open","closed"]}),
+                "open",
+                true,
+            ),
+            (
+                "enum-deny",
+                json!({"kind":"enum","values":["open","closed"]}),
+                "all",
+                false,
+            ),
+            (
+                "pattern-allow",
+                json!({"kind":"pattern","pattern":"^[A-Za-z0-9._-]{1,16}$","maxLength":16}),
+                "repo-1",
+                true,
+            ),
+            (
+                "pattern-deny",
+                json!({"kind":"pattern","pattern":"^[A-Za-z0-9._-]{1,16}$","maxLength":16}),
+                "repo/1",
+                false,
+            ),
+            (
+                "length-byte-allow",
+                json!({"kind":"stringLength","minLength":2,"maxLength":2}),
+                "é",
+                true,
+            ),
+            (
+                "length-byte-deny",
+                json!({"kind":"stringLength","maxLength":1}),
+                "é",
+                false,
+            ),
+            (
+                "integer-allow",
+                json!({"kind":"numeric","min":1,"max":50,"integer":true}),
+                "42",
+                true,
+            ),
+            (
+                "integer-canonical-deny",
+                json!({"kind":"numeric","min":1,"max":50,"integer":true}),
+                "+42",
+                false,
+            ),
+            (
+                "integer-above-f64-precision-deny",
+                json!({"kind":"numeric","max":9007199254740992_i64,"integer":true}),
+                "9007199254740993",
+                false,
+            ),
+            (
+                "integer-i64-maximum-allow",
+                json!({"kind":"numeric","min":i64::MAX,"integer":true}),
+                "9223372036854775807",
+                true,
+            ),
+            (
+                "integer-outside-i64-deny",
+                json!({"kind":"numeric","max":i64::MAX,"integer":true}),
+                "9223372036854775808",
+                false,
+            ),
+            (
+                "number-allow",
+                json!({"kind":"numeric","min":1.25,"max":2.5}),
+                "1.5",
+                true,
+            ),
+            (
+                "number-whitespace-deny",
+                json!({"kind":"numeric","min":1.25,"max":2.5}),
+                " 1.5",
+                false,
+            ),
+            (
+                "number-finite-deny",
+                json!({"kind":"numeric","min":0}),
+                "NaN",
+                false,
+            ),
+        ];
+        for (label, predicate, value, expected_allowed) in vectors {
+            let constraint = json!({
+                "id":label,
+                "type":"requestValue",
+                "rules":[{
+                    "source":"query",
+                    "name":"scope",
+                    "predicate":predicate,
+                    "capture":"validatedScope",
+                }],
+            });
+            let mut url = Url::parse("https://example.test/items").expect("URL");
+            url.query_pairs_mut().append_pair("scope", value);
+            let mut operation = json!({"operation":"vectors.read"});
+            let result = enforce_request_value(
+                &constraint,
+                &BTreeMap::new(),
+                &url,
+                &BTreeMap::new(),
+                &mut operation,
+            );
+            assert_eq!(result.is_ok(), expected_allowed, "{label}: {result:?}");
+            assert_eq!(
+                operation.get("validatedScope").and_then(Value::as_str) == Some(value),
+                expected_allowed,
+                "{label} capture"
+            );
+        }
+
+        assert!(!request_value_predicate_matches(
+            json!({"kind":"stringLength","minLength":1})
+                .as_object()
+                .expect("predicate"),
+            &"x".repeat(4097),
+        ));
+
+        let constraint = json!({
+            "id":"single-query-value",
+            "type":"requestValue",
+            "rules":[{
+                "source":"query",
+                "name":"scope",
+                "predicate":{"kind":"equals","value":"approved"},
+            }],
+        });
+        let url =
+            Url::parse("https://example.test/items?scope=approved&scope=approved").expect("URL");
+        let denied = enforce_request_value(
+            &constraint,
+            &BTreeMap::new(),
+            &url,
+            &BTreeMap::new(),
+            &mut json!({"operation":"vectors.read"}),
+        )
+        .expect_err("duplicate query values must deny");
+        assert_eq!(denied["error"], "request_value_ambiguous");
+
+        let path_constraint = json!({
+            "id":"path-and-header",
+            "type":"requestValue",
+            "rules":[
+                {
+                    "source":"pathParam",
+                    "name":"owner",
+                    "predicate":{"kind":"equals","value":"approved-owner"},
+                    "capture":"owner",
+                },
+                {
+                    "source":"header",
+                    "name":"x-tenant-id",
+                    "predicate":{"kind":"enum","values":["tenant-a"]},
+                },
+            ],
+        });
+        let mut operation = json!({"operation":"vectors.read"});
+        enforce_request_value(
+            &path_constraint,
+            &BTreeMap::from([("x-tenant-id".to_string(), "tenant-a".to_string())]),
+            &Url::parse("https://example.test/repos/approved-owner").expect("URL"),
+            &BTreeMap::from([("owner".to_string(), "approved-owner".to_string())]),
+            &mut operation,
+        )
+        .expect("single path and header values pass");
+        assert_eq!(operation["owner"], "approved-owner");
+
+        let collision_constraint = json!({
+            "id":"reserved-capture",
+            "type":"requestValue",
+            "rules":[{
+                "source":"pathParam",
+                "name":"owner",
+                "predicate":{"kind":"equals","value":"approved-owner"},
+                "capture":"providerAccount",
+            }],
+        });
+        let denied = enforce_request_value(
+            &collision_constraint,
+            &BTreeMap::new(),
+            &Url::parse("https://example.test/repos/approved-owner").expect("URL"),
+            &BTreeMap::from([("owner".to_string(), "approved-owner".to_string())]),
+            &mut json!({"operation":"vectors.read","providerAccount":"trusted"}),
+        )
+        .expect_err("request value capture must not replace provider account identity");
+        assert_eq!(denied["error"], "constraint_invalid_request_value");
+    }
+
+    #[test]
+    fn request_value_policy_admission_is_closed_and_source_aware() {
+        let mut route = generic_policy_route("none", json!(1024));
+        route["match"]["paths"] = json!(["/repos/{owner}/{repo}"]);
+        route["adapter"]["config"]["request"]["allowedHeaders"] = json!(["accept", "x-tenant-id"]);
+        route["adapter"]["config"]["request"]["allowedQueryKeys"] = json!(["state"]);
+        route["constraints"] = json!([{
+            "id":"repository-scope",
+            "type":"requestValue",
+            "rules":[
+                {
+                    "source":"pathParam",
+                    "name":"owner",
+                    "predicate":{"kind":"equals","value":"approved-owner"},
+                    "capture":"owner",
+                },
+                {
+                    "source":"pathParam",
+                    "name":"repo",
+                    "predicate":{"kind":"pattern","pattern":"^[A-Za-z0-9._-]{1,64}$","maxLength":64},
+                },
+                {
+                    "source":"query",
+                    "name":"state",
+                    "predicate":{"kind":"enum","values":["open","closed"]},
+                },
+                {
+                    "source":"header",
+                    "name":"x-tenant-id",
+                    "predicate":{"kind":"stringLength","minLength":1,"maxLength":64},
+                },
+            ],
+        }]);
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("bounded requestValue policy");
+
+        let mutations = [
+            ("unknown predicate field", json!({"unknown":true})),
+            ("mixed predicate family", json!({"values":["mixed"]})),
+        ];
+        for (label, addition) in mutations {
+            let mut invalid = route.clone();
+            let predicate = invalid["constraints"][0]["rules"][0]["predicate"]
+                .as_object_mut()
+                .expect("predicate");
+            predicate.extend(addition.as_object().expect("addition").clone());
+            assert!(
+                validate_policy_capabilities(&policy_with_route(invalid)).is_err(),
+                "{label} must fail admission"
+            );
+        }
+
+        let mut invalid_path = route.clone();
+        invalid_path["constraints"][0]["rules"][0]["name"] = json!("missing");
+        assert!(validate_policy_capabilities(&policy_with_route(invalid_path)).is_err());
+
+        let mut invalid_query = route.clone();
+        invalid_query["constraints"][0]["rules"][2]["name"] = json!("visibility");
+        assert!(validate_policy_capabilities(&policy_with_route(invalid_query)).is_err());
+
+        let mut invalid_header = route.clone();
+        invalid_header["constraints"][0]["rules"][3]["name"] = json!("X-Tenant-Id");
+        assert!(validate_policy_capabilities(&policy_with_route(invalid_header)).is_err());
+
+        let mut reserved_capture = route.clone();
+        reserved_capture["constraints"][0]["rules"][0]["capture"] =
+            json!(PROVIDER_ACCOUNT_OPERATION_FIELD);
+        assert!(validate_policy_capabilities(&policy_with_route(reserved_capture)).is_err());
+
+        for invalid_bound in [json!(1.5), json!(9223372036854775808_u64)] {
+            let mut invalid_integer = route.clone();
+            invalid_integer["constraints"][0]["rules"][0]["predicate"] = json!({
+                "kind":"numeric",
+                "min":invalid_bound,
+                "integer":true,
+            });
+            assert!(validate_policy_capabilities(&policy_with_route(invalid_integer)).is_err());
+        }
+
+        let mut too_many = route;
+        let rule = too_many["constraints"][0]["rules"][0].clone();
+        too_many["constraints"][0]["rules"] = json!(vec![rule; 17]);
+        assert!(validate_policy_capabilities(&policy_with_route(too_many)).is_err());
+    }
+
+    #[test]
     fn client_proof_request_binding_is_canonical_and_sanitized() {
         let mut request = IncomingRequest {
             method: "GET".to_string(),
@@ -33187,7 +36793,9 @@ mod tests {
         assert_eq!(request.body, expected_body);
         assert!(request.headers.contains_key("x-serverware-response-nonce"));
         assert!(
-            error.contains("missing X-Serverware-Response-Key-Id"),
+            error
+                .message
+                .contains("missing X-Serverware-Response-Key-Id"),
             "{error}"
         );
     }
@@ -33228,7 +36836,10 @@ mod tests {
         let error = post_audit_batch(&state, &batch)
             .expect_err("untrusted signature must not acknowledge an audit batch");
         server.join().expect("audit server");
-        assert!(error.contains("signature verification failed"), "{error}");
+        assert!(
+            error.message.contains("signature verification failed"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -33268,7 +36879,10 @@ mod tests {
         let error = post_audit_batch(&state, &batch)
             .expect_err("another instance must not acknowledge this audit batch");
         server.join().expect("audit server");
-        assert!(error.contains("instance binding mismatch"), "{error}");
+        assert!(
+            error.message.contains("instance binding mismatch"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -33341,6 +36955,7 @@ mod tests {
         let binding = CredentialLeaseReleaseBinding {
             scope: CredentialLeaseScope::new("agent:test", "route:test", "credential:test"),
             version: 7,
+            secret_fingerprint: credential_secret_fingerprint("secret"),
             expires_at_monotonic: Instant::now() + Duration::from_secs(5),
         };
         let decision = json!({
@@ -33430,6 +37045,7 @@ mod tests {
         let binding = CredentialLeaseReleaseBinding {
             scope,
             version: 7,
+            secret_fingerprint: credential_secret_fingerprint("secret"),
             expires_at_monotonic: expiry,
         };
         assert!(credential_lease_still_releasable(
@@ -33473,6 +37089,140 @@ mod tests {
         ));
     }
 
+    fn cache_test_credential_lease_for_send(
+        state: &GateState,
+        snapshot: &Arc<Snapshot>,
+        lifetime: Duration,
+    ) -> CredentialLeaseReleaseBinding {
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let lease = SecretLease {
+            scope: scope.clone(),
+            version: 7,
+            secret: Zeroizing::new("upstream-secret".to_string()),
+            metadata: BTreeMap::new(),
+            policy_hash: snapshot.hash.clone(),
+            expires_at_epoch_ms: now_epoch_ms() + lifetime.as_millis(),
+            expires_at_monotonic: Instant::now() + lifetime,
+        };
+        let binding = credential_lease_release_binding(&lease);
+        cache_scoped_credential_lease(state, snapshot, &scope, lease)
+            .expect("cache test credential lease generation");
+        binding
+    }
+
+    #[test]
+    fn buffered_upstream_send_rejects_lease_expiry_during_dispatch() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let binding =
+            cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_millis(40));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("buffered upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking buffered upstream listener");
+        let address = listener.local_addr().expect("buffered upstream address");
+        let builder = state
+            .one_shot_upstream_client
+            .post(format!("http://{address}/resource"))
+            .body(br#"{"safe":true}"#.to_vec());
+
+        thread::sleep(Duration::from_millis(80));
+        let error =
+            send_upstream_request_with_current_lease(&state, &snapshot, Some(&binding), builder)
+                .expect_err("lease expiring during dispatch must block buffered send");
+        assert!(matches!(
+            error,
+            UpstreamSendError::CredentialAuthority("credential_lease_expired_before_upstream_send")
+        ));
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("expired buffered lease must not contact upstream")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn streaming_upstream_send_rejects_revocation_during_dispatch() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let binding =
+            cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_secs(5));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("streaming upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking streaming upstream listener");
+        let address = listener.local_addr().expect("streaming upstream address");
+        let body = Body::sized(Cursor::new(br#"{"safe":true}"#.to_vec()), 13);
+        let builder = state
+            .one_shot_upstream_client
+            .post(format!("http://{address}/resource"))
+            .body(body);
+
+        state
+            .credential_leases
+            .lock()
+            .expect("credential lease cache")
+            .remove(&binding.scope);
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generation cache")
+            .remove(&binding.scope);
+        let error =
+            send_upstream_request_with_current_lease(&state, &snapshot, Some(&binding), builder)
+                .expect_err("lease revoked during dispatch must block streaming send");
+        assert!(matches!(
+            error,
+            UpstreamSendError::CredentialAuthority("credential_lease_changed_before_upstream_send")
+        ));
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("revoked streaming lease must not contact upstream")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn upstream_send_timeout_never_extends_original_lease_binding() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let binding =
+            cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_millis(800));
+        let renewed = SecretLease {
+            scope: binding.scope.clone(),
+            version: binding.version,
+            secret: Zeroizing::new("upstream-secret".to_string()),
+            metadata: BTreeMap::new(),
+            policy_hash: snapshot.hash.clone(),
+            expires_at_epoch_ms: now_epoch_ms() + 5_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(5),
+        };
+        cache_scoped_credential_lease(&state, &snapshot, &binding.scope, renewed)
+            .expect("renew same credential generation");
+
+        let timeout = credential_lease_upstream_send_timeout(&state, &snapshot, Some(&binding))
+            .expect("renewed lease remains releasable")
+            .expect("credential-bound send timeout");
+        assert!(timeout >= MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW);
+        assert!(timeout < Duration::from_millis(800));
+    }
+
+    #[test]
+    fn upstream_send_rejects_lease_without_dispatch_margin() {
+        let snapshot = test_snapshot(1);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        let binding =
+            cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_millis(100));
+        assert_eq!(
+            credential_lease_upstream_send_timeout(&state, &snapshot, Some(&binding)),
+            Err("credential_lease_lifetime_insufficient_for_upstream_send")
+        );
+    }
+
     #[test]
     fn stale_attested_trust_revokes_credentialless_decisions() {
         let snapshot = test_snapshot(1);
@@ -33480,7 +37230,7 @@ mod tests {
         state.policy_trust_root_source = PolicyTrustRootSource::AttestedControlPlane {
             url: "https://control.invalid/trust-root".to_string(),
             expected_quote_key_id: Some("sha256:quote".to_string()),
-            verify_command: None,
+            verifier: None,
         };
         *state
             .policy_trust_last_success
@@ -34281,28 +38031,257 @@ mod tests {
     }
 
     #[test]
-    fn production_release_authorization_url_requires_https_independently() {
-        validate_release_authorization_base_url(
-            "http://control.test/api/data-plane/release-authorizations",
-            false,
-        )
-        .expect("development may explicitly use HTTP");
-        assert_eq!(
-            validate_release_authorization_base_url(
-                "http://control.test/api/data-plane/release-authorizations",
-                true,
-            )
-            .expect_err("production release authorization must not depend on lease URL checks"),
-            "production release authorization base URL must use HTTPS"
+    fn production_credential_jit_and_shared_quota_require_atomic_release_authorization() {
+        let mut credential_jit = (*test_snapshot(1)).clone();
+        credential_jit.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "demo".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer"}),
+            },
         );
-        validate_release_authorization_base_url(
-            "https://control.test/api/data-plane/release-authorizations",
+        credential_jit.routes[0].credential_ref = Some("credential:test".to_string());
+        credential_jit.routes[0].jit["required"] = json!(true);
+        let error = validate_production_release_authorization_policy(&credential_jit, true, false)
+            .expect_err("production credential JIT must require atomic release authorization");
+        assert!(error.contains("route:test"));
+        validate_production_release_authorization_policy(&credential_jit, true, true)
+            .expect("atomic release authorization admits production credential JIT");
+        validate_production_release_authorization_policy(&credential_jit, false, false)
+            .expect("explicit development mode retains legacy compatibility");
+
+        let mut shared_quota = credential_jit.clone();
+        shared_quota.routes[0].jit["required"] = json!(false);
+        shared_quota.routes[0].constraints = vec![json!({
+            "id":"quota:test",
+            "type":"rateLimit",
+            "max":1,
+            "windowSeconds":60,
+            "store":"shared",
+        })];
+        assert!(
+            validate_production_release_authorization_policy(&shared_quota, true, false)
+                .expect_err("production credential shared quota must require atomic authorization")
+                .contains("shared quota")
+        );
+
+        shared_quota.routes[0].credential_ref = None;
+        validate_production_release_authorization_policy(&shared_quota, true, false)
+            .expect("credentialless shared quotas do not inject a data-plane credential");
+    }
+
+    #[test]
+    fn production_control_plane_urls_require_canonical_https_independently() {
+        let canonical = [
+            ("policy trust root", POLICY_TRUST_ROOT_ATTESTATION_PATH),
+            ("credential lease", CREDENTIAL_LEASE_PATH),
+            ("audit", AUDIT_INGEST_PATH),
+            ("grant consume", GRANT_CONSUME_PATH),
+            ("rate-limit consume", RATE_LIMIT_CONSUME_PATH),
+            ("release authorization", RELEASE_AUTHORIZATION_BASE_PATH),
+        ];
+        let endpoints = canonical
+            .iter()
+            .map(|(label, path)| (*label, format!("https://control.test{path}"), *path))
+            .collect::<Vec<_>>();
+        let endpoint_refs = endpoints
+            .iter()
+            .map(|(label, value, path)| (*label, value.as_str(), *path))
+            .collect::<Vec<_>>();
+        validate_configured_control_plane_urls(true, false, &endpoint_refs)
+            .expect("canonical production control-plane endpoints");
+
+        for (label, path) in canonical {
+            let wrong_path = format!("https://control.test{path}/extra");
+            assert!(
+                validate_control_plane_endpoint_url(label, &wrong_path, path, true, false)
+                    .expect_err("each endpoint must enforce its own canonical path")
+                    .contains("exact canonical path")
+            );
+        }
+    }
+
+    #[test]
+    fn production_http_endpoint_is_rejected_without_a_credential_lease_url() {
+        let endpoints = [(
+            "audit",
+            "http://control.test/api/data-plane/audit",
+            AUDIT_INGEST_PATH,
+        )];
+        assert!(
+            validate_configured_control_plane_urls(true, false, &endpoints)
+                .expect_err("production audit HTTP must fail without any lease URL")
+                .contains("must use HTTPS")
+        );
+    }
+
+    #[test]
+    fn development_http_requires_the_explicit_insecure_mode() {
+        let endpoint = [(
+            "credential lease",
+            "http://control.test/api/data-plane/credential-leases",
+            CREDENTIAL_LEASE_PATH,
+        )];
+        assert!(validate_configured_control_plane_urls(false, false, &endpoint).is_err());
+        validate_configured_control_plane_urls(false, true, &endpoint)
+            .expect("explicit insecure development mode permits canonical HTTP");
+    }
+
+    #[test]
+    fn control_plane_urls_reject_credentials_queries_fragments_and_path_tricks() {
+        for value in [
+            "https://user:secret@control.test/api/data-plane/credential-leases",
+            "https://control.test/api/data-plane/credential-leases?next=/attacker",
+            "https://control.test/api/data-plane/credential-leases#fragment",
+            "https://control.test/api/data-plane/credential-leases/",
+            "https://control.test/api/data-plane/x/../credential-leases",
+            "https://control.test/api/data-plane/%63redential-leases",
+            "https:\\control.test\\api\\data-plane\\credential-leases",
+        ] {
+            assert!(
+                validate_control_plane_endpoint_url(
+                    "credential lease",
+                    value,
+                    CREDENTIAL_LEASE_PATH,
+                    true,
+                    false,
+                )
+                .is_err(),
+                "accepted noncanonical control-plane URL {value}"
+            );
+        }
+    }
+
+    #[test]
+    fn production_attestation_verifier_rejects_configuration_omissions() {
+        assert!(
+            configure_control_plane_attestation_verifier(None, None, true, true)
+                .expect_err("production attested trust must require a verifier")
+                .contains(CONTROL_PLANE_ATTESTATION_VERIFY_COMMAND_ENV)
+        );
+        assert!(
+            configure_control_plane_attestation_verifier(Some("verifier"), None, true, true)
+                .expect_err("production verifier must require an independent digest")
+                .contains(ATTESTATION_EXECUTABLE_SHA256_MANIFEST_ENV)
+        );
+        assert!(configure_control_plane_attestation_verifier(
+            None,
+            Some("sha256:0000000000000000000000000000000000000000000000000000000000000000"),
+            true,
             true,
         )
-        .expect("production HTTPS release authorization URL");
-        assert!(
-            validate_release_authorization_base_url("https://control.test/wrong-path", true,)
-                .is_err()
+        .expect_err("orphan verifier digest must fail")
+        .contains("without the command"));
+        configure_control_plane_attestation_verifier(None, None, false, true)
+            .expect("development may use the built-in signed-quote verifier");
+    }
+
+    #[test]
+    fn production_attestation_verifier_rejects_relative_path_and_symlink() {
+        let digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+        assert!(configure_control_plane_attestation_verifier(
+            Some("control-plane-attestation-verify"),
+            Some(digest),
+            true,
+            true,
+        )
+        .expect_err("relative verifier path must fail")
+        .contains("must be absolute"));
+
+        let target = write_test_executable(
+            "verifier-symlink-target",
+            b"#!/bin/sh\nprintf '%s' '{\"ok\":true,\"claims\":{}}'\n",
         );
+        let link = test_temp_path("verifier-symlink");
+        std::os::unix::fs::symlink(&target, &link).expect("create verifier symlink");
+        let expected = sha256_prefixed(&fs::read(&target).expect("read verifier target"));
+        assert!(configure_control_plane_attestation_verifier(
+            Some(link.to_str().expect("UTF-8 verifier link")),
+            Some(&expected),
+            true,
+            true,
+        )
+        .expect_err("verifier symlink must fail")
+        .contains("must not be a symlink"));
+        fs::remove_file(link).expect("remove verifier symlink");
+        fs::remove_file(target).expect("remove verifier target");
+    }
+
+    #[test]
+    fn verifier_stdout_cannot_override_pinned_executable_identity() {
+        let marker = test_temp_path("verifier-executed-marker");
+        let script = format!(
+            "#!/bin/sh\nprintf executed > '{}'\nprintf '%s' '{{\"ok\":true,\"verifier_identity_sha256\":\"sha256:{}\",\"claims\":{{}}}}'\n",
+            marker.display(),
+            "f".repeat(64),
+        );
+        let executable = write_test_executable("verifier-digest-mismatch", script.as_bytes());
+        let pinned = PinnedVerifierCommand {
+            executable: executable.clone(),
+            arguments: Vec::new(),
+            expected_sha256:
+                "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+                    .to_string(),
+        };
+        assert!(
+            run_pinned_bounded_json_command(&pinned, &json!({}), "test verifier")
+                .expect_err("stdout identity must not bypass the byte pin")
+                .contains("SHA-256 mismatch")
+        );
+        assert!(
+            !marker.exists(),
+            "digest mismatch must be detected before verifier execution"
+        );
+        fs::remove_file(executable).expect("remove mismatched verifier");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn sealed_attestation_verifier_snapshot_survives_path_substitution() {
+        let script = b"#!/bin/sh\n[ \"$LANG\" = C ] || exit 3\n[ \"$LC_ALL\" = C ] || exit 4\n[ \"$TZ\" = UTC ] || exit 5\nprintf '%s' '{\"ok\":true,\"claims\":{\"snapshot\":\"approved\"}}'\n";
+        let executable = write_test_executable("verifier-valid", script);
+        let expected = sha256_prefixed(script);
+        let verifier = configure_control_plane_attestation_verifier(
+            executable.to_str(),
+            Some(&expected),
+            true,
+            true,
+        )
+        .expect("valid pinned verifier configuration")
+        .expect("configured verifier");
+        let ControlPlaneAttestationVerifier::Pinned(pinned) = verifier else {
+            panic!("production verifier was not pinned");
+        };
+        let snapshot =
+            sealed_authenticated_verifier_snapshot(&pinned).expect("sealed verifier snapshot");
+        let approved_original = test_temp_path("approved-verifier-original");
+        fs::rename(&executable, &approved_original).expect("move approved verifier path");
+        fs::write(
+            &executable,
+            b"#!/bin/sh\nprintf '%s' '{\"ok\":true,\"claims\":{\"snapshot\":\"substituted\"}}'\n",
+        )
+        .expect("substitute verifier path");
+        let result = run_bounded_json_program_with_timeout(
+            &pinned.executable,
+            &pinned.arguments,
+            &json!({}),
+            "test verifier",
+            Duration::from_secs(10),
+            true,
+            Some(snapshot.as_raw_fd()),
+        );
+        drop(snapshot);
+        let output = result.expect("execute sealed verifier snapshot");
+        assert_eq!(output.get("ok").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            output
+                .get("claims")
+                .and_then(|claims| claims.get("snapshot"))
+                .and_then(Value::as_str),
+            Some("approved")
+        );
+        fs::remove_file(executable).expect("remove valid verifier");
+        fs::remove_file(approved_original).expect("remove approved verifier original");
     }
 }

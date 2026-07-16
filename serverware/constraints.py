@@ -22,17 +22,19 @@ SUPPORTED_REQUEST_CONSTRAINTS = {
     "queryDateWindow",
     "queryNumericBounds",
     "requestTimeWindow",
+    "requestValue",
     "jsonBody",
     "formBody",
 }
 SUPPORTED_RESPONSE_CONSTRAINTS = {"responseDateWindow", "responseJson", "responseBinding"}
 MIN_I64 = -(2**63)
 MAX_I64 = 2**63 - 1
+_MAX_LOCAL_RATE_COUNTER_ENTRIES = 65_536
 
 
 @dataclass
 class _RateBucket:
-    window_start: int
+    expires_at: int
     count: int
 
 
@@ -90,6 +92,8 @@ def evaluate_request_constraints(
             decision = _enforce_query_numeric_bounds(constraint, flow.request.pretty_url)
         elif constraint_type == "requestTimeWindow":
             decision = _enforce_request_time_window(constraint)
+        elif constraint_type == "requestValue":
+            decision = _enforce_request_value(constraint, flow, operation_fields)
         elif constraint_type == "jsonBody":
             decision = _enforce_json_body(constraint, flow)
         elif constraint_type == "formBody":
@@ -506,11 +510,12 @@ def _enforce_rate_limit(
 
     with _RATE_LOCK:
         bucket = _RATE_BUCKETS.get(key)
-        if bucket is None or now >= bucket.window_start + window_seconds:
-            bucket = _RateBucket(window_start=now, count=0)
-            _RATE_BUCKETS[key] = bucket
-        if bucket.count >= maximum:
-            retry_after = max(1, bucket.window_start + window_seconds - now)
+        if consume and bucket is not None and bucket.expires_at <= now:
+            _RATE_BUCKETS.pop(key, None)
+            bucket = None
+        active_bucket = bucket if bucket is not None and bucket.expires_at > now else None
+        if active_bucket is not None and active_bucket.count >= maximum:
+            retry_after = max(1, active_bucket.expires_at - now)
             return _deny(
                 constraint,
                 "credential use rate limit exceeded",
@@ -520,8 +525,31 @@ def _enforce_rate_limit(
                 retry_after_seconds=retry_after,
                 store=constraint.get("store") or "local",
             )
-        if consume:
-            bucket.count += 1
+        if not consume:
+            return PolicyDecision(True)
+        if active_bucket is None:
+            if len(_RATE_BUCKETS) >= _MAX_LOCAL_RATE_COUNTER_ENTRIES:
+                expired_keys = [
+                    existing_key
+                    for existing_key, existing_bucket in _RATE_BUCKETS.items()
+                    if existing_bucket.expires_at <= now
+                ]
+                for expired_key in expired_keys:
+                    _RATE_BUCKETS.pop(expired_key, None)
+            if len(_RATE_BUCKETS) >= _MAX_LOCAL_RATE_COUNTER_ENTRIES:
+                return _deny(
+                    constraint,
+                    "local rate-limit counter capacity is exhausted",
+                    "local_rate_limit_capacity_exhausted",
+                    statusCode=503,
+                    capacity=_MAX_LOCAL_RATE_COUNTER_ENTRIES,
+                )
+            active_bucket = _RateBucket(
+                expires_at=now + window_seconds,
+                count=0,
+            )
+            _RATE_BUCKETS[key] = active_bucket
+        active_bucket.count += 1
     return PolicyDecision(True)
 
 
@@ -661,6 +689,226 @@ def _enforce_request_time_window(
 def _query_values(url: str, parameter: str) -> list[str]:
     parsed = urlsplit(url)
     return parse_qs(parsed.query, keep_blank_values=True).get(parameter, [])
+
+
+def _request_header_values(flow: Any, name: str) -> list[str]:
+    headers = flow.request.headers
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        return [str(value) for value in get_all(name)]
+    return [
+        str(value)
+        for raw_name, value in getattr(headers, "items", lambda: [])()
+        if str(raw_name).lower() == name
+    ]
+
+
+def _request_value_values(rule: dict[str, Any], flow: Any) -> list[str]:
+    source = rule.get("source")
+    name = str(rule.get("name") or "")
+    if source == "pathParam":
+        params = flow.metadata.get("serverware_request_value_path_params") or {}
+        value = params.get(name) if isinstance(params, dict) else None
+        return [value] if isinstance(value, str) else []
+    if source == "query":
+        return [
+            value
+            for key, value in parse_qsl(
+                urlsplit(flow.request.pretty_url).query,
+                keep_blank_values=True,
+            )
+            if key == name
+        ]
+    if source == "header":
+        return _request_header_values(flow, name)
+    return []
+
+
+def _finite_request_value_number(value: Any) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except (OverflowError, ValueError):
+        return False
+
+
+def _request_value_predicate_matches(predicate: dict[str, Any], value: str) -> bool:
+    kind = predicate.get("kind")
+    fields_by_kind = {
+        "equals": {"kind", "value"},
+        "enum": {"kind", "values"},
+        "pattern": {"kind", "pattern", "maxLength"},
+        "stringLength": {"kind", "minLength", "maxLength"},
+        "numeric": {"kind", "min", "max", "integer"},
+    }
+    allowed_fields = fields_by_kind.get(kind)
+    encoded_length = len(value.encode("utf-8"))
+    if allowed_fields is None or set(predicate) - allowed_fields or encoded_length > 4096:
+        return False
+    if kind == "equals":
+        expected = predicate.get("value")
+        return (
+            isinstance(expected, str)
+            and len(expected.encode("utf-8")) <= 4096
+            and value == expected
+        )
+    if kind == "enum":
+        values = predicate.get("values")
+        return (
+            isinstance(values, list)
+            and 1 <= len(values) <= 32
+            and all(
+                isinstance(item, str) and len(item.encode("utf-8")) <= 4096
+                for item in values
+            )
+            and len(values) == len(set(values))
+            and value in values
+        )
+    if kind == "pattern":
+        pattern = predicate.get("pattern")
+        maximum = predicate.get("maxLength")
+        return (
+            isinstance(pattern, str)
+            and type(maximum) is int
+            and 1 <= maximum <= 4096
+            and encoded_length <= maximum
+            and bounded_pattern_matches(pattern, value) is True
+        )
+    if kind == "stringLength":
+        minimum = predicate.get("minLength")
+        maximum = predicate.get("maxLength")
+        return (
+            (minimum is not None or maximum is not None)
+            and all(
+                bound is None or (type(bound) is int and 0 <= bound <= 4096)
+                for bound in (minimum, maximum)
+            )
+            and not (
+                minimum is not None and maximum is not None and minimum > maximum
+            )
+            and not (
+                (minimum is not None and encoded_length < minimum)
+                or (maximum is not None and encoded_length > maximum)
+            )
+        )
+    if kind == "numeric":
+        minimum = predicate.get("min")
+        maximum = predicate.get("max")
+        if (
+            (minimum is None and maximum is None)
+            or any(
+                bound is not None and not _finite_request_value_number(bound)
+                for bound in (minimum, maximum)
+            )
+            or (minimum is not None and maximum is not None and minimum > maximum)
+            or ("integer" in predicate and not isinstance(predicate["integer"], bool))
+        ):
+            return False
+        integer = predicate.get("integer") is True
+        if integer:
+            if any(
+                bound is not None
+                and (type(bound) is not int or not -(2**63) <= bound <= 2**63 - 1)
+                for bound in (minimum, maximum)
+            ):
+                return False
+            parsed: int | float | None = _canonical_i64(value)
+        else:
+            if re.fullmatch(
+                r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?",
+                value,
+            ) is None:
+                parsed = None
+            else:
+                try:
+                    parsed = float(value)
+                except ValueError:
+                    parsed = None
+                if isinstance(parsed, float) and not math.isfinite(parsed):
+                    parsed = None
+        if parsed is None:
+            return False
+        if integer:
+            return not (
+                (minimum is not None and parsed < minimum)
+                or (maximum is not None and parsed > maximum)
+            )
+        return not (
+            (minimum is not None and parsed < float(minimum))
+            or (maximum is not None and parsed > float(maximum))
+        )
+    return False
+
+
+def _enforce_request_value(
+    constraint: dict[str, Any],
+    flow: Any,
+    operation_fields: dict[str, str],
+) -> PolicyDecision:
+    rules = constraint.get("rules")
+    if not isinstance(rules, list) or not 1 <= len(rules) <= 16:
+        return _deny(
+            constraint,
+            "request value constraint is invalid",
+            "constraint_invalid_request_value",
+            statusCode=500,
+        )
+    captures: dict[str, str] = {}
+    for rule_index, rule in enumerate(rules):
+        if not isinstance(rule, dict):
+            return _deny(
+                constraint,
+                "request value rule is invalid",
+                "constraint_invalid_request_value",
+                statusCode=500,
+                ruleIndex=rule_index,
+            )
+        values = _request_value_values(rule, flow)
+        if not values:
+            return _deny(
+                constraint,
+                "required request value is missing",
+                "request_value_missing",
+                source=rule.get("source"),
+                name=rule.get("name"),
+                ruleIndex=rule_index,
+            )
+        if len(values) != 1:
+            return _deny(
+                constraint,
+                "request value must occur exactly once",
+                "request_value_ambiguous",
+                source=rule.get("source"),
+                name=rule.get("name"),
+                ruleIndex=rule_index,
+            )
+        value = values[0]
+        predicate = rule.get("predicate")
+        if not isinstance(predicate, dict) or not _request_value_predicate_matches(predicate, value):
+            return _deny(
+                constraint,
+                "request value is outside the allowed policy",
+                "request_value_predicate_denied",
+                source=rule.get("source"),
+                name=rule.get("name"),
+                predicateKind=predicate.get("kind") if isinstance(predicate, dict) else None,
+                ruleIndex=rule_index,
+            )
+        capture = rule.get("capture")
+        if isinstance(capture, str):
+            if capture in operation_fields or capture in captures:
+                return _deny(
+                    constraint,
+                    "request value capture collides with an existing operation field",
+                    "constraint_invalid_request_value",
+                    statusCode=500,
+                    capture=capture,
+                    ruleIndex=rule_index,
+                )
+            captures[capture] = value
+    operation_fields.update(captures)
+    return PolicyDecision(True)
 
 
 def _enforce_query_date_window(constraint: dict[str, Any], url: str) -> PolicyDecision:

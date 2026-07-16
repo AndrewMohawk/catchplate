@@ -184,6 +184,7 @@ from serverware.setup_receipts import (
     FixedClock,
     HardwareVerificationExpected,
     JsonLimits,
+    ReceiptErrorCode,
     ReceiptVerificationError,
     SetupAssignment,
     VerifiedEnrollmentVerifierReceipt,
@@ -2065,6 +2066,31 @@ def _control_plane_approval_roles(action: str) -> set[str]:
     )
 
 
+def _control_plane_requester_roles(action: str) -> set[str]:
+    if action.startswith("setup.attestation."):
+        return {"attestation_reviewer"}
+    if action.startswith("policy."):
+        return {"policy_publisher"}
+    if action in {"credential.create", "credential.update", "credential.delete"}:
+        return {"credential_owner", "policy_author"}
+    if action.startswith("credential."):
+        return {"credential_owner"}
+    if action.startswith("route."):
+        return {"policy_author"}
+    if action in {
+        "webauthn.credential.register",
+        "webauthn.credential.revoke",
+        "break_glass.grant",
+    }:
+        return {"approver"}
+    if action.startswith(("webauthn.", "rbac.", "control_plane.")):
+        return {"admin"}
+    raise HTTPException(
+        status_code=400,
+        detail={"error": "unknown_control_plane_action", "action": action},
+    )
+
+
 def _assert_control_plane_approval_role(identity: AdminIdentity, action: str) -> None:
     required = _control_plane_approval_roles(action)
     if not identity.has_any_role(required):
@@ -2094,6 +2120,7 @@ def _require_control_plane_two_person(
             payload_digest=payload_digest,
             actor_id=identity.user_id,
             require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+            required_requester_roles=_control_plane_requester_roles(action),
             required_approver_roles=_control_plane_approval_roles(action),
             _connection=connection,
         )
@@ -3118,6 +3145,25 @@ def _write_policy_canary_bundle(signed_bundle: dict[str, Any]) -> None:
     temporary.replace(POLICY_CANARY_BUNDLE_PATH)
 
 
+_POLICY_PUBLICATION_THREAD_LOCK = threading.RLock()
+
+
+@contextmanager
+def _policy_publication_file_lock():
+    lock_path = Path(str(POLICY_BUNDLE_PATH) + ".publish.lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with (
+        _POLICY_PUBLICATION_THREAD_LOCK,
+        lock_path.open("a+b") as lock_file,
+    ):
+        os.chmod(lock_path, 0o600)
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 @contextmanager
 def _restore_files_on_error(*paths: Path):
     previous = {
@@ -3336,87 +3382,105 @@ def _policy_canary_monitor(
 
 def _start_policy_canary(
     *,
-    report: dict[str, Any],
     payload: PolicyPublishRequest,
     payload_digest: str,
     identity: AdminIdentity,
     mfa: dict[str, Any] | None,
-    approval_request: dict[str, Any],
 ) -> dict[str, Any]:
-    existing = _read_policy_canary_state()
-    if existing and existing.get("status") == "running":
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error": "policy_canary_already_running",
-                "canaryId": existing.get("id"),
-                "candidatePolicyHash": existing.get("candidate_policy_hash"),
-            },
-        )
-    signed_bundle = report["signedBundle"]
-    metadata = (
-        signed_bundle.get("metadata")
-        if isinstance(signed_bundle.get("metadata"), dict)
-        else {}
-    )
-    canary_id = _policy_canary_id(
-        report["candidate"]["policyHash"], metadata.get("sequence")
-    )
-    started_at = _now_iso()
-    with _restore_files_on_error(
-        POLICY_CANARY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH
+    with (
+        _policy_publication_file_lock(),
+        _restore_files_on_error(
+            POLICY_CANARY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH
+        ),
+        db.connect() as connection,
     ):
-        with db.connect() as connection:
-            two_person = _require_control_plane_two_person(
-                action="policy.publish",
-                resource_id=metadata.get("id"),
-                payload_digest=payload_digest,
-                mfa=payload.mfa,
-                identity=identity,
-                request=approval_request,
-                connection=connection,
+        db.lock_policy_publication(connection)
+        report = _policy_candidate_report(
+            bundle=payload.bundle,
+            dry_run=payload.dry_run,
+            enforce_monotonic=True,
+        )
+        existing = _read_policy_canary_state()
+        if existing and existing.get("status") == "running":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "policy_canary_already_running",
+                    "canaryId": existing.get("id"),
+                    "candidatePolicyHash": existing.get("candidate_policy_hash"),
+                },
             )
-            _write_policy_canary_bundle(signed_bundle)
-            state = {
-                "version": "serverware.policyCanary/v1",
-                "id": canary_id,
-                "status": "running",
+        signed_bundle = report["signedBundle"]
+        metadata = (
+            signed_bundle.get("metadata")
+            if isinstance(signed_bundle.get("metadata"), dict)
+            else {}
+        )
+        canary_id = _policy_canary_id(
+            report["candidate"]["policyHash"], metadata.get("sequence")
+        )
+        approval_request = {
+            "policy_id": metadata.get("id"),
+            "previous_policy_hash": report["current"]["policyHash"],
+            "candidate_policy_hash": report["candidate"]["policyHash"],
+            "previous_sequence": report["current"]["sequence"],
+            "new_sequence": metadata.get("sequence"),
+            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+            "new_rollback_epoch": metadata.get("rollbackEpoch"),
+            "diff": report["diff"],
+            "dry_run": report["dryRun"],
+        }
+        two_person = _require_control_plane_two_person(
+            action="policy.publish",
+            resource_id=metadata.get("id"),
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request=approval_request,
+            connection=connection,
+        )
+        started_at = _now_iso()
+        _write_policy_canary_bundle(signed_bundle)
+        state = {
+            "version": "serverware.policyCanary/v1",
+            "id": canary_id,
+            "status": "running",
+            "policy_id": metadata.get("id"),
+            "previous_policy_hash": report["current"]["policyHash"],
+            "candidate_policy_hash": report["candidate"]["policyHash"],
+            "candidate_sequence": metadata.get("sequence"),
+            "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
+            "started_at": started_at,
+            "started_by": identity.user_id,
+            "bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
+            "diff": report["diff"],
+            "dry_run": report["dryRun"],
+            "payload_digest": payload_digest,
+            "signed_bundle": signed_bundle,
+            "control_plane_mfa": mfa,
+            "control_plane_approval": two_person,
+        }
+        _write_policy_canary_state(state)
+        db.append_audit_event(
+            connection,
+            event_type="policy.canary.started",
+            actor_type="admin",
+            actor_id=identity.user_id,
+            event={
+                "canary_id": canary_id,
                 "policy_id": metadata.get("id"),
                 "previous_policy_hash": report["current"]["policyHash"],
                 "candidate_policy_hash": report["candidate"]["policyHash"],
                 "candidate_sequence": metadata.get("sequence"),
                 "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
-                "started_at": started_at,
-                "started_by": identity.user_id,
-                "bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
+                "canary_bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
                 "diff": report["diff"],
                 "dry_run": report["dryRun"],
-                "payload_digest": payload_digest,
-                "signed_bundle": signed_bundle,
                 "control_plane_mfa": mfa,
                 "control_plane_approval": two_person,
-            }
-            _write_policy_canary_state(state)
-            db.append_audit_event(
-                connection,
-                event_type="policy.canary.started",
-                actor_type="admin",
-                actor_id=identity.user_id,
-                event={
-                    "canary_id": canary_id,
-                    "policy_id": metadata.get("id"),
-                    "previous_policy_hash": report["current"]["policyHash"],
-                    "candidate_policy_hash": report["candidate"]["policyHash"],
-                    "candidate_sequence": metadata.get("sequence"),
-                    "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
-                    "canary_bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
-                    "diff": report["diff"],
-                    "dry_run": report["dryRun"],
-                    "control_plane_mfa": mfa,
-                    "control_plane_approval": two_person,
-                    "payload_digest": payload_digest,
-                },
-            )
+                "payload_digest": payload_digest,
+            },
+        )
     response = dict(report)
     response.pop("signedBundle", None)
     response["published"] = False
@@ -4284,7 +4348,7 @@ def control_plane_approval_approve(
         raise HTTPException(
             status_code=403,
             detail="requester cannot approve their own control-plane mutation",
-    )
+        )
     _assert_control_plane_approval_role(identity, approval["action"])
     mfa = _require_control_plane_mutation_mfa(
         action=approval["action"],
@@ -4299,9 +4363,11 @@ def control_plane_approval_approve(
             approval_id,
             actor_id=identity.user_id,
             note=decision.note if decision else None,
-            authn=mfa
-            or {"method": identity.auth_method, "user_id": identity.user_id},
+            authn=mfa or {"method": identity.auth_method, "user_id": identity.user_id},
             require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+            required_approver_roles=_control_plane_approval_roles(
+                str(approval["action"])
+            ),
         )
     except db.MetadataStoreError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -4333,6 +4399,9 @@ def control_plane_approval_deny(
         approval_id,
         actor_id=identity.user_id,
         note=decision.note if decision else None,
+        required_approver_roles=_control_plane_approval_roles(
+            str(approval["action"])
+        ),
     )
     if not updated:
         raise HTTPException(
@@ -4365,21 +4434,18 @@ def policy_publish(
     payload: PolicyPublishRequest,
     identity: AdminIdentity = Depends(require_role("policy_publisher")),
 ) -> dict[str, Any]:
-    report = _policy_candidate_report(
-        bundle=payload.bundle, dry_run=payload.dry_run, enforce_monotonic=True
-    )
-    metadata = (
-        report["signedBundle"].get("metadata")
-        if isinstance(report["signedBundle"].get("metadata"), dict)
-        else {}
-    )
-    policy_id = metadata.get("id")
     payload_digest = _policy_publish_payload_digest(payload)
     if payload.activation_mode == "full" and POLICY_CANARY_REQUIRED:
         raise HTTPException(
             status_code=412,
             detail="policy canary activation is required before full publish",
         )
+    submitted_metadata = (
+        payload.bundle.get("metadata")
+        if isinstance(payload.bundle.get("metadata"), dict)
+        else {}
+    )
+    policy_id = submitted_metadata.get("id")
     mfa = _require_control_plane_mutation_mfa(
         action="policy.publish",
         resource_id=policy_id,
@@ -4387,64 +4453,145 @@ def policy_publish(
         mfa=payload.mfa,
         identity=identity,
     )
-    approval_request = {
-        "policy_id": policy_id,
-        "previous_policy_hash": report["current"]["policyHash"],
-        "candidate_policy_hash": report["candidate"]["policyHash"],
-        "previous_sequence": report["current"]["sequence"],
-        "new_sequence": metadata.get("sequence"),
-        "previous_rollback_epoch": report["current"]["rollbackEpoch"],
-        "new_rollback_epoch": metadata.get("rollbackEpoch"),
-        "diff": report["diff"],
-        "dry_run": report["dryRun"],
-    }
     if payload.activation_mode == "canary":
-        return _start_policy_canary(
-            report=report,
-            payload=payload,
-            payload_digest=payload_digest,
-            identity=identity,
-            mfa=mfa,
-            approval_request=approval_request,
+        report = _policy_candidate_report(
+            bundle=payload.bundle,
+            dry_run=payload.dry_run,
+            enforce_monotonic=True,
         )
-    with _restore_files_on_error(POLICY_BUNDLE_PATH):
-        with db.connect() as connection:
-            two_person = _require_control_plane_two_person(
+        metadata = (
+            report["signedBundle"].get("metadata")
+            if isinstance(report["signedBundle"].get("metadata"), dict)
+            else {}
+        )
+        policy_id = metadata.get("id")
+        approval_request = {
+            "policy_id": policy_id,
+            "previous_policy_hash": report["current"]["policyHash"],
+            "candidate_policy_hash": report["candidate"]["policyHash"],
+            "previous_sequence": report["current"]["sequence"],
+            "new_sequence": metadata.get("sequence"),
+            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+            "new_rollback_epoch": metadata.get("rollbackEpoch"),
+            "diff": report["diff"],
+            "dry_run": report["dryRun"],
+        }
+        if _control_plane_two_person_required("policy.publish") and not (
+            _control_plane_approval_id(payload.mfa)
+        ):
+            _require_control_plane_two_person(
                 action="policy.publish",
                 resource_id=policy_id,
                 payload_digest=payload_digest,
                 mfa=payload.mfa,
                 identity=identity,
                 request=approval_request,
-                connection=connection,
             )
-            snapshot = write_policy_bundle(
-                report["signedBundle"], enforce_high_water=False
-            )
-            _advance_policy_high_water_in_transaction(
-                snapshot, connection=connection
-            )
-            db.append_audit_event(
-                connection,
-                event_type="policy.published",
-                actor_type="admin",
-                actor_id=identity.user_id,
-                event={
-                    "activation_mode": "full",
-                    "policy_id": policy_id,
-                    "previous_policy_hash": report["current"]["policyHash"],
-                    "new_policy_hash": snapshot.hash,
-                    "previous_sequence": report["current"]["sequence"],
-                    "new_sequence": metadata.get("sequence"),
-                    "previous_rollback_epoch": report["current"]["rollbackEpoch"],
-                    "new_rollback_epoch": metadata.get("rollbackEpoch"),
-                    "diff": report["diff"],
-                    "dry_run": report["dryRun"],
-                    "control_plane_mfa": mfa,
-                    "control_plane_approval": two_person,
-                    "payload_digest": payload_digest,
-                },
-            )
+            raise AssertionError("policy canary approval request unexpectedly returned")
+        return _start_policy_canary(
+            payload=payload,
+            payload_digest=payload_digest,
+            identity=identity,
+            mfa=mfa,
+        )
+
+    if _control_plane_two_person_required("policy.publish") and not (
+        _control_plane_approval_id(payload.mfa)
+    ):
+        report = _policy_candidate_report(
+            bundle=payload.bundle,
+            dry_run=payload.dry_run,
+            enforce_monotonic=True,
+        )
+        metadata = (
+            report["signedBundle"].get("metadata")
+            if isinstance(report["signedBundle"].get("metadata"), dict)
+            else {}
+        )
+        policy_id = metadata.get("id")
+        approval_request = {
+            "policy_id": policy_id,
+            "previous_policy_hash": report["current"]["policyHash"],
+            "candidate_policy_hash": report["candidate"]["policyHash"],
+            "previous_sequence": report["current"]["sequence"],
+            "new_sequence": metadata.get("sequence"),
+            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+            "new_rollback_epoch": metadata.get("rollbackEpoch"),
+            "diff": report["diff"],
+            "dry_run": report["dryRun"],
+        }
+        _require_control_plane_two_person(
+            action="policy.publish",
+            resource_id=policy_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request=approval_request,
+        )
+        raise AssertionError("policy approval request unexpectedly returned")
+
+    with (
+        _policy_publication_file_lock(),
+        _restore_files_on_error(POLICY_BUNDLE_PATH),
+        db.connect() as connection,
+    ):
+        db.lock_policy_publication(connection)
+        report = _policy_candidate_report(
+            bundle=payload.bundle,
+            dry_run=payload.dry_run,
+            enforce_monotonic=True,
+        )
+        metadata = (
+            report["signedBundle"].get("metadata")
+            if isinstance(report["signedBundle"].get("metadata"), dict)
+            else {}
+        )
+        policy_id = metadata.get("id")
+        approval_request = {
+            "policy_id": policy_id,
+            "previous_policy_hash": report["current"]["policyHash"],
+            "candidate_policy_hash": report["candidate"]["policyHash"],
+            "previous_sequence": report["current"]["sequence"],
+            "new_sequence": metadata.get("sequence"),
+            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+            "new_rollback_epoch": metadata.get("rollbackEpoch"),
+            "diff": report["diff"],
+            "dry_run": report["dryRun"],
+        }
+        two_person = _require_control_plane_two_person(
+            action="policy.publish",
+            resource_id=policy_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request=approval_request,
+            connection=connection,
+        )
+        snapshot = write_policy_bundle(
+            report["signedBundle"], enforce_high_water=False
+        )
+        _advance_policy_high_water_in_transaction(snapshot, connection=connection)
+        db.append_audit_event(
+            connection,
+            event_type="policy.published",
+            actor_type="admin",
+            actor_id=identity.user_id,
+            event={
+                "activation_mode": "full",
+                "policy_id": policy_id,
+                "previous_policy_hash": report["current"]["policyHash"],
+                "new_policy_hash": snapshot.hash,
+                "previous_sequence": report["current"]["sequence"],
+                "new_sequence": metadata.get("sequence"),
+                "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+                "new_rollback_epoch": metadata.get("rollbackEpoch"),
+                "diff": report["diff"],
+                "dry_run": report["dryRun"],
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+                "payload_digest": payload_digest,
+            },
+        )
     report = dict(report)
     report["published"] = True
     report["policyHash"] = snapshot.hash
@@ -4530,8 +4677,90 @@ def policy_canary_activate(
         "monitoring": monitor,
         "thresholds": thresholds,
     }
-    with _restore_files_on_error(POLICY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH):
-        with db.connect() as connection:
+    if _control_plane_two_person_required("policy.publish") and not (
+        _control_plane_approval_id(payload.mfa)
+    ):
+        _require_control_plane_two_person(
+            action="policy.publish",
+            resource_id=policy_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request=approval_request,
+        )
+        raise AssertionError("policy canary approval request unexpectedly returned")
+    with (
+        _policy_publication_file_lock(),
+        _restore_files_on_error(POLICY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH),
+        db.connect() as connection,
+    ):
+        db.lock_policy_publication(connection)
+        locked_state = _read_policy_canary_state()
+        if not locked_state or locked_state.get("id") != payload.canary_id:
+            raise HTTPException(status_code=404, detail="policy canary not found")
+        if locked_state.get("status") != "running":
+            raise HTTPException(
+                status_code=409,
+                detail=f"policy canary is {locked_state.get('status')}",
+            )
+        locked_signed_bundle = locked_state.get("signed_bundle")
+        if not isinstance(locked_signed_bundle, dict):
+            raise HTTPException(
+                status_code=503, detail="policy canary signed bundle is missing"
+            )
+        try:
+            locked_candidate = compile_policy_bundle(
+                locked_signed_bundle,
+                verify_signature=True,
+                validate_schema=True,
+            )
+        except PolicyBundleError as exc:
+            raise HTTPException(
+                status_code=409, detail=f"policy canary bundle is invalid: {exc}"
+            ) from exc
+        if locked_candidate.hash != locked_state.get("candidate_policy_hash"):
+            raise HTTPException(
+                status_code=409,
+                detail="policy canary bundle hash no longer matches state",
+            )
+        locked_current = get_policy_snapshot()
+        locked_current_hash = locked_current.hash if locked_current else None
+        if locked_current_hash != locked_state.get("previous_policy_hash"):
+            raise HTTPException(
+                status_code=409,
+                detail="active policy changed after canary start",
+            )
+        _assert_policy_publish_monotonic(
+            locked_current.raw if locked_current else None,
+            locked_signed_bundle,
+        )
+        state = locked_state
+        signed_bundle = locked_signed_bundle
+        candidate = locked_candidate
+        current = locked_current
+        monitor = _policy_canary_monitor(state)
+        thresholds = _require_policy_canary_activation_thresholds(
+            state, monitor, payload
+        )
+        metadata = (
+            signed_bundle.get("metadata")
+            if isinstance(signed_bundle.get("metadata"), dict)
+            else {}
+        )
+        policy_id = metadata.get("id")
+        approval_request = {
+            "canary_id": state.get("id"),
+            "policy_id": policy_id,
+            "previous_policy_hash": state.get("previous_policy_hash"),
+            "candidate_policy_hash": state.get("candidate_policy_hash"),
+            "candidate_sequence": state.get("candidate_sequence"),
+            "candidate_rollback_epoch": state.get("candidate_rollback_epoch"),
+            "monitoring": monitor,
+            "thresholds": thresholds,
+        }
+        with _restore_files_on_error(
+            POLICY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH
+        ):
             two_person = _require_control_plane_two_person(
                 action="policy.publish",
                 resource_id=policy_id,
@@ -4629,25 +4858,40 @@ def policy_canary_cancel(
         raise HTTPException(
             status_code=409, detail=f"policy canary is {state.get('status')}"
         )
-    state.update(
-        {
-            "status": "cancelled",
-            "cancelled_at": _now_iso(),
-            "cancelled_by": identity.user_id,
-            "cancel_note": payload.note,
-        }
-    )
-    _write_policy_canary_state(state)
-    db.record_audit_event(
-        "policy.canary.cancelled",
-        {
-            "canary_id": state.get("id"),
-            "policy_id": state.get("policy_id"),
-            "candidate_policy_hash": state.get("candidate_policy_hash"),
-            "note": payload.note,
-        },
-        actor_id=identity.user_id,
-    )
+    with (
+        _policy_publication_file_lock(),
+        _restore_files_on_error(POLICY_CANARY_STATE_PATH),
+        db.connect() as connection,
+    ):
+        db.lock_policy_publication(connection)
+        state = _read_policy_canary_state()
+        if not state or state.get("id") != payload.canary_id:
+            raise HTTPException(status_code=404, detail="policy canary not found")
+        if state.get("status") != "running":
+            raise HTTPException(
+                status_code=409, detail=f"policy canary is {state.get('status')}"
+            )
+        state.update(
+            {
+                "status": "cancelled",
+                "cancelled_at": _now_iso(),
+                "cancelled_by": identity.user_id,
+                "cancel_note": payload.note,
+            }
+        )
+        _write_policy_canary_state(state)
+        db.append_audit_event(
+            connection,
+            event_type="policy.canary.cancelled",
+            actor_type="admin",
+            actor_id=identity.user_id,
+            event={
+                "canary_id": state.get("id"),
+                "policy_id": state.get("policy_id"),
+                "candidate_policy_hash": state.get("candidate_policy_hash"),
+                "note": payload.note,
+            },
+        )
     return {"ok": True, "canary": _policy_canary_public(state)}
 
 
@@ -5783,6 +6027,370 @@ def _setup_receipt_uuid(statement: Mapping[str, Any]) -> str:
     return str(value)
 
 
+_ENROLLMENT_RECEIPT_V3 = "serverware.enrollmentVerifierReceipt/v3"
+_ENROLLMENT_RECEIPT_V3_CHECKS = (
+    "assignment-binding",
+    "enrollment-session-binding",
+    "packet-digest",
+    "nonce-digest",
+    "trust-profile",
+    "attestation-quote",
+    "runtime-manifest",
+    "packet-signature",
+    "packet-expiry",
+    "quote-provider",
+    "quote-digest",
+    "verified-claims-digest",
+    "quote-verifier-identity",
+    "attestation-assurance",
+    "egress-evidence-signature",
+    "network-namespace-binding",
+    "deny-by-default-installed",
+    "allow-canary-results",
+    "deny-canary-result",
+)
+_ENROLLMENT_RECEIPT_V3_STATEMENT_FIELDS = {
+    "receipt_id",
+    "setup_session_id",
+    "assignment",
+    "assignment_digest",
+    "enrollment_session_id",
+    "enrollment_packet_sha256",
+    "verifier_nonce_sha256",
+    "trust_profile_sha256",
+    "verifier_provider",
+    "assurance_mode",
+    "attestation_evidence",
+    "egress_evidence",
+    "decision",
+    "checks",
+    "issued_at_unix",
+    "expires_at_unix",
+}
+_ENROLLMENT_ATTESTATION_EVIDENCE_FIELDS = {
+    "quote_provider",
+    "quote_sha256",
+    "verified_claims_sha256",
+    "verifier_identity_sha256",
+    "self_rooted",
+    "debug",
+    "assurance",
+}
+_ENROLLMENT_ATTESTATION_ASSURANCE_FIELDS = {
+    "class",
+    "debug",
+    "hardware_proof",
+    "workload_custody_proven",
+    "tls_peer_binding_proven",
+    "fact_origin",
+    "completion_eligible",
+}
+_ENROLLMENT_EGRESS_EVIDENCE_FIELDS = {
+    "evidence_id",
+    "evidence_sha256",
+    "evidence_mode",
+    "evidence_provider",
+    "evidence_key_id",
+    "network_namespace_sha256",
+    "firewall_state_sha256",
+    "allow_results_sha256",
+    "deny_result_sha256",
+    "observed_at_unix",
+}
+_SETUP_DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
+_SETUP_DEVELOPMENT_PROVIDER_MARKERS = (
+    "dev",
+    "fixture",
+    "self-signed",
+    "self-rooted",
+    "test",
+)
+
+
+def _setup_production_release() -> bool:
+    return RELEASE_CHANNEL.strip().lower() not in _SETUP_DEVELOPMENT_RELEASE_CHANNELS
+
+
+def _setup_v3_failure(code: ReceiptErrorCode, message: str) -> ReceiptVerificationError:
+    return ReceiptVerificationError(code, message)
+
+
+def _setup_v3_exact_fields(value: Any, expected: set[str], label: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != expected:
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            f"{label} fields do not match the closed contract",
+        )
+    return value
+
+
+def _setup_v3_digest(value: Any, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            f"{label} is not a SHA-256 digest",
+        )
+    return value
+
+
+def _setup_v3_development_provider(value: str) -> bool:
+    lowered = value.lower()
+    return any(marker in lowered for marker in _SETUP_DEVELOPMENT_PROVIDER_MARKERS)
+
+
+def _verify_setup_enrollment_receipt_v3(
+    raw: bytes,
+    *,
+    trust: Any,
+    expected: EnrollmentReceiptExpected,
+    clock: Any,
+) -> VerifiedEnrollmentVerifierReceipt:
+    document = parse_strict_json_object(raw)
+    _setup_v3_exact_fields(
+        document,
+        {"apiVersion", "kind", "statement", "signing_key_id", "signature"},
+        "enrollment receipt",
+    )
+    if (
+        document.get("apiVersion") != _ENROLLMENT_RECEIPT_V3
+        or document.get("kind") != "EnrollmentVerifierReceipt"
+    ):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            "enrollment receipt type is invalid",
+        )
+    if not hmac.compare_digest(str(document.get("signing_key_id") or ""), trust.key_id):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.UNTRUSTED_SIGNER,
+            "enrollment receipt signer is not trusted",
+        )
+    statement = _setup_v3_exact_fields(
+        document.get("statement"),
+        _ENROLLMENT_RECEIPT_V3_STATEMENT_FIELDS,
+        "enrollment receipt statement",
+    )
+    encoded_signature = document.get("signature")
+    if (
+        not isinstance(encoded_signature, str)
+        or not encoded_signature.startswith("ed25519:")
+        or re.fullmatch(r"[A-Za-z0-9_-]+", encoded_signature.split(":", 1)[1]) is None
+    ):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            "enrollment receipt signature encoding is invalid",
+        )
+    encoded = encoded_signature.split(":", 1)[1]
+    try:
+        signature = base64.b64decode(
+            encoded + "=" * (-len(encoded) % 4), altchars=b"-_", validate=True
+        )
+        public_key = serialization.load_der_public_key(trust.public_key_spki_der)
+        if not isinstance(public_key, Ed25519PublicKey) or len(signature) != 64:
+            raise ValueError("invalid Ed25519 key or signature length")
+        if base64.urlsafe_b64encode(signature).decode("ascii").rstrip("=") != encoded:
+            raise ValueError("noncanonical signature")
+        public_key.verify(signature, setup_receipt_canonical_json_bytes(statement))
+    except (InvalidSignature, TypeError, ValueError) as exc:
+        raise _setup_v3_failure(
+            ReceiptErrorCode.INVALID_SIGNATURE,
+            "enrollment receipt signature verification failed",
+        ) from exc
+
+    common_bindings = (
+        (statement.get("receipt_id"), expected.receipt_id),
+        (statement.get("setup_session_id"), expected.setup_session_id),
+        (statement.get("enrollment_session_id"), expected.enrollment_session_id),
+        (statement.get("assignment"), expected.assignment.as_document()),
+        (statement.get("assignment_digest"), expected.assignment.digest),
+        (statement.get("enrollment_packet_sha256"), expected.enrollment_packet_sha256),
+        (statement.get("verifier_nonce_sha256"), expected.verifier_nonce_sha256),
+        (statement.get("trust_profile_sha256"), expected.trust_profile_sha256),
+        (statement.get("verifier_provider"), trust.provider),
+    )
+    if any(actual != wanted for actual, wanted in common_bindings):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.BINDING_MISMATCH,
+            "enrollment receipt common binding mismatch",
+        )
+    for field in (
+        "enrollment_packet_sha256",
+        "verifier_nonce_sha256",
+        "trust_profile_sha256",
+    ):
+        _setup_v3_digest(statement.get(field), f"enrollment receipt {field}")
+
+    production = _setup_production_release()
+    expected_mode = "production" if production else "development-fixture"
+    if statement.get("assurance_mode") != expected_mode:
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            f"enrollment receipt must use {expected_mode} assurance",
+        )
+    attestation = _setup_v3_exact_fields(
+        statement.get("attestation_evidence"),
+        _ENROLLMENT_ATTESTATION_EVIDENCE_FIELDS,
+        "enrollment attestation evidence",
+    )
+    quote_provider = attestation.get("quote_provider")
+    if not isinstance(quote_provider, str) or not quote_provider:
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            "enrollment quote provider is invalid",
+        )
+    for field in ("quote_sha256", "verified_claims_sha256", "verifier_identity_sha256"):
+        _setup_v3_digest(attestation.get(field), f"enrollment attestation {field}")
+    assurance = _setup_v3_exact_fields(
+        attestation.get("assurance"),
+        _ENROLLMENT_ATTESTATION_ASSURANCE_FIELDS,
+        "enrollment attestation assurance",
+    )
+    boolean_assurance_fields = (
+        "debug",
+        "hardware_proof",
+        "workload_custody_proven",
+        "tls_peer_binding_proven",
+        "completion_eligible",
+    )
+    if (
+        type(attestation.get("debug")) is not bool
+        or type(attestation.get("self_rooted")) is not bool
+        or any(type(assurance.get(field)) is not bool for field in boolean_assurance_fields)
+        or assurance.get("debug") != attestation.get("debug")
+        or not isinstance(assurance.get("class"), str)
+        or not isinstance(assurance.get("fact_origin"), str)
+    ):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            "enrollment attestation assurance values are invalid",
+        )
+    if production and (
+        _setup_v3_development_provider(quote_provider)
+        or attestation["verifier_identity_sha256"] == "sha256:" + "0" * 64
+        or attestation["debug"] is not False
+        or attestation["self_rooted"] is not False
+        or assurance["hardware_proof"] is not True
+        or assurance["workload_custody_proven"] is not True
+        or assurance["tls_peer_binding_proven"] is not True
+        or assurance["completion_eligible"] is not True
+        or assurance["fact_origin"] != "independent-verifier"
+        or _setup_v3_development_provider(str(assurance["class"]))
+    ):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.BINDING_MISMATCH,
+            "production enrollment rejects development, debug, self-rooted, or incomplete quote assurance",
+        )
+
+    egress = _setup_v3_exact_fields(
+        statement.get("egress_evidence"),
+        _ENROLLMENT_EGRESS_EVIDENCE_FIELDS,
+        "enrollment egress evidence",
+    )
+    try:
+        if str(uuid.UUID(str(egress.get("evidence_id")))) != egress.get("evidence_id"):
+            raise ValueError("noncanonical UUID")
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            "enrollment egress evidence ID is invalid",
+        ) from exc
+    for field in (
+        "evidence_sha256",
+        "evidence_key_id",
+        "network_namespace_sha256",
+        "firewall_state_sha256",
+        "allow_results_sha256",
+        "deny_result_sha256",
+    ):
+        _setup_v3_digest(egress.get(field), f"enrollment egress {field}")
+    expected_egress_mode = "production-launcher" if production else "development-fixture"
+    egress_provider = egress.get("evidence_provider")
+    if (
+        egress.get("evidence_mode") != expected_egress_mode
+        or not isinstance(egress_provider, str)
+        or not egress_provider
+        or (production and _setup_v3_development_provider(egress_provider))
+        or (
+            production
+            and hmac.compare_digest(str(egress.get("evidence_key_id")), trust.key_id)
+        )
+        or type(egress.get("observed_at_unix")) is not int
+        or egress["observed_at_unix"] < 1
+    ):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.BINDING_MISMATCH,
+            "enrollment egress evidence is not eligible for this release channel",
+        )
+
+    if statement.get("decision") != "verified" or statement.get("checks") != tuple(
+        _ENROLLMENT_RECEIPT_V3_CHECKS
+    ):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            "enrollment receipt decision or checks are incomplete",
+        )
+    issued_at = statement.get("issued_at_unix")
+    expires_at = statement.get("expires_at_unix")
+    now = clock.now_unix() if hasattr(clock, "now_unix") else clock()
+    if (
+        type(issued_at) is not int
+        or type(expires_at) is not int
+        or type(now) is not int
+        or not issued_at <= now < expires_at
+        or not 1 <= expires_at - issued_at <= 900
+        or egress["observed_at_unix"] > issued_at
+    ):
+        raise _setup_v3_failure(
+            ReceiptErrorCode.INVALID_TIME,
+            "enrollment receipt time window is invalid",
+        )
+    return VerifiedEnrollmentVerifierReceipt(
+        receipt_id=expected.receipt_id,
+        receipt_sha256=setup_receipt_sha256_digest(
+            setup_receipt_canonical_json_bytes(document)
+        ),
+        setup_session_id=expected.setup_session_id,
+        assignment=expected.assignment,
+        enrollment_session_id=expected.enrollment_session_id,
+        enrollment_packet_sha256=expected.enrollment_packet_sha256,
+        verifier_nonce_sha256=expected.verifier_nonce_sha256,
+        trust_profile_sha256=expected.trust_profile_sha256,
+        verifier_provider=trust.provider,
+        verifier_key_id=trust.key_id,
+        decision="verified",
+        checks=_ENROLLMENT_RECEIPT_V3_CHECKS,
+        issued_at_unix=issued_at,
+        expires_at_unix=expires_at,
+    )
+
+
+def _verify_setup_enrollment_receipt(
+    raw: bytes,
+    *,
+    trust: Any,
+    expected: EnrollmentReceiptExpected,
+    clock: Any,
+) -> VerifiedEnrollmentVerifierReceipt:
+    document = parse_strict_json_object(raw)
+    if document.get("apiVersion") == _ENROLLMENT_RECEIPT_V3:
+        return _verify_setup_enrollment_receipt_v3(
+            raw,
+            trust=trust,
+            expected=expected,
+            clock=clock,
+        )
+    if _setup_production_release():
+        raise _setup_v3_failure(
+            ReceiptErrorCode.CONTRACT_MISMATCH,
+            "production setup requires a v3 enrollment receipt",
+        )
+    return verify_enrollment_verifier_receipt(
+        raw,
+        trust=trust,
+        expected=expected,
+        clock=clock,
+    )
+
+
 def _setup_enrollment_is_authoritatively_consumed(item: Mapping[str, Any]) -> None:
     enrollment_session_id = str(item.get("enrollment_session_id") or "")
     with _ca_install_sessions_lock():
@@ -5839,7 +6447,7 @@ def _verified_setup_enrollment(
         trust_profile_sha256=profile.digest,
     )
     try:
-        return verify_enrollment_verifier_receipt(
+        return _verify_setup_enrollment_receipt(
             raw,
             trust=profile.enrollment_verifier,
             expected=expected,
@@ -6131,7 +6739,7 @@ async def setup_session_enrollment_receipt(
         trust_profile_sha256=profile.digest,
     )
     try:
-        verified = verify_enrollment_verifier_receipt(
+        verified = _verify_setup_enrollment_receipt(
             raw_receipt,
             trust=profile.enrollment_verifier,
             expected=expected,
@@ -7252,10 +7860,11 @@ def _revoke_rejected_oauth_exchange(
     *,
     actor_id: str,
     rejection_reason: str = "callback_validation_failed",
-) -> None:
+) -> dict[str, Any]:
     provider_id = exchanged.get("provider")
     result = "retained"
     reason = None
+    work_id = exchanged.get("revocationWorkId")
     try:
         work_id = _ensure_oauth_exchange_revocation_work(exchanged, actor_id=actor_id)
         db.mark_oauth_revocation_work_pending(
@@ -7275,15 +7884,27 @@ def _revoke_rejected_oauth_exchange(
         db.MetadataStoreError,
         ValueError,
     ):
+        retained = None
+        if isinstance(work_id, str):
+            try:
+                retained = db.get_oauth_revocation_work_status(work_id)
+            except (db.ManagedOAuthCredentialError, db.MetadataStoreError, ValueError):
+                retained = None
         try:
             token_secret = json.loads(str(exchanged.get("secret") or ""))
             if not isinstance(provider_id, str) or not isinstance(token_secret, dict):
                 raise OAuthError("rejected OAuth exchange is malformed")
             revoke_oauth_token(provider_id=provider_id, token_secret=token_secret)
             result = "revoked"
+            if retained is not None and isinstance(work_id, str):
+                db.complete_oauth_revocation_work(work_id)
         except (OAuthError, json.JSONDecodeError, TypeError, ValueError):
-            result = "failed"
-            reason = "revocation_retention_failed"
+            if retained is not None:
+                result = "retained_for_retry"
+                reason = "provider_revocation_failed"
+            else:
+                result = "failed"
+                reason = "revocation_retention_failed"
     db.record_audit_event(
         (
             "credential.oauth_reconnect_rejected"
@@ -7301,6 +7922,70 @@ def _revoke_rejected_oauth_exchange(
         },
         actor_id=actor_id,
     )
+    return {
+        "status": result,
+        "reason": reason,
+        "durableRetryRetained": result in {"retained", "retained_for_retry"},
+    }
+
+
+def _oauth_grant_collision_response(
+    collision: db.OAuthGrantCollisionError,
+    *,
+    exchanged: dict[str, Any],
+    actor_id: str,
+    setup_session_id: object,
+    provider_id: str,
+    state: str,
+    oauth_cookie_name: str | None,
+) -> JSONResponse:
+    family = collision.detail.get("grantFamily")
+    if not isinstance(family, dict):
+        raise db.MetadataStoreError("Google OAuth collision family is unavailable")
+    revocation_work_id = _ensure_oauth_exchange_revocation_work(
+        exchanged,
+        actor_id=actor_id,
+    )
+    quarantine = db.quarantine_google_oauth_grant_family(
+        oauth_client_id=family.get("oauthClientId"),
+        provider_subject=str(family.get("providerSubject") or ""),
+        actor_id=actor_id,
+        revocation_work_id=revocation_work_id,
+    )
+    for credential in quarantine.get("credentials") or []:
+        if isinstance(credential, dict) and isinstance(credential.get("id"), str):
+            runtime.invalidate_secret_leases(credential["id"])
+    disposition = _revoke_rejected_oauth_exchange(
+        exchanged,
+        actor_id=actor_id,
+        rejection_reason="google_oauth_grant_collision",
+    )
+    _fail_bound_oauth_setup_session(
+        setup_session_id=setup_session_id,
+        actor_id=actor_id,
+        provider_id=provider_id,
+        state=state,
+        reason="google_oauth_grant_collision",
+    )
+    detail = {
+        **collision.detail,
+        "grantFamilyQuarantine": quarantine,
+        "newGrantDisposition": disposition,
+    }
+    response = JSONResponse(
+        status_code=409,
+        content={"detail": detail},
+        headers={"Cache-Control": "no-store"},
+    )
+    if oauth_cookie_name:
+        response.delete_cookie(
+            oauth_cookie_name,
+            path="/",
+            secure=True,
+            httponly=True,
+            samesite="lax",
+        )
+    return response
 
 
 def _revoke_rejected_oauth_refresh(
@@ -7795,6 +8480,16 @@ def oauth_callback(
                         "setup session disappeared after atomic OAuth staging"
                     )
                 _drain_setup_session_audit_outbox()
+        except db.OAuthGrantCollisionError as exc:
+            return _oauth_grant_collision_response(
+                exc,
+                exchanged=exchanged,
+                actor_id=str(actor_id),
+                setup_session_id=(setup_session or {}).get("id"),
+                provider_id=provider_id,
+                state=state,
+                oauth_cookie_name=oauth_cookie_name,
+            )
         except db.SetupSessionError as exc:
             _revoke_rejected_oauth_exchange(
                 exchanged,
@@ -7937,6 +8632,16 @@ def oauth_callback(
                         "setup session disappeared after atomic OAuth activation"
                     )
                 _drain_setup_session_audit_outbox()
+        except db.OAuthGrantCollisionError as exc:
+            return _oauth_grant_collision_response(
+                exc,
+                exchanged=exchanged,
+                actor_id=str(actor_id),
+                setup_session_id=(setup_session or {}).get("id"),
+                provider_id=provider_id,
+                state=state,
+                oauth_cookie_name=oauth_cookie_name,
+            )
         except db.SetupSessionError as exc:
             _revoke_rejected_oauth_exchange(
                 exchanged,
@@ -8157,6 +8862,8 @@ def oauth_pending_credential_activate(
             approval_id=approval_id,
             actor_id=identity.user_id,
             require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+            required_requester_roles=_control_plane_requester_roles(action),
+            required_approver_roles=_control_plane_approval_roles(action),
             setup_session_id=setup_session["id"] if setup_session is not None else None,
             setup_expected_revision=(
                 int(payload.setup_revision) if setup_session is not None else None
@@ -8164,6 +8871,8 @@ def oauth_pending_credential_activate(
         )
     except db.SetupSessionError as exc:
         _setup_session_error(exc)
+    except db.OAuthGrantCollisionError as exc:
+        raise HTTPException(status_code=409, detail=exc.detail) from exc
     except db.ManagedOAuthCredentialError as exc:
         detail = str(exc)
         if "revocation work capacity" in detail:
@@ -8766,6 +9475,7 @@ def break_glass_grant(
             "control_plane_approval": two_person,
             "payload_digest": payload_digest,
         },
+        required_approver_roles={"approver"},
     )
     if not approved:
         raise HTTPException(
@@ -8908,6 +9618,7 @@ def approve(
             "review_digest": review_receipt["review_digest"],
         }
     try:
+        allowed_approver_ids = set((jit.get("approvers") or {}).get("users") or [])
         updated = db.approve_request(
             approval_id,
             ttl_seconds=ttl_seconds,
@@ -8918,8 +9629,12 @@ def approve(
             review_receipt_id=review_receipt["id"],
             review_digest=review_receipt["review_digest"],
             require_review_receipt=True,
+            required_approver_roles={"approver"},
+            authority_policy_hash=str(approval.get("policy_hash") or ""),
+            authority_route_id=str(approval.get("route_id") or ""),
+            allowed_approver_ids=allowed_approver_ids,
         )
-    except db.MetadataStoreError as exc:
+    except (db.MetadataStoreError, db.RBACBindingStoreError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     if not updated:
         raise HTTPException(
@@ -8968,11 +9683,17 @@ def deny(
         )
     if _approval_is_expired(approval):
         raise HTTPException(status_code=409, detail="approval is expired")
-    _assert_approver_allowed(identity, _approval_jit_policy(approval))
+    jit = _approval_jit_policy(approval, require_current_policy=True)
+    _assert_approver_allowed(identity, jit)
+    allowed_approver_ids = set((jit.get("approvers") or {}).get("users") or [])
     updated = db.deny_request(
         approval_id,
         note=decision.reason if decision else None,
         actor_id=identity.user_id,
+        required_approver_roles={"approver"},
+        authority_policy_hash=str(approval.get("policy_hash") or ""),
+        authority_route_id=str(approval.get("route_id") or ""),
+        allowed_approver_ids=allowed_approver_ids,
     )
     if not updated:
         raise HTTPException(
@@ -11162,6 +11883,7 @@ def data_plane_release_authorization_reserve(
         _release_authorization_route_claims(payload)
     )
     approval_review = None
+    jit = route.jit or {}
     if require_jit_grant or payload.canonical_request is not None:
         approval_review = _release_authorization_approval_review(payload, route)
     jit_approval_request = None
@@ -11172,7 +11894,6 @@ def data_plane_release_authorization_reserve(
                 detail="JIT release authorization requires canonicalRequest",
             )
         method, url, canonical_request, redacted_display = approval_review
-        jit = route.jit or {}
         jit_approval_request = {
             "method": method,
             "url": url,
@@ -11204,6 +11925,18 @@ def data_plane_release_authorization_reserve(
             reservation_ttl_seconds=RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS,
             jit_approval_request=jit_approval_request,
             actor_id=DATA_PLANE_INSTANCE_ID,
+            authority_policy_hash=payload.policy_hash,
+            authority_route_id=route.id,
+            required_approver_roles={"approver"} if require_jit_grant else None,
+            allowed_approver_ids=(
+                set((jit.get("approvers") or {}).get("users") or []) or None
+            )
+            if require_jit_grant
+            else None,
+            require_approver_webauthn=(
+                require_jit_grant
+                and _webauthn_required(_approval_authn_policy(jit))
+            ),
         )
     except db.ReleaseAuthorizationConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -11229,6 +11962,7 @@ def data_plane_release_authorization_dispatch(
             binding_digest=payload.binding_digest,
             dispatch_ttl_seconds=RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS,
             actor_id=DATA_PLANE_INSTANCE_ID,
+            required_approver_roles={"approver"},
         )
     except db.ReleaseAuthorizationConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -12268,8 +13002,8 @@ UI_HTML = r"""
         policies: [{"type":"operationPolicy","allowedOperations":["search.read"]},{"type":"queryDateWindow","parameters":["start_time","end_time"],"maxAgeDays":7},{"type":"queryNumericBounds","parameters":["max_results"],"min":1,"max":100,"integer":true}]
       },
       x_one_post_daily: {
-        label: 'X one post daily',
-        name: 'X one tweet per day',
+        label: 'X one post per 24h',
+        name: 'X one tweet per 24-hour window',
         host: 'api.x.com',
         path: '/2/tweets',
         injection: {"type":"bearer","field":"access_token"},
@@ -12293,7 +13027,7 @@ UI_HTML = r"""
         requiredScopes: ['https://www.googleapis.com/auth/gmail.readonly'],
         injection: {type: 'bearer', field: 'access_token'},
         match: {scheme: 'https', host: 'gmail.googleapis.com', port: 443, methods: ['GET'], paths: ['/gmail/v1/users/{user}/messages', '/gmail/v1/users/{user}/messages/{message_id}']},
-        adapter: {type: 'gmail.v1', config: {maxAgeDays: 30, maxResults: 10, forceQuery: true, allowMessageGetOnlyFromPriorSearch: true, cacheTtlSeconds: 1800, denyEquivalentEndpoints: ['threads', 'history', 'attachments', 'imap'], response: {validateInternalDate: true, validateListByMetadataFetch: true, maxBodyBytes: 1048576, allowedFields: ['id', 'threadId', 'labelIds', 'snippet', 'internalDate', 'payload.headers'], allowedHeaders: [], allowedMessageHeaderNames: ['From', 'Subject', 'Date'], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.code', 'error.status', 'error.message', 'error.errors.reason', 'error.errors.domain'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}, onViolation: 'block'}}},
+        adapter: {type: 'gmail.v1', config: {maxAgeDays: 30, maxResults: 10, forceQuery: true, allowMessageGetOnlyFromPriorSearch: true, cacheTtlSeconds: 1800, denyEquivalentEndpoints: ['threads', 'history', 'attachments', 'imap'], response: {validateInternalDate: true, validateListByMetadataFetch: true, metadataFetch: {maxMessages: 10, perRequestTimeoutMs: 1500, totalTimeoutMs: 8000, maxBodyBytes: 4096}, maxBodyBytes: 1048576, allowedFields: ['id', 'threadId', 'labelIds', 'snippet', 'internalDate', 'payload.headers'], allowedHeaders: [], allowedMessageHeaderNames: ['From', 'Subject', 'Date'], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.code', 'error.status', 'error.message', 'error.errors.reason', 'error.errors.domain'], allowedHeaders: ['retry-after', 'www-authenticate'], onInvalid: 'block'}, onViolation: 'block'}}},
         constraints: [
           {id: 'gmail-max-page-size', type: 'queryNumericBounds', parameters: ['maxResults'], min: 1, max: 10, integer: true},
           {id: 'gmail-response-last-30-days', type: 'responseDateWindow', phase: 'response', operations: ['gmail.messages.list'], items: ['messages'], dateFields: ['internalDate'], formats: ['epochMillis'], maxAgeDays: 30, required: true}
@@ -12314,7 +13048,7 @@ UI_HTML = r"""
         ]
       },
       x_one_post_daily: {
-        label: 'X one text post per day',
+        label: 'X one text post per 24-hour window',
         routeId: 'x.post.one-per-day',
         provider: 'x',
         requiredScopes: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'],
@@ -12373,8 +13107,9 @@ UI_HTML = r"""
         match: {scheme: 'https', host: 'api.stripe.com', port: 443, methods: ['GET'], paths: ['/v1/customers/{customer_id}']},
         adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'none', maxBodyBytes: 0, operation: {name: 'stripe.customers.get', pathParams: ['customer_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['id', 'object', 'email', 'name', 'created', 'deleted'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error.type', 'error.code', 'error.message', 'error.param'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
+          {id: 'stripe-approved-customer', type: 'requestValue', rules: [{source: 'pathParam', name: 'customer_id', predicate: {kind: 'equals', value: 'cus_replace_with_approved_customer'}, capture: 'approvedCustomerId'}]},
           {id: 'stripe-customer-get-shape', type: 'responseJson', phase: 'response', operations: ['stripe.customers.get'], fields: {id: {required: true, type: 'string', minLength: 5, maxLength: 255, pattern: '^cus_[A-Za-z0-9]{1,251}$'}, object: {required: true, type: 'string', equals: 'customer'}, deleted: {required: false, type: 'boolean'}}},
-          {id: 'stripe-customer-get-binding', type: 'responseBinding', phase: 'response', operations: ['stripe.customers.get'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'customer-id', operationField: 'customer_id', responseField: 'id', comparison: 'exactString'}]}
+          {id: 'stripe-customer-get-binding', type: 'responseBinding', phase: 'response', operations: ['stripe.customers.get'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'customer-id', operationField: 'approvedCustomerId', responseField: 'id', comparison: 'exactString'}]}
         ]
       },
       stripe_payment_intent_jit: {
@@ -12397,13 +13132,14 @@ UI_HTML = r"""
         routeId: 'example.object_store.small_puts',
         provider: 'object-store',
         injection: {type: 'header', name: 'X-Api-Key'},
-        match: {scheme: 'https', host: 'objects.example.com', port: 443, methods: ['PUT'], paths: ['/v1/objects/{artifact_id}']},
+        match: {scheme: 'https', host: 'objects.example.com', port: 443, methods: ['PUT'], paths: ['/v1/buckets/{bucket}/objects/{artifact_id}']},
         adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'json', maxBodyBytes: 65536, operation: {name: 'object_store.objects.put', bodySha256Field: 'requestBodySha256', pathParams: ['artifact_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'id', 'sha256'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'code', 'message'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
+          {id: 'object-store-bucket-and-key-scope', type: 'requestValue', rules: [{source: 'pathParam', name: 'bucket', predicate: {kind: 'equals', value: 'agent-artifacts'}, capture: 'validatedBucket'}, {source: 'pathParam', name: 'artifact_id', predicate: {kind: 'pattern', pattern: '^[A-Za-z0-9._-]{1,128}$', maxLength: 128}, capture: 'validatedObjectKey'}]},
           {id: 'object-store-json-payload', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['content', 'contentType'], requiredFields: ['content'], fields: {content: {type: 'string', minLength: 1, maxLength: 4096}, contentType: {type: 'string', maxLength: 128}}},
           {id: 'object-store-ten-puts-per-assignment-hour', type: 'rateLimit', max: 10, windowSeconds: 3600, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
           {id: 'object-store-response-contract', type: 'responseJson', phase: 'response', operations: ['object_store.objects.put'], fields: {ok: {required: true, type: 'boolean', equals: true}, id: {required: true, type: 'string', maxLength: 128, pattern: '^[A-Za-z0-9._-]{1,128}$'}, sha256: {required: true, type: 'string', maxLength: 71, pattern: '^sha256:[0-9a-f]{64,64}$'}}},
-          {id: 'object-store-response-binding', type: 'responseBinding', phase: 'response', operations: ['object_store.objects.put'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'artifact-id', operationField: 'artifact_id', responseField: 'id', comparison: 'exactString'}, {id: 'sha256', operationField: 'requestBodySha256', responseField: 'sha256', comparison: 'exactString'}]}
+          {id: 'object-store-response-binding', type: 'responseBinding', phase: 'response', operations: ['object_store.objects.put'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'artifact-id', operationField: 'validatedObjectKey', responseField: 'id', comparison: 'exactString'}, {id: 'sha256', operationField: 'requestBodySha256', responseField: 'sha256', comparison: 'exactString'}]}
         ]
       },
       custom_json: {
@@ -14484,44 +15220,28 @@ UI_HTML = r"""
       if (!packet || packet.apiVersion !== 'serverware.agentEnrollment/v1') {
         throw new Error('Generate a current enrollment packet first');
       }
-      const handoff = packet.agentHandoff || {};
-      const environment = handoff.proxyEnvironment || {};
-      const proxyHeaders = handoff.requiredProxyHeaders || {};
-      const providerHeaders = handoff.requiredProviderHeaders || {};
-      const proxyAuthorization = handoff.proxyAuthorization || {};
-      const handling = handoff.requestHandling || {};
-      const lines = [
-        `Serverware enrollment for ${packet.principalId}`,
-        '',
-        'Use normal provider SDKs and the upstream URLs listed below.',
-        'Never request, store, print, or cache provider credentials.',
-        'Do not bypass Serverware when a request is denied or unavailable.',
-        '',
-        'Environment:'
-      ];
-      for (const [name, value] of Object.entries(environment).sort(([left], [right]) => left.localeCompare(right))) {
-        lines.push(`${name}=${value}`);
+      const instructions = packet.agentHandoff?.instructionsText;
+      if (typeof instructions !== 'string' || !instructions.trim()) {
+        throw new Error('Enrollment packet is missing signed agent instructions');
       }
-      lines.push('', `CA path: ${packet.ca?.installPath || ''}`);
-      lines.push(`CONNECT proxy headers: ${JSON.stringify(proxyHeaders)}`);
-      lines.push(`Provider request identity headers: ${JSON.stringify(providerHeaders)}`);
-      if (proxyAuthorization.required === true) {
-        lines.push(`Proxy authorization must be provisioned separately${proxyAuthorization.tokenId ? ` for token ID ${proxyAuthorization.tokenId}` : ''}; it is not in this packet.`);
-      }
-      lines.push('', 'Allowed upstream URLs:');
-      for (const url of handoff.allowedUrls || []) lines.push(`- ${url}`);
-      lines.push(
-        '',
-        `On HTTP ${handling.approvalRequired?.statusCode || 428}, give approval_url to the operator, honor retry_after_seconds, wait for approval, and retry only the identical request.`,
-        'On HTTP 403 or any 5xx response, stop and report the route and error. Never retry through a direct provider connection.'
-      );
-      return lines.join('\n');
+      return instructions;
     }
 
     async function copyAgentInstructions() {
-      const instructions = agentInstructionText(state.enrollmentPacket);
-      await navigator.clipboard.writeText(instructions);
-      return {copied: true, principalId: state.enrollmentPacket.principalId};
+      const binding = await downloadEnrollmentBinding();
+      agentInstructionText(binding.packet);
+      const serverware = binding.packet.serverware || {};
+      if (!serverware.controlPlaneUrl) throw new Error('Enrollment packet is missing its control-plane binding');
+      const command = [
+        'set -eu',
+        'umask 077',
+        'SERVERWARE_PACKET_PATH="${SERVERWARE_PACKET_PATH:-$HOME/Downloads/' + binding.packetFilename + '}"',
+        `SERVERWARE_PACKET_SHA256=${shellQuote(binding.packetSha256)}`,
+        'export SERVERWARE_PACKET_PATH SERVERWARE_PACKET_SHA256',
+        `serverware-enrollment --base ${shellQuote(serverware.controlPlaneUrl)} --verify-packet "$SERVERWARE_PACKET_PATH" --expected-packet-sha256 "$SERVERWARE_PACKET_SHA256" --expected-principal ${shellQuote(binding.packet.principalId)} --expected-nonce ${shellQuote(binding.packet.nonce)} --emit-verified-instructions`
+      ];
+      await navigator.clipboard.writeText(command.join('\n'));
+      return {copied: true, principalId: binding.packet.principalId};
     }
 
     function enrollmentFilename(packet) {
@@ -14546,6 +15266,16 @@ UI_HTML = r"""
       link.remove();
       URL.revokeObjectURL(url);
       return filename;
+    }
+
+    async function downloadEnrollmentBinding() {
+      const packet = state.enrollmentPacket;
+      if (!packet) throw new Error('Generate an enrollment packet first so the verifier is bound to its pins');
+      const packetText = enrollmentPacketText(packet);
+      const packetFilename = downloadEnrollment(packetText);
+      const packetDigestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(packetText));
+      const packetSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
+      return {packet, packetText, packetFilename, packetSha256};
     }
 
     async function deleteCredential(id) {
@@ -14857,25 +15587,21 @@ UI_HTML = r"""
       return "'" + String(value).replace(/'/g, "'\"'\"'") + "'";
     }
     async function copyEnrollmentVerifier() {
-      const packet = state.enrollmentPacket;
-      if (!packet) throw new Error('Generate an enrollment packet first so the verifier is bound to its pins');
+      const binding = await downloadEnrollmentBinding();
+      const packet = binding.packet;
       const pinning = packet.pinning || {};
       const serverware = packet.serverware || {};
       const ca = packet.ca || {};
       if (!serverware.controlPlaneUrl || !pinning.policySigningKeyId || !pinning.rollbackEpoch || !ca.installPath) {
         throw new Error('Enrollment packet is missing required verifier bindings');
       }
-      const packetText = enrollmentPacketText(packet);
-      const packetFilename = downloadEnrollment(packetText);
-      const packetDigestBytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(packetText));
-      const packetSha256 = 'sha256:' + Array.from(new Uint8Array(packetDigestBytes), (byte) => byte.toString(16).padStart(2, '0')).join('');
       const command = [
-        'set -euo pipefail',
+        'set -eu',
         'umask 077',
-        'ENROLLMENT_PACKET="${SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/' + packetFilename + '}"',
+        'ENROLLMENT_PACKET="${SERVERWARE_ENROLLMENT_PACKET:-$HOME/Downloads/' + binding.packetFilename + '}"',
         'VERIFIED_ENROLLMENT_PACKET="${SERVERWARE_VERIFIED_ENROLLMENT_PACKET:-${ENROLLMENT_PACKET%.json}.verified.json}"',
-        `python3 scripts/generate_agent_enrollment.py --verify-packet "$ENROLLMENT_PACKET" --expected-packet-sha256 ${shellQuote(packetSha256)} --expected-principal ${shellQuote(packet.principalId)} --expected-nonce ${shellQuote(packet.nonce)} --base ${shellQuote(serverware.controlPlaneUrl)} > "$VERIFIED_ENROLLMENT_PACKET"`,
-        `python3 scripts/verify_attestation.py --base ${shellQuote(serverware.controlPlaneUrl)} --enrollment-packet "$VERIFIED_ENROLLMENT_PACKET" --ca-out .tmp/serverware-ca.pem --expected-policy-key-hash ${shellQuote(pinning.policySigningKeyId)} --expected-rollback-epoch ${Number(pinning.rollbackEpoch)}`,
+        `serverware-enrollment --verify-packet "$ENROLLMENT_PACKET" --expected-packet-sha256 ${shellQuote(binding.packetSha256)} --expected-principal ${shellQuote(packet.principalId)} --expected-nonce ${shellQuote(packet.nonce)} --base ${shellQuote(serverware.controlPlaneUrl)} > "$VERIFIED_ENROLLMENT_PACKET"`,
+        `serverware-attestation --base ${shellQuote(serverware.controlPlaneUrl)} --enrollment-packet "$VERIFIED_ENROLLMENT_PACKET" --ca-out .tmp/serverware-ca.pem --expected-policy-key-hash ${shellQuote(pinning.policySigningKeyId)} --expected-rollback-epoch ${Number(pinning.rollbackEpoch)}`,
         `install -D -m 0644 .tmp/serverware-ca.pem ${shellQuote(ca.installPath)}`,
         `export HTTPS_PROXY=${shellQuote(serverware.proxyUrl)}`,
         `export HTTP_PROXY=${shellQuote(serverware.proxyUrl)}`

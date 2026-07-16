@@ -20,6 +20,7 @@ import serverware_source_tree
 ROOT = Path(__file__).resolve().parent.parent
 BUILD_API_VERSION = "serverware.productionImagesBuild/v2"
 BUILD_KIND = "ProductionImagesBuild"
+PRODUCTION_PLATFORM = "linux/amd64"
 DEFAULT_IMAGES = (
     ("serverware-control", "Dockerfile.production", "serverware/control:production-local"),
     ("serverware-decision-gate", "data-plane/decision-gate-rs/Dockerfile.production", "serverware/decision-gate:production-local"),
@@ -158,10 +159,20 @@ def build_metadata() -> dict[str, str]:
     }
 
 
-def build_command(dockerfile: str, tag: str, *, platform: str | None, metadata: dict[str, str]) -> list[str]:
-    command = ["docker", "build", "-f", dockerfile, "-t", tag]
-    if platform:
-        command.extend(["--platform", platform])
+def build_command(dockerfile: str, tag: str, *, platform: str, metadata: dict[str, str]) -> list[str]:
+    if platform != PRODUCTION_PLATFORM:
+        raise RuntimeError(f"production image platform must be {PRODUCTION_PLATFORM}")
+    command = [
+        "docker",
+        "build",
+        "--network=none",
+        "-f",
+        dockerfile,
+        "-t",
+        tag,
+        "--platform",
+        platform,
+    ]
     command.extend(
         [
             "--build-arg",
@@ -238,6 +249,12 @@ def image_file_sha256(image: str, path: str) -> str:
         maybe_run(["docker", "rm", "-f", container_id])
 
 
+def verify_image_platform(image: str, expected: str) -> None:
+    actual = run(["docker", "image", "inspect", "--format", "{{.Os}}/{{.Architecture}}", image])
+    if actual != expected:
+        raise RuntimeError(f"production image platform mismatch: expected {expected}, got {actual}")
+
+
 def decision_gate_binary_digests(image: str) -> dict[str, str]:
     return {
         field: image_file_sha256(image, path)
@@ -255,7 +272,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build local shell-free Serverware production image candidates.")
     parser.add_argument("--control-tag", default="serverware/control:production-local")
     parser.add_argument("--decision-gate-tag", default="serverware/decision-gate:production-local")
-    parser.add_argument("--platform", default=None)
+    parser.add_argument("--platform", default=PRODUCTION_PLATFORM, choices=(PRODUCTION_PLATFORM,))
     parser.add_argument("--out", default=".tmp/production-images-build.json")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -275,7 +292,17 @@ def main() -> None:
         for service, dockerfile, tag in image_specs
     ]
     if args.dry_run:
-        print(canonical_json({"ok": True, "commands": commands, "metadata": metadata, "out": args.out}))
+        print(
+            canonical_json(
+                {
+                    "ok": True,
+                    "commands": commands,
+                    "metadata": metadata,
+                    "platform": args.platform,
+                    "out": args.out,
+                }
+            )
+        )
         return
 
     images: list[dict[str, Any]] = []
@@ -283,6 +310,7 @@ def main() -> None:
         print(f"==> building {spec['service']} with {spec['dockerfile']}", file=sys.stderr)
         run(spec["argv"])
         built_image_id = image_id(spec["tag"])
+        verify_image_platform(built_image_id, args.platform)
         binary_digests: dict[str, str] = {}
         if spec["service"] == "serverware-decision-gate":
             binary_digests = decision_gate_binary_digests(built_image_id)
@@ -305,7 +333,7 @@ def main() -> None:
         "metadata": metadata,
         "images": images,
         "no_shell": no_shell,
-        "publish_requirement": "push these images to a registry and set SERVERWARE_PRODUCTION_IMAGES to immutable @sha256 digest refs before live readiness",
+        "publish_requirement": "publish these verified linux/amd64 image IDs unchanged, then set SERVERWARE_PRODUCTION_IMAGES to immutable @sha256 digest refs before live readiness",
     }
     output_path = Path(args.out)
     output_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,13 +1,33 @@
+FROM scratch AS python-production-dependency-cache
+COPY requirements.lock /dependency-cache/requirements.lock
+COPY production-dependencies/python-linux-amd64.sha256 /dependency-cache/python-linux-amd64.sha256
+COPY production-dependencies/cache/python-wheelhouse-linux-amd64.tar.gz /dependency-cache/cache/python-wheelhouse-linux-amd64.tar.gz
+
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS python-deps
 
 ARG SOURCE_DATE_EPOCH="0"
 ENV PYTHONDONTWRITEBYTECODE=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_INDEX=1 \
     SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH}
 
 WORKDIR /build
-COPY requirements.lock .
-RUN python -m pip install --no-cache-dir --no-compile --require-hashes --target=/deps -r requirements.lock \
-    && find /deps -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+COPY --from=python-production-dependency-cache /dependency-cache /dependency-cache
+RUN --network=none set -eu; \
+    cd /dependency-cache; \
+    sha256sum -c python-linux-amd64.sha256; \
+    tar -xzf cache/python-wheelhouse-linux-amd64.tar.gz; \
+    test -n "$(find wheelhouse -maxdepth 1 -type f -name '*.whl' -print -quit)"; \
+    python -m pip install \
+        --no-cache-dir \
+        --no-compile \
+        --no-index \
+        --only-binary=:all: \
+        --find-links=/dependency-cache/wheelhouse \
+        --require-hashes \
+        --target=/deps \
+        -r /dependency-cache/requirements.lock; \
+    find /deps -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM python:3.11-slim-bookworm@sha256:0030323c9ce4d6dfab5f0812577cb0abd13c806f86b3a1f5b5d8f200ebb1421c AS production-python-runtime-tree
 
@@ -15,7 +35,7 @@ ARG SOURCE_DATE_EPOCH="0"
 # This artifact closes CPython, libpython, stdlib, extension modules, and vendor.
 # The host PT_INTERP target and recursive system DSO graph remain external.
 COPY --from=python-deps /deps /deps
-RUN set -eu; \
+RUN --network=none set -eu; \
     mkdir -p /runtime/python/bin /runtime/python/lib/python3.11 /vendor; \
     cp -L /usr/local/bin/python3 /runtime/python/bin/python3; \
     cp -RL /usr/local/lib/python3.11/. /runtime/python/lib/python3.11/; \
@@ -51,7 +71,7 @@ COPY schemas /runtime/app/schemas
 COPY policies /runtime/app/policies
 COPY security /runtime/app/security
 COPY docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
-RUN printf 'serverware.productionImage/v1\n' > /runtime/app/.serverware-production-image \
+RUN --network=none printf 'serverware.productionImage/v1\n' > /runtime/app/.serverware-production-image \
     && chmod 0444 /runtime/app/.serverware-production-image \
     && find /runtime -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 

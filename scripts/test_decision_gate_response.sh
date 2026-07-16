@@ -40,9 +40,8 @@ def assert_gmail_redaction(payload: dict, proof: str) -> None:
     for item in payload["messages"]:
         assert item["serverwareAgeProof"] == proof, item
         assert item["threadId"].startswith("thread-"), item
-        assert item["payload"]["headers"][0]["name"] == "From", item
-        assert "body" not in item["payload"], item
-        for key in ("authorization", "query", "raw", "secretDebug", "serverDebugSecret"):
+        assert int(item["internalDate"]) > 1776900000000, item
+        for key in ("authorization", "query", "payload", "raw", "secretDebug", "serverDebugSecret"):
             assert key not in item, item
 
 
@@ -70,17 +69,35 @@ for key in ("authorization", "authorization_sha256", "proxy_authorization", "ser
 
 status, payload = request("/gmail/v1/users/me/messages?omitInternalDate=1")
 assert status == 200, payload
-assert payload == {"messages": []}, payload
+assert len(payload["messages"]) == 2, payload
+assert_gmail_redaction(payload, "validated")
 
 status, payload = request("/gmail/v1/users/me/messages")
 assert status == 200, payload
 assert set(payload) == {"messages"}, payload
-assert all(int(item["internalDate"]) > 1776900000000 for item in payload["messages"]), payload
 assert_gmail_redaction(payload, "validated")
+
+status, payload = request("/gmail/v1/users/me/messages/recent-message-1")
+assert status == 200, payload
+assert payload["id"] == "recent-message-1", payload
+assert payload["payload"]["headers"][0]["name"] == "From", payload
+assert "body" not in payload["payload"], payload
+
+status, payload = request("/gmail/v1/users/me/messages?metadataNotFound=1")
+assert status == 200, payload
+assert [item["id"] for item in payload["messages"]] == ["recent-message-1"], payload
+
+status, payload = request("/gmail/v1/users/me/messages?duplicateMessageId=1")
+assert status == 502, payload
+assert payload == {"error": "gmail_metadata_fetch_duplicate_id"}, payload
 
 status, payload = request("/gmail/v1/users/me/messages?oldInternalDate=1")
 assert status == 502, payload
 assert payload == {"error": "gmail_response_too_old", "max_days": 30}, payload
+
+status, payload = request("/gmail/v1/users/me/messages/old-list-message-1")
+assert status == 403, payload
+assert payload["error"] == "gmail_message_age_not_proven", payload
 
 print(json.dumps({"ok": True, "response_validation": "pass"}, sort_keys=True))
 PY

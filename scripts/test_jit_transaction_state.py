@@ -1215,6 +1215,138 @@ def exercise_policy_high_water(db: Any, backend: str) -> None:
     )
 
 
+def advance_active_policy_hash(db: Any, policy_hash: str) -> dict[str, Any]:
+    current = db.get_policy_high_water()
+    if current is None:
+        return db.advance_policy_high_water(
+            policy_id="serverware-test",
+            sequence=1,
+            rollback_epoch=1,
+            policy_hash=policy_hash,
+        )
+    if current["policy_hash"] == policy_hash:
+        return current
+    return db.advance_policy_high_water(
+        policy_id=current["policy_id"],
+        sequence=int(current["sequence"]) + 1,
+        rollback_epoch=int(current["rollback_epoch"]),
+        policy_hash=policy_hash,
+    )
+
+
+def exercise_release_policy_authority_race(db: Any, backend: str) -> None:
+    suffix = f"{backend}-release-policy-race"
+    binding = approval_kwargs(suffix)
+    active_policy_hash = "sha256:" + hashlib.sha256(
+        f"{suffix}:active".encode("utf-8")
+    ).hexdigest()
+    restrictive_policy_hash = "sha256:" + hashlib.sha256(
+        f"{suffix}:restrictive".encode("utf-8")
+    ).hexdigest()
+    binding["policy_hash"] = active_policy_hash
+    advance_active_policy_hash(db, active_policy_hash)
+    approval = db.ensure_jit_approval_request(**binding)
+    approved = db.approve_request(approval["id"], ttl_seconds=60)
+    if not approved or approved["status"] != "approved":
+        raise AssertionError(
+            f"release policy race grant fixture was not approved: {approved}"
+        )
+    operation = "release.policy-race"
+    quota = {
+        "counter_key": "sha256:"
+        + hashlib.sha256(f"{suffix}:quota".encode("utf-8")).hexdigest(),
+        "constraint_id": f"constraint:{suffix}",
+        "operation": operation,
+        "window_seconds": 60,
+        "max_count": 1,
+    }
+    reserve_kwargs = {
+        "attempt_id": f"attempt:{suffix}",
+        "flow_id": f"flow:{suffix}",
+        "principal_id": binding["principal_id"],
+        "route_id": binding["route_id"],
+        "credential_id": binding["credential_id"],
+        "credential_version": binding["credential_version"],
+        "policy_hash": active_policy_hash,
+        "request_digest": binding["request_digest"],
+        "operation_digest": binding["operation_digest"],
+        "operation_context": {"operation": operation},
+        "shared_quotas": [quota],
+        "require_jit_grant": True,
+        "reservation_ttl_seconds": 30,
+        "authority_policy_hash": active_policy_hash,
+        "authority_route_id": binding["route_id"],
+    }
+    transaction_barrier = threading.Barrier(2)
+    transaction_ready = threading.Event()
+    original_begin = db._begin_release_transaction
+
+    def delayed_begin(conn: Any) -> None:
+        if threading.current_thread().name == "release-policy-race":
+            transaction_ready.set()
+            transaction_barrier.wait(timeout=5)
+        original_begin(conn)
+
+    result: dict[str, Any] = {}
+
+    def reserve() -> None:
+        try:
+            result["value"] = db.reserve_release_authorization(**reserve_kwargs)
+        except BaseException as exc:
+            result["error"] = exc
+
+    db._begin_release_transaction = delayed_begin
+    worker = threading.Thread(target=reserve, name="release-policy-race")
+    try:
+        worker.start()
+        if not transaction_ready.wait(timeout=5):
+            raise AssertionError(
+                "release reservation did not reach the transaction barrier"
+            )
+        advance_active_policy_hash(db, restrictive_policy_hash)
+        transaction_barrier.wait(timeout=5)
+        worker.join(timeout=10)
+    finally:
+        db._begin_release_transaction = original_begin
+    if worker.is_alive():
+        raise AssertionError("release policy authority race did not terminate")
+    if result.get("error") is not None:
+        raise AssertionError(
+            f"release policy authority race raised unexpectedly: {result}"
+        )
+    if result.get("value", {}).get("reason") != "active_policy_changed":
+        raise AssertionError(
+            f"restrictive policy publication did not deny release: {result}"
+        )
+    with db.connect() as conn:
+        grant = conn.execute(
+            "SELECT uses_remaining, reserved_attempt_id FROM approval_grants "
+            "WHERE approval_request_id = ?",
+            (approval["id"],),
+        ).fetchone()
+        attempt_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM release_authorization_attempts "
+            "WHERE attempt_id = ?",
+            (reserve_kwargs["attempt_id"],),
+        ).fetchone()
+        quota_count = conn.execute(
+            "SELECT COUNT(*) AS count FROM rate_limit_counters WHERE counter_key = ?",
+            (quota["counter_key"],),
+        ).fetchone()
+    if (
+        grant is None
+        or int(grant["uses_remaining"]) != 1
+        or grant["reserved_attempt_id"] is not None
+        or int(attempt_count["count"]) != 0
+        or int(quota_count["count"]) != 0
+    ):
+        raise AssertionError(
+            "restrictive policy race consumed grant or quota state: "
+            f"grant={dict(grant) if grant else None} "
+            f"attempt={dict(attempt_count)} quota={dict(quota_count)}"
+        )
+
+
 def exercise_atomic_approval(db: Any, grants: Any, backend: str) -> dict[str, Any]:
     kwargs = approval_kwargs(backend)
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -1319,6 +1451,755 @@ def exercise_atomic_approval(db: Any, grants: Any, backend: str) -> dict[str, An
     }}
 
 
+def assert_jit_authority_rejection_left_no_grant(
+    db: Any,
+    approval_id: str,
+    *,
+    label: str,
+) -> None:
+    approval = db.get_approval_request(approval_id)
+    if not approval or approval["status"] != "pending":
+        raise AssertionError(f"{label} changed the approval state: {approval}")
+    with db.connect() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) AS count FROM approval_grants WHERE approval_request_id = ?",
+            (approval_id,),
+        ).fetchone()
+    if int(row["count"]) != 0:
+        raise AssertionError(f"{label} created a JIT grant")
+
+
+def exercise_google_grant_family_quarantine(db: Any, backend: str) -> None:
+    scope = "https://www.googleapis.com/auth/gmail.readonly"
+
+    def metadata(label: str) -> dict[str, Any]:
+        return {
+            "oauth": True,
+            "refreshable": True,
+            "provider": "google.oauth2",
+            "provider_id": "google",
+            "provider_subject": f"google-family-{label}-{backend}",
+            "provider_account": f"{label}-{backend}@example.test",
+            "provider_identity_verified": True,
+            "oauth_client_id": f"google-client-{backend}",
+            "scopes": [scope],
+            "token_type": "Bearer",
+            "injection_field": "access_token",
+        }
+
+    def secret(label: str) -> str:
+        return db.dumps(
+            {
+                "access_token": f"{label}-access",
+                "refresh_token": f"{label}-refresh",
+                "token_type": "Bearer",
+                "scope": scope,
+                "expires_at_epoch_ms": 4_102_444_800_000,
+            }
+        )
+
+    active_metadata = metadata("active")
+    active = db.create_credential(
+        f"Google family quarantine {backend}",
+        "oauth2",
+        secret(f"active-{backend}"),
+        active_metadata,
+    )
+    active_version = int(active["credential_version"])
+    barrier = threading.Barrier(2)
+
+    def quarantine() -> tuple[str, Any]:
+        barrier.wait(timeout=5)
+        return (
+            "quarantined",
+            db.quarantine_google_oauth_grant_family(
+                oauth_client_id=str(active_metadata["oauth_client_id"]),
+                provider_subject=str(active_metadata["provider_subject"]),
+                actor_id="user:google-family-race",
+            ),
+        )
+
+    def collide() -> tuple[str, Any]:
+        barrier.wait(timeout=5)
+        try:
+            db.create_credential(
+                f"Duplicate Google family {backend}",
+                "oauth2",
+                secret(f"duplicate-{backend}"),
+                active_metadata,
+            )
+        except db.OAuthGrantCollisionError as exc:
+            return "collision", exc.detail
+        return "created", None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        race_results = [
+            executor.submit(quarantine),
+            executor.submit(collide),
+        ]
+        race_results = [future.result(timeout=10) for future in race_results]
+    if sorted(result[0] for result in race_results) != ["collision", "quarantined"]:
+        raise AssertionError(
+            f"Google quarantine and collision were not serialized: {race_results}"
+        )
+    quarantine_result = next(
+        result[1] for result in race_results if result[0] == "quarantined"
+    )
+    if quarantine_result.get("credentialCount") != 1:
+        raise AssertionError(f"Google active family was not quarantined: {quarantine_result}")
+    if db.get_credential(active["id"]) is not None:
+        raise AssertionError("quarantined Google credential remained active")
+    inactive = db.get_credential(
+        active["id"], include_secret=True, include_inactive=True
+    )
+    if not (
+        inactive is not None
+        and inactive.get("lifecycle_status") == "revocation_pending"
+        and int(inactive.get("credential_version") or 0) == active_version + 1
+        and json.loads(inactive["secret"])["refresh_token"]
+        == f"active-{backend}-refresh"
+    ):
+        raise AssertionError(f"Google quarantine did not rotate the generation: {inactive}")
+
+    pending_metadata = metadata("pending")
+    pending_name = f"Google pending quarantine {backend}"
+    pending_secret = secret(f"pending-{backend}")
+    pending_review = {
+        "credential_type": "oauth2",
+        "provider": "google",
+        "provider_subject": pending_metadata["provider_subject"],
+        "provider_account": pending_metadata["provider_account"],
+        "scopes": [scope],
+        "credential_name": pending_name,
+        "metadata_keys": sorted(pending_metadata),
+        "expires_at_epoch_ms": None,
+    }
+    pending_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            db.dumps(
+                {
+                    "action": "credential.oauth.activate",
+                    "review": pending_review,
+                    "encrypted_token_source_sha256": "sha256:"
+                    + hashlib.sha256(pending_secret.encode("utf-8")).hexdigest(),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    pending = db.create_pending_oauth_credential(
+        name=pending_name,
+        kind="oauth2",
+        secret=pending_secret,
+        metadata=pending_metadata,
+        requester_id="user:google-family-race",
+        payload_digest=pending_digest,
+        review=pending_review,
+        ttl_seconds=300,
+    )
+    pending_quarantine = db.quarantine_google_oauth_grant_family(
+        oauth_client_id=str(pending_metadata["oauth_client_id"]),
+        provider_subject=str(pending_metadata["provider_subject"]),
+        actor_id="user:google-family-race",
+    )
+    retained_pending = db.get_pending_oauth_credential(pending["id"])
+    if not (
+        pending_quarantine.get("pendingCredentialIds") == [pending["id"]]
+        and retained_pending is not None
+        and retained_pending.get("status") == "rejected"
+        and retained_pending.get("revocation_status") == "pending"
+    ):
+        raise AssertionError(
+            f"Google pending family was not terminally quarantined: {pending_quarantine} {retained_pending}"
+        )
+    rejected_activation = db.activate_pending_oauth_credential(
+        pending["id"],
+        approval_id="unused-after-terminal-quarantine",
+        actor_id="user:google-family-race",
+    )
+    if rejected_activation != {
+        "ok": False,
+        "reason": "pending_credential_rejected",
+    }:
+        raise AssertionError(
+            f"terminal Google pending grant remained activatable: {rejected_activation}"
+        )
+
+
+def exercise_approval_authority_revalidation(db: Any, backend: str) -> None:
+    webauthn_actor_id = f"user:jit-webauthn-{backend}"
+    webauthn_credential = db.create_webauthn_credential(
+        credential_id=f"jit-webauthn-credential-{backend}",
+        user_id=webauthn_actor_id,
+        label="JIT authority race fixture",
+        public_key_cose="test-public-key",
+        sign_count=0,
+        aaguid=None,
+        authenticator_class="test",
+    )
+    revoked_approval = db.ensure_jit_approval_request(
+        **approval_kwargs(f"{backend}-revoked-webauthn")
+    )
+    revoked = db.revoke_webauthn_credential(
+        webauthn_credential["id"],
+        actor_id="user:authority-test",
+        reason="revoke immediately before JIT commit",
+    )
+    if revoked.get("ok") is not True:
+        raise AssertionError(f"WebAuthn authority fixture was not revoked: {revoked}")
+    assert_raises(
+        db.MetadataStoreError,
+        lambda: db.approve_request(
+            revoked_approval["id"],
+            actor_id=webauthn_actor_id,
+            authn={
+                "method": "webauthn",
+                "user_id": webauthn_actor_id,
+                "credential_record_id": webauthn_credential["id"],
+            },
+            required_approver_roles={"approver"},
+        ),
+        "revoked WebAuthn credential approved a JIT request",
+    )
+    assert_jit_authority_rejection_left_no_grant(
+        db,
+        revoked_approval["id"],
+        label="revoked WebAuthn authority",
+    )
+
+    oidc_approver_id = f"oidc:jit-approver-{backend}@example.com"
+    authority = db.get_rbac_authority_state()
+    provisioned_approver = db.mutate_rbac_role_binding(
+        subject_id=oidc_approver_id,
+        roles=["approver"],
+        status="active",
+        expected_generation=authority["generation"],
+        actor_id="user:authority-test",
+        reason="JIT approver authority fixture",
+        event_type="rbac.role_changed",
+        event={"test": "jit_approver_commit_time_authorization"},
+    )
+    role_approval = db.ensure_jit_approval_request(
+        **approval_kwargs(f"{backend}-revoked-approver-role")
+    )
+    db.mutate_rbac_role_binding(
+        subject_id=oidc_approver_id,
+        roles=[],
+        status="deprovisioned",
+        expected_generation=provisioned_approver["generation"],
+        actor_id="user:authority-test",
+        reason="deprovision immediately before JIT commit",
+        event_type="rbac.deprovisioned",
+        event={"test": "jit_approver_commit_time_authorization"},
+    )
+    assert_raises(
+        db.MetadataStoreError,
+        lambda: db.approve_request(
+            role_approval["id"],
+            actor_id=oidc_approver_id,
+            authn={"method": "oidc", "user_id": oidc_approver_id},
+            required_approver_roles={"approver"},
+        ),
+        "deprovisioned OIDC approver approved a JIT request",
+    )
+    assert_jit_authority_rejection_left_no_grant(
+        db,
+        role_approval["id"],
+        label="deprovisioned JIT approver authority",
+    )
+
+    control_approver_id = f"oidc:control-approver-{backend}@example.com"
+    authority = db.get_rbac_authority_state()
+    provisioned_control_approver = db.mutate_rbac_role_binding(
+        subject_id=control_approver_id,
+        roles=["credential_owner"],
+        status="active",
+        expected_generation=authority["generation"],
+        actor_id="user:authority-test",
+        reason="control-plane approver authority fixture",
+        event_type="rbac.role_changed",
+        event={"test": "control_approver_commit_time_authorization"},
+    )
+    stale_control_approval = db.ensure_control_plane_approval(
+        action="credential.create",
+        resource_id=f"stale-approver-{backend}",
+        payload_digest="sha256:" + "c" * 64,
+        requester_id="user:control-requester",
+        request={"summary": "stale approver race fixture"},
+        ttl_seconds=300,
+    )
+    db.mutate_rbac_role_binding(
+        subject_id=control_approver_id,
+        roles=[],
+        status="deprovisioned",
+        expected_generation=provisioned_control_approver["generation"],
+        actor_id="user:authority-test",
+        reason="deprovision immediately before approval commit",
+        event_type="rbac.deprovisioned",
+        event={"test": "control_approver_commit_time_authorization"},
+    )
+    if (
+        db.approve_control_plane_approval(
+            stale_control_approval["id"],
+            actor_id=control_approver_id,
+            required_approver_roles={"credential_owner"},
+        )
+        is not None
+    ):
+        raise AssertionError("deprovisioned OIDC approver committed an approval")
+    if (
+        db.get_control_plane_approval(stale_control_approval["id"])["status"]
+        != "pending"
+    ):
+        raise AssertionError("stale approver rejection changed control-plane state")
+
+    oidc_requester_id = f"oidc:control-requester-{backend}@example.com"
+    authority = db.get_rbac_authority_state()
+    provisioned_requester = db.mutate_rbac_role_binding(
+        subject_id=oidc_requester_id,
+        roles=["credential_owner"],
+        status="active",
+        expected_generation=authority["generation"],
+        actor_id="user:authority-test",
+        reason="control-plane requester authority fixture",
+        event_type="rbac.role_changed",
+        event={"test": "control_requester_commit_time_authorization"},
+    )
+    payload_digest = "sha256:" + "e" * 64
+    control_approval = db.ensure_control_plane_approval(
+        action="credential.create",
+        resource_id=f"requester-authority-{backend}",
+        payload_digest=payload_digest,
+        requester_id=oidc_requester_id,
+        request={"summary": "requester authority race fixture"},
+        ttl_seconds=300,
+    )
+    if (
+        db.approve_control_plane_approval(
+            control_approval["id"],
+            actor_id=f"user:control-approver-{backend}",
+        )
+        is None
+    ):
+        raise AssertionError(
+            "control-plane requester authority fixture was not approved"
+        )
+    db.mutate_rbac_role_binding(
+        subject_id=oidc_requester_id,
+        roles=[],
+        status="deprovisioned",
+        expected_generation=provisioned_requester["generation"],
+        actor_id="user:authority-test",
+        reason="deprovision immediately before protected mutation commit",
+        event_type="rbac.deprovisioned",
+        event={"test": "control_requester_commit_time_authorization"},
+    )
+    consumed = db.consume_control_plane_approval(
+        control_approval["id"],
+        action="credential.create",
+        resource_id=f"requester-authority-{backend}",
+        payload_digest=payload_digest,
+        actor_id=oidc_requester_id,
+        required_requester_roles={"credential_owner"},
+        required_approver_roles={"credential_owner"},
+    )
+    if consumed != {
+        "ok": False,
+        "reason": "approval_requester_role_revoked",
+    }:
+        raise AssertionError(
+            f"deprovisioned control-plane requester was not rejected: {consumed}"
+        )
+    if db.get_control_plane_approval(control_approval["id"])["status"] != "approved":
+        raise AssertionError("requester authority rejection consumed the approval")
+
+    oauth_requester_id = f"oidc:oauth-requester-{backend}@example.com"
+    authority = db.get_rbac_authority_state()
+    provisioned_oauth_requester = db.mutate_rbac_role_binding(
+        subject_id=oauth_requester_id,
+        roles=["credential_owner"],
+        status="active",
+        expected_generation=authority["generation"],
+        actor_id="user:authority-test",
+        reason="OAuth requester authority fixture",
+        event_type="rbac.role_changed",
+        event={"test": "oauth_requester_commit_time_authorization"},
+    )
+    oauth_scope = "https://www.googleapis.com/auth/gmail.readonly"
+    oauth_metadata = {
+        "oauth": True,
+        "refreshable": True,
+        "provider": "google.oauth2",
+        "provider_id": "google",
+        "provider_subject": f"oauth-requester-subject-{backend}",
+        "provider_account": f"oauth-requester-{backend}@example.test",
+        "provider_identity_verified": True,
+        "oauth_client_id": f"oauth-requester-client-{backend}",
+        "scopes": [oauth_scope],
+        "token_type": "Bearer",
+        "injection_field": "access_token",
+    }
+    oauth_secret = db.dumps(
+        {
+            "access_token": f"oauth-access-{backend}",
+            "refresh_token": f"oauth-refresh-{backend}",
+            "token_type": "Bearer",
+            "scope": oauth_scope,
+            "expires_at_epoch_ms": 4_102_444_800_000,
+        }
+    )
+    oauth_review = {
+        "credential_type": "oauth2",
+        "provider": "google",
+        "provider_subject": oauth_metadata["provider_subject"],
+        "provider_account": oauth_metadata["provider_account"],
+        "scopes": [oauth_scope],
+        "credential_name": f"OAuth requester authority {backend}",
+        "metadata_keys": sorted(oauth_metadata),
+        "expires_at_epoch_ms": None,
+    }
+    oauth_payload_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            db.dumps(
+                {
+                    "action": "credential.oauth.activate",
+                    "review": oauth_review,
+                    "encrypted_token_source_sha256": "sha256:"
+                    + hashlib.sha256(oauth_secret.encode("utf-8")).hexdigest(),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    pending_oauth = db.create_pending_oauth_credential(
+        name=f"OAuth requester authority {backend}",
+        kind="oauth2",
+        secret=oauth_secret,
+        metadata=oauth_metadata,
+        requester_id=oauth_requester_id,
+        payload_digest=oauth_payload_digest,
+        review=oauth_review,
+        ttl_seconds=300,
+    )
+    oauth_approval = db.ensure_control_plane_approval(
+        action="credential.oauth.activate",
+        resource_id=pending_oauth["id"],
+        payload_digest=oauth_payload_digest,
+        requester_id=oauth_requester_id,
+        request=oauth_review,
+        ttl_seconds=300,
+    )
+    if (
+        db.approve_control_plane_approval(
+            oauth_approval["id"],
+            actor_id=f"user:oauth-approver-{backend}",
+            required_approver_roles={"credential_owner"},
+        )
+        is None
+    ):
+        raise AssertionError("OAuth requester authority fixture was not approved")
+    db.mutate_rbac_role_binding(
+        subject_id=oauth_requester_id,
+        roles=[],
+        status="deprovisioned",
+        expected_generation=provisioned_oauth_requester["generation"],
+        actor_id="user:authority-test",
+        reason="deprovision immediately before OAuth activation commit",
+        event_type="rbac.deprovisioned",
+        event={"test": "oauth_requester_commit_time_authorization"},
+    )
+    oauth_activation = db.activate_pending_oauth_credential(
+        pending_oauth["id"],
+        approval_id=oauth_approval["id"],
+        actor_id=oauth_requester_id,
+        required_requester_roles={"credential_owner"},
+        required_approver_roles={"credential_owner"},
+    )
+    if oauth_activation != {
+        "ok": False,
+        "reason": "approval_requester_role_revoked",
+    }:
+        raise AssertionError(
+            f"deprovisioned OAuth requester was not rejected: {oauth_activation}"
+        )
+    if db.get_pending_oauth_credential(pending_oauth["id"]) is None:
+        raise AssertionError(
+            "OAuth requester authority rejection removed pending state"
+        )
+    if db.get_control_plane_approval(oauth_approval["id"])["status"] != "approved":
+        raise AssertionError("OAuth requester authority rejection consumed approval")
+
+
+def exercise_denial_authority_races(db: Any, backend: str) -> None:
+    jit_actor_id = f"oidc:jit-denier-{backend}@example.com"
+    authority = db.get_rbac_authority_state()
+    provisioned_jit_actor = db.mutate_rbac_role_binding(
+        subject_id=jit_actor_id,
+        roles=["approver"],
+        status="active",
+        expected_generation=authority["generation"],
+        actor_id="user:authority-test",
+        reason="JIT denial race fixture",
+        event_type="rbac.role_changed",
+        event={"test": "jit_denial_authority_race"},
+    )
+    active_policy_hash = "sha256:" + hashlib.sha256(
+        f"{backend}:jit-denial-active".encode("utf-8")
+    ).hexdigest()
+    restrictive_policy_hash = "sha256:" + hashlib.sha256(
+        f"{backend}:jit-denial-restrictive".encode("utf-8")
+    ).hexdigest()
+    advance_active_policy_hash(db, active_policy_hash)
+    route_race_kwargs = approval_kwargs(f"{backend}-jit-route-denial-race")
+    route_race_kwargs["policy_hash"] = active_policy_hash
+    route_race_approval = db.ensure_jit_approval_request(**route_race_kwargs)
+    route_barrier = threading.Barrier(2)
+    route_ready = threading.Event()
+    original_policy_lock = db._lock_policy_high_water
+
+    def delayed_policy_lock(conn: Any) -> None:
+        if threading.current_thread().name == "jit-route-denial-race":
+            route_ready.set()
+            route_barrier.wait(timeout=5)
+        original_policy_lock(conn)
+
+    route_result: dict[str, Any] = {}
+
+    def deny_with_stale_route_authority() -> None:
+        try:
+            route_result["value"] = db.deny_request(
+                route_race_approval["id"],
+                actor_id=jit_actor_id,
+                required_approver_roles={"approver"},
+                authority_policy_hash=active_policy_hash,
+                authority_route_id=route_race_kwargs["route_id"],
+                allowed_approver_ids={jit_actor_id},
+            )
+        except BaseException as exc:
+            route_result["error"] = exc
+
+    db._lock_policy_high_water = delayed_policy_lock
+    route_worker = threading.Thread(
+        target=deny_with_stale_route_authority,
+        name="jit-route-denial-race",
+    )
+    try:
+        route_worker.start()
+        if not route_ready.wait(timeout=5):
+            raise AssertionError("JIT route denial did not reach its authority barrier")
+        advance_active_policy_hash(db, restrictive_policy_hash)
+        route_barrier.wait(timeout=5)
+        route_worker.join(timeout=10)
+    finally:
+        db._lock_policy_high_water = original_policy_lock
+    if route_worker.is_alive() or route_result.get("error") is not None:
+        raise AssertionError(
+            f"JIT route denial race did not terminate cleanly: {route_result}"
+        )
+    if route_result.get("value") is not None or db.get_approval_request(
+        route_race_approval["id"]
+    )["status"] != "pending":
+        raise AssertionError(
+            "stale route approver authority terminalized a JIT denial"
+        )
+
+    rbac_race_kwargs = approval_kwargs(f"{backend}-jit-rbac-denial-race")
+    rbac_race_kwargs["policy_hash"] = restrictive_policy_hash
+    rbac_race_approval = db.ensure_jit_approval_request(**rbac_race_kwargs)
+    rbac_barrier = threading.Barrier(2)
+    rbac_ready = threading.Event()
+
+    def delayed_rbac_policy_lock(conn: Any) -> None:
+        if threading.current_thread().name == "jit-rbac-denial-race":
+            rbac_ready.set()
+            rbac_barrier.wait(timeout=5)
+        original_policy_lock(conn)
+
+    rbac_result: dict[str, Any] = {}
+
+    def deny_with_stale_rbac_authority() -> None:
+        try:
+            rbac_result["value"] = db.deny_request(
+                rbac_race_approval["id"],
+                actor_id=jit_actor_id,
+                required_approver_roles={"approver"},
+                authority_policy_hash=restrictive_policy_hash,
+                authority_route_id=rbac_race_kwargs["route_id"],
+                allowed_approver_ids={jit_actor_id},
+            )
+        except BaseException as exc:
+            rbac_result["error"] = exc
+
+    db._lock_policy_high_water = delayed_rbac_policy_lock
+    rbac_worker = threading.Thread(
+        target=deny_with_stale_rbac_authority,
+        name="jit-rbac-denial-race",
+    )
+    try:
+        rbac_worker.start()
+        if not rbac_ready.wait(timeout=5):
+            raise AssertionError("JIT RBAC denial did not reach its authority barrier")
+        deprovisioned_jit_actor = db.mutate_rbac_role_binding(
+            subject_id=jit_actor_id,
+            roles=[],
+            status="deprovisioned",
+            expected_generation=provisioned_jit_actor["generation"],
+            actor_id="user:authority-test",
+            reason="deprovision during JIT denial",
+            event_type="rbac.deprovisioned",
+            event={"test": "jit_denial_authority_race"},
+        )
+        rbac_barrier.wait(timeout=5)
+        rbac_worker.join(timeout=10)
+    finally:
+        db._lock_policy_high_water = original_policy_lock
+    if rbac_worker.is_alive() or rbac_result.get("error") is not None:
+        raise AssertionError(
+            f"JIT RBAC denial race did not terminate cleanly: {rbac_result}"
+        )
+    if rbac_result.get("value") is not None or db.get_approval_request(
+        rbac_race_approval["id"]
+    )["status"] != "pending":
+        raise AssertionError("revoked OIDC authority terminalized a JIT denial")
+
+    control_actor_id = f"oidc:control-denier-{backend}@example.com"
+    provisioned_control_actor = db.mutate_rbac_role_binding(
+        subject_id=control_actor_id,
+        roles=["credential_owner"],
+        status="active",
+        expected_generation=deprovisioned_jit_actor["generation"],
+        actor_id="user:authority-test",
+        reason="control-plane denial race fixture",
+        event_type="rbac.role_changed",
+        event={"test": "control_denial_authority_race"},
+    )
+    scope = "https://www.googleapis.com/auth/gmail.readonly"
+    pending_metadata = {
+        "oauth": True,
+        "refreshable": True,
+        "provider": "google.oauth2",
+        "provider_id": "google",
+        "provider_subject": f"control-denial-{backend}",
+        "provider_account": f"control-denial-{backend}@example.test",
+        "provider_identity_verified": True,
+        "oauth_client_id": f"control-denial-client-{backend}",
+        "scopes": [scope],
+        "token_type": "Bearer",
+        "injection_field": "access_token",
+    }
+    pending_secret = db.dumps(
+        {
+            "access_token": f"control-denial-access-{backend}",
+            "refresh_token": f"control-denial-refresh-{backend}",
+            "token_type": "Bearer",
+            "scope": scope,
+            "expires_at_epoch_ms": 4_102_444_800_000,
+        }
+    )
+    pending_review = {
+        "credential_type": "oauth2",
+        "provider": "google",
+        "provider_subject": pending_metadata["provider_subject"],
+        "provider_account": pending_metadata["provider_account"],
+        "scopes": [scope],
+        "credential_name": f"Control denial race {backend}",
+        "metadata_keys": sorted(pending_metadata),
+        "expires_at_epoch_ms": None,
+    }
+    pending_digest = "sha256:" + hashlib.sha256(
+        db.dumps(
+            {
+                "action": "credential.oauth.activate",
+                "review": pending_review,
+                "encrypted_token_source_sha256": "sha256:"
+                + hashlib.sha256(pending_secret.encode("utf-8")).hexdigest(),
+            }
+        ).encode("utf-8")
+    ).hexdigest()
+    pending_oauth = db.create_pending_oauth_credential(
+        name=f"Control denial race {backend}",
+        kind="oauth2",
+        secret=pending_secret,
+        metadata=pending_metadata,
+        requester_id=f"user:control-denial-requester-{backend}",
+        payload_digest=pending_digest,
+        review=pending_review,
+        ttl_seconds=300,
+    )
+    control_approval = db.ensure_control_plane_approval(
+        action="credential.oauth.activate",
+        resource_id=pending_oauth["id"],
+        payload_digest=pending_digest,
+        requester_id=f"user:control-denial-requester-{backend}",
+        request=pending_review,
+        ttl_seconds=300,
+    )
+    control_barrier = threading.Barrier(2)
+    control_ready = threading.Event()
+    original_webauthn_lock = db._lock_webauthn_authority
+
+    def delayed_webauthn_lock(conn: Any) -> None:
+        if threading.current_thread().name == "control-denial-race":
+            control_ready.set()
+            control_barrier.wait(timeout=5)
+        original_webauthn_lock(conn)
+
+    control_result: dict[str, Any] = {}
+
+    def deny_with_stale_control_authority() -> None:
+        try:
+            control_result["value"] = db.deny_control_plane_approval(
+                control_approval["id"],
+                actor_id=control_actor_id,
+                required_approver_roles={"credential_owner"},
+            )
+        except BaseException as exc:
+            control_result["error"] = exc
+
+    db._lock_webauthn_authority = delayed_webauthn_lock
+    control_worker = threading.Thread(
+        target=deny_with_stale_control_authority,
+        name="control-denial-race",
+    )
+    try:
+        control_worker.start()
+        if not control_ready.wait(timeout=5):
+            raise AssertionError(
+                "control-plane denial did not reach its authority barrier"
+            )
+        db.mutate_rbac_role_binding(
+            subject_id=control_actor_id,
+            roles=[],
+            status="deprovisioned",
+            expected_generation=provisioned_control_actor["generation"],
+            actor_id="user:authority-test",
+            reason="deprovision during control-plane denial",
+            event_type="rbac.deprovisioned",
+            event={"test": "control_denial_authority_race"},
+        )
+        control_barrier.wait(timeout=5)
+        control_worker.join(timeout=10)
+    finally:
+        db._lock_webauthn_authority = original_webauthn_lock
+    retained_pending = db.get_pending_oauth_credential(pending_oauth["id"])
+    if control_worker.is_alive() or control_result.get("error") is not None:
+        raise AssertionError(
+            f"control-plane denial race did not terminate cleanly: {control_result}"
+        )
+    if (
+        control_result.get("value") is not None
+        or db.get_control_plane_approval(control_approval["id"])["status"]
+        != "pending"
+        or retained_pending is None
+        or retained_pending.get("status") != "pending"
+        or retained_pending.get("revocation_status") is not None
+    ):
+        raise AssertionError(
+            "revoked control-plane authority scheduled provider revocation: "
+            f"denial={control_result} pending={retained_pending}"
+        )
+
+
 def exercise_grant_consumption(
     db: Any,
     grants: Any,
@@ -1395,8 +2276,23 @@ def exercise_grant_consumption(
         raise AssertionError(f"idempotent retry duplicated consumption ledger rows: {dict(ledger)}")
 
 
-def approved_release_binding(db: Any, suffix: str) -> dict[str, Any]:
+def approved_release_binding(
+    db: Any,
+    suffix: str,
+    *,
+    credential: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     kwargs = approval_kwargs(suffix)
+    if credential is None:
+        credential = db.create_credential(
+            name=f"{suffix} release credential",
+            kind="bearer",
+            secret=f"secret:{suffix}",
+            metadata={"test_fixture": suffix},
+        )
+    kwargs["credential_id"] = credential["id"]
+    kwargs["credential_version"] = int(credential["credential_version"])
+    advance_active_policy_hash(db, kwargs["policy_hash"])
     approval = db.ensure_jit_approval_request(**kwargs)
     approved = db.approve_request(approval["id"], ttl_seconds=60)
     if not approved or approved.get("status") != "approved":
@@ -1409,6 +2305,8 @@ def approved_release_binding(db: Any, suffix: str) -> dict[str, Any]:
         "policy_hash": kwargs["policy_hash"],
         "request_digest": kwargs["request_digest"],
         "operation_digest": kwargs["operation_digest"],
+        "authority_policy_hash": kwargs["policy_hash"],
+        "authority_route_id": kwargs["route_id"],
     }
 
 
@@ -1454,6 +2352,429 @@ def counter_count(db: Any, counter_key: str) -> int | None:
 
 def operation_digest(operation: str) -> str:
     return "sha256:" + hashlib.sha256(operation.encode("utf-8")).hexdigest()
+
+
+def _jit_authority_policy_hash(label: str) -> str:
+    return "sha256:" + hashlib.sha256(label.encode("utf-8")).hexdigest()
+
+
+def _provision_release_authority_fixture(
+    db: Any,
+    backend: str,
+    label: str,
+    *,
+    reserve: bool,
+) -> dict[str, Any]:
+    suffix = f"{backend}-authority-{label}"
+    actor_id = f"oidc:{suffix}@example.test"
+    policy_hash = _jit_authority_policy_hash(f"{suffix}:policy")
+    advance_active_policy_hash(db, policy_hash)
+    authority = db.get_rbac_authority_state()
+    role_binding = db.mutate_rbac_role_binding(
+        subject_id=actor_id,
+        roles=["approver"],
+        status="active",
+        expected_generation=authority["generation"],
+        actor_id="user:jit-authority-test",
+        reason=f"{label} authority fixture",
+        event_type="rbac.role_changed",
+        event={"test": "jit_release_authority"},
+    )
+    webauthn = db.create_webauthn_credential(
+        credential_id=f"passkey-{suffix}",
+        user_id=actor_id,
+        label=f"{label} authority fixture",
+        public_key_cose="test-public-key",
+        sign_count=0,
+        aaguid=None,
+        authenticator_class="test",
+    )
+    credential = db.create_credential(
+        f"{label} release authority fixture",
+        "bearer",
+        f"secret-{suffix}",
+        {},
+    )
+    request = approval_kwargs(suffix)
+    request["policy_hash"] = policy_hash
+    request["credential_id"] = credential["id"]
+    request["credential_version"] = int(credential["credential_version"])
+    approval = db.ensure_jit_approval_request(**request)
+    approved = db.approve_request(
+        approval["id"],
+        ttl_seconds=120,
+        actor_id=actor_id,
+        authn={
+            "method": "webauthn",
+            "user_id": actor_id,
+            "credential_record_id": webauthn["id"],
+        },
+        required_approver_roles={"approver"},
+        authority_policy_hash=policy_hash,
+        authority_route_id=request["route_id"],
+        allowed_approver_ids={actor_id},
+    )
+    if not approved or approved.get("status") != "approved":
+        raise AssertionError(f"{label} authority fixture was not approved: {approved}")
+    binding = {
+        "principal_id": request["principal_id"],
+        "route_id": request["route_id"],
+        "credential_id": request["credential_id"],
+        "credential_version": request["credential_version"],
+        "policy_hash": request["policy_hash"],
+        "request_digest": request["request_digest"],
+        "operation_digest": request["operation_digest"],
+    }
+    quota = quota_claim(f"{suffix}-quota", maximum=2)
+    reserve_kwargs = {
+        **release_reserve_kwargs(
+            binding,
+            attempt_id=f"attempt:{suffix}",
+            quotas=[quota],
+        ),
+        "reservation_ttl_seconds": 60,
+        "authority_policy_hash": policy_hash,
+        "authority_route_id": request["route_id"],
+        "required_approver_roles": {"approver"},
+        "allowed_approver_ids": {actor_id},
+        "require_approver_webauthn": True,
+    }
+    reservation = None
+    if reserve:
+        reservation = db.reserve_release_authorization(**reserve_kwargs)
+        if reservation.get("state") != "reserved":
+            raise AssertionError(
+                f"{label} authority fixture was not reserved: {reservation}"
+            )
+    return {
+        "actor_id": actor_id,
+        "approval_id": approval["id"],
+        "binding": binding,
+        "grant_id": f"approval:{approval['id']}",
+        "policy_hash": policy_hash,
+        "quota": quota,
+        "reserve_kwargs": reserve_kwargs,
+        "reservation": reservation,
+        "role_generation": role_binding["generation"],
+        "webauthn_id": webauthn["id"],
+    }
+
+
+def _assert_reserve_authority_rejected(
+    db: Any,
+    fixture: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    if result.get("authorized") is not False or result.get("state") != "denied":
+        raise AssertionError(f"{label} reserve did not fail closed: {result}")
+    with db.connect() as conn:
+        attempt = conn.execute(
+            "SELECT COUNT(*) AS count FROM release_authorization_attempts "
+            "WHERE attempt_id = ?",
+            (fixture["reserve_kwargs"]["attempt_id"],),
+        ).fetchone()
+        grant = conn.execute(
+            "SELECT state, uses_remaining, reserved_attempt_id "
+            "FROM approval_grants WHERE id = ?",
+            (fixture["grant_id"],),
+        ).fetchone()
+        quota = conn.execute(
+            "SELECT COUNT(*) AS count FROM release_authorization_quota_reservations "
+            "WHERE attempt_id = ?",
+            (fixture["reserve_kwargs"]["attempt_id"],),
+        ).fetchone()
+    if (
+        int(attempt["count"]) != 0
+        or grant is None
+        or grant["state"] not in {"active", "revoked"}
+        or int(grant["uses_remaining"]) not in {0, 1}
+        or (grant["state"] == "active" and int(grant["uses_remaining"]) != 1)
+        or grant["reserved_attempt_id"] is not None
+        or int(quota["count"]) != 0
+        or counter_count(db, fixture["quota"]["counter_key"]) is not None
+    ):
+        raise AssertionError(
+            f"{label} reserve rejection mutated attempt, grant, or quota state"
+        )
+
+
+def _assert_dispatch_authority_cancelled(
+    db: Any,
+    fixture: dict[str, Any],
+    result: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    attempt_id = fixture["reserve_kwargs"]["attempt_id"]
+    if result.get("authorized") is not False or result.get("state") != "cancelled":
+        raise AssertionError(f"{label} dispatch did not cancel fail-closed: {result}")
+    with db.connect() as conn:
+        attempt = conn.execute(
+            "SELECT state, completion_outcome FROM release_authorization_attempts "
+            "WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
+        grant = conn.execute(
+            "SELECT state, uses_remaining, reserved_attempt_id "
+            "FROM approval_grants WHERE id = ?",
+            (fixture["grant_id"],),
+        ).fetchone()
+        quota = conn.execute(
+            "SELECT reservation_state FROM release_authorization_quota_reservations "
+            "WHERE attempt_id = ? AND counter_key = ?",
+            (attempt_id, fixture["quota"]["counter_key"]),
+        ).fetchone()
+        dispatch_events = conn.execute(
+            "SELECT COUNT(*) AS count FROM release_authorization_events "
+            "WHERE attempt_id = ? AND event_type = 'release_authorization.dispatching'",
+            (attempt_id,),
+        ).fetchone()
+        consumptions = conn.execute(
+            "SELECT COUNT(*) AS count FROM approval_grant_consumptions "
+            "WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
+    if (
+        attempt is None
+        or attempt["state"] != "cancelled"
+        or attempt["completion_outcome"] != "not_forwarded"
+        or grant is None
+        or grant["state"] not in {"active", "revoked"}
+        or int(grant["uses_remaining"]) not in {0, 1}
+        or (grant["state"] == "active" and int(grant["uses_remaining"]) != 1)
+        or grant["reserved_attempt_id"] is not None
+        or quota is None
+        or quota["reservation_state"] != "refunded"
+        or counter_count(db, fixture["quota"]["counter_key"]) != 0
+        or int(dispatch_events["count"]) != 0
+        or int(consumptions["count"]) != 0
+    ):
+        raise AssertionError(
+            f"{label} cancellation forwarded, consumed, or retained authority: "
+            f"attempt={dict(attempt) if attempt else None} "
+            f"grant={dict(grant) if grant else None} "
+            f"quota={dict(quota) if quota else None}"
+        )
+
+
+def exercise_jit_approval_route_authority(db: Any, backend: str) -> None:
+    suffix = f"{backend}-approval-route-authority"
+    actor_id = f"oidc:{suffix}@example.test"
+    authority = db.get_rbac_authority_state()
+    db.mutate_rbac_role_binding(
+        subject_id=actor_id,
+        roles=["approver"],
+        status="active",
+        expected_generation=authority["generation"],
+        actor_id="user:jit-authority-test",
+        reason="transactional approval route authority fixture",
+        event_type="rbac.role_changed",
+        event={"test": "jit_approval_route_authority"},
+    )
+    policy_hash = _jit_authority_policy_hash(f"{suffix}:active")
+    advance_active_policy_hash(db, policy_hash)
+    request = approval_kwargs(f"{suffix}-policy-race")
+    request["policy_hash"] = policy_hash
+    approval = db.ensure_jit_approval_request(**request)
+    lock_ready = threading.Event()
+    continue_lock = threading.Event()
+    original_lock = db._lock_policy_high_water
+    result: dict[str, Any] = {}
+
+    def delayed_policy_lock(conn: Any) -> None:
+        if threading.current_thread().name == "jit-approval-policy-race":
+            lock_ready.set()
+            if not continue_lock.wait(timeout=5):
+                raise AssertionError("approval policy race barrier timed out")
+        original_lock(conn)
+
+    def approve() -> None:
+        try:
+            result["value"] = db.approve_request(
+                approval["id"],
+                actor_id=actor_id,
+                authn={"method": "oidc", "user_id": actor_id},
+                required_approver_roles={"approver"},
+                authority_policy_hash=policy_hash,
+                authority_route_id=request["route_id"],
+                allowed_approver_ids={actor_id},
+            )
+        except BaseException as exc:
+            result["error"] = exc
+
+    db._lock_policy_high_water = delayed_policy_lock
+    worker = threading.Thread(target=approve, name="jit-approval-policy-race")
+    try:
+        worker.start()
+        if not lock_ready.wait(timeout=5):
+            raise AssertionError(
+                "JIT approval did not enter transactional policy serialization"
+            )
+        advance_active_policy_hash(
+            db, _jit_authority_policy_hash(f"{suffix}:restrictive")
+        )
+        continue_lock.set()
+        worker.join(timeout=10)
+    finally:
+        continue_lock.set()
+        db._lock_policy_high_water = original_lock
+    if worker.is_alive():
+        raise AssertionError("JIT approval policy race did not terminate")
+    if result.get("value") is not None or (
+        result.get("error") is not None
+        and not isinstance(result["error"], db.MetadataStoreError)
+    ):
+        raise AssertionError(
+            f"stale-policy JIT approval did not fail closed: {result}"
+        )
+    assert_jit_authority_rejection_left_no_grant(
+        db, approval["id"], label="stale-policy JIT approval"
+    )
+
+    current_policy = str(db.get_policy_high_water()["policy_hash"])
+    for label, route_id, allowed_ids in (
+        ("removed-route", f"route:{suffix}:removed", {actor_id}),
+        ("removed-approver", None, {f"oidc:other-{suffix}@example.test"}),
+    ):
+        candidate = approval_kwargs(f"{suffix}-{label}")
+        candidate["policy_hash"] = current_policy
+        pending = db.ensure_jit_approval_request(**candidate)
+        try:
+            approved = db.approve_request(
+                pending["id"],
+                actor_id=actor_id,
+                authn={"method": "oidc", "user_id": actor_id},
+                required_approver_roles={"approver"},
+                authority_policy_hash=current_policy,
+                authority_route_id=route_id or candidate["route_id"],
+                allowed_approver_ids=allowed_ids,
+            )
+        except db.MetadataStoreError:
+            approved = None
+        if approved is not None:
+            raise AssertionError(f"{label} JIT authority committed approval: {approved}")
+        assert_jit_authority_rejection_left_no_grant(
+            db, pending["id"], label=f"{label} JIT authority"
+        )
+
+    positive = approval_kwargs(f"{suffix}-positive")
+    positive["policy_hash"] = current_policy
+    pending = db.ensure_jit_approval_request(**positive)
+    approved = db.approve_request(
+        pending["id"],
+        actor_id=actor_id,
+        authn={"method": "oidc", "user_id": actor_id},
+        required_approver_roles={"approver"},
+        authority_policy_hash=current_policy,
+        authority_route_id=positive["route_id"],
+        allowed_approver_ids={actor_id},
+    )
+    if not approved or approved.get("status") != "approved":
+        raise AssertionError(f"current JIT route authority was rejected: {approved}")
+
+
+def exercise_release_authority_lifecycle(db: Any, backend: str) -> None:
+    for authority_kind in ("policy", "grant", "webauthn", "rbac"):
+        fixture = _provision_release_authority_fixture(
+            db,
+            backend,
+            f"reserve-{authority_kind}",
+            reserve=False,
+        )
+        if authority_kind == "policy":
+            advance_active_policy_hash(
+                db,
+                _jit_authority_policy_hash(
+                    f"{backend}:reserve-policy:restrictive"
+                ),
+            )
+        elif authority_kind == "grant":
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE approval_grants SET state = 'revoked' WHERE id = ?",
+                    (fixture["grant_id"],),
+                )
+        elif authority_kind == "webauthn":
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE webauthn_credentials SET revoked_at = ? WHERE id = ?",
+                    (db.iso_now(), fixture["webauthn_id"]),
+                )
+        else:
+            db.mutate_rbac_role_binding(
+                subject_id=fixture["actor_id"],
+                roles=[],
+                status="deprovisioned",
+                expected_generation=fixture["role_generation"],
+                actor_id="user:jit-authority-test",
+                reason="revoke immediately before release reserve",
+                event_type="rbac.deprovisioned",
+                event={"test": "jit_release_reserve_authority"},
+            )
+        rejected = db.reserve_release_authorization(**fixture["reserve_kwargs"])
+        _assert_reserve_authority_rejected(
+            db,
+            fixture,
+            rejected,
+            label=f"{backend} {authority_kind} authority",
+        )
+
+    for authority_kind in ("policy", "grant", "webauthn", "rbac"):
+        fixture = _provision_release_authority_fixture(
+            db,
+            backend,
+            f"dispatch-{authority_kind}",
+            reserve=True,
+        )
+        if authority_kind == "policy":
+            advance_active_policy_hash(
+                db,
+                _jit_authority_policy_hash(
+                    f"{backend}:dispatch-policy:restrictive"
+                ),
+            )
+        elif authority_kind == "grant":
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE approval_grants SET state = 'revoked' WHERE id = ?",
+                    (fixture["grant_id"],),
+                )
+        elif authority_kind == "webauthn":
+            revoked = db.revoke_webauthn_credential(
+                fixture["webauthn_id"],
+                actor_id="user:jit-authority-test",
+                reason="revoke between release reserve and dispatch",
+            )
+            if revoked.get("ok") is not True:
+                raise AssertionError(
+                    f"dispatch WebAuthn fixture did not revoke: {revoked}"
+                )
+        else:
+            db.mutate_rbac_role_binding(
+                subject_id=fixture["actor_id"],
+                roles=[],
+                status="deprovisioned",
+                expected_generation=fixture["role_generation"],
+                actor_id="user:jit-authority-test",
+                reason="revoke between release reserve and dispatch",
+                event_type="rbac.deprovisioned",
+                event={"test": "jit_release_dispatch_authority"},
+            )
+        dispatched = db.dispatch_release_authorization(
+            attempt_id=fixture["reserve_kwargs"]["attempt_id"],
+            binding_digest=fixture["reservation"]["binding_digest"],
+            dispatch_ttl_seconds=5,
+            actor_id="spiffe://test.serverware/decision-gate/authority",
+            required_approver_roles={"approver"},
+        )
+        _assert_dispatch_authority_cancelled(
+            db,
+            fixture,
+            dispatched,
+            label=f"{backend} {authority_kind} authority",
+        )
 
 
 def operation_commitment(operation: str) -> dict[str, Any]:
@@ -1956,11 +3277,18 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
         "request_digest": "sha256:" + "b" * 64,
         "operation_digest": None,
     }
+    advance_active_policy_hash(db, binding["policy_hash"])
     reserve_kwargs = release_reserve_kwargs(
         binding,
         attempt_id=attempt_id,
         quotas=[quota],
         require_jit_grant=False,
+    )
+    reserve_kwargs.update(
+        {
+            "authority_policy_hash": binding["policy_hash"],
+            "authority_route_id": binding["route_id"],
+        }
     )
     reserved = db.reserve_release_authorization(**reserve_kwargs)
     if reserved.get("state") != "reserved":
@@ -2467,8 +3795,9 @@ def exercise_operation_storage_commitments(db: Any, backend: str) -> None:
     ):
         raise AssertionError(
             "legacy plaintext quota operations were not migrated without state loss: "
-            f"standalone={migrated_standalone} counter={migrated_atomic} "
-            f"reservation={migrated_reservation}"
+            f"standalone={dict(migrated_standalone)} "
+            f"counter={dict(migrated_atomic)} "
+            f"reservation={dict(migrated_reservation)}"
         )
 
     with db.connect() as conn:
@@ -2760,8 +4089,22 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
     if not writer.get("shared_transaction"):
         raise AssertionError(f"test stores cannot share an atomic writer: {writer}")
 
-    first_multi_binding = approved_release_binding(db, f"{backend}-atomic-multi-grant")
-    second_multi_binding = approved_release_binding(db, f"{backend}-atomic-multi-grant")
+    multi_credential = db.create_credential(
+        name=f"{backend} atomic multi-grant credential",
+        kind="bearer",
+        secret=f"secret:{backend}:atomic-multi-grant",
+        metadata={"test_fixture": f"{backend}-atomic-multi-grant"},
+    )
+    first_multi_binding = approved_release_binding(
+        db,
+        f"{backend}-atomic-multi-grant",
+        credential=multi_credential,
+    )
+    second_multi_binding = approved_release_binding(
+        db,
+        f"{backend}-atomic-multi-grant",
+        credential=multi_credential,
+    )
     if first_multi_binding != second_multi_binding:
         raise AssertionError("matching approval grants did not retain the same binding")
     first_multi = db.reserve_release_authorization(
@@ -3309,10 +4652,18 @@ def exercise_atomic_release_authorization(db: Any, backend: str) -> None:
 def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) -> None:
     principal_id = f"agent:{backend}:reserve-approval"
     route_id = f"route:{backend}:reserve-approval"
-    credential_id = f"credential:{backend}:reserve-approval"
+    credential = db.create_credential(
+        name=f"{backend} control-plane JIT credential",
+        kind="bearer",
+        secret=f"secret:{backend}:reserve-approval",
+        metadata={"test_fixture": f"{backend}-reserve-approval"},
+    )
+    credential_id = credential["id"]
+    credential_version = int(credential["credential_version"])
     policy_hash = "sha256:" + hashlib.sha256(
         f"{backend}:reserve-approval:policy".encode("utf-8")
     ).hexdigest()
+    advance_active_policy_hash(db, policy_hash)
     operation = {"account": "acct:test", "operation": "test.forward"}
     body_sha256 = "sha256:" + hashlib.sha256(b'{"safe":true}').hexdigest()
     canonical = {
@@ -3321,7 +4672,7 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
         "client_ip": "192.0.2.10",
         "route_id": route_id,
         "credential_ref": credential_id,
-        "credential_version": "1",
+        "credential_version": str(credential_version),
         "policy_hash": policy_hash,
         "request": {
             "method": "POST",
@@ -3376,7 +4727,7 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
             "principalId": principal_id,
             "routeId": route_id,
             "credentialRef": credential_id,
-            "credentialVersion": 1,
+            "credentialVersion": credential_version,
             "policyHash": policy_hash,
             "requestDigest": request_digest or digest(canonical_request or canonical),
             "operationDigest": submitted_operation_digest
@@ -3447,7 +4798,7 @@ def exercise_control_plane_jit_approval(app_module: Any, db: Any, backend: str) 
         patch.object(
             app_module.db,
             "get_credential",
-            return_value={"credential_version": 1},
+            return_value={"credential_version": credential_version},
         ),
         patch.object(app_module, "_release_authorization_maintenance"),
     ):
@@ -4565,8 +5916,14 @@ def exercise_proxy_atomic_backend_integration(
     db: Any,
     backend: str,
 ) -> None:
+    stored_credential = db.create_credential(
+        name=f"{backend} proxy integration credential",
+        kind="bearer",
+        secret=f"secret-{backend}",
+        metadata={"test_fixture": f"{backend}-proxy-integration"},
+    )
     credential_policy = credential_policy_type(
-        id=f"credential:{backend}:proxy-integration",
+        id=stored_credential["id"],
         provider="generic",
         provider_subject=None,
         scopes=(),
@@ -4629,11 +5986,12 @@ def exercise_proxy_atomic_backend_integration(
         identify_principal=lambda *_args: principal,
         match_route=lambda *_args: SimpleNamespace(route=route, params={}),
     )
+    advance_active_policy_hash(db, snapshot.hash)
     credential = {
         "id": credential_policy.id,
         "kind": "bearer",
         "secret": f"secret-{backend}",
-        "credential_version": 1,
+        "credential_version": int(stored_credential["credential_version"]),
         "metadata": {},
     }
 
@@ -4696,7 +6054,11 @@ def exercise_proxy_atomic_backend_integration(
             )
         )
         stack.enter_context(
-            patch.object(policy_engine.runtime, "get_credential_version", return_value=1)
+            patch.object(
+                policy_engine.runtime,
+                "get_credential_version",
+                return_value=int(stored_credential["credential_version"]),
+            )
         )
         stack.enter_context(
             patch.object(policy_engine.runtime, "get_credential", return_value=credential)
@@ -4867,6 +6229,7 @@ def exercise_webauthn_state(db: Any, backend: str) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--postgres-dsn")
+    parser.add_argument("--authority-only", action="store_true")
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as tmp:
         schema = None
@@ -4898,6 +6261,27 @@ def main() -> None:
                 demo_policy_bundle,
             )
 
+            if args.authority_only:
+                db.init_db()
+                load_master_key()
+                exercise_policy_high_water(db, backend)
+                exercise_release_policy_authority_race(db, backend)
+                exercise_approval_authority_revalidation(db, backend)
+                exercise_jit_approval_route_authority(db, backend)
+                exercise_denial_authority_races(db, backend)
+                exercise_release_authority_lifecycle(db, backend)
+                print(
+                    json.dumps(
+                        {
+                            "authority_only": "pass",
+                            "backend": backend,
+                            "ok": True,
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return
+
             exercise_fresh_startup_key_release_order(db)
             exercise_modern_audit_verification_without_key(db, backend)
             exercise_pre_policy_rate_limit_storage(crypto, db, backend)
@@ -4916,7 +6300,12 @@ def main() -> None:
                 )
                 exercise_postgres_audit_migration_faults(db, args.postgres_dsn)
             exercise_policy_high_water(db, backend)
+            exercise_release_policy_authority_race(db, backend)
             state = exercise_atomic_approval(db, grants, backend)
+            exercise_google_grant_family_quarantine(db, backend)
+            exercise_approval_authority_revalidation(db, backend)
+            exercise_jit_approval_route_authority(db, backend)
+            exercise_denial_authority_races(db, backend)
             exercise_grant_consumption(
                 db,
                 grants,
@@ -4931,6 +6320,7 @@ def main() -> None:
             exercise_transactional_bound_storage_rewrap(
                 crypto, db, backend
             )
+            exercise_release_authority_lifecycle(db, backend)
             exercise_atomic_release_authorization(db, backend)
             exercise_control_plane_jit_approval(app_module, db, backend)
             exercise_proxy_credential_binding(policy_engine, CredentialPolicy)

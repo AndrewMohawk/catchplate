@@ -2,11 +2,14 @@
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
 import json
 import os
 import sys
 import tempfile
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -62,6 +65,8 @@ def main() -> None:
             os.environ.pop(name, None)
 
         from pydantic import ValidationError
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
         from serverware import app as app_module
         from serverware import db
@@ -72,6 +77,141 @@ def main() -> None:
             demo_policy_bundle,
             write_policy_bundle,
         )
+        from serverware.setup_receipts import (
+            Ed25519TrustRoot,
+            EnrollmentReceiptExpected,
+            ReceiptVerificationError,
+            SetupAssignment,
+            canonical_json_bytes,
+        )
+
+        receipt_key = Ed25519PrivateKey.generate()
+        receipt_trust = Ed25519TrustRoot(
+            "production-enrollment-verifier",
+            receipt_key.public_key().public_bytes(
+                serialization.Encoding.DER,
+                serialization.PublicFormat.SubjectPublicKeyInfo,
+            ),
+        )
+        receipt_assignment = SetupAssignment(
+            principal_id="agent:setup-receipt-test",
+            route_id="route.setup-receipt-test",
+            credential_id="credential.setup-receipt-test",
+            credential_version=1,
+            policy_hash="sha256:" + "1" * 64,
+            route_policy_digest="sha256:" + "2" * 64,
+        )
+        receipt_expected = EnrollmentReceiptExpected(
+            receipt_id=str(uuid.uuid4()),
+            setup_session_id=str(uuid.uuid4()),
+            assignment=receipt_assignment,
+            enrollment_session_id=str(uuid.uuid4()),
+            enrollment_packet_sha256="sha256:" + "3" * 64,
+            verifier_nonce_sha256="sha256:" + "4" * 64,
+            trust_profile_sha256="sha256:" + "5" * 64,
+        )
+        receipt_now = int(time.time())
+        receipt_statement: dict[str, Any] = {
+            "receipt_id": receipt_expected.receipt_id,
+            "setup_session_id": receipt_expected.setup_session_id,
+            "assignment": receipt_assignment.as_document(),
+            "assignment_digest": receipt_assignment.digest,
+            "enrollment_session_id": receipt_expected.enrollment_session_id,
+            "enrollment_packet_sha256": receipt_expected.enrollment_packet_sha256,
+            "verifier_nonce_sha256": receipt_expected.verifier_nonce_sha256,
+            "trust_profile_sha256": receipt_expected.trust_profile_sha256,
+            "verifier_provider": receipt_trust.provider,
+            "assurance_mode": "production",
+            "attestation_evidence": {
+                "quote_provider": "aws-nitro-enclaves",
+                "quote_sha256": "sha256:" + "6" * 64,
+                "verified_claims_sha256": "sha256:" + "7" * 64,
+                "verifier_identity_sha256": "sha256:" + "8" * 64,
+                "self_rooted": False,
+                "debug": False,
+                "assurance": {
+                    "class": "hardware-backed",
+                    "debug": False,
+                    "hardware_proof": True,
+                    "workload_custody_proven": True,
+                    "tls_peer_binding_proven": True,
+                    "fact_origin": "independent-verifier",
+                    "completion_eligible": True,
+                },
+            },
+            "egress_evidence": {
+                "evidence_id": str(uuid.uuid4()),
+                "evidence_sha256": "sha256:" + "9" * 64,
+                "evidence_mode": "production-launcher",
+                "evidence_provider": "measured-agent-launcher",
+                "evidence_key_id": "sha256:" + "a" * 64,
+                "network_namespace_sha256": "sha256:" + "b" * 64,
+                "firewall_state_sha256": "sha256:" + "c" * 64,
+                "allow_results_sha256": "sha256:" + "d" * 64,
+                "deny_result_sha256": "sha256:" + "e" * 64,
+                "observed_at_unix": receipt_now,
+            },
+            "decision": "verified",
+            "checks": list(app_module._ENROLLMENT_RECEIPT_V3_CHECKS),
+            "issued_at_unix": receipt_now,
+            "expires_at_unix": receipt_now + 300,
+        }
+
+        def signed_v3(statement: dict[str, Any]) -> bytes:
+            signature = receipt_key.sign(canonical_json_bytes(statement))
+            return canonical_json_bytes(
+                {
+                    "apiVersion": app_module._ENROLLMENT_RECEIPT_V3,
+                    "kind": "EnrollmentVerifierReceipt",
+                    "statement": statement,
+                    "signing_key_id": receipt_trust.key_id,
+                    "signature": "ed25519:"
+                    + base64.urlsafe_b64encode(signature).decode("ascii").rstrip("="),
+                }
+            )
+
+        original_release_channel = app_module.RELEASE_CHANNEL
+        app_module.RELEASE_CHANNEL = "prod"
+        try:
+            verified_v3 = app_module._verify_setup_enrollment_receipt(
+                signed_v3(receipt_statement),
+                trust=receipt_trust,
+                expected=receipt_expected,
+                clock=lambda: receipt_now,
+            )
+            if verified_v3.receipt_id != receipt_expected.receipt_id:
+                raise AssertionError("production v3 enrollment receipt lost its receipt binding")
+            dev_statement = copy.deepcopy(receipt_statement)
+            dev_statement["attestation_evidence"]["quote_provider"] = "dev-signed-quote"
+            try:
+                app_module._verify_setup_enrollment_receipt(
+                    signed_v3(dev_statement),
+                    trust=receipt_trust,
+                    expected=receipt_expected,
+                    clock=lambda: receipt_now,
+                )
+            except ReceiptVerificationError:
+                pass
+            else:
+                raise AssertionError("production setup accepted a dev-signed quote receipt")
+            try:
+                app_module._verify_setup_enrollment_receipt(
+                    canonical_json_bytes(
+                        {
+                            "apiVersion": "serverware.enrollmentVerifierReceipt/v2",
+                            "kind": "EnrollmentVerifierReceipt",
+                        }
+                    ),
+                    trust=receipt_trust,
+                    expected=receipt_expected,
+                    clock=lambda: receipt_now,
+                )
+            except ReceiptVerificationError:
+                pass
+            else:
+                raise AssertionError("production setup accepted a legacy v2 enrollment receipt")
+        finally:
+            app_module.RELEASE_CHANNEL = original_release_channel
 
         db.init_db()
         oauth_secret = canonical_json(
@@ -102,6 +242,12 @@ def main() -> None:
                     metadata.pop(key, None)
                 else:
                     metadata[key] = value
+            # Each synthetic row represents a separate OAuth grant family; the
+            # test varies stored policy bindings rather than reconnect behavior.
+            metadata.setdefault(
+                "oauth_client_id",
+                "setup-verification-" + hashlib.sha256(name.encode("utf-8")).hexdigest(),
+            )
             return db.create_credential(name, "oauth2", oauth_secret, metadata)
 
         exact_credential = create_oauth_credential("Setup verification exact OAuth")

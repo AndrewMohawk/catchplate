@@ -13,10 +13,11 @@
   <text x="88" y="316" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#166534">CA copied only after proof</text>
   <rect x="410" y="92" width="300" height="420" rx="8" fill="#ffffff" stroke="#d9dfd8"/>
   <text x="436" y="132" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#17211d">2. Run Agent Through Proxy</text>
-  <rect x="436" y="160" width="248" height="92" rx="6" fill="#f8fafc" stroke="#d9dfd8"/>
+  <rect x="436" y="160" width="248" height="112" rx="6" fill="#f8fafc" stroke="#d9dfd8"/>
   <text x="454" y="190" font-family="Arial, sans-serif" font-size="12" fill="#17211d">HTTPS_PROXY=http://serverware:8080</text>
   <text x="454" y="216" font-family="Arial, sans-serif" font-size="12" fill="#17211d">HTTP_PROXY=http://serverware:8080</text>
-  <text x="454" y="242" font-family="Arial, sans-serif" font-size="12" fill="#17211d">SSL_CERT_FILE=/serverware/ca.pem</text>
+  <text x="454" y="242" font-family="Arial, sans-serif" font-size="12" fill="#17211d">SSL_CERT_FILE=/etc/serverware/</text>
+  <text x="454" y="260" font-family="Arial, sans-serif" font-size="12" fill="#17211d">serverware-ca.pem</text>
   <rect x="436" y="286" width="248" height="58" rx="6" fill="#fff7ed" stroke="#fed7aa"/>
   <text x="454" y="320" font-family="Arial, sans-serif" font-size="13" font-weight="700" fill="#9a3412">Egress only to Serverware</text>
   <rect x="780" y="92" width="300" height="420" rx="8" fill="#ffffff" stroke="#d9dfd8"/>

@@ -43,7 +43,15 @@ SOURCE_NAMES = {
     "Procfile",
     "requirements.txt",
 }
-SOURCE_ROOTS = {"data-plane", "policies", "schemas", "scripts", "security", "serverware"}
+SOURCE_ROOTS = {
+    "data-plane",
+    "policies",
+    "production-dependencies",
+    "schemas",
+    "scripts",
+    "security",
+    "serverware",
+}
 EXCLUDED_PARTS = (
     ".git",
     ".mypy_cache",

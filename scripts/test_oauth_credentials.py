@@ -899,6 +899,660 @@ def run_oauth_issuance_uncertainty_tests(
                 db.complete_oauth_revocation_work(work_id)
 
 
+def run_google_pending_activation_quarantine_race(db, *, backend: str) -> None:
+    scope = "https://www.googleapis.com/auth/gmail.readonly"
+    fixture_id = uuid.uuid4().hex
+    actor_id = f"user:google-activation-race-{backend}"
+    metadata = {
+        "oauth": True,
+        "refreshable": True,
+        "provider": "google.oauth2",
+        "provider_id": "google",
+        "provider_subject": f"google-activation-race-{backend}-{fixture_id}",
+        "provider_account": f"activation-race-{backend}@example.test",
+        "provider_identity_verified": True,
+        "scopes": [scope],
+        "token_type": "Bearer",
+        "injection_field": "access_token",
+        "oauth_client_id": f"google-activation-race-client-{backend}-{fixture_id}",
+    }
+    name = f"Google activation quarantine race {backend} {fixture_id}"
+    secret = json.dumps(
+        {
+            "access_token": f"activation-race-{backend}-access",
+            "refresh_token": f"activation-race-{backend}-refresh",
+            "token_type": "Bearer",
+            "scope": scope,
+            "expires_at_epoch_ms": 2_000_000_000_000,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    review = {
+        "credential_type": "oauth2",
+        "provider": "google",
+        "provider_subject": metadata["provider_subject"],
+        "provider_account": metadata["provider_account"],
+        "scopes": [scope],
+        "credential_name": name,
+        "metadata_keys": sorted(metadata),
+        "expires_at_epoch_ms": None,
+    }
+    payload_digest = (
+        "sha256:"
+        + hashlib.sha256(
+            db.dumps(
+                {
+                    "action": "credential.oauth.activate",
+                    "review": review,
+                    "encrypted_token_source_sha256": "sha256:"
+                    + hashlib.sha256(secret.encode("utf-8")).hexdigest(),
+                }
+            ).encode("utf-8")
+        ).hexdigest()
+    )
+    pending = db.create_pending_oauth_credential(
+        name=name,
+        kind="oauth2",
+        secret=secret,
+        metadata=metadata,
+        requester_id=actor_id,
+        payload_digest=payload_digest,
+        review=review,
+        ttl_seconds=300,
+    )
+    approval = db.ensure_control_plane_approval(
+        action="credential.oauth.activate",
+        resource_id=pending["id"],
+        payload_digest=payload_digest,
+        requester_id=actor_id,
+        request=review,
+        ttl_seconds=300,
+    )
+    approved = db.approve_control_plane_approval(
+        approval["id"],
+        actor_id=f"user:google-activation-race-approver-{backend}",
+    )
+    if approved is None or approved.get("status") != "approved":
+        raise AssertionError(f"Google activation race approval failed: {approved}")
+
+    activation_context = threading.local()
+    activation_read_pending = threading.Event()
+    activation_waiting_for_family = threading.Event()
+    permit_activation_family_lock = threading.Event()
+    quarantine_started = threading.Event()
+    original_connect = db.connect
+    original_family_lock = db._lock_google_oauth_grant_families
+
+    def observed_connect():
+        conn = original_connect()
+        if backend != "postgres" or not getattr(
+            activation_context, "active", False
+        ):
+            return conn
+        original_execute = conn.execute
+
+        def observed_execute(sql, params=()):
+            result = original_execute(sql, params)
+            normalized = " ".join(str(sql).split()).lower()
+            if (
+                normalized.startswith("select * from pending_oauth_credentials")
+                and pending["id"] in params
+            ):
+                activation_read_pending.set()
+            return result
+
+        conn.execute = observed_execute
+        return conn
+
+    def controlled_family_lock(conn):
+        if getattr(activation_context, "active", False):
+            if backend == "postgres" and not activation_read_pending.is_set():
+                raise AssertionError(
+                    "PostgreSQL activation reached the family lock before reading pending state"
+                )
+            activation_waiting_for_family.set()
+            if not permit_activation_family_lock.wait(timeout=10):
+                raise AssertionError(
+                    "timed out waiting to release activation at the family lock"
+                )
+        return original_family_lock(conn)
+
+    def activate():
+        activation_context.active = True
+        try:
+            return db.activate_pending_oauth_credential(
+                pending["id"],
+                approval_id=approval["id"],
+                actor_id=actor_id,
+            )
+        finally:
+            activation_context.active = False
+
+    def quarantine():
+        quarantine_started.set()
+        return db.quarantine_google_oauth_grant_family(
+            oauth_client_id=str(metadata["oauth_client_id"]),
+            provider_subject=str(metadata["provider_subject"]),
+            actor_id=actor_id,
+            reason="activation_race_quarantine",
+        )
+
+    db.connect = observed_connect
+    db._lock_google_oauth_grant_families = controlled_family_lock
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            activation_future = executor.submit(activate)
+            if not activation_waiting_for_family.wait(timeout=10):
+                raise AssertionError(
+                    "activation did not pause after reading the pending credential"
+                )
+            quarantine_future = executor.submit(quarantine)
+            if not quarantine_started.wait(timeout=2):
+                raise AssertionError("quarantine worker did not start")
+
+            if backend == "postgres":
+                try:
+                    quarantine_result = quarantine_future.result(timeout=10)
+                except TimeoutError as exc:
+                    raise AssertionError(
+                        "PostgreSQL quarantine could not commit while activation waited for the family lock"
+                    ) from exc
+                quarantined_pending = db.get_pending_oauth_credential(pending["id"])
+                if not (
+                    quarantine_result.get("pendingCredentialIds") == [pending["id"]]
+                    and quarantined_pending is not None
+                    and quarantined_pending.get("status") == "rejected"
+                ):
+                    raise AssertionError(
+                        "PostgreSQL quarantine did not terminally reject the pending grant: "
+                        f"{quarantine_result} {quarantined_pending}"
+                    )
+                permit_activation_family_lock.set()
+                activation_result = activation_future.result(timeout=10)
+                if activation_result != {
+                    "ok": False,
+                    "reason": "pending_credential_rejected",
+                }:
+                    raise AssertionError(
+                        "PostgreSQL activation resurrected a quarantined Google grant: "
+                        f"{activation_result}"
+                    )
+                if db.get_credential(
+                    pending["id"], include_inactive=True
+                ) is not None:
+                    raise AssertionError(
+                        "PostgreSQL activation materialized the rejected pending grant"
+                    )
+            else:
+                time.sleep(0.2)
+                if quarantine_future.done():
+                    raise AssertionError(
+                        "SQLite quarantine bypassed the activation writer transaction"
+                    )
+                permit_activation_family_lock.set()
+                activation_result = activation_future.result(timeout=10)
+                quarantine_result = quarantine_future.result(timeout=10)
+                if not activation_result.get("ok"):
+                    raise AssertionError(
+                        f"SQLite serialized activation failed: {activation_result}"
+                    )
+                if not (
+                    quarantine_result.get("credentialCount") == 1
+                    and quarantine_result.get("pendingCredentialCount") == 0
+                    and db.get_credential(pending["id"]) is None
+                ):
+                    raise AssertionError(
+                        "SQLite did not serialize activation before family quarantine: "
+                        f"{quarantine_result}"
+                    )
+                inactive = db.get_credential(
+                    pending["id"], include_secret=True, include_inactive=True
+                )
+                if not (
+                    inactive is not None
+                    and inactive.get("lifecycle_status") == "revocation_pending"
+                    and json.loads(str(inactive.get("secret") or "{}"))[
+                        "refresh_token"
+                    ]
+                    == f"activation-race-{backend}-refresh"
+                ):
+                    raise AssertionError(
+                        f"SQLite quarantine lost the activated credential: {inactive}"
+                    )
+    finally:
+        permit_activation_family_lock.set()
+        db.connect = original_connect
+        db._lock_google_oauth_grant_families = original_family_lock
+        with db.connect() as conn:
+            conn.execute(
+                "DELETE FROM control_plane_approvals WHERE id = ?", (approval["id"],)
+            )
+            conn.execute(
+                "DELETE FROM pending_oauth_credentials WHERE id = ?", (pending["id"],)
+            )
+            conn.execute("DELETE FROM credentials WHERE id = ?", (pending["id"],))
+            conn.execute(
+                "DELETE FROM credential_generations WHERE credential_id = ?",
+                (pending["id"],),
+            )
+
+
+def run_google_grant_collision_tests(app_module, oauth, db) -> None:
+    google_scope = "https://www.googleapis.com/auth/gmail.readonly"
+
+    def metadata(
+        provider: str,
+        subject: str,
+        account: str,
+        client_id: str,
+    ) -> dict[str, object]:
+        value: dict[str, object] = {
+            "oauth": True,
+            "refreshable": True,
+            "provider": f"{provider}.oauth2",
+            "provider_id": provider,
+            "provider_subject": subject,
+            "provider_account": account,
+            "provider_identity_verified": True,
+            "scopes": [google_scope] if provider == "google" else ["tweet.read"],
+            "token_type": "Bearer",
+            "injection_field": "access_token",
+        }
+        value["oauth_client_id" if provider == "google" else "x_app_id"] = client_id
+        return value
+
+    def secret(label: str) -> str:
+        return json.dumps(
+            {
+                "access_token": f"{label}-access",
+                "refresh_token": f"{label}-refresh",
+                "token_type": "Bearer",
+                "scope": google_scope,
+                "expires_at_epoch_ms": 2_000_000_000_000,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+
+    def pending(name: str, item_metadata: dict[str, object]) -> dict[str, object]:
+        item_secret = secret(name)
+        review = {
+            "credential_type": "oauth2",
+            "provider": item_metadata["provider_id"],
+            "provider_subject": item_metadata["provider_subject"],
+            "provider_account": item_metadata["provider_account"],
+            "scopes": item_metadata["scopes"],
+            "credential_name": name,
+            "metadata_keys": sorted(item_metadata),
+            "expires_at_epoch_ms": None,
+        }
+        payload_digest = (
+            "sha256:"
+            + hashlib.sha256(
+                json.dumps(
+                    {
+                        "action": "credential.oauth.activate",
+                        "review": review,
+                        "encrypted_token_source_sha256": "sha256:"
+                        + hashlib.sha256(item_secret.encode("utf-8")).hexdigest(),
+                    },
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            ).hexdigest()
+        )
+        return db.create_pending_oauth_credential(
+            name=name,
+            kind="oauth2",
+            secret=item_secret,
+            metadata=item_metadata,
+            requester_id="user:collision-test",
+            payload_digest=payload_digest,
+            review=review,
+            ttl_seconds=300,
+        )
+
+    credential_ids: set[str] = set()
+    pending_ids: set[str] = set()
+    route_ids: set[str] = set()
+    retained_work_ids: set[str] = set()
+
+    def track_credential(item: dict[str, object]) -> dict[str, object]:
+        credential_ids.add(str(item["id"]))
+        return item
+
+    active_metadata = metadata(
+        "google",
+        "google-grant-family-active",
+        "active-collision@example.test",
+        "google-client",
+    )
+    active = track_credential(
+        db.create_credential(
+            "Existing Google grant",
+            "oauth2",
+            secret("existing-google"),
+            active_metadata,
+        )
+    )
+    route = db.create_route(
+        {
+            "name": "Existing Google assignment",
+            "match_host": "gmail.googleapis.com",
+            "match_path_prefix": "/gmail/v1/users/me/",
+            "credential_id": active["id"],
+        }
+    )
+    route_ids.add(str(route["id"]))
+    try:
+        db.create_credential(
+            "Duplicate Google grant",
+            "oauth2",
+            secret("duplicate-google"),
+            active_metadata,
+        )
+    except db.OAuthGrantCollisionError as exc:
+        existing = exc.detail.get("existing") or {}
+        impact = existing.get("assignmentImpact") or {}
+        if not (
+            exc.detail.get("error") == "oauth_google_grant_collision"
+            and existing.get("type") == "credential"
+            and existing.get("id") == active["id"]
+            and impact.get("routeCount") == 1
+            and (impact.get("routes") or [{}])[0].get("id") == route["id"]
+        ):
+            raise AssertionError(
+                f"active Google collision omitted assignment impact: {exc.detail}"
+            ) from exc
+    else:
+        raise AssertionError("duplicate active Google grant was accepted")
+
+    pending_metadata = metadata(
+        "google",
+        "google-grant-family-pending",
+        "pending-collision@example.test",
+        "google-client",
+    )
+    first_pending = pending("Existing pending Google grant", pending_metadata)
+    pending_ids.add(str(first_pending["id"]))
+    try:
+        pending("Duplicate pending Google grant", pending_metadata)
+    except db.OAuthGrantCollisionError as exc:
+        existing = exc.detail.get("existing") or {}
+        if not (
+            existing.get("type") == "pendingCredential"
+            and existing.get("id") == first_pending["id"]
+            and existing.get("status") == "pending"
+        ):
+            raise AssertionError(
+                f"pending Google collision identified the wrong grant: {exc.detail}"
+            ) from exc
+    else:
+        raise AssertionError("duplicate pending Google grant was accepted")
+
+    concurrent_metadata = metadata(
+        "google",
+        "google-grant-family-concurrent",
+        "concurrent-collision@example.test",
+        "google-client",
+    )
+    barrier = threading.Barrier(2)
+
+    def create_concurrently(index: int) -> tuple[str, object]:
+        barrier.wait(timeout=5)
+        try:
+            created = db.create_credential(
+                f"Concurrent Google grant {index}",
+                "oauth2",
+                secret(f"concurrent-{index}"),
+                concurrent_metadata,
+            )
+        except db.OAuthGrantCollisionError as exc:
+            return "collision", exc.detail
+        credential_ids.add(str(created["id"]))
+        return "created", created
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        concurrent_results = list(executor.map(create_concurrently, range(2)))
+    if sorted(result[0] for result in concurrent_results) != ["collision", "created"]:
+        raise AssertionError(
+            f"concurrent Google grant creation was not serialized: {concurrent_results}"
+        )
+
+    for index, client_id in enumerate(("google-project-a", "google-project-b")):
+        track_credential(
+            db.create_credential(
+                f"Distinct Google project {index}",
+                "oauth2",
+                secret(f"distinct-project-{index}"),
+                metadata(
+                    "google",
+                    "same-subject-different-project",
+                    "multi-project@example.test",
+                    client_id,
+                ),
+            )
+        )
+
+    x_metadata = metadata(
+        "x",
+        "x-duplicate-is-token-local",
+        "@x_duplicate",
+        "x-client",
+    )
+    for index in range(2):
+        track_credential(
+            db.create_credential(
+                f"X duplicate grant {index}",
+                "oauth2",
+                secret(f"x-duplicate-{index}"),
+                x_metadata,
+            )
+        )
+
+    original_post_token_request = oauth._post_token_request
+    original_fetch_provider_identity = oauth._fetch_provider_identity
+    original_revoke_oauth_token = app_module.revoke_oauth_token
+    original_reconcile = app_module._reconcile_oauth_revocations
+    original_two_person_required = app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED
+    original_two_person_actions = app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS
+    callback_metadata = metadata(
+        "google",
+        "google-callback-collision",
+        "callback-collision@example.test",
+        "google-client",
+    )
+    callback_active = track_credential(
+        db.create_credential(
+            "Existing callback Google grant",
+            "oauth2",
+            secret("existing-callback"),
+            callback_metadata,
+        )
+    )
+    callback_active_version = int(callback_active["credential_version"])
+    callback_route = db.create_route(
+        {
+            "name": "Callback collision assignment",
+            "match_host": "gmail.googleapis.com",
+            "match_path_prefix": "/gmail/v1/",
+            "credential_id": callback_active["id"],
+        }
+    )
+    route_ids.add(str(callback_route["id"]))
+
+    def callback_request(state: str, browser_nonce: str):
+        return app_module.Request(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/api/oauth/callback/google",
+                "headers": [
+                    (
+                        b"cookie",
+                        f"{oauth.browser_cookie_name(state)}={browser_nonce}".encode(
+                            "ascii"
+                        ),
+                    )
+                ],
+            }
+        )
+
+    def fail_provider_revocation(*, provider_id: str, token_secret: dict[str, object]):
+        raise oauth.OAuthError(f"injected {provider_id} revocation outage")
+
+    def uncertain_reconciliation(**kwargs):
+        raise db.MetadataStoreError("injected revocation reconciliation uncertainty")
+
+    oauth._post_token_request = lambda provider, body, headers: {
+        "access_token": f"{body['code']}-access",
+        "refresh_token": f"{body['code']}-refresh",
+        "token_type": "Bearer",
+        "expires_in": 3600,
+    }
+    oauth._fetch_provider_identity = lambda provider, token: {
+        "provider_subject": "google-callback-collision",
+        "provider_account": "callback-collision@example.test",
+        "provider_identity_verified": True,
+        "provider_email_verified": True,
+    }
+    app_module.revoke_oauth_token = fail_provider_revocation
+    app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED = False
+    app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS = ()
+    try:
+        for case, reconciliation_uncertain in (
+            ("provider-failure", False),
+            ("reconciliation-uncertain", True),
+        ):
+            browser_nonce = ("f" if not reconciliation_uncertain else "u") * 43
+            started = oauth.create_authorization_url(
+                provider_id="google",
+                credential_name=f"Collision callback {case}",
+                scopes=[google_scope],
+                metadata={},
+                actor_id="user:collision-test",
+                browser_nonce=browser_nonce,
+            )
+            app_module._reconcile_oauth_revocations = (
+                uncertain_reconciliation
+                if reconciliation_uncertain
+                else original_reconcile
+            )
+            response = app_module.oauth_callback(
+                "google",
+                callback_request(str(started["state"]), browser_nonce),
+                code=f"collision-{case}",
+                state=str(started["state"]),
+            )
+            if response.status_code != 409:
+                raise AssertionError(
+                    f"{case} collision returned {response.status_code}: {response.body!r}"
+                )
+            detail = json.loads(response.body).get("detail") or {}
+            disposition = detail.get("newGrantDisposition") or {}
+            existing = detail.get("existing") or {}
+            quarantine = detail.get("grantFamilyQuarantine") or {}
+            expected_quarantined = 1 if case == "provider-failure" else 0
+            if not (
+                detail.get("error") == "oauth_google_grant_collision"
+                and existing.get("id") == callback_active["id"]
+                and (existing.get("assignmentImpact") or {}).get("routeCount") == 1
+                and quarantine.get("credentialCount") == expected_quarantined
+                and quarantine.get("pendingCredentialCount") == 0
+                and quarantine.get("revocationWorkId")
+                and disposition.get("status") == "retained_for_retry"
+                and disposition.get("durableRetryRetained") is True
+            ):
+                raise AssertionError(
+                    f"{case} collision response was not safely structured: {detail}"
+                )
+            replay = app_module.oauth_callback(
+                "google",
+                callback_request(str(started["state"]), browser_nonce),
+                code=f"collision-{case}-replay",
+                state=str(started["state"]),
+            )
+            if replay.status_code != 400 or b"unknown or expired" not in replay.body:
+                raise AssertionError(
+                    f"{case} collision left OAuth state replayable: {replay.body!r}"
+                )
+        if db.get_credential(str(callback_active["id"])) is not None:
+            raise AssertionError(
+                "Google grant-family collision left the original credential usable"
+            )
+        quarantined_active = db.get_credential(
+            str(callback_active["id"]),
+            include_secret=True,
+            include_inactive=True,
+        )
+        if not (
+            quarantined_active is not None
+            and quarantined_active.get("lifecycle_status") == "revocation_pending"
+            and int(quarantined_active.get("credential_version") or 0)
+            == callback_active_version + 1
+            and json.loads(str(quarantined_active.get("secret") or "{}"))[
+                "refresh_token"
+            ]
+            == "existing-callback-refresh"
+        ):
+            raise AssertionError(
+                f"Google collision did not rotate and quarantine the original generation: {quarantined_active}"
+            )
+        with db.connect() as conn:
+            generation = conn.execute(
+                "SELECT last_version FROM credential_generations WHERE credential_id = ?",
+                (callback_active["id"],),
+            ).fetchone()
+        if (
+            generation is None
+            or int(generation["last_version"]) != callback_active_version + 1
+        ):
+            raise AssertionError(
+                "Google collision did not invalidate the original credential generation"
+            )
+        with db.connect() as conn:
+            retained_rows = conn.execute(
+                "SELECT id, status, attempts FROM oauth_revocation_work "
+                "WHERE actor_id = ? AND source = ? ORDER BY created_at",
+                ("user:collision-test", "authorization_code_exchange"),
+            ).fetchall()
+        if len(retained_rows) != 2 or any(
+            row["status"] != "pending" for row in retained_rows
+        ):
+            raise AssertionError(
+                f"collision cleanup did not retain failed revocations: {retained_rows}"
+            )
+        if sorted(int(row["attempts"]) for row in retained_rows) != [0, 1]:
+            raise AssertionError(
+                f"collision cleanup did not preserve retry state: {retained_rows}"
+            )
+        retained_work_ids.update(str(row["id"]) for row in retained_rows)
+    finally:
+        oauth._post_token_request = original_post_token_request
+        oauth._fetch_provider_identity = original_fetch_provider_identity
+        app_module.revoke_oauth_token = original_revoke_oauth_token
+        app_module._reconcile_oauth_revocations = original_reconcile
+        app_module.CONTROL_PLANE_TWO_PERSON_REQUIRED = original_two_person_required
+        app_module.CONTROL_PLANE_TWO_PERSON_ACTIONS = original_two_person_actions
+        for work_id in retained_work_ids:
+            db.complete_oauth_revocation_work(work_id)
+        with db.connect() as conn:
+            for route_id in route_ids:
+                conn.execute("DELETE FROM routes WHERE id = ?", (route_id,))
+            for pending_id in pending_ids:
+                conn.execute(
+                    "DELETE FROM pending_oauth_credentials WHERE id = ?",
+                    (pending_id,),
+                )
+            for credential_id in credential_ids:
+                conn.execute("DELETE FROM credentials WHERE id = ?", (credential_id,))
+                conn.execute(
+                    "DELETE FROM credential_generations WHERE credential_id = ?",
+                    (credential_id,),
+                )
+
+
 def main(*, setup_session_only: bool = False) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         if not setup_session_only:
@@ -981,6 +1635,8 @@ def main(*, setup_session_only: bool = False) -> None:
         if setup_session_only:
             print(json.dumps({"oauth_setup_session_state": "pass", "ok": True}, sort_keys=True))
             return
+        run_google_pending_activation_quarantine_race(db, backend="sqlite")
+        run_google_grant_collision_tests(app_module, oauth, db)
 
         providers = app_module.oauth_providers(identity)["providers"]
         google = next(item for item in providers if item["id"] == "google")
@@ -2771,10 +3427,28 @@ def main(*, setup_session_only: bool = False) -> None:
             original_pending_capacity = db.OAUTH_PENDING_CREDENTIAL_MAX_COUNT
             db.OAUTH_PENDING_CREDENTIAL_MAX_COUNT = 1
             capacity_ids: list[str] = []
-            capacity_metadata = dict(active_exact["metadata"])
             capacity_secret = json.dumps(active_secret, separators=(",", ":"), sort_keys=True)
+
+            def capacity_binding(label: str, name: str):
+                item_metadata = {
+                    **active_exact["metadata"],
+                    "provider_subject": f"google-capacity-{label}",
+                    "provider_account": f"capacity-{label}@example.test",
+                    "oauth_client_id": f"google-capacity-client-{label}",
+                }
+                item_review = {
+                    **pending["review"],
+                    "provider_subject": item_metadata["provider_subject"],
+                    "provider_account": item_metadata["provider_account"],
+                    "credential_name": name,
+                    "metadata_keys": sorted(item_metadata),
+                }
+                return item_metadata, item_review
+
             try:
-                first_review = {**pending["review"], "credential_name": "OAuth capacity one"}
+                first_metadata, first_review = capacity_binding(
+                    "one", "OAuth capacity one"
+                )
                 first_digest = app_module._oauth_activation_payload_digest(
                     review=first_review,
                     secret=capacity_secret,
@@ -2783,7 +3457,7 @@ def main(*, setup_session_only: bool = False) -> None:
                     name="OAuth capacity one",
                     kind="oauth2",
                     secret=capacity_secret,
-                    metadata=capacity_metadata,
+                    metadata=first_metadata,
                     requester_id="user:operator",
                     payload_digest=first_digest,
                     review=first_review,
@@ -2791,7 +3465,9 @@ def main(*, setup_session_only: bool = False) -> None:
                 )
                 capacity_ids.append(first_capacity_item["id"])
 
-                second_review = {**pending["review"], "credential_name": "OAuth capacity two"}
+                second_metadata, second_review = capacity_binding(
+                    "two", "OAuth capacity two"
+                )
                 second_digest = app_module._oauth_activation_payload_digest(
                     review=second_review,
                     secret=capacity_secret,
@@ -2801,7 +3477,7 @@ def main(*, setup_session_only: bool = False) -> None:
                         name="OAuth capacity two",
                         kind="oauth2",
                         secret=capacity_secret,
-                        metadata=capacity_metadata,
+                        metadata=second_metadata,
                         requester_id="user:operator",
                         payload_digest=second_digest,
                         review=second_review,
@@ -2825,7 +3501,7 @@ def main(*, setup_session_only: bool = False) -> None:
                     name="OAuth capacity two",
                     kind="oauth2",
                     secret=capacity_secret,
-                    metadata=capacity_metadata,
+                    metadata=second_metadata,
                     requester_id="user:operator",
                     payload_digest=second_digest,
                     review=second_review,
@@ -2858,13 +3534,15 @@ def main(*, setup_session_only: bool = False) -> None:
                 original_backlog_capacity = db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT
                 db.OAUTH_PENDING_CREDENTIAL_MAX_COUNT = 2
                 db._OAUTH_REVOCATION_BACKLOG_MAX_COUNT = 1
-                backlog_review = {**pending["review"], "credential_name": "OAuth backlog bound"}
+                backlog_metadata, backlog_review = capacity_binding(
+                    "backlog", "OAuth backlog bound"
+                )
                 try:
                     db.create_pending_oauth_credential(
                         name="OAuth backlog bound",
                         kind="oauth2",
                         secret=capacity_secret,
-                        metadata=capacity_metadata,
+                        metadata=backlog_metadata,
                         requester_id="user:operator",
                         payload_digest=app_module._oauth_activation_payload_digest(
                             review=backlog_review,
@@ -2908,7 +3586,7 @@ def main(*, setup_session_only: bool = False) -> None:
                         name="OAuth capacity two",
                         kind="oauth2",
                         secret=capacity_secret,
-                        metadata=capacity_metadata,
+                        metadata=second_metadata,
                         requester_id="user:operator",
                         payload_digest=app_module._oauth_activation_payload_digest(
                             review=mismatched_review,
@@ -2958,7 +3636,8 @@ def main(*, setup_session_only: bool = False) -> None:
             terminal_ids: list[str] = []
 
             def stage_terminal(name: str) -> dict[str, object]:
-                review = {**pending["review"], "credential_name": name}
+                terminal_label = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+                terminal_metadata, review = capacity_binding(terminal_label, name)
                 digest = app_module._oauth_activation_payload_digest(
                     review=review,
                     secret=capacity_secret,
@@ -2967,7 +3646,7 @@ def main(*, setup_session_only: bool = False) -> None:
                     name=name,
                     kind="oauth2",
                     secret=capacity_secret,
-                    metadata=capacity_metadata,
+                    metadata=terminal_metadata,
                     requester_id="user:operator",
                     payload_digest=digest,
                     review=review,
@@ -3530,11 +4209,57 @@ def main(*, setup_session_only: bool = False) -> None:
     print(json.dumps({"oauth_credentials": "pass", "ok": True}, sort_keys=True))
 
 
+def run_google_family_race_only(*, postgres_dsn: str | None = None) -> None:
+    with tempfile.TemporaryDirectory() as tmp:
+        schema = None
+        backend = "postgres" if postgres_dsn else "sqlite"
+        os.environ["SERVERWARE_DATA_DIR"] = tmp
+        os.environ["SERVERWARE_RELEASE_CHANNEL"] = "test"
+        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
+        if postgres_dsn:
+            import psycopg
+
+            schema = f"serverware_oauth_race_{uuid.uuid4().hex}"
+            with psycopg.connect(postgres_dsn, autocommit=True) as conn:
+                conn.execute(f'CREATE SCHEMA "{schema}"')
+            separator = "&" if "?" in postgres_dsn else "?"
+            options = urllib.parse.quote(f"-csearch_path={schema}", safe="")
+            isolated_dsn = f"{postgres_dsn}{separator}options={options}"
+            for store in ("METADATA", "AUDIT", "GRANT"):
+                os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "postgres"
+                os.environ[f"SERVERWARE_{store}_STORE_POSTGRES_DSN"] = isolated_dsn
+        else:
+            for store in ("METADATA", "AUDIT", "GRANT"):
+                os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "sqlite"
+                os.environ.pop(f"SERVERWARE_{store}_STORE_POSTGRES_DSN", None)
+        try:
+            from serverware import db
+
+            db.init_db()
+            run_google_pending_activation_quarantine_race(db, backend=backend)
+        finally:
+            if schema and postgres_dsn:
+                import psycopg
+
+                with psycopg.connect(postgres_dsn, autocommit=True) as conn:
+                    conn.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+    print(
+        json.dumps(
+            {"backend": backend, "google_activation_quarantine_race": "pass", "ok": True},
+            sort_keys=True,
+        )
+    )
+
+
 if __name__ == "__main__":
     if sys.argv[1:] == ["--compose-contract-only"]:
         verify_compose_oauth_contract()
         print(json.dumps({"oauth_compose_contract": "pass", "ok": True}, sort_keys=True))
     elif sys.argv[1:] == ["--setup-session-only"]:
         main(setup_session_only=True)
+    elif sys.argv[1:] == ["--google-family-race-only"]:
+        run_google_family_race_only()
+    elif len(sys.argv) == 3 and sys.argv[1] == "--google-family-race-postgres":
+        run_google_family_race_only(postgres_dsn=sys.argv[2])
     else:
         main()

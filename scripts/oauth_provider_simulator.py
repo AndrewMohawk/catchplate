@@ -49,6 +49,8 @@ class _AuthorizationCode:
 @dataclass
 class _Grant:
     provider: str
+    client_id: str
+    provider_subject: str
     scopes: tuple[str, ...]
     outcome: str
     active: bool = True
@@ -76,6 +78,10 @@ class OAuthProviderSimulator:
     _CLIENTS = {
         "google": (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET),
         "x": (X_CLIENT_ID, X_CLIENT_SECRET),
+    }
+    _PROVIDER_SUBJECTS = {
+        "google": "google-subject-001",
+        "x": "x-subject-001",
     }
     _ALLOWED_SCOPES = {
         "google": frozenset(
@@ -725,7 +731,11 @@ class OAuthProviderSimulator:
         self._grant_counter += 1
         grant_id = f"grant-{provider}-{self._grant_counter:06d}"
         self._grants[grant_id] = _Grant(
-            provider=provider, scopes=scopes, outcome=code.outcome
+            provider=provider,
+            client_id=client_id,
+            provider_subject=self._PROVIDER_SUBJECTS[provider],
+            scopes=scopes,
+            outcome=code.outcome,
         )
         self._counts[provider]["authorization_code_exchanges"] += 1
         self._record_locked(
@@ -876,20 +886,35 @@ class OAuthProviderSimulator:
                 valid = False
             else:
                 if provider == "google":
-                    grant.active = False
+                    family_grant_ids = {
+                        grant_id
+                        for grant_id, candidate in self._grants.items()
+                        if candidate.provider == "google"
+                        and candidate.client_id == grant.client_id
+                        and candidate.provider_subject == grant.provider_subject
+                    }
+                    for grant_id in family_grant_ids:
+                        self._grants[grant_id].active = False
                     for item in self._access_tokens.values():
-                        if item.grant_id == reference.grant_id:
+                        if item.grant_id in family_grant_ids:
                             item.active = False
                     for item in self._refresh_tokens.values():
-                        if item.grant_id == reference.grant_id:
+                        if item.grant_id in family_grant_ids:
                             item.active = False
-                    event_type = "grant_revoked"
+                    event_type = "grant_family_revoked"
+                    event_fields = {"family_grant_count": len(family_grant_ids)}
                 else:
                     reference.active = False
                     event_type = "token_revoked"
+                    event_fields = {}
                 self._counts[provider]["revocation_requests"] += 1
                 self._counts[provider]["successful_revocations"] += 1
-                self._record_locked(provider, event_type, token_type_hint=hint)
+                self._record_locked(
+                    provider,
+                    event_type,
+                    token_type_hint=hint,
+                    **event_fields,
+                )
                 valid = True
         if not valid:
             self._send_json(handler, 400, {"error": "invalid_token"})

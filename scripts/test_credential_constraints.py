@@ -17,11 +17,55 @@ from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, quote, urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 PROXY_TRANSPORT_ONLY = "--proxy-transport-only" in sys.argv
+
+REQUEST_VALUE_PARITY_VECTORS = (
+    ("equals-allow", {"kind": "equals", "value": "approved"}, "approved", True),
+    ("equals-deny", {"kind": "equals", "value": "approved"}, "other", False),
+    ("enum-allow", {"kind": "enum", "values": ["open", "closed"]}, "open", True),
+    ("enum-deny", {"kind": "enum", "values": ["open", "closed"]}, "all", False),
+    (
+        "pattern-allow",
+        {"kind": "pattern", "pattern": "^[A-Za-z0-9._-]{1,16}$", "maxLength": 16},
+        "repo-1",
+        True,
+    ),
+    (
+        "pattern-deny",
+        {"kind": "pattern", "pattern": "^[A-Za-z0-9._-]{1,16}$", "maxLength": 16},
+        "repo/1",
+        False,
+    ),
+    ("length-byte-allow", {"kind": "stringLength", "minLength": 2, "maxLength": 2}, "é", True),
+    ("length-byte-deny", {"kind": "stringLength", "maxLength": 1}, "é", False),
+    ("integer-allow", {"kind": "numeric", "min": 1, "max": 50, "integer": True}, "42", True),
+    ("integer-canonical-deny", {"kind": "numeric", "min": 1, "max": 50, "integer": True}, "+42", False),
+    (
+        "integer-above-f64-precision-deny",
+        {"kind": "numeric", "max": 9007199254740992, "integer": True},
+        "9007199254740993",
+        False,
+    ),
+    (
+        "integer-i64-maximum-allow",
+        {"kind": "numeric", "min": 9223372036854775807, "integer": True},
+        "9223372036854775807",
+        True,
+    ),
+    (
+        "integer-outside-i64-deny",
+        {"kind": "numeric", "max": 9223372036854775807, "integer": True},
+        "9223372036854775808",
+        False,
+    ),
+    ("number-allow", {"kind": "numeric", "min": 1.25, "max": 2.5}, "1.5", True),
+    ("number-whitespace-deny", {"kind": "numeric", "min": 1.25, "max": 2.5}, " 1.5", False),
+    ("number-finite-deny", {"kind": "numeric", "min": 0}, "NaN", False),
+)
 
 tmpdir = tempfile.TemporaryDirectory()
 os.environ["SERVERWARE_DATA_DIR"] = tmpdir.name
@@ -36,7 +80,7 @@ for name in (
 ):
     os.environ.pop(name, None)
 
-from serverware import db, runtime
+from serverware import constraints, db, runtime
 from serverware.adapters import X_V2_READ_OPERATION_PATHS, X_V2_READ_OPERATIONS, _x_read_operation, get_adapter
 from serverware.constraints import (
     _enforce_request_time_window,
@@ -240,6 +284,33 @@ def assert_signed_policy_rejected(bundle: dict, message: str, *, validate_schema
         except PolicyBundleError:
             continue
         raise AssertionError(f"{message}; validate_schema={use_schema}")
+
+
+def assert_signed_policy_and_schema_rejected(
+    bundle: dict,
+    message: str,
+    *,
+    validate_schema: bool,
+) -> None:
+    signed = sign_policy_bundle(bundle)
+    try:
+        compile_policy_bundle(
+            signed,
+            verify_signature=True,
+            validate_schema=False,
+        )
+    except PolicyBundleError:
+        pass
+    else:
+        raise AssertionError(f"compiler accepted {message}")
+
+    if not validate_schema:
+        return
+    try:
+        validate_policy_schema(signed)
+    except PolicyBundleError:
+        return
+    raise AssertionError(f"policy schema accepted {message}")
 
 
 def assert_signed_policy_rejected_reason(
@@ -676,6 +747,266 @@ def main() -> None:
     demo = compile_policy_bundle(demo_bundle, validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     example_snapshot = compile_policy_bundle(examples, validate_schema=validate_schema)
+
+    for label, predicate, value, expected_allowed in REQUEST_VALUE_PARITY_VECTORS:
+        vector_flow = flow("GET", f"https://example.test/items?scope={quote(value, safe='')}")
+        vector_route = SimpleNamespace(
+            id=f"request-value-{label}",
+            credential_ref=None,
+            constraints=(
+                {
+                    "id": label,
+                    "type": "requestValue",
+                    "rules": [
+                        {
+                            "source": "query",
+                            "name": "scope",
+                            "predicate": predicate,
+                            "capture": "validatedScope",
+                        }
+                    ],
+                },
+            ),
+        )
+        operation_fields = {"operation": "vectors.read"}
+        decision = evaluate_request_constraints(
+            vector_flow,
+            vector_route,
+            principal_id="agent:example",
+            credential_ref=None,
+            credential_version=0,
+            operation_fields=operation_fields,
+            consume_rate_limits=False,
+        )
+        assert decision.allowed is expected_allowed, (label, decision)
+        assert (operation_fields.get("validatedScope") == value) is expected_allowed, label
+
+    oversized_value_flow = flow(
+        "GET",
+        f"https://example.test/items?scope={quote('x' * 4097, safe='')}",
+    )
+    oversized_value_route = SimpleNamespace(
+        id="request-value-oversized",
+        credential_ref=None,
+        constraints=(
+            {
+                "id": "bounded-input",
+                "type": "requestValue",
+                "rules": [
+                    {
+                        "source": "query",
+                        "name": "scope",
+                        "predicate": {"kind": "stringLength", "minLength": 1},
+                    }
+                ],
+            },
+        ),
+    )
+    assert_denied(
+        request_decision(oversized_value_route, oversized_value_flow, "vectors.read"),
+        "request_value_predicate_denied",
+    )
+
+    ambiguous_flow = flow(
+        "GET",
+        "https://example.test/items?scope=approved&scope=approved",
+    )
+    ambiguous_route = SimpleNamespace(
+        id="request-value-ambiguous",
+        credential_ref=None,
+        constraints=(
+            {
+                "id": "single-query-value",
+                "type": "requestValue",
+                "rules": [
+                    {
+                        "source": "query",
+                        "name": "scope",
+                        "predicate": {"kind": "equals", "value": "approved"},
+                    }
+                ],
+            },
+        ),
+    )
+    assert_denied(
+        request_decision(ambiguous_route, ambiguous_flow, "vectors.read"),
+        "request_value_ambiguous",
+    )
+
+    header_flow = flow("GET", "https://example.test/items")
+    header_flow.request.headers["x-tenant-id"] = "tenant-a"
+    header_route = SimpleNamespace(
+        id="request-value-header",
+        credential_ref=None,
+        constraints=(
+            {
+                "id": "tenant-header",
+                "type": "requestValue",
+                "rules": [
+                    {
+                        "source": "header",
+                        "name": "x-tenant-id",
+                        "predicate": {"kind": "enum", "values": ["tenant-a"]},
+                    }
+                ],
+            },
+        ),
+    )
+    assert request_decision(header_route, header_flow, "vectors.read").allowed
+
+    path_flow = flow("GET", "https://example.test/repos/approved-owner")
+    path_flow.metadata["serverware_request_value_path_params"] = {"owner": "approved-owner"}
+    path_route = SimpleNamespace(
+        id="request-value-path",
+        credential_ref=None,
+        constraints=(
+            {
+                "id": "owner-path",
+                "type": "requestValue",
+                "rules": [
+                    {
+                        "source": "pathParam",
+                        "name": "owner",
+                        "predicate": {"kind": "equals", "value": "approved-owner"},
+                    }
+                ],
+            },
+        ),
+    )
+    assert request_decision(path_route, path_flow, "vectors.read").allowed
+
+    github_raw = next(
+        route for route in examples["routes"] if route["id"] == "example.github.issues_since_30_days"
+    )
+    for mutate, message in (
+        (
+            lambda route: route["constraints"][0]["rules"][0].update({"unknown": True}),
+            "unknown requestValue rule field",
+        ),
+        (
+            lambda route: route["constraints"][0]["rules"][0]["predicate"].update(
+                {"values": ["mixed"]}
+            ),
+            "mixed requestValue predicate families",
+        ),
+        (
+            lambda route: route["constraints"][0]["rules"][0].update({"name": "missing"}),
+            "requestValue path parameter absent from the path",
+        ),
+        (
+            lambda route: route["constraints"][0]["rules"][1].update({"capture": "githubOwner"}),
+            "duplicate requestValue capture",
+        ),
+        (
+            lambda route: route["constraints"][0]["rules"][1].update(
+                {"capture": "providerAccount"}
+            ),
+            "reserved provider-account requestValue capture",
+        ),
+        (
+            lambda route: route["constraints"][0].update(
+                {"rules": route["constraints"][0]["rules"] * 9}
+            ),
+            "more than 16 requestValue rules",
+        ),
+    ):
+        invalid = copy.deepcopy(examples)
+        invalid_route = next(route for route in invalid["routes"] if route["id"] == github_raw["id"])
+        mutate(invalid_route)
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted {message}",
+            validate_schema=validate_schema,
+        )
+
+    invalid = copy.deepcopy(examples)
+    invalid_route = next(route for route in invalid["routes"] if route["id"] == github_raw["id"])
+    invalid_route["constraints"][0]["rules"][0] = {
+        "source": "query",
+        "name": "visibility",
+        "predicate": {"kind": "equals", "value": "public"},
+    }
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted requestValue query outside generic allowlist",
+        validate_schema=validate_schema,
+    )
+
+    github_route = route(example_snapshot, "example.github.issues_since_30_days")
+    github_adapter = get_adapter(github_route.adapter_type)
+    github_since = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    github_flow = flow(
+        "GET",
+        "https://api.github.com/repos/approved-owner/approved-api/issues"
+        f"?state=open&since={github_since}&per_page=10",
+    )
+    github_operation = github_adapter.operation_fields(
+        github_flow,
+        github_route,
+        {"owner": "approved-owner", "repo": "approved-api"},
+    )
+    github_decision = evaluate_request_constraints(
+        github_flow,
+        github_route,
+        principal_id="agent:example",
+        credential_ref=github_route.credential_ref,
+        credential_version=1,
+        operation_fields=github_operation,
+        consume_rate_limits=False,
+        skip_rate_limits=True,
+    )
+    assert github_decision.allowed
+    assert github_operation == {
+        "githubOwner": "approved-owner",
+        "githubRepository": "approved-api",
+    }
+    denied_github = flow(
+        "GET",
+        "https://api.github.com/repos/other/approved-api/issues"
+        f"?state=open&since={github_since}&per_page=10",
+    )
+    denied_github_operation = github_adapter.operation_fields(
+        denied_github,
+        github_route,
+        {"owner": "other", "repo": "approved-api"},
+    )
+    assert_denied(
+        evaluate_request_constraints(
+            denied_github,
+            github_route,
+            principal_id="agent:example",
+            credential_ref=github_route.credential_ref,
+            credential_version=1,
+            operation_fields=denied_github_operation,
+            consume_rate_limits=False,
+            skip_rate_limits=True,
+        ),
+        "request_value_predicate_denied",
+    )
+
+    stripe_customer_route = route(example_snapshot, "example.stripe.customers.get")
+    stripe_customer_flow = flow(
+        "GET",
+        "https://api.stripe.com/v1/customers/cus_replace_with_approved_customer",
+    )
+    stripe_customer_operation = get_adapter(stripe_customer_route.adapter_type).operation_fields(
+        stripe_customer_flow,
+        stripe_customer_route,
+        {"customer_id": "cus_replace_with_approved_customer"},
+    )
+    assert request_decision(
+        stripe_customer_route,
+        stripe_customer_flow,
+        "stripe.customers.get",
+        operation_fields=stripe_customer_operation,
+    ).allowed
+    assert stripe_customer_operation["approvedCustomerId"] == (
+        "cus_replace_with_approved_customer"
+    )
+    assert evaluate_response_binding_sources(
+        stripe_customer_route,
+        stripe_customer_operation,
+    ).allowed
 
     unknown_field_mutations: list[tuple[str, dict]] = []
 
@@ -1716,6 +2047,21 @@ def main() -> None:
     assert_policy_rejected(invalid, "compiler accepted unsupported JIT binding", validate_schema=validate_schema)
 
     gmail_route_raw = next(item for item in demo_bundle["routes"] if item["adapter"]["type"] == "gmail.v1")
+    canonical_metadata_fetch = {
+        "maxMessages": 10,
+        "perRequestTimeoutMs": 1500,
+        "totalTimeoutMs": 8000,
+        "maxBodyBytes": 4096,
+    }
+    assert gmail_route_raw["adapter"]["config"]["response"]["metadataFetch"] == (
+        canonical_metadata_fetch
+    )
+    compile_policy_bundle(
+        sign_policy_bundle(copy.deepcopy(demo_bundle)),
+        verify_signature=True,
+        validate_schema=validate_schema,
+    )
+
     for mutation, message in (
         (lambda item: item["adapter"]["config"].__setitem__("forceQuery", False), "disabled Gmail query bounding"),
         (
@@ -1728,6 +2074,100 @@ def main() -> None:
         target = next(item for item in invalid["routes"] if item["id"] == gmail_route_raw["id"])
         mutation(target)
         assert_policy_rejected(invalid, f"compiler accepted {message}", validate_schema=validate_schema)
+
+    schema_rejected_gmail_mutations = (
+        (
+            lambda response: response.pop("metadataFetch"),
+            "signed Gmail metadata hydration without metadataFetch",
+        ),
+        (
+            lambda response: response["metadataFetch"].__setitem__("maxMessages", 33),
+            "signed Gmail metadata hydration with excessive maxMessages",
+        ),
+        (
+            lambda response: response["metadataFetch"].__setitem__("perRequestTimeoutMs", 3001),
+            "signed Gmail metadata hydration with excessive perRequestTimeoutMs",
+        ),
+        (
+            lambda response: response["metadataFetch"].__setitem__("totalTimeoutMs", 10001),
+            "signed Gmail metadata hydration with excessive totalTimeoutMs",
+        ),
+        (
+            lambda response: response["metadataFetch"].__setitem__("maxBodyBytes", 8193),
+            "signed Gmail metadata hydration with excessive maxBodyBytes",
+        ),
+        (
+            lambda response: response["metadataFetch"].update(
+                {"perRequestTimeoutMs": 1001, "totalTimeoutMs": 1000}
+            ),
+            "signed Gmail metadata hydration with per-request timeout above total timeout",
+        ),
+        (
+            lambda response: response["allowedFields"].remove("id"),
+            "signed Gmail metadata hydration without id projection",
+        ),
+        (
+            lambda response: response["metadataFetch"].pop("maxBodyBytes"),
+            "signed Gmail metadata hydration with an incomplete metadataFetch object",
+        ),
+        (
+            lambda response: response["metadataFetch"].__setitem__("unexpected", 1),
+            "signed Gmail metadata hydration with an unknown metadataFetch field",
+        ),
+    )
+    for mutation, message in schema_rejected_gmail_mutations:
+        invalid = copy.deepcopy(demo_bundle)
+        target = next(item for item in invalid["routes"] if item["id"] == gmail_route_raw["id"])
+        mutation(target["adapter"]["config"]["response"])
+        assert_signed_policy_and_schema_rejected(
+            invalid,
+            message,
+            validate_schema=validate_schema,
+        )
+
+    for field_name in canonical_metadata_fetch:
+        for invalid_value in (0, True, str(canonical_metadata_fetch[field_name])):
+            invalid = copy.deepcopy(demo_bundle)
+            target = next(item for item in invalid["routes"] if item["id"] == gmail_route_raw["id"])
+            target["adapter"]["config"]["response"]["metadataFetch"][field_name] = invalid_value
+            assert_signed_policy_and_schema_rejected(
+                invalid,
+                f"signed Gmail metadata hydration with coerced {field_name}={invalid_value!r}",
+                validate_schema=validate_schema,
+            )
+
+        invalid = copy.deepcopy(demo_bundle)
+        target = next(item for item in invalid["routes"] if item["id"] == gmail_route_raw["id"])
+        integral_float = float(canonical_metadata_fetch[field_name])
+        target["adapter"]["config"]["response"]["metadataFetch"][field_name] = integral_float
+        assert_signed_policy_rejected(
+            invalid,
+            f"compiler accepted Gmail metadata hydration with {field_name}={integral_float!r}",
+            validate_schema=validate_schema,
+        )
+
+    invalid = copy.deepcopy(demo_bundle)
+    target = next(item for item in invalid["routes"] if item["id"] == gmail_route_raw["id"])
+    target["adapter"]["config"]["maxResults"] = 9
+    assert_signed_policy_rejected(
+        invalid,
+        "compiler accepted Gmail metadataFetch maxMessages greater than maxResults",
+        validate_schema=validate_schema,
+    )
+
+    metadata_fetch_disabled = copy.deepcopy(demo_bundle)
+    target = next(
+        item for item in metadata_fetch_disabled["routes"] if item["id"] == gmail_route_raw["id"]
+    )
+    response = target["adapter"]["config"]["response"]
+    response["validateListByMetadataFetch"] = False
+    response.pop("metadataFetch")
+    response["allowedFields"].remove("id")
+    compile_policy_bundle(
+        sign_policy_bundle(metadata_fetch_disabled),
+        verify_signature=True,
+        validate_schema=validate_schema,
+    )
 
     npm_route_raw = next(item for item in demo_bundle["routes"] if item["adapter"]["type"] == "npm.registry")
     invalid = copy.deepcopy(demo_bundle)
@@ -2407,13 +2847,13 @@ def main() -> None:
     assert expected_object_store_digest == f"sha256:{hashlib.sha256(object_store_body).hexdigest()}"
     object_store_request = flow(
         "PUT",
-        "https://objects.example.com/v1/objects/report-1",
+        "https://objects.example.com/v1/buckets/agent-artifacts/objects/report-1",
     )
     object_store_request.request.raw_content = object_store_body
     object_store_operation = object_store_adapter.operation_fields(
         object_store_request,
         object_store_route,
-        {"artifact_id": "report-1"},
+        {"bucket": "agent-artifacts", "artifact_id": "report-1"},
     )
     assert object_store_operation == {
         "operation": "object_store.objects.put",
@@ -2426,6 +2866,8 @@ def main() -> None:
         "object_store.objects.put",
         operation_fields=object_store_operation,
     ).allowed
+    assert object_store_operation["validatedBucket"] == "agent-artifacts"
+    assert object_store_operation["validatedObjectKey"] == "report-1"
 
     caller_digest = "sha256:" + "0" * 64
     caller_digest_request = copy.deepcopy(object_store_request)
@@ -2436,7 +2878,7 @@ def main() -> None:
     caller_digest_operation = object_store_adapter.operation_fields(
         caller_digest_request,
         object_store_route,
-        {"artifact_id": "report-1"},
+        {"bucket": "agent-artifacts", "artifact_id": "report-1"},
     )
     assert caller_digest_operation["requestBodySha256"] == (
         f"sha256:{hashlib.sha256(caller_digest_request.request.raw_content).hexdigest()}"
@@ -2445,7 +2887,7 @@ def main() -> None:
 
     object_store_response = flow(
         "PUT",
-        "https://objects.example.com/v1/objects/report-1",
+        "https://objects.example.com/v1/buckets/agent-artifacts/objects/report-1",
         response={"ok": True, "id": "report-1", "sha256": expected_object_store_digest},
     )
     object_store_response.metadata["serverware_operation"] = object_store_operation
@@ -3909,6 +4351,62 @@ def main() -> None:
         db.clear_rate_limit_counters((x_write_example["id"],))
 
     reset_local_constraint_state()
+    local_rate_route = SimpleNamespace(
+        id="local-rate-capacity-test",
+        credential_ref="credential:local-rate",
+        constraints=[
+            {
+                "id": "bounded-local-rate",
+                "type": "rateLimit",
+                "max": 10,
+                "windowSeconds": 1,
+                "store": "local",
+            }
+        ],
+    )
+    local_rate_flow = flow("GET", "https://local-rate.example.test/read")
+    original_local_capacity = constraints._MAX_LOCAL_RATE_COUNTER_ENTRIES
+    original_constraint_time = constraints.time.time
+    constraints._MAX_LOCAL_RATE_COUNTER_ENTRIES = 2
+    constraint_now = 100
+    constraints.time.time = lambda: constraint_now
+    try:
+        for operation in ("preview-one", "preview-two", "preview-three"):
+            assert request_decision(local_rate_route, local_rate_flow, operation).allowed
+        assert constraints._RATE_BUCKETS == {}, constraints._RATE_BUCKETS
+
+        assert request_decision(
+            local_rate_route, local_rate_flow, "consume-one", consume=True
+        ).allowed
+        assert request_decision(
+            local_rate_route, local_rate_flow, "consume-two", consume=True
+        ).allowed
+        assert len(constraints._RATE_BUCKETS) == 2
+        assert request_decision(
+            local_rate_route, local_rate_flow, "preview-at-capacity"
+        ).allowed
+        assert len(constraints._RATE_BUCKETS) == 2
+        capacity_denial = request_decision(
+            local_rate_route, local_rate_flow, "consume-over-capacity", consume=True
+        )
+        assert_denied(capacity_denial, "local_rate_limit_capacity_exhausted")
+        assert capacity_denial.status_code == 503
+        assert capacity_denial.payload["capacity"] == 2
+        assert len(constraints._RATE_BUCKETS) == 2
+
+        constraint_now = 102
+        assert request_decision(
+            local_rate_route, local_rate_flow, "consume-after-expiry", consume=True
+        ).allowed
+        assert len(constraints._RATE_BUCKETS) == 1
+        only_bucket = next(iter(constraints._RATE_BUCKETS.values()))
+        assert only_bucket.count == 1
+        assert only_bucket.expires_at == 103
+    finally:
+        constraints.time.time = original_constraint_time
+        constraints._MAX_LOCAL_RATE_COUNTER_ENTRIES = original_local_capacity
+        reset_local_constraint_state()
+
     tweet_route = route(demo, "demo.x.tweet.one_per_day")
     tweet = flow("POST", "https://demo-upstream:8443/2/tweets", {"text": "ship it"})
     assert request_decision(tweet_route, tweet, "tweets.write").allowed
@@ -4050,6 +4548,22 @@ def main() -> None:
     assert evaluate_response_constraints(gmail_detail, gmail_route).allowed
 
     gmail_adapter = get_adapter(gmail_route.adapter_type)
+    fractional_internal_date = flow(
+        "GET",
+        "https://demo-upstream:8443/gmail/v1/users/me/messages/fractional",
+        response={
+            "id": "fractional",
+            "internalDate": float(epoch_ms_days_ago(1)) + 0.5,
+        },
+    )
+    assert_denied(
+        gmail_adapter.validate_response(
+            fractional_internal_date,
+            gmail_route,
+            {"user": "me", "message_id": "fractional"},
+        ),
+        "gmail_response_invalid_internal_date",
+    )
     for projection in (None, []):
         unprojected_gmail_route = copy.deepcopy(gmail_route)
         response_config = unprojected_gmail_route.adapter_config["response"]

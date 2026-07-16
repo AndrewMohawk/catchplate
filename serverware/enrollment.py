@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import ipaddress
 import hashlib
+import ipaddress
+import json
 import re
 import shlex
 import time
@@ -330,15 +331,339 @@ def _network_policy(
     }
 
 
-def _iptables_rules(proxy_cidrs: list[str], proxy_port: int) -> list[str]:
-    rules = [
-        "iptables -P OUTPUT DROP",
-        "iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT",
+def _nftables_firewall(
+    *,
+    principal_id: str,
+    nonce: str,
+    proxy_cidrs: list[str],
+    proxy_port: int,
+) -> dict[str, Any]:
+    table_suffix = hashlib.sha256(f"{principal_id}\0{nonce}".encode("utf-8")).hexdigest()[:16]
+    table_name = f"sw_agent_{table_suffix}"
+    marker_prefix = f"serverware:{table_suffix}"
+    allow_rules: list[str] = []
+    expected_rule_comments: list[str] = []
+    for index, cidr in enumerate(proxy_cidrs):
+        network = ipaddress.ip_network(cidr, strict=True)
+        address_family = "ip" if network.version == 4 else "ip6"
+        comment = f"{marker_prefix}:allow:{index}"
+        expected_rule_comments.append(comment)
+        allow_rules.append(
+            f'        {address_family} daddr {network} tcp dport {proxy_port} '
+            f'accept comment "{comment}"'
+        )
+    deny_comment = f"{marker_prefix}:deny"
+    expected_rule_comments.append(deny_comment)
+    ruleset_lines = [
+        f"table inet {table_name} {{",
+        "    chain output {",
+        "        type filter hook output priority -10; policy drop;",
+        *allow_rules,
+        f'        reject comment "{deny_comment}"',
+        "    }",
+        "}",
     ]
-    for cidr in proxy_cidrs:
-        rules.append(f"iptables -A OUTPUT -p tcp -d {cidr} --dport {proxy_port} -j ACCEPT")
-    rules.append('iptables -A OUTPUT -j REJECT --reject-with icmp-admin-prohibited')
-    return rules
+    ruleset = "\n".join(ruleset_lines) + "\n"
+    expected_comments_json = json.dumps(expected_rule_comments, separators=(",", ":"))
+    apply_script = f"""#!/bin/sh
+set -eu
+
+for tool in nft python3 mktemp readlink id uname chmod cat rm; do
+  command -v "$tool" >/dev/null 2>&1 || {{ echo "required firewall tool is unavailable: $tool" >&2; exit 1; }}
+done
+[ "$(uname -s)" = Linux ] || {{ echo "nftables enrollment enforcement requires Linux" >&2; exit 1; }}
+[ "$(id -u)" -eq 0 ] || {{ echo "nftables enrollment enforcement requires root in the agent network namespace" >&2; exit 1; }}
+: "${{SERVERWARE_AGENT_NETNS_ID:?set SERVERWARE_AGENT_NETNS_ID to the launcher-recorded agent network namespace identity}}"
+actual_netns="$(readlink /proc/self/ns/net)"
+[ "$actual_netns" = "$SERVERWARE_AGENT_NETNS_ID" ] || {{ echo "agent network namespace identity mismatch" >&2; exit 1; }}
+
+table_name={shlex.quote(table_name)}
+if nft list table inet "$table_name" >/dev/null 2>&1; then
+  echo "refusing to replace an existing firewall table: $table_name" >&2
+  exit 1
+fi
+
+rules_file="$(mktemp)"
+state_file="$(mktemp)"
+trap 'rm -f "$rules_file" "$state_file"' EXIT HUP INT TERM
+chmod 0600 "$rules_file" "$state_file"
+cat >"$rules_file" <<'SERVERWARE_NFT_RULESET'
+{ruleset}SERVERWARE_NFT_RULESET
+
+# --check validates the complete dual-stack transaction before any rule is installed.
+nft --check --file "$rules_file"
+nft --file "$rules_file"
+nft --json list table inet "$table_name" >"$state_file"
+python3 - "$state_file" "$table_name" {shlex.quote(expected_comments_json)} <<'SERVERWARE_VERIFY_NFT'
+import json
+import sys
+
+state_path, expected_table, expected_comments_json = sys.argv[1:]
+with open(state_path, "r", encoding="utf-8") as handle:
+    document = json.load(handle)
+objects = document.get("nftables")
+if not isinstance(objects, list):
+    raise SystemExit("nftables verification output is malformed")
+tables = [item.get("table") for item in objects if isinstance(item, dict) and isinstance(item.get("table"), dict)]
+chains = [item.get("chain") for item in objects if isinstance(item, dict) and isinstance(item.get("chain"), dict)]
+rules = [item.get("rule") for item in objects if isinstance(item, dict) and isinstance(item.get("rule"), dict)]
+if len(tables) != 1 or tables[0].get("family") != "inet" or tables[0].get("name") != expected_table:
+    raise SystemExit("installed nftables table identity mismatch")
+if len(chains) != 1:
+    raise SystemExit("installed nftables policy must contain exactly one chain")
+chain = chains[0]
+if any(chain.get(key) != value for key, value in {{
+    "family": "inet",
+    "table": expected_table,
+    "name": "output",
+    "type": "filter",
+    "hook": "output",
+    "policy": "drop",
+}}.items()):
+    raise SystemExit("installed nftables output chain is not deny-by-default")
+expected_comments = json.loads(expected_comments_json)
+actual_comments = [rule.get("comment") for rule in rules]
+if sorted(actual_comments) != sorted(expected_comments) or len(actual_comments) != len(expected_comments):
+    raise SystemExit("installed nftables rules do not exactly match the enrollment policy")
+print(json.dumps({{"ok": True, "backend": "nftables", "table": expected_table}}, sort_keys=True))
+SERVERWARE_VERIFY_NFT
+"""
+    return {
+        "backend": "nftables",
+        "tableFamily": "inet",
+        "tableName": table_name,
+        "scope": "launcher-verified-agent-network-namespace",
+        "requiredTools": ["nft", "python3", "mktemp", "readlink", "id", "uname", "chmod", "cat", "rm"],
+        "ruleset": ruleset,
+        "applyAndVerifyScript": apply_script,
+        "verification": {
+            "required": True,
+            "tableFamily": "inet",
+            "tableName": table_name,
+            "chainName": "output",
+            "chainHook": "output",
+            "chainPolicy": "drop",
+            "expectedRuleComments": expected_rule_comments,
+            "failureAction": "do-not-start-agent-and-keep-any-installed-deny-policy-active",
+        },
+    }
+
+
+def _safe_allow_canaries(routes: list[dict[str, Any]], *, limit: int = 3) -> list[dict[str, Any]]:
+    canaries: list[dict[str, Any]] = []
+    for route in routes:
+        safe_methods = sorted(set(route.get("methods") or []).intersection({"GET", "HEAD"}))
+        urls = route.get("urls") or []
+        if not safe_methods or not urls:
+            continue
+        method = "HEAD" if "HEAD" in safe_methods else "GET"
+        canaries.append(
+            {
+                "name": "allowed non-mutating route must pass policy evaluation",
+                "routeId": route.get("id"),
+                "method": method,
+                "url": urls[0],
+                "bodyPolicy": "forbidden",
+                "automaticExecution": True,
+            }
+        )
+        if len(canaries) >= limit:
+            break
+    return canaries
+
+
+def _write_route_previews(routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    previews: list[dict[str, Any]] = []
+    for route in routes:
+        write_methods = sorted(set(route.get("methods") or []).difference({"GET", "HEAD"}))
+        if not write_methods:
+            continue
+        previews.append(
+            {
+                "routeId": route.get("id"),
+                "methods": write_methods,
+                "urls": list(route.get("urls") or []),
+                "automaticExecution": False,
+                "manualReviewRequired": True,
+            }
+        )
+    return previews
+
+
+def _render_verified_instructions_bootstrap(packet: dict[str, Any]) -> str:
+    principal_id = packet.get("principalId")
+    nonce = packet.get("nonce")
+    serverware = packet.get("serverware")
+    pinning = packet.get("pinning")
+    if (
+        not isinstance(principal_id, str)
+        or not isinstance(nonce, str)
+        or not isinstance(serverware, dict)
+        or not isinstance(pinning, dict)
+    ):
+        raise AgentEnrollmentError("enrollment packet cannot render a verified-instructions bootstrap")
+    control_plane_url = serverware.get("controlPlaneUrl")
+    if not isinstance(control_plane_url, str):
+        raise AgentEnrollmentError("enrollment packet control plane URL is invalid")
+    return "\n".join(
+        [
+            "#!/bin/sh",
+            "set -eu",
+            "",
+            "# Obtain both values from the authenticated portal download response.",
+            "# Never calculate SERVERWARE_PACKET_SHA256 from an untrusted packet and trust that same value.",
+            ': "${SERVERWARE_PACKET_PATH:?path to the exact packet downloaded from the authenticated portal}"',
+            ': "${SERVERWARE_PACKET_SHA256:?authenticated portal SHA-256 for those exact downloaded bytes}"',
+            "",
+            "exec serverware-enrollment \\",
+            f"  --base {shlex.quote(control_plane_url)} \\",
+            '  --verify-packet "$SERVERWARE_PACKET_PATH" \\',
+            '  --expected-packet-sha256 "$SERVERWARE_PACKET_SHA256" \\',
+            f"  --expected-principal {shlex.quote(principal_id)} \\",
+            f"  --expected-nonce {shlex.quote(nonce)} \\",
+            "  --emit-verified-instructions",
+            "",
+            "# The CLI emits agentHandoff.authenticatedInstructions only after checking the exact file digest,",
+            "# expected principal, expected nonce, packet signature, live attestation, and every signed pin.",
+            f"# Expected signed pin evidence: {canonical_json(pinning)}",
+        ]
+    ) + "\n"
+
+
+def render_agent_handoff_instructions(packet: dict[str, Any]) -> str:
+    """Render the signed machine-readable handoff without dropping requirements."""
+    handoff = packet.get("agentHandoff")
+    egress = packet.get("egress")
+    canaries = packet.get("canaries")
+    serverware = packet.get("serverware")
+    if not all(isinstance(value, dict) for value in (handoff, egress, canaries, serverware)):
+        raise AgentEnrollmentError("enrollment packet is missing agent handoff requirements")
+
+    def require_mapping(parent: dict[str, Any], field: str) -> dict[str, Any]:
+        value = parent.get(field)
+        if not isinstance(value, dict):
+            raise AgentEnrollmentError(f"agent handoff {field} must be an object")
+        return value
+
+    def require_list(parent: dict[str, Any], field: str) -> list[Any]:
+        value = parent.get(field)
+        if not isinstance(value, list):
+            raise AgentEnrollmentError(f"agent handoff {field} must be an array")
+        return value
+
+    ca_install = require_mapping(handoff, "caInstall")
+    proxy_environment = require_mapping(handoff, "proxyEnvironment")
+    proxy_headers = require_mapping(handoff, "requiredProxyHeaders")
+    provider_headers = require_mapping(handoff, "requiredProviderHeaders")
+    proxy_authorization = require_mapping(handoff, "proxyAuthorization")
+    request_handling = require_mapping(handoff, "requestHandling")
+    approval = require_mapping(request_handling, "approvalRequired")
+    sequence = require_list(handoff, "sequence")
+    allowed_urls = require_list(handoff, "allowedUrls")
+    egress_notes = require_list(egress, "notes")
+    firewall = require_mapping(egress, "firewall")
+    firewall_verification = require_mapping(firewall, "verification")
+    etc_hosts = require_list(egress, "etcHosts")
+    allow_canaries = require_list(canaries, "allow")
+    deny_canaries = require_list(canaries, "deny")
+    write_route_previews = require_list(canaries, "writeRoutePreviews")
+
+    if any(not isinstance(step, str) or not step for step in sequence):
+        raise AgentEnrollmentError("agent handoff sequence contains an invalid step")
+    if egress.get("denyByDefault") is not True:
+        raise AgentEnrollmentError("agent handoff must require deny-by-default egress")
+    if firewall.get("backend") != "nftables" or firewall_verification.get("required") is not True:
+        raise AgentEnrollmentError("agent handoff must require verified nftables enforcement")
+    for canary in allow_canaries:
+        if not isinstance(canary, dict):
+            raise AgentEnrollmentError("agent handoff allow canary must be an object")
+        if canary.get("method") not in {"GET", "HEAD"}:
+            raise AgentEnrollmentError("agent handoff allow canaries must use GET or HEAD")
+        if canary.get("bodyPolicy") != "forbidden" or canary.get("automaticExecution") is not True:
+            raise AgentEnrollmentError("agent handoff allow canaries must forbid request bodies")
+
+    lines = [
+        "SERVERWARE AGENT HANDOFF",
+        f"Principal: {packet.get('principalId')}",
+        f"Control plane: {serverware.get('controlPlaneUrl')}",
+        f"Proxy: {serverware.get('proxyUrl')}",
+        "",
+        "REQUIRED SEQUENCE (SIGNED ORDER)",
+    ]
+    lines.extend(f"{index}. {step}" for index, step in enumerate(sequence, start=1))
+    lines.extend(
+        [
+            "",
+            "CA INSTALLATION",
+            f"Verified source: {ca_install.get('verifiedSourcePath')}",
+            f"Destination: {ca_install.get('destinationPath')}",
+            f"Command: {ca_install.get('command')}",
+            "",
+            "PROXY ENVIRONMENT",
+        ]
+    )
+    lines.extend(
+        f"export {name}={shlex.quote(str(proxy_environment[name]))}"
+        for name in sorted(proxy_environment)
+    )
+    lines.extend(
+        [
+            "",
+            f"Required CONNECT proxy headers: {canonical_json(proxy_headers)}",
+            f"Required tunneled provider headers: {canonical_json(provider_headers)}",
+            "Proxy authorization: "
+            f"required={str(bool(proxy_authorization.get('required'))).lower()}, "
+            f"provisionSeparately={str(bool(proxy_authorization.get('provisionSeparately'))).lower()}, "
+            f"tokenId={proxy_authorization.get('tokenId') or 'none'}",
+            "",
+            "REQUEST AND ERROR HANDLING",
+            "HTTP 428: send "
+            f"{approval.get('operatorPathField')} to the operator, honor "
+            f"{approval.get('retryAfterField')}, and {approval.get('retryRule')}.",
+            "Stop and report status codes: "
+            + ", ".join(str(value) for value in request_handling.get("stopAndReportStatusCodes") or []),
+            "Stop and report status classes: "
+            + ", ".join(f"{value}xx" for value in request_handling.get("stopAndReportStatusClasses") or []),
+            f"Bypass forbidden: {str(bool(request_handling.get('bypassForbidden'))).lower()}",
+            f"Credential handling: {request_handling.get('credentialHandling')}",
+            "",
+            "DENY-BY-DEFAULT EGRESS (APPLY BEFORE AGENT START)",
+            "Allowed proxy destinations: "
+            + ", ".join(
+                f"{cidr}:tcp/{egress.get('allowedProxyPort')}"
+                for cidr in egress.get("allowedProxyCidrs") or []
+            ),
+            "Kubernetes NetworkPolicy: " + canonical_json(egress.get("kubernetesNetworkPolicy")),
+            "nftables enforcement backend: " + str(firewall.get("backend")),
+            "nftables dedicated table: "
+            + f"{firewall.get('tableFamily')} {firewall.get('tableName')}",
+            "Required enforcement scope: " + str(firewall.get("scope")),
+            "Apply and verify the following signed script; a nonzero exit forbids agent startup:",
+        ]
+    )
+    lines.extend(f"  {line}" for line in str(firewall.get("applyAndVerifyScript") or "").splitlines())
+    lines.append("Pinned /etc/hosts entries:")
+    lines.extend(f"  {entry}" for entry in etc_hosts)
+    lines.append("Egress requirements:")
+    lines.extend(f"  {note}" for note in egress_notes)
+    lines.extend(["", "CANARIES (RUN BEFORE AGENT START)", "ALLOW:"])
+    if allow_canaries:
+        lines.extend("  " + canonical_json(canary) for canary in allow_canaries)
+    else:
+        lines.append("  NONE: no explicit GET/HEAD route is assigned; do not execute a write as a canary.")
+    lines.append("DENY:")
+    for canary in deny_canaries:
+        if not isinstance(canary, dict):
+            raise AgentEnrollmentError("agent handoff deny canary must be an object")
+        lines.append("  " + canonical_json(canary))
+    lines.append("WRITE ROUTE PREVIEWS (NEVER AUTOMATICALLY EXECUTE):")
+    if write_route_previews:
+        lines.extend("  " + canonical_json(preview) for preview in write_route_previews)
+    else:
+        lines.append("  NONE")
+    lines.extend(["", "ALLOWED UPSTREAM URLS"])
+    lines.extend(f"  {url}" for url in allowed_urls)
+    return "\n".join(lines) + "\n"
 
 
 def build_agent_enrollment(
@@ -389,6 +714,14 @@ def build_agent_enrollment(
     if validated_install_session is not None:
         required_proxy_headers["X-Serverware-Enrollment-Session"] = validated_install_session["id"]
     pinning = _required_enrollment_pins(snapshot, attestation)
+    firewall = _nftables_firewall(
+        principal_id=principal_id,
+        nonce=nonce,
+        proxy_cidrs=proxy_cidrs,
+        proxy_port=port,
+    )
+    allow_canaries = _safe_allow_canaries(routes)
+    write_route_previews = _write_route_previews(routes)
     issued_at_epoch_ms = int(time.time() * 1000)
     packet = {
         "apiVersion": "serverware.agentEnrollment/v1",
@@ -447,12 +780,49 @@ def build_agent_enrollment(
                 "credentialHandling": "never-request-store-print-or-cache-provider-credentials",
             },
             "allowedUrls": [url for route in routes for url in route["urls"]],
+            "verificationBinding": {
+                "mode": "emit-verified-instructions",
+                "installedCli": "serverware-enrollment",
+                "downloadedPacketPathEnvironmentVariable": "SERVERWARE_PACKET_PATH",
+                "downloadedPacketSha256EnvironmentVariable": "SERVERWARE_PACKET_SHA256",
+                "downloadedPacketSha256Source": "authenticated-portal-metadata-for-exact-download-bytes",
+                "portalIntegration": {
+                    "digestDomain": "exact-bytes-written-to-downloaded-packet-file",
+                    "digestTransport": "authenticated-metadata-separate-from-packet-body",
+                    "copyAction": "export-packet-path-and-authenticated-sha256-then-run-instructionsText",
+                    "mustNot": "derive-the-expected-digest-from-the-same-untrusted-file-being-verified",
+                },
+                "expectedPrincipal": principal_id,
+                "expectedNonce": nonce,
+                "expectedPins": pinning,
+                "installedCliInvocation": [
+                    "serverware-enrollment",
+                    "--base",
+                    control_plane_url.rstrip("/"),
+                    "--verify-packet",
+                    "${SERVERWARE_PACKET_PATH}",
+                    "--expected-packet-sha256",
+                    "${SERVERWARE_PACKET_SHA256}",
+                    "--expected-principal",
+                    principal_id,
+                    "--expected-nonce",
+                    nonce,
+                    "--emit-verified-instructions",
+                ],
+                "authenticatedOutputField": "agentHandoff.authenticatedInstructions",
+                "pinVerification": "compare-every-signed-pinning-field-to-fresh-live-attestation-before-output",
+                "circularDigestAssumption": False,
+            },
             "sequence": [
                 "Verify attestation and install the returned CA at destinationPath.",
-                "Apply deny-by-default egress before starting the agent.",
+                "Run the signed nftables applyAndVerifyScript inside the launcher-recorded agent network namespace; any preflight, apply, or verification failure forbids agent startup.",
                 "Provision proxy authorization separately when required; it is never embedded here.",
                 "Set requiredProxyHeaders on CONNECT, requiredProviderHeaders inside the tunnel, and the enrollment header on a direct plain-HTTP proxy request.",
-                "Run allow and deny canaries, then start the agent with normal provider URLs.",
+                (
+                    "Run only the signed bodyless GET/HEAD allow canaries and the deny canary, then start the agent with normal provider URLs."
+                    if allow_canaries
+                    else "No automatic allow canary is available; never substitute a write request, record manual review, run the deny canary, and keep the agent stopped until the assignment is approved."
+                ),
                 "On HTTP 428, send approval_url to the operator, wait for approval, honor retry_after_seconds, and retry only the identical request.",
                 "On HTTP 403 or 5xx, stop and report the route and error; never bypass Serverware or request provider credentials.",
             ],
@@ -468,20 +838,29 @@ def build_agent_enrollment(
                 proxy_cidrs=proxy_cidrs,
                 proxy_port=port,
             ),
-            "iptables": _iptables_rules(proxy_cidrs, port),
+            "firewall": firewall,
             "hostAliases": host_mappings,
             "etcHosts": [
                 f"{mapping['ip']} {' '.join(mapping['hostnames'])}"
                 for mapping in host_mappings
             ],
             "notes": [
-                "Apply the egress policy before injecting credentials or enabling agent traffic.",
+                "Apply and verify the egress policy before injecting credentials or enabling agent traffic; enrollment fails closed on any nonzero result.",
+                "The dedicated nftables table is installed atomically in one inet transaction and does not flush, replace, or change policies on unrelated firewall tables or chains.",
+                "Run the firewall installer only inside the launcher-recorded agent network namespace; SERVERWARE_AGENT_NETNS_ID must match /proc/self/ns/net.",
                 "Apply hostAliases or etcHosts before deny-by-default egress when proxyUrl uses a hostname.",
                 "Proxy hostname mappings are pinned to exact /32 or /128 CIDRs; unrestricted DNS egress is not added.",
             ],
         },
         "canaries": {
-            "allow": routes[:3],
+            "automaticAllowPolicy": {
+                "allowedMethods": ["GET", "HEAD"],
+                "requestBodies": "forbidden",
+                "writeMethods": "never-automatically-execute",
+            },
+            "allow": allow_canaries,
+            "allowStatus": "ready" if allow_canaries else "manual-review-required-no-safe-route",
+            "writeRoutePreviews": write_route_previews,
             "deny": [
                 {
                     "name": "unknown route must fail closed",
@@ -493,6 +872,8 @@ def build_agent_enrollment(
             ],
         },
     }
+    packet["agentHandoff"]["authenticatedInstructions"] = render_agent_handoff_instructions(packet)
+    packet["agentHandoff"]["instructionsText"] = _render_verified_instructions_bootstrap(packet)
     packet_sha256 = "sha256:" + hashlib.sha256(canonical_json(packet).encode("utf-8")).hexdigest()
     response_key = response_public_key_info()
     if response_key["spki_sha256"] != pinning["responseSigningKeyId"]:

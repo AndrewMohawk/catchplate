@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import re
 import time
@@ -922,6 +923,15 @@ def dispatch_release_authorization(flow: http.HTTPFlow) -> PolicyDecision:
             503,
             {"error": "release_authorization_dispatch_invalid"},
         )
+    lifecycle["dispatch_started_at_epoch_ms"] = result[
+        "dispatch_started_at_epoch_ms"
+    ]
+    lifecycle["dispatch_expires_at_epoch_ms"] = result[
+        "dispatch_expires_at_epoch_ms"
+    ]
+    flow.metadata["serverware_release_dispatch_expires_at_epoch_ms"] = result[
+        "dispatch_expires_at_epoch_ms"
+    ]
     _set_release_state(flow, lifecycle, "dispatching")
     return PolicyDecision(True)
 
@@ -1374,8 +1384,23 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             ],
         )
 
+    bound_credential_lease: runtime.BoundCredentialLease | None = None
     try:
-        credential = runtime.get_credential(route.credential_ref) if route.credential_ref else None
+        if route.credential_ref and route.adapter_type == "gmail.v1":
+            bound_credential_lease = runtime.get_bound_credential_lease(
+                route.credential_ref
+            )
+            credential = (
+                bound_credential_lease.credential
+                if bound_credential_lease is not None
+                else None
+            )
+        else:
+            credential = (
+                runtime.get_credential(route.credential_ref)
+                if route.credential_ref
+                else None
+            )
     except Exception:
         return block_after_reserve(
             PolicyDecision(False, "credential unavailable", 503, {"error": "credential_unavailable"})
@@ -1570,6 +1595,12 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
                 "serverware_operation": dict(operation_fields),
                 "serverware_route": route,
                 "serverware_params": params,
+                "serverware_credential_policy": credential_policy,
+                "serverware_credential_lease_binding": (
+                    bound_credential_lease.binding
+                    if bound_credential_lease is not None
+                    else None
+                ),
             }
         )
         runtime.log_request(
@@ -1586,6 +1617,137 @@ def evaluate_request(flow: http.HTTPFlow) -> RequestEvaluation:
             PolicyDecision(False, "request preparation failed", 503, {"error": "request_preparation_failed"})
         )
     return evaluation(PolicyDecision(True))
+
+
+def _fresh_gmail_metadata_authorization(
+    flow: http.HTTPFlow,
+    route: RoutePolicy,
+) -> tuple[str, float]:
+    credential_policy = flow.metadata.get("serverware_credential_policy")
+    if not isinstance(credential_policy, CredentialPolicy):
+        raise ValueError("Gmail metadata credential policy is missing")
+    credential_ref = route.credential_ref
+    expected_version = flow.metadata.get("serverware_credential_version")
+    if (
+        not isinstance(credential_ref, str)
+        or not credential_ref
+        or credential_policy.id != credential_ref
+        or type(expected_version) is not int
+        or expected_version < 1
+    ):
+        raise ValueError("Gmail metadata credential binding is missing")
+    parent_binding = flow.metadata.get("serverware_credential_lease_binding")
+    if not isinstance(parent_binding, runtime.CredentialLeaseBinding):
+        raise ValueError("Gmail metadata parent credential binding is missing")
+    bound_lease = runtime.get_bound_credential_lease(credential_ref)
+    if not isinstance(bound_lease, runtime.BoundCredentialLease):
+        raise ValueError("Gmail metadata credential is unavailable")
+    credential = bound_lease.credential
+    child_binding = bound_lease.binding
+    if type(credential.get("credential_version")) is not int or (
+        credential["credential_version"] != expected_version
+    ):
+        raise ValueError("Gmail metadata credential version changed")
+    if (
+        parent_binding.credential_id != credential_ref
+        or child_binding.credential_id != parent_binding.credential_id
+        or child_binding.credential_version != parent_binding.credential_version
+        or child_binding.credential_version != expected_version
+        or not hmac.compare_digest(
+            child_binding.secret_fingerprint,
+            parent_binding.secret_fingerprint,
+        )
+    ):
+        raise ValueError("Gmail metadata credential generation changed")
+    expires_at_monotonic = min(
+        parent_binding.expires_at_monotonic,
+        child_binding.expires_at_monotonic,
+    )
+    if expires_at_monotonic - time.monotonic() < 0.250:
+        raise ValueError("Gmail metadata credential lease is expiring")
+    injection = credential_policy.injection or {}
+    if (
+        credential.get("kind") != "oauth2"
+        or injection.get("type") != "bearer"
+        or str(injection.get("header") or "Authorization").lower() != "authorization"
+        or injection.get("field") != "access_token"
+        or injection.get("prefix", "Bearer ") != "Bearer "
+    ):
+        raise ValueError("Gmail metadata credential injection is not canonical OAuth bearer")
+    token = _secret_for_injection(str(credential.get("secret") or ""), injection)
+    authorization = f"Bearer {token}"
+    try:
+        encoded = authorization.encode("latin-1")
+    except UnicodeEncodeError as exc:
+        raise ValueError("Gmail metadata authorization is invalid") from exc
+    if (
+        len(encoded) > 16 * 1024
+        or any(ord(character) < 32 or ord(character) == 127 for character in authorization)
+    ):
+        raise ValueError("Gmail metadata authorization is invalid")
+    guard = getattr(flow, _RESPONSE_CREDENTIAL_GUARD_ATTR, None)
+    if not isinstance(guard, _ResponseCredentialGuard):
+        guard = _ResponseCredentialGuard()
+        _install_response_credential_guard(flow, guard)
+    guard.add_text_encodings(token)
+    guard.add_text_encodings(authorization)
+    return authorization, expires_at_monotonic
+
+
+def prepare_response(flow: http.HTTPFlow) -> PolicyDecision:
+    route = flow.metadata.get("serverware_route")
+    params = flow.metadata.get("serverware_params") or {}
+    if not route:
+        if flow.metadata.get("serverware_blocked_response") is True:
+            return PolicyDecision(True)
+        return PolicyDecision(
+            False,
+            "response policy context missing",
+            502,
+            {"error": "response_policy_context_missing"},
+        )
+    adapter = get_adapter(route.adapter_type)
+    try:
+        decision = adapter.prepare_response(
+            flow,
+            route,
+            params,
+            authorization_factory=lambda: _fresh_gmail_metadata_authorization(flow, route),
+        )
+    except Exception:
+        decision = PolicyDecision(
+            False,
+            "response preparation failed closed",
+            503,
+            {"error": "response_preparation_failed_closed"},
+        )
+    if not decision.allowed:
+        runtime.log_request(
+            flow.metadata.get("serverware_route_id"),
+            flow.request.method,
+            _audit_url(flow),
+            "blocked",
+            decision.status_code,
+            decision.reason,
+            {
+                "principal_id": flow.metadata.get("serverware_principal_id"),
+                "policy_hash": flow.metadata.get("serverware_policy_hash"),
+                "credential_id": flow.metadata.get("serverware_credential_id"),
+                "credential_version": flow.metadata.get("serverware_credential_version"),
+                "request_digest": flow.metadata.get("serverware_request_digest"),
+                "operation_digest": flow.metadata.get("serverware_operation_digest"),
+                "attempt_id": flow.metadata.get("serverware_release_attempt_id"),
+                "binding_digest": flow.metadata.get("serverware_release_binding_digest"),
+                "release_state": flow.metadata.get("serverware_release_state"),
+            },
+        )
+    return decision
+
+
+def discard_response_guards(flow: http.HTTPFlow) -> None:
+    guard = _take_response_credential_guard(flow)
+    if guard is not None:
+        guard.clear()
 
 
 def evaluate_response(flow: http.HTTPFlow) -> PolicyDecision:
@@ -1730,6 +1892,30 @@ def _evaluate_response(
             502,
             {"error": "response_credential_reflection"},
         )
+    finalizer = getattr(adapter, "finalize_response", None)
+    if finalizer is None:
+        finalize_decision = PolicyDecision(True)
+    else:
+        try:
+            finalize_decision = finalizer(flow, route, params)
+        except Exception:
+            finalize_decision = PolicyDecision(
+                False,
+                "response finalization failed closed",
+                503,
+                {"error": "response_finalization_failed_closed"},
+            )
+    if not finalize_decision.allowed:
+        runtime.log_request(
+            route_id,
+            flow.request.method,
+            _audit_url(flow),
+            "blocked",
+            finalize_decision.status_code,
+            finalize_decision.reason,
+            audit_context,
+        )
+        return finalize_decision
     if response_binding_audit is not None:
         audit_context = dict(audit_context)
         audit_context["response_validation"] = response_binding_audit
@@ -1743,4 +1929,4 @@ def _evaluate_response(
         None,
         audit_context,
     )
-    return decision
+    return finalize_decision

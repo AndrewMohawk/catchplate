@@ -6,7 +6,7 @@ This guide covers the operator path for connecting OAuth-backed services in the 
 
 [Private deployment screenshot omitted from public source.]
 
-The screenshots in this guide are rendered from the real portal UI by the repeatable HTTPS browser journey in `scripts/test_portal_browser_oauth.py`. IDs, timestamps, ports, and signatures are intentionally fresh, so pixel output is not deterministic and the tracked images are documentation captures rather than golden security evidence. The desktop view above shows the empty operator-passkey inventory, pending configuration/runtime/hardware statuses, handoff field, and assignment controls after the demo state is seeded. The approval views below open a real pending request through its exact deep link. The OAuth and policy screenshots exercise real portal redirects and callback handling against a bounded local provider simulator. They are not evidence of a live Google/X tenant, production WebAuthn enrollment, or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
+The screenshots in this guide are rendered from the real portal UI by the repeatable HTTPS browser journey in `scripts/test_portal_browser_oauth.py`. IDs, timestamps, ports, and signatures are intentionally fresh, so pixel output is not deterministic and the tracked images are documentation captures rather than golden security evidence. The desktop view above shows the empty operator-passkey inventory and the pre-run **New setup** form; it does not show a selected durable run or completed evidence. The approval views below open a real pending request through its exact deep link. The OAuth and policy screenshots exercise real portal redirects and callback handling against a bounded local provider simulator. They are not evidence of a live Google/X tenant, production WebAuthn enrollment, or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
 
 ## Authenticate The Operator
 
@@ -76,9 +76,11 @@ Do not clear that warning merely because a retry succeeded. The requester or an 
 
 Pending activation has an explicit provider-revocation lifecycle. Cancelling a pending connection, letting it expire, or denying its exact-account approval changes its terminal status to `cancelled`, `expired`, or `rejected` and marks revocation `pending`. Serverware then calls the configured Google or X revocation endpoint with the refresh token when present, otherwise the access token. Success audits `credential.oauth_pending.revoked` and deletes the staged token material. Failure audits `credential.oauth_pending.revocation_failed`, retains only the terminal encrypted row plus bounded `revocation_status: failed`/`revocation_error` metadata, and exposes **Retry provider revocation** to the requester or an admin. A terminal row cannot be activated while revocation is pending or failed.
 
-Provider-aware revocation also applies after activation. `DELETE /api/credentials/{id}` takes the cross-process credential lock, marks a managed OAuth credential `revocation_pending`, and immediately excludes it from normal reads, token refresh, injection, and lease snapshots. Serverware deletes local encrypted material only after Google or X confirms revocation; failure leaves a visible `revocation_failed` record and **Retry disconnect** action. **Reconnect** binds the existing credential ID and version into OAuth state, requires the callback to prove the same provider subject and account, revokes mismatched or stale newly issued material, and rotates the existing record in place so route and policy references do not change.
+Provider-aware revocation also applies after activation. `DELETE /api/credentials/{id}` takes the cross-process credential lock, marks a managed OAuth credential `revocation_pending`, and immediately excludes it from new control-plane reads, token refresh, lease issuance, and lease renewal. A Rust gate that already holds a valid recipient-bound lease may continue to use that in-memory copy until its monotonic expiry, no later than five seconds; there is not yet a signed revocation-tombstone push channel. Serverware deletes local encrypted material only after Google or X confirms revocation; failure leaves a visible `revocation_failed` record and **Retry disconnect** action. **Reconnect** binds the existing credential ID and version into OAuth state, requires the callback to prove the same provider subject and account, revokes mismatched or stale newly issued material, and rotates the existing record in place so route and policy references do not change.
 
-For X, the callback also stores the OAuth client ID as `x_app_id`. X route assignment requires that binding and replaces the template's `adapter.config.appIds` with the selected credential's stored app ID. Typed templates declare required OAuth scopes. The one-post-per-day template requires `tweet.write` in addition to its read/user/offline scopes, so a default read-only X credential is disabled in the selector until the operator reconnects with write consent. A credential from another provider, an X credential without an app ID, a scope-incomplete OAuth credential, or an incompatible injection shape is rejected before candidate creation.
+Google revocation applies to the account/project grant rather than one local credential row. Before activating or staging a Google callback, Serverware serializes credential mutation and rejects another active or pending credential with the same OAuth client ID and provider subject. Legacy rows without a stored client ID collide conservatively. The `409` response identifies only the nonsecret conflicting assignment impact; newly issued duplicate material is revoked immediately or retained in the durable retry queue if provider revocation fails. This prevents two Serverware rows from pretending they can be disconnected independently, but it is not a general provider-side grant-family inventory outside this deployment.
+
+For X, the callback also stores the OAuth client ID as `x_app_id`. X route assignment requires that binding and replaces the template's `adapter.config.appIds` with the selected credential's stored app ID. Typed templates declare required OAuth scopes. The one-post-per-24-hour-window template requires `tweet.write` in addition to its read/user/offline scopes, so a default read-only X credential is disabled in the selector until the operator reconnects with write consent. The window starts with the first committed post after the prior window expires; it is not a UTC calendar day. A credential from another provider, an X credential without an app ID, a scope-incomplete OAuth credential, or an incompatible injection shape is rejected before candidate creation.
 
 The current credential inventory assumes one administrative trust domain. Operators with the relevant credential-management roles can act on the shared credential set; credentials are not tenant-owned, and the API does not isolate credential visibility or mutation by tenant. Treat one deployment as one administrative security boundary until explicit tenant and credential-ownership enforcement exists.
 
@@ -222,7 +224,7 @@ The narrow-viewport capture exercises the same canonical review document and bin
 
 [Private deployment screenshot omitted from public source.]
 
-The mobile screenshot shows the responsive operator-passkey and Setup and Verify workflows: the empty passkey state, pending configuration/runtime/hardware status pills, next-operator subject field, and assignment controls stacked for a narrow viewport. The seeded state demonstrates rendered workflow behavior, not a live provider login, production WebAuthn ceremony, physical YubiKey use, independent enrollment verification, or hardware attestation.
+The mobile screenshot shows the responsive operator-passkey and pre-run **New setup** workflows: the empty passkey state, pending configuration/runtime/hardware status pills, next-operator subject field, and assignment controls stacked for a narrow viewport. No durable setup run is selected. This capture demonstrates rendered workflow behavior, not a live provider login, production WebAuthn ceremony, physical YubiKey use, independent enrollment verification, or hardware attestation.
 
 ## Teach Agents To Use Serverware
 
@@ -235,13 +237,28 @@ Generate an enrollment packet from the portal:
 1. Open `http://localhost:3000` or the production control-plane URL.
 2. In **Agent Enrollment**, choose the policy principal that will run the agent.
 3. Enter the Serverware proxy URL, proxy egress CIDR, namespace, CA mount path, and optional pod selector JSON. The control-plane origin is read-only and derived from `SERVERWARE_PUBLIC_URL`; a submitted mismatch is rejected.
-4. Click **Generate enrollment**, then **Download + copy verifier command**. The portal downloads the exact signed packet and copies a fail-closed command that verifies that file before any CA installation step.
-5. Click **Copy agent instructions** for a compact handoff generated from that signed packet. It contains the proxy and CA environment, required CONNECT and provider headers, token identifier when proxy authorization is required, allowed upstream URLs, and exact approval/error behavior. It never includes the proxy-authorization secret or a provider credential.
+4. Click **Generate enrollment**, then **Download** in the Agent Enrollment panel. In the separate **Credentials** section, click **Download + copy verifier command**. That action downloads the exact signed packet again and copies a fail-closed command that verifies that file before any CA installation step. The Setup and Verify flow exposes the same action beside **Generate enrollment** as **Copy verification command**.
+5. Click **Copy agent instructions** to download the exact packet bytes and copy a fixed `serverware-enrollment` command containing the separately computed raw-file digest, expected principal, and expected nonce. The installed verifier authenticates that file and fresh attestation before emitting the packet's signed `agentHandoff.authenticatedInstructions`. The emitted handoff contains every required step in order, the proxy and CA environment, required CONNECT and provider headers, token identifier when proxy authorization is required, allowed upstream URLs, verified Kubernetes/`nftables` requirements, bodyless GET/HEAD canaries, non-executable write previews, and exact approval/error behavior. It never includes the proxy-authorization secret or a provider credential.
 
-The same packet can be generated from the CLI for automation:
+Build the clean-room package and its runtime wheelhouse from the repository-controlled hash lock, then transfer the complete directory and a separately authenticated digest for it to a fresh agent/verifier host without cloning this repository:
 
 ```bash
-python3 scripts/generate_agent_enrollment.py \
+make build-agent-enrollment-wheel
+sha256sum .tmp/agent-enrollment-wheel/*
+
+python3 -m pip install --require-hashes --no-index \
+  --find-links /trusted/serverware-agent-wheelhouse \
+  -r /trusted/serverware-agent-wheelhouse/requirements.lock
+python3 -m pip install --no-deps --no-index \
+  /trusted/serverware-agent-wheelhouse/serverware_enrollment-0.2.0-py3-none-any.whl
+```
+
+The package uses the repository-owned zero-dependency PEP 517 backend in `serverware_agent_trust.build_backend`; build isolation cannot fetch an undeclared backend. The target downloads only binary runtime dependencies from the package-specific `serverware_agent_trust/requirements.lock` with `--require-hashes`, copies that exact lock into the wheelhouse as `requirements.lock`, and builds the enrollment wheel with `--no-deps --no-build-isolation`. This closes dependency selection for the tested clean-room path, but the transferred wheelhouse still needs an independently authenticated artifact manifest or digest and trusted-builder controls.
+
+The same packet can then be generated from the installed CLI for automation:
+
+```bash
+serverware-enrollment \
   --principal-id agent:mail-reader \
   --proxy-url http://serverware-proxy.internal:8080 \
   --proxy-egress-cidr 10.42.0.10/32 \
@@ -258,7 +275,7 @@ VERIFIED_ENROLLMENT_PACKET=serverware-enrollment-agent-mail-reader.verified.json
 EXPECTED_PACKET_SHA256=sha256:<value-copied-from-the-portal-command>
 EXPECTED_PRINCIPAL=agent:mail-reader
 EXPECTED_NONCE=<value-copied-from-the-portal-command>
-python3 scripts/generate_agent_enrollment.py \
+serverware-enrollment \
   --base https://serverware.example.com \
   --verify-packet "$ENROLLMENT_PACKET" \
   --expected-packet-sha256 "$EXPECTED_PACKET_SHA256" \
@@ -272,16 +289,18 @@ Use the digest, principal, and nonce from the separately copied portal command; 
 After exact packet verification succeeds, install the CA through the scoped enrollment verifier:
 
 ```bash
-python3 scripts/verify_attestation.py \
+serverware-attestation \
   --base https://serverware.example.com \
   --enrollment-packet "$VERIFIED_ENROLLMENT_PACKET" \
   --ca-out .tmp/serverware-ca.pem
 install -D -m 0644 .tmp/serverware-ca.pem /etc/serverware/serverware-ca.pem
 ```
 
-The copied portal command performs these steps in this order with shell error handling and defaults to the downloaded packet under `$HOME/Downloads`. It never requests, embeds, or transmits the Serverware admin token or any receipt-signing private key. The signed packet carries a policy-hash-bound, principal-bound, short-lived, one-use verifier capability whose URLs are relative to the configured control-plane origin; it can read only the pinned policy and download the CA once. Set `SERVERWARE_ENROLLMENT_PACKET` first when the browser saves downloads elsewhere. The verifier writes `.tmp/serverware-ca.pem`. The enrollment packet's `agentHandoff.caInstall.command` installs that verified file at the packet's configured `ca.installPath`; run it in the agent image or VM before starting the agent. The packet enumerates every allowed route URL, not just the first path, and exposes the exact proxy environment, required CONNECT/provider headers, and machine-readable `requestHandling` rules for approval and terminal errors. Proxy-authorization secret material is deliberately absent and must be provisioned separately when `agentHandoff.proxyAuthorization.required` is true.
+The copied portal commands perform these steps in order with shell error handling and default to the exact downloaded packet under `$HOME/Downloads`. They never request, embed, or transmit the Serverware admin token or any receipt-signing private key. The signed packet carries a policy-hash-bound, principal-bound, short-lived, one-use verifier capability whose URLs are relative to the configured control-plane origin; it can read only the pinned policy and download the CA once. Set `SERVERWARE_ENROLLMENT_PACKET` or `SERVERWARE_PACKET_PATH` when the browser saves downloads elsewhere. The CA verifier writes `.tmp/serverware-ca.pem`, and `agentHandoff.caInstall.command` installs that verified file at the configured destination. The packet enumerates every allowed route URL, not just the first path, and binds the exact proxy environment, required CONNECT/provider headers, machine-readable `requestHandling` rules, deny-by-default egress controls, canaries, write previews, and deterministic `agentHandoff.authenticatedInstructions`. The shorter `instructionsText` is only a bootstrap that refuses to run without a separately authenticated raw-file digest. Proxy-authorization secret material is deliberately absent and must be provisioned separately when `agentHandoff.proxyAuthorization.required` is true.
 
-Setup enrollment-receipt signing is a separate trust-domain operation. Run `scripts/generate_agent_enrollment.py --sign-setup-receipt` only on the independently controlled verifier, after transferring the precommitted packet and live nonce-bound attestation evidence to that verifier. Its owner-only Ed25519 key must never be mounted in, copied to, or referenced by the agent image, VM, portal handoff command, or Serverware workload. Transfer only the signed receipt back to the operator for upload through the Setup workflow.
+Setup enrollment-receipt signing is a separate trust-domain operation. Run `serverware-enrollment --sign-setup-receipt` only on the independently controlled verifier, after transferring the precommitted packet, live nonce-bound attestation evidence, and launcher-signed egress evidence to that verifier. The production v3 receipt binds the quote provider, exact quote and verified-claims digests, quote-verifier identity, assurance/debug/self-rooted state, evidence identity, and the exact agent network namespace. It also binds an installed deny-by-default firewall state plus successful allow canaries for every packet route and the packet's deny canary. Production signing rejects development, debug, self-rooted, incomplete-assurance, fixture-egress, or mismatched evidence; `--development-receipt-fixture` is explicit and its output is production-ineligible.
+
+The CLI's local Ed25519 private-key option is a protocol and fixture adapter, not proof of production key custody. A production receipt authority belongs behind an independently operated KMS/HSM or equivalent signing service that releases signatures only after the same closed verifier checks. Its key must never be mounted in, copied to, or referenced by the agent image, VM, portal handoff command, or Serverware workload. This repository does not implement or demonstrate that KMS/HSM authority. Transfer only the signed receipt back to the operator for upload through the Setup workflow.
 
 Run the agent with only proxy configuration:
 
@@ -307,9 +326,9 @@ If Serverware returns 428, give approval_url to the operator, honor retry_after_
 If Serverware returns 403 or 5xx, stop and report the route/error; do not bypass the proxy.
 ```
 
-The portal renders this block from the signed packet instead of a generic template. Give the generated block to the agent together with its separately provisioned proxy-authorization secret, when one is required. A new packet or policy assignment requires a fresh handoff; do not retain instructions whose packet has expired or whose pinned policy is no longer active.
+The portal integration must download one deterministic serialization, compute the digest over exactly those bytes, and copy a fixed `serverware-enrollment --verify-packet ... --emit-verified-instructions` invocation with that separately delivered digest, principal, and nonce. It must not copy either packet instruction field directly as authenticated text. Give the verifier output to the agent together with its separately provisioned proxy-authorization secret, when one is required. A new packet or policy assignment requires a fresh handoff; do not retain instructions whose packet has expired or whose pinned policy is no longer active.
 
-Enforce egress so the agent cannot bypass Serverware. The enrollment packet includes a Kubernetes `NetworkPolicy` and iptables rules that only allow outbound traffic to the configured Serverware proxy CIDRs.
+Enforce egress so the agent cannot bypass Serverware. The enrollment packet includes a Kubernetes `NetworkPolicy` and an atomic `nftables` `inet` table scoped to the launcher-recorded agent network namespace. The installer verifies the exact table, output hook, drop policy, and signed rule markers after installation; any failure keeps the agent stopped and leaves an installed deny policy active. The dedicated table does not flush or replace unrelated firewall tables.
 
 ## Exact Credential Lease Flow
 

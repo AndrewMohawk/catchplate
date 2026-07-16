@@ -1,9 +1,16 @@
-.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity production-host-preflight deploy-production build-production-python-runtime build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-python-runtime verify-production-launch-assets verify-launch-authorization verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
+.PHONY: up down logs e2e bench bench-gate-rs decision-gate-bench-evidence release-provenance production-release-provenance image-signatures sign-production-images build-agent-enrollment-wheel fetch-production-dependency-cache refresh-production-dependency-cache verify-production-dependency-cache build-production-images publish-production-images merge-production-images-env production-handoff production-release-input-preflight validate-production-policy-identity verify-production-agent-enrollment-evidence production-host-preflight deploy-production build-production-python-runtime build-production-launcher install-production-launcher generate-production-launch-manifest run-production-readiness-final production-release-proof capture-reproducible-build validate-reproducible-builds validate-policy-activation-evidence prepare-aws-kms-materials install-apparmor verify-apparmor-contract verify-apparmor-runtime verify-cosign-sigstore verify-release-image-signing verify-production-image-publish verify-production-images-env-merge verify-production-handoff verify-production-release-input-preflight verify-production-policy-identity verify-production-host-preflight verify-production-python-runtime verify-production-launch-assets verify-launch-authorization verify-production-release-proof verify-credential-policy-contracts verify-control-plane-startup verify-portal-browser-oauth verify-reproducible-builds verify-policy-activation-evidence verify-transparency-checkpoint verify-nitro-nsm-attest verify-aws-kms-recipient-release verify-aws-nitro-kms-unseal verify-prepare-aws-kms-materials verify-ca-install-sessions verify-control-plane-csrf verify-control-plane-oidc verify-webauthn-recovery verify-oauth-credentials verify-credential-lease-delivery verify-control-plane-mutation-mfa verify-control-plane-two-person verify-control-plane-rbac-audit verify-break-glass-grants verify-approval-denial-reason verify-approval-review verify-policy-publish-workflow verify-policy-canary-workflow verify-audit-search verify-audit-export verify-agent-enrollment verify-setup-session-api verify-production-images-no-shell scan-production-images-no-shell verify-production-image-builds generate-production-readiness-claims verify-production-readiness-claims verify-production-readiness-runner verify-release-completion verify-production-config verify-production-readiness run-production-readiness collect-nitro-kms-evidence verify-nitro-kms-evidence verify-nitro-tee verify-decision-gate-attestation verify-codebase-attestation install-ca verify-attestation reset
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
-PLAYWRIGHT_RUN ?= uv run --isolated --python 3.11 --with-requirements requirements.lock --with playwright==1.61.0
-TEST_PYTHON_RUN ?= uv run --isolated --python 3.11 --with-requirements requirements.lock python
-MITMPROXY_TEST_RUN ?= uv run --isolated --python 3.11 --with mitmproxy==11.0.2 --with fastapi==0.136.1 --with cbor2==5.9.0 --with jsonschema==4.23.0 --with 'psycopg[binary]==3.2.3' --with python-multipart==0.0.31 --with 'uvicorn[standard]==0.34.0'
+override PRODUCTION_PLATFORM := linux/amd64
+AGENT_ENROLLMENT_WHEEL_DIRECTORY ?= .tmp/agent-enrollment-wheel
+AGENT_ENROLLMENT_RUNTIME_LOCK ?= serverware_agent_trust/requirements.lock
+AGENT_ENROLLMENT_WHEEL_MANIFEST ?= $(AGENT_ENROLLMENT_WHEEL_DIRECTORY)/wheelhouse-manifest.json
+AGENT_ENROLLMENT_TARGET_PLATFORM ?= manylinux2014_x86_64
+AGENT_ENROLLMENT_TARGET_PYTHON ?= 311
+AGENT_ENROLLMENT_TARGET_ABI ?= cp311
+PLAYWRIGHT_RUN ?= uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock --with playwright==1.61.0
+TEST_PYTHON_RUN ?= uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python
+MITMPROXY_TEST_RUN ?= uv run --no-project --isolated --python 3.11 --with mitmproxy==11.0.2 --with fastapi==0.136.1 --with cbor2==5.9.0 --with jsonschema==4.23.0 --with 'psycopg[binary]==3.2.3' --with python-multipart==0.0.31 --with 'uvicorn[standard]==0.34.0'
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
 PRODUCTION_READINESS_OUT ?= .tmp/production-readiness.json
 PRODUCTION_READINESS_CONFIG_OUT ?= .tmp/production-readiness-config.json
@@ -80,6 +87,30 @@ PRODUCTION_RELEASE_PYTHON ?= $(PRODUCTION_RELEASE_ROOT)/runtime/python/bin/pytho
 PRODUCTION_RELEASE_PYTHON_STDLIB ?= $(PRODUCTION_RELEASE_ROOT)/runtime/python/lib/python3.11
 PRODUCTION_RELEASE_PYTHON_LIB_DYNLOAD ?= $(PRODUCTION_RELEASE_PYTHON_STDLIB)/lib-dynload
 PRODUCTION_RELEASE_PYTHON_VENDOR ?= $(PRODUCTION_RELEASE_ROOT)/vendor
+PRODUCTION_AGENT_ENROLLMENT_PACKET ?=
+PRODUCTION_AGENT_ENROLLMENT_PACKET_FILE_SHA256 ?=
+PRODUCTION_AGENT_ENROLLMENT_PACKET_SHA256 ?=
+PRODUCTION_AGENT_ENROLLMENT_RECEIPT ?=
+PRODUCTION_AGENT_ENROLLMENT_RECEIPT_TRUSTED_PUBLIC_KEY ?=
+PRODUCTION_AGENT_ENROLLMENT_RECEIPT_PROVIDER ?=
+PRODUCTION_AGENT_ENROLLMENT_RECEIPT_KEY_ID ?=
+PRODUCTION_AGENT_EGRESS_EVIDENCE ?=
+PRODUCTION_AGENT_EGRESS_TRUSTED_PUBLIC_KEY ?=
+PRODUCTION_AGENT_EGRESS_PROVIDER ?=
+PRODUCTION_AGENT_EGRESS_KEY_ID ?=
+PRODUCTION_AGENT_ENROLLMENT_RECEIPT_ID ?=
+PRODUCTION_AGENT_SETUP_SESSION_ID ?=
+PRODUCTION_AGENT_ENROLLMENT_SESSION_ID ?=
+PRODUCTION_AGENT_PRINCIPAL_ID ?=
+PRODUCTION_AGENT_ROUTE_ID ?=
+PRODUCTION_AGENT_CREDENTIAL_ID ?=
+PRODUCTION_AGENT_CREDENTIAL_VERSION ?=
+PRODUCTION_AGENT_POLICY_HASH ?=
+PRODUCTION_AGENT_ROUTE_POLICY_DIGEST ?=
+PRODUCTION_AGENT_ASSIGNMENT_DIGEST ?=
+PRODUCTION_AGENT_VERIFIER_NONCE_SHA256 ?=
+PRODUCTION_AGENT_TRUST_PROFILE_SHA256 ?=
+PRODUCTION_AGENT_ENROLLMENT_VERIFICATION_OUT ?= .tmp/production-agent-enrollment-verification.json
 
 up:
 	docker compose up -d --build serverware demo-upstream audit-anchor
@@ -239,6 +270,7 @@ decision-gate-bench-evidence:
 	SERVERWARE_CA_OUT=.tmp/serverware-ca.pem SERVERWARE_VERIFY_OUT=.tmp/attestation-verify.json ./scripts/install_verified_ca.sh >/dev/null
 	docker compose up -d --build decision-gate-rs
 	./scripts/wait_for_decision_gate.sh
+	rm -f "$(DECISION_GATE_BENCH_FILE)"
 	docker compose exec -T \
 		-e DECISION_GATE_BASE=http://decision-gate-rs:9091 \
 		-e PROXY=http://decision-gate-rs:9090 \
@@ -281,11 +313,82 @@ sign-production-images:
 		--out "$(IMAGE_SIGNATURES_FILE)" > "$(IMAGE_SIGNATURES_SUMMARY_FILE)"
 	cat "$(IMAGE_SIGNATURES_SUMMARY_FILE)"
 
-build-production-images:
-	python3 scripts/build_production_images.py --out "$(PRODUCTION_IMAGES_BUILD_FILE)"
+build-agent-enrollment-wheel:
+	rm -rf "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)"
+	mkdir -p "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)"
+	python3 -m pip download --require-hashes --only-binary=:all: --platform "$(AGENT_ENROLLMENT_TARGET_PLATFORM)" --implementation cp --python-version "$(AGENT_ENROLLMENT_TARGET_PYTHON)" --abi "$(AGENT_ENROLLMENT_TARGET_ABI)" --dest "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" --requirement "$(AGENT_ENROLLMENT_RUNTIME_LOCK)"
+	SOURCE_DATE_EPOCH="$${SOURCE_DATE_EPOCH:-0}" python3 -m pip wheel --no-build-isolation --no-deps --wheel-dir "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" .
+	cp "$(AGENT_ENROLLMENT_RUNTIME_LOCK)" "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)/requirements.lock"
+	test "$$(find "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" -maxdepth 1 -type f -name 'serverware_enrollment-*.whl' | wc -l | tr -d ' ')" = 1
+	python3 scripts/generate_offline_artifact_manifest.py --root "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" --output "$(AGENT_ENROLLMENT_WHEEL_MANIFEST)" --require 'serverware_enrollment-*.whl' --require 'cryptography-*.whl' --require 'cffi-*.whl' --require 'pycparser-*.whl' --require requirements.lock --label serverware-enrollment-cpython311-linux-amd64 --python-tag cp311 --platform-tag "$(AGENT_ENROLLMENT_TARGET_PLATFORM)" --architecture amd64
+	python3 scripts/verify_offline_artifact_manifest.py --root "$(AGENT_ENROLLMENT_WHEEL_DIRECTORY)" --manifest "$(AGENT_ENROLLMENT_WHEEL_MANIFEST)" --label serverware-enrollment-cpython311-linux-amd64 --python-tag cp311 --platform-tag "$(AGENT_ENROLLMENT_TARGET_PLATFORM)" --architecture amd64
+
+fetch-production-dependency-cache:
+	python3 production-dependencies/prefetch.py fetch
+
+refresh-production-dependency-cache:
+	python3 production-dependencies/prefetch.py refresh
+
+verify-production-dependency-cache:
+	python3 production-dependencies/prefetch.py verify
+
+verify-production-agent-enrollment-evidence:
+	@set -eu; for value in \
+		"$(PRODUCTION_AGENT_ENROLLMENT_PACKET)" \
+		"$(PRODUCTION_AGENT_ENROLLMENT_PACKET_FILE_SHA256)" \
+		"$(PRODUCTION_AGENT_ENROLLMENT_PACKET_SHA256)" \
+		"$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT)" \
+		"$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT_TRUSTED_PUBLIC_KEY)" \
+		"$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT_PROVIDER)" \
+		"$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT_KEY_ID)" \
+		"$(PRODUCTION_AGENT_EGRESS_EVIDENCE)" \
+		"$(PRODUCTION_AGENT_EGRESS_TRUSTED_PUBLIC_KEY)" \
+		"$(PRODUCTION_AGENT_EGRESS_PROVIDER)" \
+		"$(PRODUCTION_AGENT_EGRESS_KEY_ID)" \
+		"$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT_ID)" \
+		"$(PRODUCTION_AGENT_SETUP_SESSION_ID)" \
+		"$(PRODUCTION_AGENT_ENROLLMENT_SESSION_ID)" \
+		"$(PRODUCTION_AGENT_PRINCIPAL_ID)" \
+		"$(PRODUCTION_AGENT_ROUTE_ID)" \
+		"$(PRODUCTION_AGENT_CREDENTIAL_ID)" \
+		"$(PRODUCTION_AGENT_CREDENTIAL_VERSION)" \
+		"$(PRODUCTION_AGENT_POLICY_HASH)" \
+		"$(PRODUCTION_AGENT_ROUTE_POLICY_DIGEST)" \
+		"$(PRODUCTION_AGENT_ASSIGNMENT_DIGEST)" \
+		"$(PRODUCTION_AGENT_VERIFIER_NONCE_SHA256)" \
+		"$(PRODUCTION_AGENT_TRUST_PROFILE_SHA256)"; do test -n "$$value" || { echo "all PRODUCTION_AGENT_* enrollment evidence variables are required" >&2; exit 2; }; done
+	$(TEST_PYTHON_RUN) scripts/verify_production_agent_enrollment.py \
+		--enrollment-packet "$(PRODUCTION_AGENT_ENROLLMENT_PACKET)" \
+		--expected-enrollment-packet-file-sha256 "$(PRODUCTION_AGENT_ENROLLMENT_PACKET_FILE_SHA256)" \
+		--enrollment-packet-sha256 "$(PRODUCTION_AGENT_ENROLLMENT_PACKET_SHA256)" \
+		--receipt "$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT)" \
+		--receipt-trusted-public-key "$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT_TRUSTED_PUBLIC_KEY)" \
+		--receipt-provider "$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT_PROVIDER)" \
+		--expected-receipt-key-id "$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT_KEY_ID)" \
+		--egress-evidence "$(PRODUCTION_AGENT_EGRESS_EVIDENCE)" \
+		--egress-evidence-trusted-public-key "$(PRODUCTION_AGENT_EGRESS_TRUSTED_PUBLIC_KEY)" \
+		--egress-evidence-provider "$(PRODUCTION_AGENT_EGRESS_PROVIDER)" \
+		--expected-egress-evidence-key-id "$(PRODUCTION_AGENT_EGRESS_KEY_ID)" \
+		--receipt-id "$(PRODUCTION_AGENT_ENROLLMENT_RECEIPT_ID)" \
+		--setup-session-id "$(PRODUCTION_AGENT_SETUP_SESSION_ID)" \
+		--enrollment-session-id "$(PRODUCTION_AGENT_ENROLLMENT_SESSION_ID)" \
+		--principal-id "$(PRODUCTION_AGENT_PRINCIPAL_ID)" \
+		--route-id "$(PRODUCTION_AGENT_ROUTE_ID)" \
+		--credential-id "$(PRODUCTION_AGENT_CREDENTIAL_ID)" \
+		--credential-version "$(PRODUCTION_AGENT_CREDENTIAL_VERSION)" \
+		--policy-hash "$(PRODUCTION_AGENT_POLICY_HASH)" \
+		--route-policy-digest "$(PRODUCTION_AGENT_ROUTE_POLICY_DIGEST)" \
+		--expected-assignment-digest "$(PRODUCTION_AGENT_ASSIGNMENT_DIGEST)" \
+		--verifier-nonce-sha256 "$(PRODUCTION_AGENT_VERIFIER_NONCE_SHA256)" \
+		--trust-profile-sha256 "$(PRODUCTION_AGENT_TRUST_PROFILE_SHA256)" \
+		--out "$(PRODUCTION_AGENT_ENROLLMENT_VERIFICATION_OUT)"
+
+build-production-images: verify-production-dependency-cache
+	python3 scripts/build_production_images.py --platform "$(PRODUCTION_PLATFORM)" --out "$(PRODUCTION_IMAGES_BUILD_FILE)"
 
 publish-production-images:
 	@if [ -z "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" ]; then echo "PRODUCTION_IMAGE_REGISTRY_PREFIX is required, for example registry.prod.serverware.dev/serverware" >&2; exit 2; fi
+	@set -eu; python3 -c 'import json,sys; document=json.load(open(sys.argv[1], encoding="utf-8")); [print(item["image_id"]) for item in document["images"]]' "$(PRODUCTION_IMAGES_BUILD_FILE)" | while IFS= read -r image; do test "$$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$$image")" = "$(PRODUCTION_PLATFORM)" || { echo "refusing to publish a non-$(PRODUCTION_PLATFORM) image: $$image" >&2; exit 2; }; done
 	python3 scripts/publish_production_images.py \
 		--build-file "$(PRODUCTION_IMAGES_BUILD_FILE)" \
 		--registry-prefix "$(PRODUCTION_IMAGE_REGISTRY_PREFIX)" \
@@ -358,19 +461,19 @@ deploy-production:
 	@test -d "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/vendor" || { echo "production Python runtime artifact is missing vendor" >&2; exit 2; }
 	SERVERWARE_PRODUCTION_PYTHON_RUNTIME_ARTIFACT="$(abspath $(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY))" $(PRODUCTION_DEPLOY_COMMAND)
 
-build-production-python-runtime:
+build-production-python-runtime: verify-production-dependency-cache
 	@test -n "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" && test "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" != / || { echo "PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY is unsafe" >&2; exit 2; }
 	rm -rf "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)"
 	mkdir -p "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)"
-	docker buildx build --platform linux/amd64 --target production-python-runtime-artifact --output "type=local,dest=$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" -f Dockerfile.production .
+	docker buildx build --network=none --platform "$(PRODUCTION_PLATFORM)" --target production-python-runtime-artifact --output "type=local,dest=$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)" -f Dockerfile.production .
 	test -x "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/bin/python3"
 	test -d "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/lib/python3.11/lib-dynload"
 	test -f "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/runtime/python/lib/libpython3.11.so.1.0"
 	test -d "$(PRODUCTION_PYTHON_RUNTIME_ARTIFACT_DIRECTORY)/vendor"
 
-build-production-launcher:
+build-production-launcher: verify-production-dependency-cache
 	mkdir -p "$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)"
-	docker buildx build --platform linux/amd64 --target production-launcher-artifact --output "type=local,dest=$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" -f data-plane/decision-gate-rs/Dockerfile.production .
+	docker buildx build --network=none --platform "$(PRODUCTION_PLATFORM)" --target production-launcher-artifact --output "type=local,dest=$(PRODUCTION_LAUNCHER_BUILD_DIRECTORY)" -f data-plane/decision-gate-rs/Dockerfile.production .
 	test -x "$(PRODUCTION_LAUNCHER_BUILD_PATH)"
 
 install-production-launcher:
@@ -449,7 +552,10 @@ production-release-proof:
 	$(MAKE) verify-control-plane-oidc
 	$(MAKE) verify-webauthn-recovery
 	$(MAKE) verify-portal-browser-oauth
+	$(MAKE) verify-agent-enrollment
+	$(MAKE) verify-setup-session-api
 	$(MAKE) validate-production-policy-identity
+	$(MAKE) verify-production-agent-enrollment-evidence
 	$(MAKE) validate-policy-activation-evidence
 	$(MAKE) validate-reproducible-builds
 	$(MAKE) production-release-input-preflight
@@ -550,12 +656,12 @@ verify-production-release-proof: verify-production-launch-assets verify-launch-a
 	python3 scripts/test_production_release_proof_target.py
 
 verify-credential-policy-contracts:
-	uv run --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_credential_constraints.py
+	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_credential_constraints.py
 	$(MITMPROXY_TEST_RUN) python scripts/test_credential_constraints.py --proxy-transport-only
 	cargo test --locked --manifest-path data-plane/decision-gate-rs/Cargo.toml
 
 verify-control-plane-startup:
-	uv run --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_control_plane_startup.py
+	uv run --no-project --isolated --python 3.11 --with-requirements requirements.lock python scripts/test_control_plane_startup.py
 
 verify-portal-browser-oauth:
 	$(PLAYWRIGHT_RUN) python -m playwright install chromium
@@ -656,7 +762,7 @@ verify-audit-export:
 
 verify-agent-enrollment:
 	docker compose up -d --build serverware
-	python3 scripts/test_agent_enrollment.py
+	$(TEST_PYTHON_RUN) scripts/test_agent_enrollment.py
 	docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
 	docker compose exec -T serverware python scripts/test_setup_verify.py
 

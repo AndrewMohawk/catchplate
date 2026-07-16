@@ -178,6 +178,7 @@ def assert_production_dependencies() -> None:
         raise AssertionError(f"production decision gate has an unsafe private-state mount: {gate_mounts}")
     gate_environment = model["services"]["decision-gate-rs"].get("environment") or {}
     for name in (
+        "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST",
         "SERVERWARE_POLICY_HIGH_WATER_FILE",
         "SERVERWARE_POLICY_MIN_SEQUENCE",
         "SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH",
@@ -228,7 +229,8 @@ def assert_gate_response_context_publish_wait() -> None:
         dockerfile = (ROOT / relative).read_text(encoding="utf-8")
         if "--build-id=none" not in dockerfile:
             raise AssertionError(f"{relative} must omit nondeterministic GNU linker build IDs")
-        if "cargo build --release --locked" not in dockerfile:
+        lock_mode = "--frozen" if relative.endswith("Dockerfile.production") else "--locked"
+        if f"cargo build --release {lock_mode}" not in dockerfile:
             raise AssertionError(f"{relative} must build the lockfile-pinned Rust release")
 
 
@@ -237,7 +239,8 @@ def assert_static_launcher_artifact_embedded() -> None:
     dockerfile = path.read_text(encoding="utf-8")
     required = (
         "FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build",
-        "musl=1.2.5-r12 musl-dev=1.2.5-r12",
+        "COPY production-dependencies/cache/musl-1.2.5-r12.apk",
+        "--network=none cargo build --release --frozen --bin serverware-production-launcher",
         "FROM scratch AS production-launcher-artifact",
         "COPY --from=launcher-build /src/target/release/serverware-production-launcher /serverware-production-launcher",
         "COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher",

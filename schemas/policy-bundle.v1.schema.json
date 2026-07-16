@@ -103,6 +103,100 @@
       "maxLength": 256,
       "pattern": "^[^\\s:\\u0000-\\u001F\\u007F]+$"
     },
+    "requestValuePredicate": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "value"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "equals"},
+            "value": {"type": "string", "maxLength": 4096}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "values"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "enum"},
+            "values": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 32,
+              "uniqueItems": true,
+              "items": {"type": "string", "maxLength": 4096}
+            }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "pattern", "maxLength"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "pattern"},
+            "pattern": {"type": "string", "minLength": 3, "maxLength": 256},
+            "maxLength": {"type": "integer", "minimum": 1, "maximum": 4096}
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "stringLength"},
+            "minLength": {"type": "integer", "minimum": 0, "maximum": 4096},
+            "maxLength": {"type": "integer", "minimum": 0, "maximum": 4096}
+          },
+          "anyOf": [{"required": ["minLength"]}, {"required": ["maxLength"]}]
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "numeric"},
+            "min": {"type": "number"},
+            "max": {"type": "number"},
+            "integer": {"type": "boolean"}
+          },
+          "anyOf": [{"required": ["min"]}, {"required": ["max"]}],
+          "allOf": [
+            {
+              "if": {
+                "properties": {"integer": {"const": true}},
+                "required": ["integer"]
+              },
+              "then": {
+                "properties": {
+                  "min": {
+                    "type": "integer",
+                    "minimum": -9223372036854775808,
+                    "maximum": 9223372036854775807
+                  },
+                  "max": {
+                    "type": "integer",
+                    "minimum": -9223372036854775808,
+                    "maximum": 9223372036854775807
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "requestValueRule": {
+      "type": "object",
+      "required": ["source", "name", "predicate"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {"enum": ["pathParam", "query", "header"]},
+        "name": {"type": "string", "minLength": 1, "maxLength": 256},
+        "predicate": {"$ref": "#/$defs/requestValuePredicate"},
+        "capture": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"}
+      }
+    },
     "credentialConstraint": {
       "type": "object",
       "required": ["id", "type"],
@@ -117,6 +211,7 @@
             "queryDateWindow",
             "queryNumericBounds",
             "requestTimeWindow",
+            "requestValue",
             "jsonBody",
             "formBody",
             "responseDateWindow",
@@ -184,6 +279,12 @@
               "end": {"type": "string", "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$"}
             }
           }
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "items": {"$ref": "#/$defs/requestValueRule"}
         },
         "contentTypes": {"type": "array", "items": {"type": "string"}},
         "successStatusCodes": {
@@ -270,6 +371,10 @@
               {"required": ["dailyWindows"]}
             ]
           }
+        },
+        {
+          "if": {"properties": {"type": {"const": "requestValue"}}, "required": ["type"]},
+          "then": {"required": ["rules"]}
         },
         {
           "if": {

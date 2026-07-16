@@ -6,11 +6,13 @@ import hashlib
 import io
 import json
 import re
+import time
+from collections import Counter
 from datetime import datetime, timedelta, timezone
-from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
+from typing import Any, Callable
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlsplit, urlunsplit
 
-from serverware import runtime
+from serverware import db, http_client, runtime
 from serverware.policies import PolicyDecision
 from serverware.policy_bundle import (
     X_V2_RECENT_SEARCH_PATHS,
@@ -71,6 +73,58 @@ _MEDIA_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 _RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
 _OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
 _JSON_OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
+_GMAIL_PROOF_NONCE_HEADER = "x-serverware-proof-nonce"
+_GMAIL_STREAM_PROOF_NONCE_HEADER = "x-serverware-stream-proof-nonce"
+_MIN_GMAIL_CHILD_AUTHORITY_SECONDS = 0.250
+
+
+def _secure_bounded_metadata_get(
+    *,
+    origin: str,
+    path: str,
+    headers: dict[str, str],
+    timeout_seconds: float,
+    max_body_bytes: int,
+    deadline: http_client.HttpDeadline,
+) -> Any:
+    origin_parts = urlsplit(origin)
+    path_parts = urlsplit(path)
+    if (
+        origin_parts.scheme != "https"
+        or not origin_parts.hostname
+        or origin_parts.path
+        or origin_parts.query
+        or origin_parts.fragment
+        or origin_parts.username is not None
+        or origin_parts.password is not None
+        or not path.startswith("/")
+        or path.startswith("//")
+        or path_parts.scheme
+        or path_parts.netloc
+        or path_parts.fragment
+    ):
+        raise http_client.HttpClientError("Gmail metadata request origin or path is invalid")
+    if set(headers) != {"Authorization"}:
+        raise http_client.HttpClientError("Gmail metadata request headers are invalid")
+    url = urlunsplit(
+        (
+            origin_parts.scheme,
+            origin_parts.netloc,
+            path_parts.path,
+            path_parts.query,
+            "",
+        )
+    )
+    return http_client.request_json(
+        url,
+        headers=headers,
+        timeout=timeout_seconds,
+        max_bytes=max_body_bytes,
+        deadline=deadline,
+        require_https=True,
+        expected_statuses=(200,),
+        expected_content_types=("application/json",),
+    )
 
 
 class ApiAdapter:
@@ -348,6 +402,16 @@ class ApiAdapter:
             )
         return None
 
+    def prepare_response(
+        self,
+        flow: Any,
+        route: Any,
+        params: dict[str, str],
+        *,
+        authorization_factory: Callable[[], tuple[str, float]] | None = None,
+    ) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
+
     def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
         if not flow.response:
             return PolicyDecision(allowed=True)
@@ -445,6 +509,9 @@ class ApiAdapter:
         self._normalize_response_headers(flow, response_cfg, mode)
         return PolicyDecision(allowed=True)
 
+    def finalize_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        return PolicyDecision(allowed=True)
+
     def _response_profile(
         self, flow: Any, route: Any
     ) -> tuple[dict[str, Any] | None, PolicyDecision | None]:
@@ -512,6 +579,15 @@ class ApiAdapter:
         flow.response.headers["Content-Length"] = str(len(flow.response.raw_content or b""))
 
     def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
+        if any(
+            isinstance(constraint, dict) and constraint.get("type") == "requestValue"
+            for constraint in (getattr(route, "constraints", ()) or ())
+        ):
+            flow.metadata["serverware_request_value_path_params"] = {
+                str(name): value
+                for name, value in params.items()
+                if isinstance(value, str)
+            }
         request_config = route.adapter_config.get("request") or {}
         operation = request_config.get("operation") or {}
         name = operation.get("name")
@@ -847,6 +923,23 @@ class GmailV1Adapter(ApiAdapter):
                 )
 
         if self._is_list(params):
+            response_cfg = route.adapter_config.get("response") or {}
+            if (
+                response_cfg.get("validateListByMetadataFetch", False)
+                and any(
+                    self._header_value(flow.request.headers, header) is not None
+                    for header in (
+                        _GMAIL_PROOF_NONCE_HEADER,
+                        _GMAIL_STREAM_PROOF_NONCE_HEADER,
+                    )
+                )
+            ):
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=400,
+                    reason="response proof is unsupported for Gmail metadata-fetch lists",
+                    payload={"error": "gmail_metadata_fetch_response_proof_unsupported"},
+                )
             query = flow.request.query.get("q", "")
             older_than = self._older_than_days(query)
             days = self._days(route)
@@ -903,6 +996,574 @@ class GmailV1Adapter(ApiAdapter):
             "cutoff_epoch_ms": self._cache_cutoff_epoch_ms(route),
         }
 
+    @staticmethod
+    def _digest_json(value: Any) -> str:
+        encoded = json.dumps(
+            value,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+    @staticmethod
+    def _valid_message_id(value: Any) -> str | None:
+        if not isinstance(value, str) or not value:
+            return None
+        try:
+            encoded = value.encode("utf-8")
+        except UnicodeEncodeError:
+            return None
+        if len(encoded) > 512 or any(byte < 32 or byte == 127 for byte in encoded):
+            return None
+        return value
+
+    @staticmethod
+    def _decoded_path_param(value: Any) -> str:
+        if not isinstance(value, str) or not value:
+            raise ValueError("Gmail path parameter is missing")
+        for index, character in enumerate(value):
+            if character == "%" and (
+                index + 2 >= len(value)
+                or re.fullmatch(r"[0-9A-Fa-f]{2}", value[index + 1 : index + 3]) is None
+            ):
+                raise ValueError("Gmail path parameter contains invalid percent encoding")
+        decoded = unquote(value, encoding="utf-8", errors="strict")
+        encoded = decoded.encode("utf-8")
+        if not encoded or len(encoded) > 512 or any(byte < 32 or byte == 127 for byte in encoded):
+            raise ValueError("Gmail path parameter is invalid")
+        return decoded
+
+    def _metadata_fetch_config(self, route: Any) -> dict[str, int] | None:
+        response_cfg = route.adapter_config.get("response") or {}
+        if not (
+            response_cfg.get("validateInternalDate", True)
+            and response_cfg.get("validateListByMetadataFetch", False)
+        ):
+            return None
+        config = response_cfg.get("metadataFetch")
+        if not isinstance(config, dict):
+            raise ValueError("Gmail metadata fetch policy is missing")
+        required_fields = {
+            "maxMessages",
+            "perRequestTimeoutMs",
+            "totalTimeoutMs",
+            "maxBodyBytes",
+        }
+        if set(config) != required_fields:
+            raise ValueError("Gmail metadata fetch policy fields are invalid")
+        bounds = {
+            "maxMessages": (1, 32),
+            "perRequestTimeoutMs": (1, 3_000),
+            "totalTimeoutMs": (1, 10_000),
+            "maxBodyBytes": (1, 8_192),
+        }
+        normalized: dict[str, int] = {}
+        for name, (minimum, maximum) in bounds.items():
+            value = config.get(name)
+            if type(value) is not int or not minimum <= value <= maximum:
+                raise ValueError("Gmail metadata fetch policy is invalid")
+            normalized[name] = value
+        if normalized["perRequestTimeoutMs"] > normalized["totalTimeoutMs"]:
+            raise ValueError("Gmail metadata fetch timeout policy is invalid")
+        max_results = route.adapter_config.get("maxResults")
+        if (
+            type(max_results) is not int
+            or max_results < 1
+            or normalized["maxMessages"] > max_results
+        ):
+            raise ValueError("Gmail metadata fetch message limit exceeds maxResults")
+        allowed_fields = response_cfg.get("allowedFields")
+        if not isinstance(allowed_fields, list) or "id" not in allowed_fields:
+            raise ValueError("Gmail metadata fetch response projection must include id")
+        return normalized
+
+    def _metadata_origin_and_user(
+        self,
+        flow: Any,
+        route: Any,
+        params: dict[str, str],
+    ) -> tuple[str, str]:
+        parts = urlsplit(flow.request.pretty_url)
+        try:
+            explicit_port = parts.port
+        except ValueError as exc:
+            raise ValueError("Gmail parent origin is invalid") from exc
+        hostname = (parts.hostname or "").rstrip(".").lower()
+        effective_port = explicit_port or (443 if parts.scheme.lower() == "https" else 80)
+        if (
+            parts.scheme.lower() != "https"
+            or parts.username is not None
+            or parts.password is not None
+            or not hostname
+            or parts.scheme.lower() != str(route.scheme).lower()
+            or hostname != str(route.host).rstrip(".").lower()
+            or effective_port != int(route.port)
+        ):
+            raise ValueError("Gmail metadata fetch origin does not match the parent route")
+        rendered_host = f"[{hostname}]" if ":" in hostname else hostname
+        netloc = f"{rendered_host}:{explicit_port}" if explicit_port is not None else rendered_host
+        gmail_user = self._decoded_path_param(params.get("user", "me"))
+        return urlunsplit(("https", netloc, "", "", "")), gmail_user
+
+    @staticmethod
+    def _internal_date_value(raw_value: Any) -> int | None:
+        if isinstance(raw_value, int) and not isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, str) and raw_value and raw_value.isascii():
+            try:
+                return int(raw_value)
+            except ValueError:
+                return None
+        return None
+
+    def _metadata_audit_event(
+        self,
+        flow: Any,
+        route: Any,
+        details: dict[str, Any],
+    ) -> dict[str, Any]:
+        event = {
+            "component": "serverware-python-proxy",
+            "principal_id": flow.metadata.get("serverware_principal_id"),
+            "route_id": route.id,
+            "policy_hash": flow.metadata.get("serverware_policy_hash"),
+            "credential_ref": flow.metadata.get("serverware_credential_id"),
+            "credential_version": flow.metadata.get("serverware_credential_version"),
+            "request_digest": flow.metadata.get("serverware_request_digest"),
+            "operation_digest": flow.metadata.get("serverware_operation_digest"),
+            "attempt_id": flow.metadata.get("serverware_release_attempt_id"),
+            "binding_digest": flow.metadata.get("serverware_release_binding_digest"),
+            "flow_id": flow.metadata.get("serverware_release_attempt_id"),
+            "grant_id": flow.metadata.get("serverware_release_grant_id"),
+            "approval_id": flow.metadata.get("serverware_release_approval_request_id"),
+        }
+        event.update(details)
+        return event
+
+    def _record_metadata_audit(
+        self,
+        flow: Any,
+        route: Any,
+        event_type: str,
+        details: dict[str, Any],
+    ) -> bool:
+        parent_binding = self._digest_json(
+            {
+                "attempt_id": flow.metadata.get("serverware_release_attempt_id"),
+                "binding_digest": flow.metadata.get("serverware_release_binding_digest"),
+                "operation_digest": flow.metadata.get("serverware_operation_digest"),
+                "request_digest": flow.metadata.get("serverware_request_digest"),
+                "route_id": route.id,
+            }
+        )
+        phase = event_type.rsplit(".", 1)[-1]
+        try:
+            db.record_audit_event(
+                event_type,
+                self._metadata_audit_event(flow, route, details),
+                actor_type="data-plane",
+                actor_id="serverware-python-proxy",
+                idempotency_key=f"gmail-metadata-fanout:{phase}:{parent_binding}",
+            )
+        except Exception:
+            return False
+        return True
+
+    def _metadata_child_record(
+        self,
+        *,
+        path: str,
+        response_payload: Any | None,
+        outcome: str,
+    ) -> dict[str, Any]:
+        request_digest = self._digest_json(
+            {
+                "method": "GET",
+                "path": urlsplit(path).path,
+                "query": [["fields", "id,internalDate"], ["format", "metadata"]],
+            }
+        )
+        response_digest = None
+        if response_payload is not None:
+            response_digest = self._digest_json(response_payload)
+        return {
+            "request_digest": request_digest,
+            "response_digest": response_digest,
+            "outcome": outcome,
+        }
+
+    def prepare_response(
+        self,
+        flow: Any,
+        route: Any,
+        params: dict[str, str],
+        *,
+        authorization_factory: Callable[[], str] | None = None,
+    ) -> PolicyDecision:
+        if not flow.response or not self._is_list(params):
+            return PolicyDecision(allowed=True)
+        if not 200 <= int(flow.response.status_code) < 300:
+            return PolicyDecision(allowed=True)
+        try:
+            config = self._metadata_fetch_config(route)
+        except ValueError:
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason="Gmail metadata fetch policy is invalid",
+                payload={"error": "gmail_metadata_fetch_config_invalid"},
+            )
+        if config is None:
+            return PolicyDecision(allowed=True)
+        response_cfg = route.adapter_config.get("response") or {}
+        max_body = response_cfg.get("maxBodyBytes")
+        if type(max_body) is not int or len(flow.response.raw_content or b"") > max_body:
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="gmail response body exceeded policy limit",
+                payload={"error": "response_body_too_large", "maxBodyBytes": max_body},
+            )
+        try:
+            payload = strict_json_loads(flow.response.raw_content or b"")
+        except Exception:
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="gmail response is not valid JSON",
+                payload={"error": "gmail_response_invalid_json"},
+            )
+        if not isinstance(payload, dict):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="gmail response must be a JSON object",
+                payload={"error": "gmail_response_invalid_json"},
+            )
+        messages = payload.get("messages")
+        if messages is None:
+            return PolicyDecision(allowed=True)
+        if not isinstance(messages, list):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="gmail metadata-fetch messages field is invalid",
+                payload={"error": "gmail_metadata_fetch_messages_invalid"},
+            )
+        if len(messages) > config["maxMessages"]:
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="gmail metadata-fetch message limit exceeded",
+                payload={
+                    "error": "gmail_metadata_fetch_message_limit_exceeded",
+                    "max_messages": config["maxMessages"],
+                },
+            )
+
+        cutoff_ms = self._cutoff_ms(route)
+        seen: set[str] = set()
+        planned = 0
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            message_id = self._valid_message_id(item.get("id"))
+            if message_id is None:
+                continue
+            if message_id in seen:
+                return PolicyDecision(
+                    allowed=False,
+                    status_code=502,
+                    reason="gmail metadata-fetch response contains a duplicate id",
+                    payload={"error": "gmail_metadata_fetch_duplicate_id"},
+                )
+            seen.add(message_id)
+            if "internalDate" in item:
+                value = self._internal_date_value(item.get("internalDate"))
+                if value is None:
+                    return PolicyDecision(
+                        allowed=False,
+                        status_code=502,
+                        reason="gmail response internalDate is not an epoch-ms integer",
+                        payload={"error": "gmail_response_invalid_internal_date"},
+                    )
+                if value < cutoff_ms:
+                    return PolicyDecision(
+                        allowed=False,
+                        status_code=502,
+                        reason=f"gmail response contains mail older than {self._days(route)} days",
+                        payload={"error": "gmail_response_too_old", "max_days": self._days(route)},
+                    )
+            else:
+                planned += 1
+        if planned == 0:
+            return PolicyDecision(allowed=True)
+        if authorization_factory is None:
+            return PolicyDecision(
+                allowed=False,
+                status_code=503,
+                reason="gmail metadata-fetch credential context is missing",
+                payload={"error": "gmail_metadata_fetch_credential_context_missing"},
+            )
+        try:
+            origin, gmail_user = self._metadata_origin_and_user(flow, route, params)
+        except (UnicodeError, ValueError):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="gmail metadata-fetch origin is invalid",
+                payload={"error": "gmail_metadata_fetch_origin_invalid"},
+            )
+        config_digest = self._digest_json(
+            {
+                "max_messages": config["maxMessages"],
+                "per_request_timeout_ms": config["perRequestTimeoutMs"],
+                "total_timeout_ms": config["totalTimeoutMs"],
+                "max_body_bytes": config["maxBodyBytes"],
+            }
+        )
+        try:
+            deadline = http_client.HttpDeadline.after(config["totalTimeoutMs"] / 1000)
+        except http_client.HttpClientError:
+            return PolicyDecision(
+                allowed=False,
+                status_code=500,
+                reason="gmail metadata-fetch deadline policy is invalid",
+                payload={"error": "gmail_metadata_fetch_config_invalid"},
+            )
+        if not self._record_metadata_audit(
+            flow,
+            route,
+            "data_plane.gmail.metadata_fanout.started",
+            {
+                "outcome": "started",
+                "planned_count": planned,
+                "cutoff_epoch_ms": cutoff_ms,
+                "metadata_fetch_config_digest": config_digest,
+            },
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=503,
+                reason="gmail metadata-fetch start audit is unavailable",
+                payload={"error": "gmail_metadata_fetch_start_audit_unavailable"},
+            )
+
+        released: list[dict[str, Any]] = []
+        child_records: list[dict[str, Any]] = []
+        outcomes: Counter[str] = Counter()
+        blocked_decision: PolicyDecision | None = None
+        encoded_user = quote(gmail_user, safe="")
+        for item in messages:
+            if not isinstance(item, dict):
+                continue
+            message_id = self._valid_message_id(item.get("id"))
+            if message_id is None:
+                continue
+            if "internalDate" in item:
+                released.append(item)
+                continue
+            path = (
+                f"/gmail/v1/users/{encoded_user}/messages/{quote(message_id, safe='')}"
+                "?format=metadata&fields=id,internalDate"
+            )
+            dispatch_deadline: float | None = None
+            dispatch_expires_at_epoch_ms = flow.metadata.get(
+                "serverware_release_dispatch_expires_at_epoch_ms"
+            )
+            dispatch_deadline_required = (
+                flow.metadata.get("serverware_release_state") == "dispatching"
+            )
+            if dispatch_expires_at_epoch_ms is not None or dispatch_deadline_required:
+                if (
+                    type(dispatch_expires_at_epoch_ms) is not int
+                    or dispatch_expires_at_epoch_ms < 0
+                ):
+                    dispatch_remaining = 0.0
+                else:
+                    dispatch_remaining = (
+                        dispatch_expires_at_epoch_ms - int(time.time() * 1000)
+                    ) / 1000
+                if dispatch_remaining < _MIN_GMAIL_CHILD_AUTHORITY_SECONDS:
+                    child_records.append(
+                        self._metadata_child_record(
+                            path=path,
+                            response_payload=None,
+                            outcome="blocked_release_authority",
+                        )
+                    )
+                    outcomes["blocked"] += 1
+                    blocked_decision = PolicyDecision(
+                        allowed=False,
+                        status_code=503,
+                        reason="gmail metadata-fetch release authority expired",
+                        payload={"error": "gmail_metadata_fetch_release_authority_expired"},
+                    )
+                    break
+                dispatch_deadline = time.monotonic() + dispatch_remaining
+            try:
+                authorization, credential_lease_deadline = authorization_factory()
+            except Exception:
+                child_records.append(
+                    self._metadata_child_record(
+                        path=path,
+                        response_payload=None,
+                        outcome="blocked_credential",
+                    )
+                )
+                outcomes["blocked"] += 1
+                blocked_decision = PolicyDecision(
+                    allowed=False,
+                    status_code=503,
+                    reason="gmail metadata-fetch credential authority changed",
+                    payload={"error": "gmail_metadata_fetch_credential_authority_changed"},
+                )
+                break
+            now_monotonic = time.monotonic()
+            child_deadline_at = min(
+                deadline.expires_at,
+                credential_lease_deadline,
+                dispatch_deadline if dispatch_deadline is not None else float("inf"),
+            )
+            child_timeout_seconds = min(
+                config["perRequestTimeoutMs"] / 1000,
+                child_deadline_at - now_monotonic,
+            )
+            if child_timeout_seconds <= 0:
+                child_records.append(
+                    self._metadata_child_record(
+                        path=path,
+                        response_payload=None,
+                        outcome="gmail_metadata_fetch_total_deadline_exhausted",
+                    )
+                )
+                outcomes["dropped"] += 1
+                continue
+            child_deadline = http_client.HttpDeadline(child_deadline_at)
+            metadata: Any | None = None
+            try:
+                metadata = _secure_bounded_metadata_get(
+                    origin=origin,
+                    path=path,
+                    headers={"Authorization": authorization},
+                    timeout_seconds=child_timeout_seconds,
+                    max_body_bytes=config["maxBodyBytes"],
+                    deadline=child_deadline,
+                )
+            except http_client.HttpClientError:
+                child_records.append(
+                    self._metadata_child_record(
+                        path=path,
+                        response_payload=None,
+                        outcome="dropped_transport_or_response",
+                    )
+                )
+                outcomes["dropped"] += 1
+                continue
+            token = authorization.removeprefix("Bearer ")
+            try:
+                serialized_metadata = json.dumps(
+                    metadata,
+                    ensure_ascii=True,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                )
+            except (TypeError, ValueError):
+                serialized_metadata = ""
+            if authorization in serialized_metadata or token in serialized_metadata:
+                child_records.append(
+                    self._metadata_child_record(
+                        path=path,
+                        response_payload=metadata,
+                        outcome="dropped_credential_reflection",
+                    )
+                )
+                outcomes["dropped"] += 1
+                continue
+            if not isinstance(metadata, dict) or metadata.get("id") != message_id:
+                child_records.append(
+                    self._metadata_child_record(
+                        path=path,
+                        response_payload=metadata,
+                        outcome="dropped_json_or_id",
+                    )
+                )
+                outcomes["dropped"] += 1
+                continue
+            internal_date = metadata.get("internalDate")
+            if (
+                not isinstance(internal_date, str)
+                or not internal_date
+                or not internal_date.isascii()
+                or not internal_date.isdigit()
+            ):
+                child_records.append(
+                    self._metadata_child_record(
+                        path=path,
+                        response_payload=metadata,
+                        outcome="dropped_internal_date_invalid",
+                    )
+                )
+                outcomes["dropped"] += 1
+                continue
+            if int(internal_date) < cutoff_ms:
+                child_records.append(
+                    self._metadata_child_record(
+                        path=path,
+                        response_payload=metadata,
+                        outcome="blocked_too_old",
+                    )
+                )
+                outcomes["blocked"] += 1
+                blocked_decision = PolicyDecision(
+                    allowed=False,
+                    status_code=502,
+                    reason=f"gmail response contains mail older than {self._days(route)} days",
+                    payload={"error": "gmail_response_too_old", "max_days": self._days(route)},
+                )
+                break
+            merged = dict(item)
+            merged["id"] = metadata["id"]
+            merged["internalDate"] = internal_date
+            released.append(merged)
+            child_records.append(
+                self._metadata_child_record(
+                    path=path,
+                    response_payload=metadata,
+                    outcome="hydrated",
+                )
+            )
+            outcomes["hydrated"] += 1
+
+        completion_details = {
+            "outcome": "blocked" if blocked_decision is not None else "completed",
+            "planned_count": planned,
+            "attempted_count": len(child_records),
+            "hydrated_count": outcomes["hydrated"],
+            "dropped_count": outcomes["dropped"],
+            "blocked_count": outcomes["blocked"],
+            "ordered_child_digest": self._digest_json(child_records),
+            "metadata_fetch_config_digest": config_digest,
+        }
+        if not self._record_metadata_audit(
+            flow,
+            route,
+            "data_plane.gmail.metadata_fanout.completed",
+            completion_details,
+        ):
+            return PolicyDecision(
+                allowed=False,
+                status_code=503,
+                reason="gmail metadata-fetch completion audit is unavailable",
+                payload={"error": "gmail_metadata_fetch_completion_audit_unavailable"},
+            )
+        if blocked_decision is not None:
+            return blocked_decision
+        payload["messages"] = released
+        flow.response.set_text(json.dumps(payload, separators=(",", ":"), sort_keys=True))
+        return PolicyDecision(allowed=True)
+
     def _validate_internal_date(self, route: Any, item: dict[str, Any]) -> PolicyDecision:
         raw_value = item.get("internalDate")
         if raw_value is None:
@@ -912,9 +1573,8 @@ class GmailV1Adapter(ApiAdapter):
                 reason="gmail response missing internalDate required by policy",
                 payload={"error": "gmail_response_missing_internal_date"},
             )
-        try:
-            value = int(raw_value)
-        except (TypeError, ValueError):
+        value = self._internal_date_value(raw_value)
+        if value is None:
             return PolicyDecision(
                 allowed=False,
                 status_code=502,
@@ -931,6 +1591,7 @@ class GmailV1Adapter(ApiAdapter):
         return PolicyDecision(allowed=True)
 
     def validate_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        flow.metadata.pop("serverware_gmail_pending_proofs", None)
         if not flow.response:
             return PolicyDecision(allowed=True)
         if not 200 <= int(flow.response.status_code) < 300:
@@ -953,7 +1614,7 @@ class GmailV1Adapter(ApiAdapter):
             )
         validate_internal_date = response_cfg.get("validateInternalDate", True)
         try:
-            payload = json.loads(flow.response.get_text(strict=False))
+            payload = strict_json_loads(flow.response.raw_content or b"")
         except Exception:
             return PolicyDecision(
                 allowed=False,
@@ -961,31 +1622,59 @@ class GmailV1Adapter(ApiAdapter):
                 reason="gmail response is not valid JSON",
                 payload={"error": "gmail_response_invalid_json"},
             )
+        if not isinstance(payload, dict):
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="gmail response must be a JSON object",
+                payload={"error": "gmail_response_invalid_json"},
+            )
 
         if self._is_list(params):
             if validate_internal_date:
                 messages = payload.get("messages") or []
-                allowed_ids: list[str] = []
+                if not isinstance(messages, list):
+                    return PolicyDecision(
+                        allowed=False,
+                        status_code=502,
+                        reason="gmail response messages field is invalid",
+                        payload={"error": "gmail_response_messages_invalid"},
+                    )
+                pending_proofs: dict[str, int] = {}
                 validated_messages: list[dict[str, Any]] = []
+                seen: set[str] = set()
                 for item in messages:
-                    if not isinstance(item, dict) or not item.get("id"):
+                    if not isinstance(item, dict):
                         continue
+                    message_id = self._valid_message_id(item.get("id"))
+                    if message_id is None:
+                        continue
+                    if message_id in seen:
+                        return PolicyDecision(
+                            allowed=False,
+                            status_code=502,
+                            reason="gmail response contains a duplicate id",
+                            payload={"error": "gmail_metadata_fetch_duplicate_id"},
+                        )
+                    seen.add(message_id)
                     if item.get("internalDate") is None and response_cfg.get("validateListByMetadataFetch", False):
-                        # The prototype cannot perform the gate's bounded metadata fetch.
-                        # Do not release an identifier until its age is proven.
                         continue
                     decision = self._validate_internal_date(route, item)
                     if not decision.allowed:
                         return decision
+                    internal_date = self._internal_date_value(item.get("internalDate"))
+                    if internal_date is None:
+                        return PolicyDecision(
+                            allowed=False,
+                            status_code=502,
+                            reason="gmail response internalDate is not an epoch-ms integer",
+                            payload={"error": "gmail_response_invalid_internal_date"},
+                        )
                     item["serverwareAgeProof"] = "validated"
-                    allowed_ids.append(str(item["id"]))
+                    pending_proofs[message_id] = internal_date + self._days(route) * 86_400_000
                     validated_messages.append(item)
                 payload["messages"] = validated_messages
-                runtime.cache_gmail_message_ids(
-                    self._proof_context(flow, route, params),
-                    allowed_ids,
-                    ttl_seconds=int(route.adapter_config.get("cacheTtlSeconds", 1800)),
-                )
+                flow.metadata["serverware_gmail_pending_proofs"] = pending_proofs
             self._apply_allowed_fields(flow, route, payload)
             self._normalize_response_headers(flow, response_cfg, "json")
             return PolicyDecision(allowed=True)
@@ -994,15 +1683,65 @@ class GmailV1Adapter(ApiAdapter):
         if validate_internal_date:
             decision = self._validate_internal_date(route, payload)
             if decision.allowed and payload.get("id"):
-                runtime.cache_gmail_message_ids(
-                    self._proof_context(flow, route, params),
-                    [payload["id"]],
-                    ttl_seconds=int(route.adapter_config.get("cacheTtlSeconds", 1800)),
-                )
+                message_id = self._valid_message_id(payload.get("id"))
+                if message_id is not None:
+                    internal_date = self._internal_date_value(payload.get("internalDate"))
+                    if internal_date is not None:
+                        flow.metadata["serverware_gmail_pending_proofs"] = {
+                            message_id: internal_date + self._days(route) * 86_400_000
+                        }
         self._apply_allowed_fields(flow, route, payload)
         if decision.allowed:
             self._normalize_response_headers(flow, response_cfg, "json")
         return decision
+
+    def finalize_response(self, flow: Any, route: Any, params: dict[str, str]) -> PolicyDecision:
+        pending = flow.metadata.pop("serverware_gmail_pending_proofs", None)
+        if not isinstance(pending, dict) or not pending:
+            return PolicyDecision(allowed=True)
+        try:
+            payload = strict_json_loads(flow.response.raw_content or b"")
+        except Exception:
+            return PolicyDecision(
+                allowed=False,
+                status_code=502,
+                reason="projected gmail response is not valid JSON",
+                payload={"error": "gmail_response_projection_invalid"},
+            )
+        pending_set = set(pending)
+        emitted: list[str] = []
+        if self._is_list(params):
+            messages = payload.get("messages") if isinstance(payload, dict) else None
+            if isinstance(messages, list):
+                for item in messages:
+                    if not isinstance(item, dict) or item.get("serverwareAgeProof") != "validated":
+                        continue
+                    message_id = self._valid_message_id(item.get("id"))
+                    if message_id in pending_set:
+                        emitted.append(message_id)
+        elif isinstance(payload, dict):
+            message_id = self._valid_message_id(payload.get("id"))
+            if message_id in pending_set:
+                emitted.append(message_id)
+        if not emitted:
+            return PolicyDecision(allowed=True)
+        try:
+            runtime.cache_gmail_message_ids(
+                self._proof_context(flow, route, params),
+                emitted,
+                ttl_seconds=int(route.adapter_config.get("cacheTtlSeconds", 1800)),
+                max_age_expires_at_epoch_ms={
+                    message_id: pending[message_id] for message_id in emitted
+                },
+            )
+        except Exception:
+            return PolicyDecision(
+                allowed=False,
+                status_code=503,
+                reason="gmail direct-read proof commit failed",
+                payload={"error": "gmail_direct_read_proof_commit_failed"},
+            )
+        return PolicyDecision(allowed=True)
 
     def _apply_allowed_fields(self, flow: Any, route: Any, payload: dict[str, Any]) -> None:
         response_cfg = route.adapter_config.get("response") or {}

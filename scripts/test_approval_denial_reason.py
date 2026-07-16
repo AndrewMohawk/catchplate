@@ -30,6 +30,12 @@ def main() -> None:
 
         db.init_db()
         snapshot = policy_bundle.write_policy_bundle(policy_bundle.demo_policy_bundle("cred-demo-bearer"))
+        db.advance_policy_high_water(
+            policy_id=snapshot.raw["metadata"]["id"],
+            sequence=snapshot.raw["metadata"]["sequence"],
+            rollback_epoch=snapshot.raw["metadata"]["rollbackEpoch"],
+            policy_hash=snapshot.hash,
+        )
         db.upsert_route_with_id(
             "demo.npm.publish.jit",
             {

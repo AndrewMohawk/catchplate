@@ -12,9 +12,11 @@ from serverware.policy_engine import (
     _client_ip,
     complete_release_authorization,
     complete_release_authorization_for_error,
+    discard_response_guards,
     dispatch_release_authorization,
     evaluate_request,
     evaluate_response,
+    prepare_response,
 )
 
 
@@ -230,12 +232,22 @@ class ServerwareAddon:
     def response(self, flow: http.HTTPFlow) -> None:
         try:
             if flow.metadata.get("serverware_blocked_response") is not True:
+                prepared = prepare_response(flow)
                 completion = complete_release_authorization(flow, "forwarded")
                 if not completion.allowed:
+                    discard_response_guards(flow)
                     _install_blocked_response(
                         flow,
                         completion.status_code,
                         completion.payload or {"error": completion.reason},
+                    )
+                    return
+                if not prepared.allowed:
+                    discard_response_guards(flow)
+                    _install_blocked_response(
+                        flow,
+                        prepared.status_code,
+                        prepared.payload or {"error": prepared.reason},
                     )
                     return
             decision = evaluate_response(flow)
@@ -246,6 +258,12 @@ class ServerwareAddon:
                     decision.payload or {"error": decision.reason},
                 )
         except Exception:
+            if flow.metadata.get("serverware_blocked_response") is not True:
+                try:
+                    complete_release_authorization(flow, "forwarded")
+                except Exception:
+                    pass
+            discard_response_guards(flow)
             _install_blocked_response(
                 flow,
                 503,

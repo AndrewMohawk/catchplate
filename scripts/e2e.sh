@@ -190,8 +190,9 @@ for item in data["messages"]:
     assert item["serverwareAgeProof"] == "validated", item
     assert int(item["internalDate"]) >= cutoff_ms, item
     assert item["threadId"].startswith("thread-"), item
-    assert item["payload"]["headers"][0]["name"] == "From", item
-    assert "body" not in item["payload"], item
+    if "payload" in item:
+        assert item["payload"]["headers"][0]["name"] == "From", item
+        assert "body" not in item["payload"], item
     for key in ("authorization", "proxy_authorization", "serverware_agent", "cookie", "query", "raw", "secretDebug", "serverDebugSecret"):
         assert key not in item, item
 PY
@@ -204,28 +205,56 @@ import json, sys
 data = json.load(open(sys.argv[1]))
 assert set(data) == {"messages"}, data
 assert all(item["serverwareAgeProof"] == "validated" for item in data["messages"]), data
-assert all("raw" not in item and "body" not in item["payload"] for item in data["messages"]), data
+assert all(
+    "raw" not in item and ("payload" not in item or "body" not in item["payload"])
+    for item in data["messages"]
+), data
 PY
 
 gmail_missing_date_code="$(curl -sS -o "$TMP_DIR/gmail-pending-list.json" -w "%{http_code}" \
   --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages?q=from%3Asecurity%40example.com&omitInternalDate=1")"
 if [[ "$gmail_missing_date_code" != "200" ]]; then
-  echo "expected Gmail list without age evidence to return an empty filtered list, got $gmail_missing_date_code" >&2
+  echo "expected Gmail list metadata hydration to succeed, got $gmail_missing_date_code" >&2
   cat "$TMP_DIR/gmail-pending-list.json" >&2
   exit 1
 fi
 python3 - "$TMP_DIR/gmail-pending-list.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
-assert data == {"messages": []}, data
+assert [item["id"] for item in data["messages"]] == ["pending-message-1", "pending-message-2"], data
+assert all(item["serverwareAgeProof"] == "validated" for item in data["messages"]), data
+assert all(str(item["internalDate"]).isdigit() for item in data["messages"]), data
 PY
 
-pending_get_code="$(curl -sS -o "$TMP_DIR/gmail-pending-get-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+pending_get_code="$(curl -sS -o "$TMP_DIR/gmail-pending-get.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
   "https://demo-upstream:8443/gmail/v1/users/me/messages/pending-message-1")"
-if [[ "$pending_get_code" != "403" ]]; then
-  echo "expected Gmail ID without age proof to fail with 403, got $pending_get_code" >&2
-  cat "$TMP_DIR/gmail-pending-get-block.json" >&2
+if [[ "$pending_get_code" != "200" ]]; then
+  echo "expected metadata-validated Gmail ID to authorize a direct read, got $pending_get_code" >&2
+  cat "$TMP_DIR/gmail-pending-get.json" >&2
+  exit 1
+fi
+python3 - "$TMP_DIR/gmail-pending-get.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert data["id"] == "pending-message-1", data
+assert str(data["internalDate"]).isdigit(), data
+assert "body" not in data["payload"], data
+PY
+
+curl -fsS --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+  "https://demo-upstream:8443/gmail/v1/users/me/messages?metadataNotFound=1" \
+  > "$TMP_DIR/gmail-missing-metadata-list.json"
+python3 - "$TMP_DIR/gmail-missing-metadata-list.json" <<'PY'
+import json, sys
+data = json.load(open(sys.argv[1]))
+assert [item["id"] for item in data["messages"]] == ["recent-message-1"], data
+PY
+missing_get_code="$(curl -sS -o "$TMP_DIR/gmail-missing-get-block.json" -w "%{http_code}" --proxy "$PROXY" "${AGENT_PROXY_HEADER[@]}" --cacert "$CA_FILE" "${AGENT_HEADER[@]}" \
+  "https://demo-upstream:8443/gmail/v1/users/me/messages/missing-message-1")"
+if [[ "$missing_get_code" != "403" ]]; then
+  echo "expected Gmail ID whose metadata fetch failed to remain unauthorized, got $missing_get_code" >&2
+  cat "$TMP_DIR/gmail-missing-get-block.json" >&2
   exit 1
 fi
 

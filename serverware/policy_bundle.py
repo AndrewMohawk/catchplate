@@ -84,6 +84,7 @@ SUPPORTED_CONSTRAINTS = {
     "queryDateWindow",
     "queryNumericBounds",
     "requestTimeWindow",
+    "requestValue",
     "jsonBody",
     "formBody",
     "responseDateWindow",
@@ -196,6 +197,7 @@ CONSTRAINT_TYPE_FIELDS = {
     "queryDateWindow": {"parameters", "required", "formats", "maxAgeDays", "allowFutureSkewSeconds"},
     "queryNumericBounds": {"parameters", "required", "min", "max", "integer"},
     "requestTimeWindow": {"timezone", "notBefore", "notAfter", "weekdays", "dailyWindows"},
+    "requestValue": {"rules"},
     "jsonBody": {"contentTypes", "allowedFields", "requiredFields", "deniedFields", "fields"},
     "formBody": {"contentTypes", "allowedFields", "requiredFields", "deniedFields", "fields"},
     "responseDateWindow": {
@@ -448,13 +450,40 @@ def _load_schema(path: Path) -> dict[str, Any]:
 def validate_policy_schema(raw: dict[str, Any]) -> None:
     _admit_policy_json_object(raw)
     try:
-        from jsonschema import Draft202012Validator, ValidationError
+        from jsonschema import Draft202012Validator, ValidationError, validators
     except Exception as exc:
         raise PolicyBundleError("jsonschema package is required for policy validation") from exc
 
+    def validate_less_than_or_equal(
+        validator: Any,
+        relation: Any,
+        instance: Any,
+        schema: Any,
+    ) -> Any:
+        del validator, schema
+        if not isinstance(instance, dict) or not isinstance(relation, dict):
+            return
+        left_name = relation.get("left")
+        right_name = relation.get("right")
+        left = instance.get(left_name) if isinstance(left_name, str) else None
+        right = instance.get(right_name) if isinstance(right_name, str) else None
+        if (
+            isinstance(left, (int, float))
+            and not isinstance(left, bool)
+            and isinstance(right, (int, float))
+            and not isinstance(right, bool)
+            and left > right
+        ):
+            yield ValidationError(f"{left_name} must not exceed {right_name}")
+
+    ServerwareSchemaValidator = validators.extend(
+        Draft202012Validator,
+        {"x-serverware-less-than-or-equal": validate_less_than_or_equal},
+    )
+
     bundle_schema = _load_schema(SCHEMA_DIR / "policy-bundle.v1.schema.json")
     try:
-        Draft202012Validator(bundle_schema).validate(raw)
+        ServerwareSchemaValidator(bundle_schema).validate(raw)
         for route in raw.get("routes") or []:
             adapter = route.get("adapter") or {}
             adapter_type = adapter.get("type")
@@ -462,7 +491,9 @@ def validate_policy_schema(raw: dict[str, Any]) -> None:
                 continue
             schema_path = SCHEMA_DIR / "adapters" / f"{adapter_type}.schema.json"
             if schema_path.exists():
-                Draft202012Validator(_load_schema(schema_path)).validate(adapter.get("config") or {})
+                ServerwareSchemaValidator(_load_schema(schema_path)).validate(
+                    adapter.get("config") or {}
+                )
     except ValidationError as exc:
         path = ".".join(str(item) for item in exc.absolute_path)
         location = f" at {path}" if path else ""
@@ -1029,6 +1060,87 @@ def _parse_clock_minutes(value: Any) -> int | None:
     return int(hour) * 60 + int(minute)
 
 
+def _validate_request_value_predicate(
+    route_id: str,
+    constraint_id: str,
+    rule_index: int,
+    predicate: Any,
+) -> str:
+    label = f"route {route_id} requestValue {constraint_id} rule {rule_index}"
+    if not isinstance(predicate, dict):
+        raise PolicyBundleError(f"{label} predicate must be an object")
+    kind = predicate.get("kind")
+    fields_by_kind = {
+        "equals": {"kind", "value"},
+        "enum": {"kind", "values"},
+        "pattern": {"kind", "pattern", "maxLength"},
+        "stringLength": {"kind", "minLength", "maxLength"},
+        "numeric": {"kind", "min", "max", "integer"},
+    }
+    allowed = fields_by_kind.get(kind)
+    if allowed is None:
+        raise PolicyBundleError(f"{label} has unsupported predicate kind {kind}")
+    unknown = sorted(set(predicate) - allowed)
+    if unknown:
+        raise PolicyBundleError(f"{label} predicate has unsupported fields: {', '.join(unknown)}")
+
+    if kind == "equals":
+        value = predicate.get("value")
+        if not isinstance(value, str) or len(value.encode("utf-8")) > 4096:
+            raise PolicyBundleError(f"{label} equals value must be a string of at most 4096 bytes")
+    elif kind == "enum":
+        values = predicate.get("values")
+        if (
+            not isinstance(values, list)
+            or not 1 <= len(values) <= 32
+            or any(not isinstance(value, str) or len(value.encode("utf-8")) > 4096 for value in values)
+            or len(values) != len(set(values))
+        ):
+            raise PolicyBundleError(f"{label} enum must contain 1-32 unique strings of at most 4096 bytes")
+    elif kind == "pattern":
+        pattern = predicate.get("pattern")
+        maximum = predicate.get("maxLength")
+        if (
+            not isinstance(pattern, str)
+            or parse_bounded_pattern(pattern) is None
+            or type(maximum) is not int
+            or not 1 <= maximum <= 4096
+        ):
+            raise PolicyBundleError(
+                f"{label} pattern must use the anchored bounded runtime grammar with maxLength 1-4096"
+            )
+    elif kind == "stringLength":
+        minimum = predicate.get("minLength")
+        maximum = predicate.get("maxLength")
+        if minimum is None and maximum is None:
+            raise PolicyBundleError(f"{label} stringLength must define minLength or maxLength")
+        if any(
+            value is not None and (type(value) is not int or not 0 <= value <= 4096)
+            for value in (minimum, maximum)
+        ) or (minimum is not None and maximum is not None and minimum > maximum):
+            raise PolicyBundleError(f"{label} has invalid stringLength bounds")
+    else:
+        minimum = predicate.get("min")
+        maximum = predicate.get("max")
+        if minimum is None and maximum is None:
+            raise PolicyBundleError(f"{label} numeric predicate must define min or max")
+        if any(value is not None and not _is_finite_json_number(value) for value in (minimum, maximum)):
+            raise PolicyBundleError(f"{label} numeric bounds must be finite numbers")
+        if minimum is not None and maximum is not None and minimum > maximum:
+            raise PolicyBundleError(f"{label} numeric min must not exceed max")
+        if "integer" in predicate and not isinstance(predicate["integer"], bool):
+            raise PolicyBundleError(f"{label} numeric integer must be boolean")
+        if predicate.get("integer") is True and any(
+            value is not None
+            and (type(value) is not int or not -(2**63) <= value <= 2**63 - 1)
+            for value in (minimum, maximum)
+        ):
+            raise PolicyBundleError(
+                f"{label} integer numeric bounds must be signed 64-bit integers"
+            )
+    return str(kind)
+
+
 def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, Any], ...]:
     if constraints is None:
         return ()
@@ -1201,6 +1313,42 @@ def _validate_constraints(route_id: str, constraints: Any) -> tuple[dict[str, An
                     raise PolicyBundleError(
                         f"route {route_id} requestTimeWindow {constraint_id} daily windows must not overlap"
                     )
+        elif constraint_type == "requestValue":
+            rules = constraint.get("rules")
+            if not isinstance(rules, list) or not 1 <= len(rules) <= 16:
+                raise PolicyBundleError(
+                    f"route {route_id} requestValue {constraint_id} must define 1-16 rules"
+                )
+            seen_sources: set[tuple[str, str]] = set()
+            seen_captures: set[str] = set()
+            for rule_index, rule in enumerate(rules):
+                label = f"route {route_id} requestValue {constraint_id} rule {rule_index}"
+                if not isinstance(rule, dict) or not {"source", "name", "predicate"}.issubset(rule):
+                    raise PolicyBundleError(f"{label} must define source, name, and predicate")
+                unknown = sorted(set(rule) - {"source", "name", "predicate", "capture"})
+                if unknown:
+                    raise PolicyBundleError(f"{label} has unsupported fields: {', '.join(unknown)}")
+                source = rule.get("source")
+                name = rule.get("name")
+                if source not in {"pathParam", "query", "header"}:
+                    raise PolicyBundleError(f"{label} has unsupported source {source}")
+                if not isinstance(name, str) or not name or len(name.encode("utf-8")) > 256:
+                    raise PolicyBundleError(f"{label} name must contain 1-256 bytes")
+                source_key = (str(source), name)
+                if source_key in seen_sources:
+                    raise PolicyBundleError(f"{label} duplicates source {source}:{name}")
+                seen_sources.add(source_key)
+                _validate_request_value_predicate(route_id, constraint_id, rule_index, rule.get("predicate"))
+                capture = rule.get("capture")
+                if capture is not None:
+                    if (
+                        not isinstance(capture, str)
+                        or OPERATION_FIELD_NAME_RE.fullmatch(capture) is None
+                        or capture == "operation"
+                        or capture in seen_captures
+                    ):
+                        raise PolicyBundleError(f"{label} capture is invalid, reserved, or duplicated")
+                    seen_captures.add(capture)
         elif constraint_type in {"jsonBody", "formBody"}:
             allowed_fields = constraint.get("allowedFields")
             if not isinstance(allowed_fields, list) or not allowed_fields:
@@ -1642,6 +1790,91 @@ def _validate_generic_operation_sources(
     return source_kinds
 
 
+def _validate_request_value_sources(
+    route_id: str,
+    adapter_type: str,
+    adapter_config: dict[str, Any],
+    paths: tuple[str, ...],
+    constraints: tuple[dict[str, Any], ...],
+    operation_source_kinds: dict[str, str],
+) -> dict[str, str]:
+    request_value_constraints = [
+        constraint for constraint in constraints if constraint.get("type") == "requestValue"
+    ]
+    if not request_value_constraints:
+        return {}
+    if adapter_type != "generic.rest":
+        raise PolicyBundleError(
+            f"route {route_id} requestValue is supported only by generic.rest"
+        )
+    request = adapter_config.get("request") or {}
+    allowed_query = set(request.get("allowedQueryKeys") or [])
+    allowed_headers = {
+        str(name).lower() for name in request.get("allowedHeaders") or []
+    }
+    path_placeholders: list[set[str]] = []
+    for path in paths:
+        placeholders = {
+            segment[1:-1]
+            for segment in path.strip("/").split("/")
+            if segment.startswith("{") and segment.endswith("}")
+        }
+        path_placeholders.append(placeholders)
+
+    captures: dict[str, str] = {}
+    seen_sources: set[tuple[str, str]] = set()
+    for constraint in request_value_constraints:
+        constraint_id = str(constraint.get("id") or "unnamed")
+        for rule_index, rule in enumerate(constraint.get("rules") or []):
+            source = str(rule.get("source") or "")
+            name = str(rule.get("name") or "")
+            label = f"route {route_id} requestValue {constraint_id} rule {rule_index}"
+            source_key = (source, name)
+            if source_key in seen_sources:
+                raise PolicyBundleError(f"{label} duplicates route source {source}:{name}")
+            seen_sources.add(source_key)
+            if source == "pathParam":
+                if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None or any(
+                    name not in placeholders for placeholders in path_placeholders
+                ):
+                    raise PolicyBundleError(
+                        f"{label} pathParam {name} must be a placeholder in every matched path"
+                    )
+            elif source == "query":
+                if name not in allowed_query:
+                    raise PolicyBundleError(
+                        f"{label} query {name} is not admitted by generic.rest allowedQueryKeys"
+                    )
+            elif source == "header":
+                if name != name.lower() or HTTP_HEADER_NAME_RE.fullmatch(name) is None:
+                    raise PolicyBundleError(
+                        f"{label} header name must be a lower-case HTTP field name"
+                    )
+                if name not in allowed_headers:
+                    raise PolicyBundleError(
+                        f"{label} header {name} is not admitted by generic.rest allowedHeaders"
+                    )
+            capture = rule.get("capture")
+            if capture is None:
+                continue
+            capture = str(capture)
+            if (
+                capture in operation_source_kinds
+                or capture in captures
+                or capture in {"operation", "providerAccount"}
+            ):
+                raise PolicyBundleError(
+                    f"{label} capture {capture} collides with another operation field"
+                )
+            predicate = rule.get("predicate") or {}
+            captures[capture] = (
+                "requestValueInteger"
+                if predicate.get("kind") == "numeric" and predicate.get("integer") is True
+                else "requestValueString"
+            )
+    return captures
+
+
 def _validate_response_binding_sources(
     route_id: str,
     adapter_type: str,
@@ -1748,6 +1981,18 @@ def _validate_response_binding_sources(
                     raise PolicyBundleError(
                         f"route {route_id} responseBinding {constraint_id} bodySha256 source "
                         f"{source} must use exactString"
+                    )
+                continue
+            if source_kind in {"requestValueString", "requestValueInteger"}:
+                expected_comparison = (
+                    "canonicalInteger"
+                    if source_kind == "requestValueInteger"
+                    else "exactString"
+                )
+                if binding.get("comparison") != expected_comparison:
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} requestValue source {source} "
+                        f"must use {expected_comparison}"
                     )
                 continue
             source_constraints = body_constraints[source_kind]
@@ -1954,6 +2199,48 @@ def _validate_adapter_security_invariants(
         if not isinstance(response.get("validateListByMetadataFetch"), bool):
             raise PolicyBundleError(
                 f"route {route_id} Gmail policy must explicitly configure list metadata age proof"
+            )
+        validate_list_by_metadata = response["validateListByMetadataFetch"]
+        metadata_fetch = response.get("metadataFetch")
+        if validate_list_by_metadata and not isinstance(metadata_fetch, dict):
+            raise PolicyBundleError(
+                f"route {route_id} Gmail list metadata age proof requires metadataFetch"
+            )
+        if metadata_fetch is not None:
+            if not isinstance(metadata_fetch, dict):
+                raise PolicyBundleError(
+                    f"route {route_id} Gmail metadataFetch must be an object"
+                )
+            metadata_fetch_bounds = {
+                "maxMessages": 32,
+                "perRequestTimeoutMs": 3000,
+                "totalTimeoutMs": 10000,
+                "maxBodyBytes": 8192,
+            }
+            if set(metadata_fetch) != set(metadata_fetch_bounds):
+                raise PolicyBundleError(
+                    f"route {route_id} Gmail metadataFetch must define only "
+                    "maxMessages, perRequestTimeoutMs, totalTimeoutMs, and maxBodyBytes"
+                )
+            for field_name, maximum in metadata_fetch_bounds.items():
+                value = metadata_fetch.get(field_name)
+                if type(value) is not int or not 1 <= value <= maximum:
+                    raise PolicyBundleError(
+                        f"route {route_id} Gmail metadataFetch {field_name} must be an integer "
+                        f"between 1 and {maximum}"
+                    )
+            if metadata_fetch["maxMessages"] > adapter_config["maxResults"]:
+                raise PolicyBundleError(
+                    f"route {route_id} Gmail metadataFetch maxMessages must not exceed maxResults"
+                )
+            if metadata_fetch["perRequestTimeoutMs"] > metadata_fetch["totalTimeoutMs"]:
+                raise PolicyBundleError(
+                    f"route {route_id} Gmail metadataFetch perRequestTimeoutMs "
+                    "must not exceed totalTimeoutMs"
+                )
+        if validate_list_by_metadata and "id" not in response_fields:
+            raise PolicyBundleError(
+                f"route {route_id} Gmail list metadata age proof requires id in allowedFields"
             )
         if response.get("onViolation") != "block":
             raise PolicyBundleError(f"route {route_id} Gmail response violations must block")
@@ -2383,6 +2670,16 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             adapter_type,
             adapter_config,
             paths,
+        )
+        operation_source_kinds.update(
+            _validate_request_value_sources(
+                route_id,
+                adapter_type,
+                adapter_config,
+                paths,
+                constraints,
+                operation_source_kinds,
+            )
         )
         _validate_response_binding_sources(
             route_id,
@@ -2998,6 +3295,12 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                         "response": {
                             "validateInternalDate": True,
                             "validateListByMetadataFetch": True,
+                            "metadataFetch": {
+                                "maxMessages": 10,
+                                "perRequestTimeoutMs": 1500,
+                                "totalTimeoutMs": 8000,
+                                "maxBodyBytes": 4096,
+                            },
                             "maxBodyBytes": 1048576,
                             "allowedFields": [
                                 "id",
@@ -3080,7 +3383,7 @@ def demo_policy_bundle(credential_id: str = "cred-demo-bearer") -> dict[str, Any
                     {
                         "id": "x-one-tweet-per-day",
                         "type": "rateLimit",
-                        "description": "The Docker fixture can publish at most one tweet per day for this principal and credential.",
+                        "description": "The Docker fixture can publish at most one tweet per 86,400-second fixed window for this principal and credential.",
                         "max": 1,
                         "windowSeconds": 86400,
                         "store": "shared",

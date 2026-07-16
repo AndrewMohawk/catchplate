@@ -24,7 +24,7 @@ For each request:
 1. Principal allowlist checks run first: client IP, identity headers, and proxy bearer token.
 2. Route matching blocks unknown hosts, ports, paths, and methods.
 3. The adapter validates provider-specific credential metadata and classifies the operation.
-4. Request constraints validate operation, query, body, time windows, and current rate-limit headroom without mutating state.
+4. Request constraints validate operation, path/query/header values, body, time windows, and current rate-limit headroom without mutating quota or grant state. Validated `requestValue` captures are added to the canonical operation before its digest is computed.
 5. For an actual proxy request, the release authority atomically reserves every shared rate-limit counter and the exact request- and operation-bound one-use JIT grant. If a required grant is absent, it leaves no quota reservation and creates or reuses a bounded pending approval for the exact canonical request. `/v1/decide` is preview-only and does not create approvals or reserve state.
 6. The Rust gate obtains the route's one-credential scoped lease, checks its version, policy generation, and expiry, injects only the selected credential field, and strips Serverware-only identity headers.
 7. Immediately before the upstream send, the gate rechecks that the reservation, lease, and policy snapshot are still current, advances the exact release attempt to `dispatching`, synchronously submits `data_plane.credential.release_started`, and requires the control plane to acknowledge its durable hash-chain append. If any dependency is unavailable or rejects the binding, the upstream request is not sent.
@@ -40,13 +40,37 @@ For streaming responses, validation and projection happen incrementally. Serverw
 
 `operationPolicy`: allow or deny normalized adapter operations. Use this to block writes for one app while allowing reads, or to make a broad route safe even if SDKs choose unexpected endpoints.
 
-`rateLimit`: fixed-window credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. Examples: one tweet per provider account per day, five Slack posts per principal/credential/route assignment per hour, and ten bounded JSON object-store writes per principal/credential/route assignment per hour. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas.
+`rateLimit`: first-use-anchored fixed-window credential use limits keyed by principal, credential, verified provider account, route, operation, credential version, or selected operation fields. `providerAccount` derives a stable SHA-256 scope from the signed provider and callback-verified subject, so principal, credential, or credential-version rotation cannot reset an account-wide quota; policy admission and runtime authorization fail closed when that identity is unavailable. Examples: one tweet per provider account per 86,400-second window, five Slack posts per principal/credential/route assignment per 3,600-second window, and ten bounded JSON object-store writes per principal/credential/route assignment per 3,600-second window. `store: "local"` keeps the counter in the current process for dev-only throttles. `store: "shared"` commits the counter through the authenticated control-plane endpoint so the quota is atomic across proxy/data-plane replicas. These windows start with the first committed use after expiry; they are not aligned to UTC calendar boundaries.
 
 `queryDateWindow`: bounds query parameters such as `start_time`, `end_time`, or `since` to a maximum lookback. Formats supported: RFC3339, date, epoch seconds, and epoch milliseconds.
 
 `queryNumericBounds`: caps query values such as `max_results`, `per_page`, `limit`, and `maxResults`.
 
 `requestTimeWindow`: limits credential use by absolute RFC3339 bounds, UTC weekdays, and one or more UTC daily intervals. `timezone` must be `UTC`; daily interval ends are exclusive. Empty bounds, reversed absolute bounds, duplicate weekdays, malformed times, and overlapping intervals are rejected when the policy loads. Runtime parsing also fails closed.
+
+`requestValue`: constrains one path parameter, query value, or forwarded request header per rule on a `generic.rest` route. Every named value is mandatory and must occur exactly once. A rule selects exactly one predicate family through `predicate.kind`: exact string, string enum, bounded anchored pattern, UTF-8 byte-length range, or finite numeric range. Integer numeric rules accept only canonical signed 64-bit text. At most 16 rules and 32 enum values are allowed; string inputs are capped at 4096 bytes. Pattern rules use the shared non-backtracking bounded grammar and must declare `maxLength`.
+
+```json
+{
+  "id": "repository-scope",
+  "type": "requestValue",
+  "rules": [
+    {
+      "source": "pathParam",
+      "name": "owner",
+      "predicate": {"kind": "equals", "value": "approved-owner"},
+      "capture": "githubOwner"
+    },
+    {
+      "source": "query",
+      "name": "state",
+      "predicate": {"kind": "enum", "values": ["open", "closed"]}
+    }
+  ]
+}
+```
+
+Policy admission proves every `pathParam` appears in every route path template and every query/header name appears in the generic adapter allowlist. Header names must be lower-case. Optional `capture` names cannot collide with adapter operation fields; captures can key shared quotas, bind JIT operation digests, and serve as response-binding sources (`exactString`, or `canonicalInteger` for integer predicates). Predicate failure, missing or repeated values, invalid runtime policy state, and duplicate HTTP request header fields deny before JIT lookup, quota consumption, credential lease release, or injection.
 
 `jsonBody`: enforces JSON request body shape: allowed fields, required fields, denied fields, type checks, string length, numeric bounds, enums, exact values, and array size bounds. Structural allowlisting includes empty objects and arrays, including empty containers nested in arrays, so an unknown key cannot evade the allowlist merely because it has no scalar leaf. An explicitly allowlisted container remains valid and can be constrained with `type: "array"`, `minItems`, and `maxItems`.
 
@@ -99,11 +123,11 @@ The demo policy includes:
 
 - Gmail read access limited to the last 30 days, with page size caps and response `internalDate` validation.
 - X recent search limited to seven days, capped at 100 results, with response `created_at` validation.
-- X controlled posting limited to one plain-text tweet per day.
+- X controlled posting limited to one plain-text tweet per provider account in a first-use-anchored 86,400-second window.
 - X bounded read access covering every explicitly cataloged current GET endpoint while writes, unknown endpoints, and streaming endpoints stay blocked.
 - npm publish/dist-tag writes guarded by operation allowlists and per-operation JIT approval.
 
-[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting, GitHub issue listing, Stripe customer read-only access, tokenized PaymentIntent creation with a required bounded idempotency key, amount caps, and hardware-backed JIT approval, and bounded object-store writes. Each provider has a separate credential reference so copying the examples does not imply cross-provider credential reuse.
+[policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting; GitHub issue listing scoped to an exact owner and repository allowlist; Stripe customer access scoped to one exact customer with request/response binding; tokenized PaymentIntent creation with a required bounded idempotency key, amount caps, and hardware-backed JIT approval; and object-store writes scoped to one bucket and bounded key grammar under one assignment-wide shared quota. The bucket/key captures constrain each request but are deliberately not quota dimensions, so changing object names cannot reset the assignment's hourly allowance. Each provider has a separate credential reference so copying the examples does not imply cross-provider credential reuse.
 
 ## X Endpoint Catalog
 
@@ -115,7 +139,7 @@ Streaming reads are intentionally excluded from that profile because a live stre
 
 ## Composing New Limits
 
-Constraints compose as an intersection: a request must satisfy the principal, endpoint, adapter, every request constraint, any JIT grant, and every response constraint. This supports rules such as "one post per credential and agent per day, only on weekdays, with a 280-character body" without provider-specific scripting.
+Constraints compose as an intersection: a request must satisfy the principal, endpoint, adapter, every request constraint, any JIT grant, and every response constraint. This supports rules such as "one post per credential and agent per 86,400-second window, only on weekdays, with a 280-character body" without provider-specific scripting.
 
 Shared quotas and JIT are enforced as one release decision, not as sequential best-effort counters. For example, a one-tweet-per-day route cannot consume the daily slot while discovering that its approval is missing, and a failed pre-dispatch audit cannot permanently burn either control. Quota denial reports a retry interval bounded by the policy window, while approval polling remains independently bounded to one hour.
 

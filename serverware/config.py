@@ -7,6 +7,18 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RELEASE_CHANNEL = os.getenv("SERVERWARE_RELEASE_CHANNEL", "dev")
+_PRODUCTION_IMAGE_MARKER = PROJECT_ROOT / ".serverware-production-image"
+try:
+    _PRODUCTION_IMAGE_MARKER_PRESENT = (
+        _PRODUCTION_IMAGE_MARKER.is_file()
+        and _PRODUCTION_IMAGE_MARKER.read_text(encoding="ascii")
+        == "serverware.productionImage/v1\n"
+    )
+except OSError:
+    _PRODUCTION_IMAGE_MARKER_PRESENT = False
+PRODUCTION_IMAGE = _PRODUCTION_IMAGE_MARKER_PRESENT or os.getenv(
+    "SERVERWARE_PRODUCTION_IMAGE", "0"
+) == "1"
 _DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
 MAX_OAUTH_CLIENT_SECRET_FILE_BYTES = 4096
 

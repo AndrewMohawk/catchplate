@@ -191,6 +191,14 @@ def main() -> None:
                 ),
                 message="Setup creation accepted a route digest without a route ID",
             )
+            draft_route_request = app_module.SetupSessionCreateRequest.model_validate(
+                {"routeId": "route:planned-before-activation"}
+            )
+            if (
+                draft_route_request.route_id != "route:planned-before-activation"
+                or draft_route_request.route_policy_digest is not None
+            ):
+                raise AssertionError("Setup creation lost its draft route binding")
             expect_validation_error(
                 ValidationError,
                 lambda: app_module.SetupSessionRevisionRequest.model_validate(
@@ -546,6 +554,21 @@ def main() -> None:
 
             # A reviewed route digest is checked against live policy state at creation.
             app_module.get_policy_snapshot = lambda: None
+            draft_route = app_module.setup_session_create(
+                app_module.SetupSessionCreateRequest(
+                    templateId="template:draft-route",
+                    principalId="agent:draft-route",
+                    routeId="route:planned-before-activation",
+                ),
+                identity=owner,
+            )["session"]
+            if (
+                draft_route["routeId"] != "route:planned-before-activation"
+                or draft_route["routePolicyDigest"] is not None
+            ):
+                raise AssertionError(
+                    f"draft Setup route was incorrectly treated as authoritative: {draft_route}"
+                )
             expect_http_error(
                 HTTPException,
                 503,
@@ -634,7 +657,7 @@ def main() -> None:
                     response=app_module.Response(),
                     identity=owner,
                 ),
-                detail_contains="requires an authoritative route",
+                detail_contains="requires an intended route ID",
             )
             app_module.get_policy_snapshot = lambda: None
             expect_http_error(

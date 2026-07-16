@@ -10772,6 +10772,37 @@ def row_to_approval(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
+_APPROVAL_PUBLIC_FIELDS = (
+    "id",
+    "route_id",
+    "method",
+    "url",
+    "status",
+    "requested_at",
+    "expires_at",
+    "approved_until",
+    "decision_note",
+    "principal_id",
+    "credential_id",
+    "credential_version",
+    "policy_hash",
+    "request_digest",
+    "operation_digest",
+    "grant_ttl_seconds",
+    "grant_max_uses",
+    "approved_by",
+)
+
+
+def approval_public_summary(item: Mapping[str, Any]) -> dict[str, Any]:
+    """Return collection-safe approval metadata without encrypted review material."""
+    return {field: item.get(field) for field in _APPROVAL_PUBLIC_FIELDS}
+
+
+def row_to_approval_public(row: sqlite3.Row) -> dict[str, Any]:
+    return approval_public_summary(dict(row))
+
+
 def row_to_control_plane_approval(row: sqlite3.Row) -> dict[str, Any]:
     item = dict(row)
     item["request"] = loads(item.pop("request_json", None), {})
@@ -14278,7 +14309,7 @@ def list_approvals(status: str | None = None, limit: int = 50) -> list[dict[str,
             f"SELECT * FROM approval_requests {where} ORDER BY requested_at DESC LIMIT ?",
             args,
         ).fetchall()
-    return [row_to_approval(row) for row in rows]
+    return [row_to_approval_public(row) for row in rows]
 
 
 def list_similar_approvals(

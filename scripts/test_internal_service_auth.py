@@ -5,6 +5,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -130,6 +131,21 @@ def assert_production_validation() -> None:
 
 def main() -> None:
     db.init_db()
+    rust_event_types = set(
+        re.findall(
+            r'"(data_plane\.[A-Za-z0-9_.-]+)"',
+            (ROOT / "data-plane" / "decision-gate-rs" / "src" / "main.rs").read_text(
+                encoding="utf-8"
+            ),
+        )
+    )
+    rust_event_types.discard("data_plane.test")
+    if rust_event_types != set(app_module._PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES):
+        raise AssertionError(
+            "production audit allowlist differs from Rust event types: "
+            f"missing={sorted(rust_event_types - set(app_module._PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES))} "
+            f"extra={sorted(set(app_module._PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES) - rust_event_types)}"
+        )
     audit_payload = {
         "event_type": "data_plane.test.internal_auth",
         "event": {"marker": "server-derived-actor"},
@@ -257,6 +273,55 @@ def main() -> None:
     stored = next(item for item in db.list_audit_events() if item["event_type"] == audit_payload["event_type"])
     if stored.get("actor_type") != "data-plane" or stored.get("actor_id") != INSTANCE_ID:
         raise AssertionError(f"audit actor was not derived from authenticated configuration: {stored}")
+    secret_batch = DataPlaneAuditBatch.model_validate(
+        {
+            "events": [
+                {
+                    "event_type": "data_plane.test.secret_rejection",
+                    "event": {
+                        "nested": {
+                            "accessToken": "must-not-enter-the-audit-chain"
+                        }
+                    },
+                }
+            ]
+        }
+    )
+    secret_error = expect_http_error(
+        lambda: data_plane_audit(
+            secret_batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+        ),
+        400,
+    )
+    if "nested.accessToken" not in secret_error:
+        raise AssertionError(f"audit secret rejection omitted its safe field path: {secret_error}")
+    with patch.object(app_module, "RELEASE_CHANNEL", "production"):
+        expect_http_error(
+            lambda: data_plane_audit(
+                batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+            ),
+            400,
+        )
+        production_batch = DataPlaneAuditBatch.model_validate(
+            {
+                "events": [
+                    {
+                        "event_type": "data_plane.policy.reloaded",
+                        "event": {
+                            "component": "serverware-decision-gate-rs",
+                            "policy_hash": "sha256:" + "f" * 64,
+                        },
+                    }
+                ]
+            }
+        )
+        production_accepted = data_plane_audit(
+            production_batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+        )
+    if production_accepted != {"ok": True, "accepted": 1}:
+        raise AssertionError(
+            f"production audit allowlist rejected a measured event: {production_accepted}"
+        )
 
     route = SimpleNamespace(
         id="route:test",

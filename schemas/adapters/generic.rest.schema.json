@@ -95,6 +95,21 @@
             "properties": {"bodyMode": {"const": "json"}},
             "required": ["bodyMode"]
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "operation": {
+                "type": "object",
+                "required": ["bodySha256Field"]
+              }
+            },
+            "required": ["operation"]
+          },
+          "then": {
+            "properties": {"bodyMode": {"enum": ["json", "formUrlencoded"]}},
+            "required": ["bodyMode"]
+          }
         }
       ],
       "properties": {
@@ -121,6 +136,7 @@
           "additionalProperties": false,
           "properties": {
             "name": {"type": "string", "minLength": 1, "maxLength": 128},
+            "bodySha256Field": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
             "formFields": {"$ref": "#/$defs/operationFields"},
             "jsonFields": {"$ref": "#/$defs/jsonOperationFields"},
             "pathParams": {"$ref": "#/$defs/operationFields"}

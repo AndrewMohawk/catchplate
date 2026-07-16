@@ -51,7 +51,9 @@ COPY schemas /runtime/app/schemas
 COPY policies /runtime/app/policies
 COPY security /runtime/app/security
 COPY docker-compose.apparmor.yml /runtime/app/docker-compose.apparmor.yml
-RUN find /runtime -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
+RUN printf 'serverware.productionImage/v1\n' > /runtime/app/.serverware-production-image \
+    && chmod 0444 /runtime/app/.serverware-production-image \
+    && find /runtime -exec touch -h -d "@${SOURCE_DATE_EPOCH}" {} +
 
 FROM gcr.io/distroless/python3-debian12:nonroot@sha256:7d1042ce588ab97019fe95c24ffca7bc5a82ccdac572511d5e09bda4435c89c5
 

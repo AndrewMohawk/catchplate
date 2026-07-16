@@ -69,6 +69,7 @@ _RESPONSE_CONTENT_TYPES = {
 }
 _MEDIA_TYPE_RE = re.compile(r"^[A-Za-z0-9!#$&^_.+-]+/[A-Za-z0-9!#$&^_.+-]+$")
 _RESPONSE_FIELD_PATH_RE = re.compile(r"^[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*$")
+_OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,127}$")
 _JSON_OPERATION_FIELD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 
 
@@ -511,7 +512,8 @@ class ApiAdapter:
         flow.response.headers["Content-Length"] = str(len(flow.response.raw_content or b""))
 
     def operation_fields(self, flow: Any, route: Any, params: dict[str, str]) -> dict[str, str]:
-        operation = ((route.adapter_config.get("request") or {}).get("operation") or {})
+        request_config = route.adapter_config.get("request") or {}
+        operation = request_config.get("operation") or {}
         name = operation.get("name")
         fields: dict[str, str] = {"operation": str(name)} if name else {}
 
@@ -564,6 +566,16 @@ class ApiAdapter:
                         and -(2**63) <= value <= 2**63 - 1
                     ):
                         fields[field] = str(value)
+
+        body_sha256_field = operation.get("bodySha256Field")
+        if (
+            isinstance(body_sha256_field, str)
+            and body_sha256_field != "operation"
+            and _OPERATION_FIELD_RE.fullmatch(body_sha256_field)
+            and request_config.get("bodyMode") in {"json", "formUrlencoded"}
+        ):
+            raw_body = flow.request.raw_content or b""
+            fields[body_sha256_field] = f"sha256:{hashlib.sha256(raw_body).hexdigest()}"
         return fields
 
     def _allowed_field_paths(self, response_cfg: dict[str, Any]) -> list[tuple[str, ...]]:

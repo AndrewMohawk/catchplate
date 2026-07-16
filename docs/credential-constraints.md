@@ -91,6 +91,8 @@ The tokenized Stripe PaymentIntent template uses this contract for provider idem
 
 The agent must generate a policy-conforming `Idempotency-Key` for each intended PaymentIntent operation. Serverware validates and forwards it; Serverware does not synthesize the key or treat it as client identity.
 
+The example accepts Stripe's documented PaymentIntent state machine, including nonterminal states such as `requires_action`, but it does not expose `client_secret` or next-action payloads and cannot complete customer authentication. The agent must preserve the same idempotency key, stop on a nonterminal state, and hand the PaymentIntent ID and status to an operator-owned checkout/SCA workflow. The route accepts only pre-tokenized `pm_...` identifiers and rejects raw card/source fields; this is neither tokenization nor PCI certification.
+
 ## Common Patterns Already Modeled
 
 The demo policy includes:
@@ -246,14 +248,15 @@ The general v2 source contract is admitted for `generic.rest` routes with a buff
 - `formFields`: at most 16 unique form keys, available only with `bodyMode: "formUrlencoded"`.
 - `jsonFields`: at most 16 unique top-level JSON object keys, available only with `bodyMode: "json"`. Dots are forbidden because `jsonBody` uses dots for structural traversal; nested JSON values cannot be captured as operation sources.
 - `pathParams`: at most 16 unique route parameter names. Every name must be an exact, non-repeated `{placeholder}` in every path in `route.match.paths`. If equal-specificity templates can match the same path, each configured source must occupy the same segment position; swapped placeholders are rejected.
+- `bodySha256Field`: one operation-field name that receives lowercase `sha256:<64hex>` computed from the exact admitted request entity bytes. It is available only with buffered `bodyMode: "json"` or `"formUrlencoded"`, cannot be named `operation`, and can be compared only with `exactString`.
 
-Form and path source names must match `[A-Za-z][A-Za-z0-9_.-]{0,127}`; JSON source names use the stricter `[A-Za-z][A-Za-z0-9_-]{0,127}` top-level-key contract. Names must be unique across all three arrays, and `operation` is reserved. A route can therefore use `responseBinding` with any request body mode when its declared sources are compatible: for example, a `bodyMode: "none"` GET can bind `operation` and declared path parameters without inventing a request body. Path sources support `exactString` only.
+Form, path, and computed-digest source names must match `[A-Za-z][A-Za-z0-9_.-]{0,127}`; JSON source names use the stricter `[A-Za-z][A-Za-z0-9_-]{0,127}` top-level-key contract. Names must be unique across every source, and `operation` is reserved. A route can therefore use `responseBinding` with any request body mode when its declared sources are compatible: for example, a `bodyMode: "none"` GET can bind `operation` and declared path parameters without inventing a request body. Path and computed-digest sources support `exactString` only.
 
 `npm.registry` has a narrower adapter-specific source contract for `npm.publish`. It permits only captured `packageName`, `packageVersion`, or `tarballIntegrity` fields with `exactString` and rejects any other npm operation. When a signed route enables `npm.publish` response binding, admission requires a buffered JSON success profile capped at 65,536 bytes, status exactly `200` or `201`, content type exactly `application/json`, exact `packageName` and `packageVersion` bindings, and a `responseJson` rule scoped only to `npm.publish` that requires boolean `published` equal to `true`. Python and Rust reject any weaker combination. This mode is for compatible registries whose documented bounded JSON success response explicitly echoes package identity. The public `registry.npmjs.org` template intentionally does not enable response-body binding because the [official npm client](https://github.com/npm/cli/blob/latest/workspaces/libnpmpublish/lib/publish.js) ignores the body for ordinary publishes. That template instead binds package, version, integrity, route, credential generation, and operation digest into its one-use hardware-approved request.
 
 JSON capture uses the same strict decoder as request constraints. The request root must be an object and only exact top-level keys are inspected. A JSON string is captured as its exact decoded UTF-8 value, with no trimming or Unicode normalization. A JSON integer is captured as its canonical base-10 string only when it fits signed i64. Booleans, floats, nulls, arrays, objects, out-of-range integers, invalid UTF-8 strings, malformed JSON, duplicate-key JSON, and non-object roots produce no JSON sources. `-0` is rejected by the strict decoder. Form capture likewise requires one unambiguous normalized value for the configured key. These extraction failures do not bypass request validation: ordinary `jsonBody` or `formBody` constraints run before source preflight and preserve their canonical denial.
 
-Policy admission proves every bound form or JSON source is required by the corresponding `formBody` or `jsonBody` constraint. `canonicalInteger` requires `type: "integer"`; `exactString` requires `type: "string"`. Path parameters need no body rule because admission proves the route placeholder and runtime uses the matched route parameters. A missing, duplicate, mistyped, oversized, or otherwise invalid source denies the request before request quota reservation, JIT grant consumption, credential lease acquisition, credential injection, or upstream contact.
+Policy admission proves every bound form or JSON source is required by the corresponding `formBody` or `jsonBody` constraint. `canonicalInteger` requires `type: "integer"`; `exactString` requires `type: "string"`. Path parameters need no body rule because admission proves the route placeholder and runtime uses the matched route parameters. A computed digest is populated only after the buffered structured body passes its normal request constraints, and it hashes the original entity bytes rather than a parsed or reserialized value. A missing, duplicate, mistyped, oversized, or otherwise invalid source denies the request before request quota reservation, JIT grant consumption, credential lease acquisition, credential injection, or upstream contact.
 
 `responseField` is a unique explicit dotted JSON path, not an operation-map key. Empty components and wildcards are forbidden. The response root and every intermediate node must be JSON objects; arrays are never traversed, even single-element arrays. The final value must be a scalar. This prevents fields from separate array elements from being combined into a false match. Missing paths, arrays, objects, or other non-scalar final values fail closed. The two comparisons are deliberately narrow:
 
@@ -280,7 +283,7 @@ The bounded object-store write in [policies/credential-limits.examples.json](../
         "maxBodyBytes": 65536,
         "operation": {
           "name": "object_store.objects.put",
-          "jsonFields": ["sha256"],
+          "bodySha256Field": "requestBodySha256",
           "pathParams": ["artifact_id"]
         }
       },
@@ -311,14 +314,14 @@ The bounded object-store write in [policies/credential-limits.examples.json](../
       "contentTypes": ["application/json"],
       "bindings": [
         {"id": "artifact-id", "operationField": "artifact_id", "responseField": "id", "comparison": "exactString"},
-        {"id": "sha256", "operationField": "sha256", "responseField": "sha256", "comparison": "exactString"}
+        {"id": "sha256", "operationField": "requestBodySha256", "responseField": "sha256", "comparison": "exactString"}
       ]
     }
   ]
 }
 ```
 
-Here `responseJson` proves that the provider reported success and returned a bounded object ID and SHA-256-shaped string. `responseBinding` separately proves that the ID equals the matched `{artifact_id}` and that the returned string equals the caller-declared top-level `sha256` metadata echoed by the provider. `allowedFields` guarantees that only those three fields can reach the agent. This generic template does not hash `content` or prove that the declared digest matches the uploaded bytes; that requires an explicit provider adapter or a future request-content digest source.
+Here `responseJson` proves that the provider reported success and returned a bounded object ID and SHA-256-shaped string. `responseBinding` separately proves that the ID equals the matched `{artifact_id}` and that the returned string equals the SHA-256 Serverware computed over the exact admitted request bytes. `allowedFields` guarantees that only those three fields can reach the agent. The digest covers the complete JSON entity, including formatting and every admitted field; it is not a semantic hash of only the decoded `content` string.
 
 Every response profile has an explicit `maxBodyBytes`. A `2xx` status uses the success profile. Redirects are always blocked with `response_redirect_not_allowed`; Serverware never follows or releases an upstream `Location`. A `4xx` or `5xx` status uses the nested `error` profile, and fails closed with `response_error_policy_missing` if that profile is absent. Gmail and npm require bounded JSON error profiles at policy admission. Generic REST and X permit an omitted error profile at admission for compatibility, but an actual error response is still blocked when no profile exists. Other status classes are invalid.
 

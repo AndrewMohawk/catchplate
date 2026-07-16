@@ -94,6 +94,18 @@ def assert_production_dependencies() -> None:
         raise AssertionError("production image must start the control-plane runner, not the prototype mitmproxy runner")
     if "requirements.lock" not in dockerfile or "--require-hashes" not in dockerfile:
         raise AssertionError("production control-plane dependencies must use the hash-locked requirements file")
+    if (
+        "serverware.productionImage/v1" not in dockerfile
+        or ".serverware-production-image" not in dockerfile
+    ):
+        raise AssertionError(
+            "production control-plane image must contain its non-environment startup marker"
+        )
+    config_source = (ROOT / "serverware" / "config.py").read_text(encoding="utf-8")
+    if "_PRODUCTION_IMAGE_MARKER_PRESENT or os.getenv" not in config_source:
+        raise AssertionError(
+            "control-plane production detection must prefer the baked image marker"
+        )
     if not (ROOT / "requirements.lock").is_file():
         raise AssertionError("production hash-locked requirements file is missing")
     prototype = (ROOT / "Dockerfile").read_text(encoding="utf-8")

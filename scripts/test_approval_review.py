@@ -488,6 +488,51 @@ def main() -> None:
                 },
             },
         )
+        approver_identity = AdminIdentity(
+            "user:demo", frozenset({"approver"}), "admin-token-header"
+        )
+        admin_identity = AdminIdentity(
+            "user:demo",
+            frozenset(
+                {
+                    "admin",
+                    "approver",
+                    "auditor",
+                    "credential_owner",
+                    "policy_author",
+                    "policy_publisher",
+                }
+            ),
+            "admin-token-header",
+        )
+        with patch.object(
+            db,
+            "_decrypt_approval_json",
+            side_effect=AssertionError("approval collection attempted to decrypt review material"),
+        ):
+            public_collection = db.list_approvals(limit=100)
+            public_api_collection = app_module.approvals(
+                status=None, _=approver_identity
+            )
+            bootstrap_document = app_module.bootstrap(admin_identity)
+        public_surfaces = json.dumps(
+            {
+                "db": public_collection,
+                "api": public_api_collection,
+                "bootstrap": bootstrap_document.get("approvals"),
+            },
+            sort_keys=True,
+        )
+        for forbidden in (
+            "top-secret-value",
+            "canonical_request",
+            "redacted_display",
+            "approval_authn",
+        ):
+            if forbidden in public_surfaces:
+                raise AssertionError(
+                    f"approval collection surface disclosed {forbidden}: {public_surfaces}"
+                )
         if app_module.approval_index(current["id"]) != app_module.UI_HTML:
             raise AssertionError("approval deep link did not serve the operator portal")
         try:
@@ -557,6 +602,117 @@ def main() -> None:
         ):
             raise AssertionError(
                 f"WebAuthn challenge did not bind the review receipt: {challenge_payload}"
+            )
+
+        denial_test = make_approval(
+            db,
+            snapshot,
+            digest_suffix="f",
+            redacted_display={
+                "package": "@scope/pkg-denied",
+                "version": "1.0.0",
+                "secretToken": "top-secret-value",
+            },
+            canonical_request={
+                "principal": "agent:demo",
+                "operation": {
+                    "packageName": "@scope/pkg-denied",
+                    "authorization": "Bearer top-secret-value",
+                },
+            },
+        )
+        denied = app_module.deny(
+            denial_test["id"],
+            payload=app_module.ApprovalDeny(reason="operator rejected request"),
+            identity=approver_identity,
+        )
+        denied_json = json.dumps(denied, sort_keys=True)
+        for forbidden in (
+            "top-secret-value",
+            "canonical_request",
+            "redacted_display",
+            "approval_authn",
+        ):
+            if forbidden in denied_json:
+                raise AssertionError(
+                    f"approval decision surface disclosed {forbidden}: {denied_json}"
+                )
+        audit_documents = json.dumps(
+            {
+                "list": app_module.audit_events(limit=500, _=admin_identity),
+                "search": db.search_audit_events(
+                    limit=500,
+                    scan_limit=5000,
+                    approval_id=denial_test["id"],
+                ),
+                "export": db.export_audit_events_jsonl(
+                    limit=500,
+                    scan_limit=5000,
+                    approval_id=denial_test["id"],
+                ),
+            },
+            sort_keys=True,
+        )
+        for forbidden in (
+            "top-secret-value",
+            "canonical_request",
+            "redacted_display",
+        ):
+            if forbidden in audit_documents:
+                raise AssertionError(
+                    f"approval audit surface disclosed {forbidden}: {audit_documents}"
+                )
+
+        approval_success_test = make_approval(
+            db,
+            snapshot,
+            digest_suffix="a",
+            redacted_display={"package": "@scope/pkg-approved", "version": "1.0.0"},
+            canonical_request={
+                "principal": "agent:demo",
+                "operation": {"packageName": "@scope/pkg-approved"},
+            },
+        )
+        approval_success_review = app_module.approval_review(
+            approval_success_test["id"], identity=approver_identity
+        )
+        with (
+            patch.object(app_module, "_webauthn_required", return_value=False),
+            patch.object(
+                runtime,
+                "publish_decision_gate_grant",
+                return_value={
+                    "enabled": True,
+                    "ok": True,
+                    "response": {"secret": "top-secret-value"},
+                    "payload": {"secret": "top-secret-value"},
+                },
+            ),
+        ):
+            approved_api = app_module.approve(
+                approval_success_test["id"],
+                ttl_seconds=30,
+                payload=app_module.ApprovalApprove(
+                    reviewReceiptId=approval_success_review["review_receipt"]["id"]
+                ),
+                identity=approver_identity,
+            )
+        approved_documents = json.dumps(
+            {
+                "response": approved_api,
+                "audit": db.search_audit_events(
+                    limit=500,
+                    scan_limit=5000,
+                    approval_id=approval_success_test["id"],
+                ),
+            },
+            sort_keys=True,
+        )
+        if "top-secret-value" in approved_documents or '"response"' in json.dumps(
+            approved_api, sort_keys=True
+        ):
+            raise AssertionError(
+                f"approval publish surface disclosed a raw gate response: {approved_documents}"
             )
 
         receipt_test = make_approval(

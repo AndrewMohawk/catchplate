@@ -586,9 +586,23 @@ def _connect_oauth(
         f"{provider} OAuth submit is disabled",
     )
     page.locator("#oauth-submit").click(no_wait_after=True)
-    page.get_by_role("heading", name="OAuth credential connected", exact=True).wait_for(
-        state="visible", timeout=DEFAULT_TIMEOUT_MS
-    )
+    try:
+        page.get_by_role(
+            "heading", name="OAuth credential connected", exact=True
+        ).wait_for(state="visible", timeout=DEFAULT_TIMEOUT_MS)
+    except Exception as exc:
+        diagnostic = page.evaluate(
+            """
+            () => ({
+              url: window.location.href,
+              heading: document.querySelector('h1,h2')?.textContent || '',
+              body: (document.body?.innerText || '').slice(0, 1000)
+            })
+            """
+        )
+        raise AssertionError(
+            f"{provider} OAuth callback did not succeed: {diagnostic}"
+        ) from exc
     page.wait_for_url(
         re.compile(rf"^{re.escape(public_url)}/(?:\?.*)?$"), timeout=DEFAULT_TIMEOUT_MS
     )
@@ -814,6 +828,14 @@ def _capture_mobile_screenshot(page: Any, selector: str, destination: Path) -> N
         mask=[page.locator("#admin-token")],
         mask_color="#e8efed",
     )
+
+
+def _capture_element_screenshot(page: Any, selector: str, destination: Path) -> None:
+    page.set_viewport_size({"width": 1440, "height": 1100})
+    target = page.locator(selector)
+    target.scroll_into_view_if_needed()
+    page.wait_for_timeout(150)
+    target.screenshot(path=str(destination), type="png")
 
 
 def _create_browser_jit_approval() -> dict[str, Any]:
@@ -1152,6 +1174,20 @@ def _run_browser_journey(
             page.locator("#admin-token").dispatch_event("change")
             _wait_for_portal(page, public_url)
 
+            page.locator("#setup-template").select_option("gmail_recent")
+            page.locator("#setup-principal").select_option("agent:demo")
+            page.locator("#setup-route-id").fill("browser.gmail.last-30-days")
+            page.locator("#setup-connect-button").click()
+            page.wait_for_function(
+                """
+                () => state.oauthSetupSessionId
+                  && state.setupSession?.id === state.oauthSetupSessionId
+                  && state.setupSession?.routeId === 'browser.gmail.last-30-days'
+                  && state.setupSession?.routePolicyDigest === null
+                  && document.activeElement?.id === 'oauth-provider'
+                """,
+                timeout=DEFAULT_TIMEOUT_MS,
+            )
             google_credential = _connect_oauth(
                 page,
                 context,
@@ -1168,10 +1204,17 @@ def _run_browser_journey(
                 account="operator@example.test",
                 scopes=GOOGLE_SCOPES,
             )
+            setup_after_google = page.evaluate("() => state.setupSession")
+            _require(
+                setup_after_google.get("routeId") == "browser.gmail.last-30-days"
+                and setup_after_google.get("credentialId") == google_credential["id"]
+                and setup_after_google.get("phase") == "credential_activated",
+                f"fresh Setup OAuth flow did not bind its credential: {setup_after_google}",
+            )
             if screenshots_dir is not None:
-                _capture_screenshot(
+                _capture_element_screenshot(
                     page,
-                    "#oauth-form",
+                    ".oauth-connect-section",
                     screenshots_dir / "operator-portal-oauth.png",
                 )
 
@@ -1218,9 +1261,9 @@ def _run_browser_journey(
                 simulator,
             )
             if screenshots_dir is not None:
-                _capture_screenshot(
+                _capture_element_screenshot(
                     page,
-                    "#policy-route-form",
+                    ".policy-authoring-section",
                     screenshots_dir / "operator-portal-policy.png",
                 )
 

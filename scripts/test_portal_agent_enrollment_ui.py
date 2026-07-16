@@ -98,6 +98,12 @@ def main() -> None:
             "/api/agents/enrollment",
             "copyEnrollment()",
             "downloadEnrollment()",
+            'id="enrollment-copy-agent-instructions"',
+            "function agentInstructionText(packet)",
+            "function copyAgentInstructions()",
+            "handoff.requiredProxyHeaders",
+            "handoff.requiredProviderHeaders",
+            "Never retry through a direct provider connection.",
             "state.enrollmentPacket",
             "copyEnrollmentVerifier",
             "Generate an enrollment packet first so the verifier is bound to its pins",
@@ -138,6 +144,23 @@ def main() -> None:
                 raise AssertionError(
                     f"portal OAuth issuance-uncertainty UI marker missing: {marker}"
                 )
+
+        workspace_markers = (
+            'class="workspace-nav" aria-label="Portal workspaces"',
+            'href="#setup-workspace"',
+            'href="#credential-workspace"',
+            'href="#policy-workspace"',
+            'href="#approval-workspace"',
+            'href="#audit-workspace"',
+            'href="#attestation-workspace"',
+            'id="oauth-connected-section"',
+            'id="oauth-connected-accounts"',
+            "function renderOAuthConnectedAccounts()",
+            "function credentialMetadataDisclosure(item)",
+        )
+        for marker in workspace_markers:
+            if marker not in ui_html:
+                raise AssertionError(f"portal workspace UX marker missing: {marker}")
 
         try:
             enrollment_verifier_fn = ui_html.split("async function copyEnrollmentVerifier()", 1)[1].split(
@@ -490,7 +513,7 @@ def main() -> None:
             "route.adapter.config.appIds",
             "function renderPolicyCredentialOptions(preferredCredential = '')",
             "item.compatible ? '' : 'disabled'",
-            "(not compatible)",
+            "unavailable:",
             "renderPolicyCredentialOptions();",
             "function buildPolicyCandidate()",
             "state.activePolicy.bundle",
@@ -566,7 +589,7 @@ def main() -> None:
             "session.enrollmentSessionId === state.enrollmentPacket?.ca?.installSession?.id",
             "function prepareSetupProviderLogin()",
             "async function createSetupSession()",
-            "const routePolicyDigest = await sha256CanonicalJson(activeRoute)",
+            "if (activeRoute) body.routePolicyDigest = await sha256CanonicalJson(activeRoute)",
             "async function loadSetupSession(id)",
             "async function handoffSetupSession()",
             "async function bindSetupCredential()",
@@ -611,7 +634,7 @@ def main() -> None:
         ordered_sections = (
             'class="jit-approvals-section"',
             'class="control-plane-approvals-section"',
-            "<aside>",
+            'id="credential-workspace"',
             'class="credentials-section"',
             'class="audit-investigation-section"',
         )
@@ -783,6 +806,49 @@ for(const value of ['', 'release-manager', 'user:*', 'user:one,user:one']){
                 raise AssertionError(
                     "portal OAuth/enrollment helpers failed in Node: "
                     f"{enrollment_check.returncode} {enrollment_check.stderr.strip()}"
+                )
+
+            try:
+                instruction_function = "function agentInstructionText(packet)" + ui_html.split(
+                    "function agentInstructionText(packet)", 1
+                )[1].split("\n\n    async function copyAgentInstructions", 1)[0]
+            except IndexError as exc:
+                raise AssertionError("could not isolate agent instruction generator") from exc
+            instruction_check = subprocess.run(
+                [
+                    node,
+                    "-e",
+                    instruction_function
+                    + r"""
+const packet={
+  apiVersion:'serverware.agentEnrollment/v1',principalId:'agent:test',
+  ca:{installPath:'/etc/serverware/ca.pem'},secret:'DO_NOT_COPY',
+  agentHandoff:{
+    proxyEnvironment:{HTTPS_PROXY:'http://proxy:8080'},
+    requiredProxyHeaders:{'X-Serverware-Agent':'test'},
+    requiredProviderHeaders:{'X-Serverware-Agent':'test'},
+    proxyAuthorization:{required:true,tokenId:'agent-token',tokenValue:'DO_NOT_COPY'},
+    allowedUrls:['https://api.example.test/v1/**'],
+    requestHandling:{approvalRequired:{statusCode:428}}
+  }
+};
+const output=agentInstructionText(packet);
+for(const expected of ['agent:test','HTTPS_PROXY=http://proxy:8080','X-Serverware-Agent','agent-token','https://api.example.test/v1/**','HTTP 428','identical request','Never retry through a direct provider connection.']){
+  if(!output.includes(expected))process.exit(20);
+}
+if(output.includes('DO_NOT_COPY'))process.exit(21);
+let failed=false;try{agentInstructionText({apiVersion:'wrong'})}catch(_){failed=true}
+if(!failed)process.exit(22);
+""",
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            if instruction_check.returncode != 0:
+                raise AssertionError(
+                    "portal agent instruction generator failed in Node: "
+                    f"{instruction_check.returncode} {instruction_check.stderr.strip()}"
                 )
 
             try:
@@ -1092,10 +1158,12 @@ function credentialToJson(value){return value;}
             object_store_request = templates["object_store_put"]["adapter"]["config"]["request"]
             if object_store_request.get("operation") != {
                 "name": "object_store.objects.put",
-                "jsonFields": ["sha256"],
+                "bodySha256Field": "requestBodySha256",
                 "pathParams": ["artifact_id"],
             }:
-                raise AssertionError("Object-store template does not capture artifact identity and digest")
+                raise AssertionError(
+                    "Object-store template does not capture artifact identity and the computed body digest"
+                )
             if templates["object_store_put"]["match"]["paths"] != ["/v1/objects/{artifact_id}"]:
                 raise AssertionError("Object-store template is not scoped to the bounded object PUT route")
             if template_constraint("object_store_put", "object-store-response-binding") != {
@@ -1114,7 +1182,7 @@ function credentialToJson(value){return value;}
                     },
                     {
                         "id": "sha256",
-                        "operationField": "sha256",
+                        "operationField": "requestBodySha256",
                         "responseField": "sha256",
                         "comparison": "exactString",
                     },

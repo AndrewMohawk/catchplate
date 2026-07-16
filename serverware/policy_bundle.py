@@ -301,6 +301,7 @@ def is_serverware_internal_header(value: Any) -> bool:
 
 
 def provider_account_scope_value(provider: str, provider_subject: str | None) -> str | None:
+    provider = normalized_credential_provider(provider)
     if not provider or not provider_subject:
         return None
     material = f"{provider}\0{provider_subject}".encode("utf-8")
@@ -1518,6 +1519,14 @@ def _validate_generic_operation_sources(
         return {}
     if not isinstance(operation, dict):
         raise PolicyBundleError(f"route {route_id} generic.rest request.operation must be an object")
+    unsupported_fields = sorted(
+        set(operation) - {"name", "bodySha256Field", "formFields", "jsonFields", "pathParams"}
+    )
+    if unsupported_fields:
+        raise PolicyBundleError(
+            f"route {route_id} generic.rest request.operation has unsupported fields: "
+            f"{unsupported_fields}"
+        )
     operation_name = operation.get("name")
     if not isinstance(operation_name, str) or not 1 <= len(operation_name) <= 128:
         raise PolicyBundleError(
@@ -1563,6 +1572,29 @@ def _validate_generic_operation_sources(
                     "is reserved or duplicated"
                 )
             source_kinds[source_name] = source_kind
+
+    body_sha256_field = operation.get("bodySha256Field")
+    if "bodySha256Field" in operation:
+        if (
+            not isinstance(body_sha256_field, str)
+            or OPERATION_FIELD_NAME_RE.fullmatch(body_sha256_field) is None
+            or body_sha256_field == "operation"
+        ):
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest request.operation.bodySha256Field "
+                "must name one valid non-reserved operation field"
+            )
+        if body_mode not in {"json", "formUrlencoded"}:
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest request.operation.bodySha256Field requires "
+                "buffered bodyMode json or formUrlencoded"
+            )
+        if body_sha256_field in source_kinds:
+            raise PolicyBundleError(
+                f"route {route_id} generic.rest request.operation source {body_sha256_field} "
+                "is duplicated by bodySha256Field"
+            )
+        source_kinds[body_sha256_field] = "bodySha256"
 
     configured_path_params = {
         source_name
@@ -1709,6 +1741,13 @@ def _validate_response_binding_sources(
                     raise PolicyBundleError(
                         f"route {route_id} responseBinding {constraint_id} path source {source} "
                         "must use exactString"
+                    )
+                continue
+            if source_kind == "bodySha256":
+                if binding.get("comparison") != "exactString":
+                    raise PolicyBundleError(
+                        f"route {route_id} responseBinding {constraint_id} bodySha256 source "
+                        f"{source} must use exactString"
                     )
                 continue
             source_constraints = body_constraints[source_kind]
@@ -2393,6 +2432,8 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
                             f"routes {left.id} and {right.id} have ambiguous path templates {left_path} and {right_path}"
                         )
     routes.sort(key=lambda route: route.id)
+    if not validate_schema:
+        validate_policy_schema(raw)
     return PolicySnapshot(
         raw=raw,
         hash=policy_hash(raw),

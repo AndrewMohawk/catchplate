@@ -23,6 +23,7 @@ from serverware import control_plane_runner, control_plane_startup  # noqa: E402
 
 _PRODUCTION_CONFIGURATION = {
     "RELEASE_CHANNEL": "production",
+    "PRODUCTION_IMAGE": True,
     "ATOMIC_RELEASE_AUTHORIZATION_ENABLED": False,
     "WEB_TLS_CERT_FILE": "/run/serverware/tls.crt",
     "WEB_TLS_KEY_FILE": "/run/serverware/tls.key",
@@ -35,6 +36,16 @@ _PRODUCTION_CONFIGURATION = {
         "hardware",
     ),
     "CONTROL_PLANE_TWO_PERSON_REQUIRED": True,
+    "CONTROL_PLANE_TWO_PERSON_ACTIONS": tuple(
+        sorted(control_plane_startup._PRODUCTION_TWO_PERSON_ACTIONS)
+    ),
+    "DEV_AUTHENTICATOR_ENABLED": False,
+    "DIRECT_CA_DOWNLOAD_ENABLED": False,
+    "POLICY_PUBLISH_DRY_RUN_REQUIRED": True,
+    "POLICY_CANARY_REQUIRED": True,
+    "POLICY_CANARY_MIN_OBSERVATION_SECONDS": 60,
+    "POLICY_CANARY_MIN_AUDIT_EVENTS": 1,
+    "POLICY_CANARY_MAX_DENIALS": 0,
     "MASTER_KEY_UNSEAL_COMMAND": "unseal-master-key",
     "NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": "nsm-unseal {ciphertext}",
 }
@@ -136,6 +147,16 @@ class ControlPlaneStartupTests(unittest.TestCase):
                 )
             },
             "two person": {"CONTROL_PLANE_TWO_PERSON_REQUIRED": False},
+            "complete two-person action set": {
+                "CONTROL_PLANE_TWO_PERSON_ACTIONS": ("policy.publish",)
+            },
+            "development authenticator": {"DEV_AUTHENTICATOR_ENABLED": True},
+            "direct CA download": {"DIRECT_CA_DOWNLOAD_ENABLED": True},
+            "policy dry-run": {"POLICY_PUBLISH_DRY_RUN_REQUIRED": False},
+            "policy canary": {"POLICY_CANARY_REQUIRED": False},
+            "canary observation": {"POLICY_CANARY_MIN_OBSERVATION_SECONDS": 0},
+            "canary audit evidence": {"POLICY_CANARY_MIN_AUDIT_EVENTS": 0},
+            "canary denial threshold": {"POLICY_CANARY_MAX_DENIALS": 1},
             "master key custody": {"MASTER_KEY_UNSEAL_COMMAND": ""},
             "NSM custody": {"NITRO_NSM_UNSEAL_COMMAND_TEMPLATE": ""},
         }
@@ -149,6 +170,17 @@ class ControlPlaneStartupTests(unittest.TestCase):
                 ):
                     with self.assertRaises(RuntimeError):
                         control_plane_startup.validate_control_plane_configuration()
+
+    def test_production_image_rejects_development_release_channel(self) -> None:
+        with patch.multiple(
+            control_plane_startup,
+            RELEASE_CHANNEL="dev",
+            PRODUCTION_IMAGE=True,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError, "production control-plane image requires"
+            ):
+                control_plane_startup.validate_control_plane_configuration()
 
     def test_tls_certificate_and_key_are_an_indivisible_pair_in_development(self) -> None:
         with patch.multiple(

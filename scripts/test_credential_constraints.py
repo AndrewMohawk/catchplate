@@ -55,6 +55,7 @@ from serverware.policy_bundle import (
     canonical_json,
     compile_policy_bundle,
     demo_policy_bundle,
+    provider_account_scope_value,
     sign_policy_bundle,
     strict_json_loads,
     validate_policy_schema,
@@ -222,6 +223,20 @@ def assert_policy_rejected(bundle: dict, message: str, *, validate_schema: bool)
     for use_schema in ((False, True) if validate_schema else (False,)):
         try:
             compile_policy_bundle(bundle, validate_schema=use_schema)
+        except PolicyBundleError:
+            continue
+        raise AssertionError(f"{message}; validate_schema={use_schema}")
+
+
+def assert_signed_policy_rejected(bundle: dict, message: str, *, validate_schema: bool) -> None:
+    signed = sign_policy_bundle(bundle)
+    for use_schema in ((False, True) if validate_schema else (False,)):
+        try:
+            compile_policy_bundle(
+                signed,
+                verify_signature=True,
+                validate_schema=use_schema,
+            )
         except PolicyBundleError:
             continue
         raise AssertionError(f"{message}; validate_schema={use_schema}")
@@ -661,6 +676,67 @@ def main() -> None:
     demo = compile_policy_bundle(demo_bundle, validate_schema=validate_schema)
     examples = json.loads((ROOT / "policies" / "credential-limits.examples.json").read_text())
     example_snapshot = compile_policy_bundle(examples, validate_schema=validate_schema)
+
+    unknown_field_mutations: list[tuple[str, dict]] = []
+
+    unknown_top = copy.deepcopy(examples)
+    unknown_top["unknownPolicyField"] = True
+    unknown_field_mutations.append(("top-level", unknown_top))
+
+    unknown_default = copy.deepcopy(examples)
+    unknown_default["defaults"]["unknownDefaultField"] = True
+    unknown_field_mutations.append(("defaults", unknown_default))
+
+    unknown_route = copy.deepcopy(examples)
+    unknown_route["routes"][0]["unknownRouteField"] = True
+    unknown_field_mutations.append(("route", unknown_route))
+
+    unknown_jit = copy.deepcopy(examples)
+    jit_route = next(item for item in unknown_jit["routes"] if "jit" in item)
+    jit_route["jit"]["unknownJitField"] = True
+    unknown_field_mutations.append(("JIT", unknown_jit))
+
+    unknown_generic_request = copy.deepcopy(examples)
+    generic_route = next(
+        item for item in unknown_generic_request["routes"] if item["adapter"]["type"] == "generic.rest"
+    )
+    generic_route["adapter"]["config"]["request"]["unknownRequestField"] = True
+    unknown_field_mutations.append(("generic request", unknown_generic_request))
+
+    for layer, mutation in unknown_field_mutations:
+        assert_policy_rejected(
+            mutation,
+            f"compiler accepted an unknown {layer} policy field",
+            validate_schema=validate_schema,
+        )
+        assert_signed_policy_rejected(
+            mutation,
+            f"signed compiler path accepted an unknown {layer} policy field",
+            validate_schema=validate_schema,
+        )
+
+    for aliases, subject in (
+        (("x", "twitter", "x.oauth", "x.oauth2", " X.OAUTH2 "), "verified-x-user-id"),
+        (("google", "google.oauth", "google.oauth2", " GOOGLE.OAUTH2 "), "verified-google-sub"),
+    ):
+        alias_scopes = {provider_account_scope_value(alias, subject) for alias in aliases}
+        assert len(alias_scopes) == 1, (aliases, alias_scopes)
+        assert None not in alias_scopes
+        assert provider_account_scope_value(aliases[0], f"{subject}-other") not in alias_scopes
+
+    object_store_example = next(
+        item for item in examples["routes"] if item["id"] == "example.object_store.small_puts"
+    )
+    object_store_operation = object_store_example["adapter"]["config"]["request"]["operation"]
+    object_store_body_constraint = next(
+        constraint
+        for constraint in object_store_example["constraints"]
+        if constraint["type"] == "jsonBody"
+    )
+    assert object_store_operation["bodySha256Field"] == "requestBodySha256"
+    assert "sha256" not in object_store_operation.get("jsonFields", [])
+    assert "sha256" not in object_store_body_constraint["allowedFields"]
+    assert "sha256" not in object_store_body_constraint["requiredFields"]
     assert list(example_snapshot.credentials["cred-gmail"].scopes) == [
         "openid",
         "email",
@@ -856,6 +932,20 @@ def main() -> None:
             for index in range(count)
         ]
 
+    def body_sha256_candidate() -> tuple[dict, dict, dict]:
+        candidate = copy.deepcopy(examples)
+        route_candidate = next(
+            item
+            for item in candidate["routes"]
+            if item["id"] == "example.object_store.small_puts"
+        )
+        binding_constraint = next(
+            constraint
+            for constraint in route_candidate["constraints"]
+            if constraint["type"] == "responseBinding"
+        )
+        return candidate, route_candidate, binding_constraint
+
     for binding_count in (1, 8):
         valid, response_binding = response_binding_candidate()
         response_binding["bindings"] = generated_response_bindings(binding_count)
@@ -871,6 +961,105 @@ def main() -> None:
 
     valid_json_path, _, _ = json_path_response_binding_candidate()
     json_path_snapshot = compile_policy_bundle(valid_json_path, validate_schema=validate_schema)
+
+    valid_body_sha256, _, _ = body_sha256_candidate()
+    compile_policy_bundle(valid_body_sha256, validate_schema=validate_schema)
+
+    valid_form_body_sha256, form_binding = response_binding_candidate()
+    form_route = next(
+        item
+        for item in valid_form_body_sha256["routes"]
+        if item["id"] == "example.stripe.payment_intent.tokenized_jit"
+    )
+    form_route["adapter"]["config"]["request"]["operation"]["bodySha256Field"] = (
+        "requestBodySha256"
+    )
+    form_binding["bindings"].append(
+        {
+            "id": "request-body-sha256",
+            "operationField": "requestBodySha256",
+            "responseField": "request_body_sha256",
+            "comparison": "exactString",
+        }
+    )
+    compile_policy_bundle(valid_form_body_sha256, validate_schema=validate_schema)
+
+    for invalid_mode in (
+        "none",
+        "any",
+        "stream",
+        "jsonlStream",
+        "jsonArrayStream",
+        "jsonSseStream",
+        "jsonNestedStream",
+        "formUrlencodedStream",
+        "csvStream",
+    ):
+        invalid, route_candidate, binding_constraint = body_sha256_candidate()
+        route_candidate.pop("credentialRef")
+        route_candidate["adapter"]["config"]["request"]["bodyMode"] = invalid_mode
+        route_candidate["constraints"] = [
+            constraint
+            for constraint in route_candidate["constraints"]
+            if constraint["type"] != "jsonBody"
+        ]
+        binding_constraint = next(
+            constraint
+            for constraint in route_candidate["constraints"]
+            if constraint["type"] == "responseBinding"
+        )
+        binding_constraint["bindings"] = [binding_constraint["bindings"][-1]]
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted bodySha256Field with non-buffered body mode {invalid_mode}",
+            validate_schema=validate_schema,
+        )
+
+    for invalid_name in (None, "operation", "1digest", "digest/value", "a" * 129):
+        invalid, route_candidate, _ = body_sha256_candidate()
+        route_candidate["adapter"]["config"]["request"]["operation"]["bodySha256Field"] = (
+            invalid_name
+        )
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted invalid bodySha256Field name {invalid_name!r}",
+            validate_schema=validate_schema,
+        )
+
+    for source_key, source_value in (
+        ("jsonFields", ["requestBodySha256"]),
+        ("pathParams", ["requestBodySha256"]),
+        ("formFields", ["requestBodySha256"]),
+    ):
+        invalid, route_candidate, _ = body_sha256_candidate()
+        request = route_candidate["adapter"]["config"]["request"]
+        if source_key == "formFields":
+            route_candidate.pop("credentialRef")
+            request["bodyMode"] = "formUrlencoded"
+            route_candidate["constraints"] = [
+                constraint
+                for constraint in route_candidate["constraints"]
+                if constraint["type"] != "jsonBody"
+            ]
+        request["operation"][source_key] = source_value
+        assert_policy_rejected(
+            invalid,
+            f"compiler accepted bodySha256Field duplicated by {source_key}",
+            validate_schema=validate_schema,
+        )
+
+    invalid, _, binding_constraint = body_sha256_candidate()
+    digest_binding = next(
+        binding
+        for binding in binding_constraint["bindings"]
+        if binding["operationField"] == "requestBodySha256"
+    )
+    digest_binding["comparison"] = "canonicalInteger"
+    assert_policy_rejected(
+        invalid,
+        "compiler accepted canonicalInteger for a bodySha256Field response binding",
+        validate_schema=validate_schema,
+    )
 
     valid_path_only, path_only_route, path_only_binding = json_path_response_binding_candidate()
     path_only_request = path_only_route["adapter"]["config"]["request"]
@@ -2199,20 +2388,69 @@ def main() -> None:
     assert json.loads(x_projection.response.get_text()) == {"data": {"id": "safe"}}
 
     object_store_route = route(example_snapshot, "example.object_store.small_puts")
+    object_store_adapter = get_adapter(object_store_route.adapter_type)
+    object_store_body = b'{"content":"hello","contentType":"text/plain"}'
+    expected_object_store_digest = (
+        "sha256:292df0fecc76d806319901d8e74c1f5de3cd776d05d4e4e72bdc44e83492d010"
+    )
+    assert expected_object_store_digest == f"sha256:{hashlib.sha256(object_store_body).hexdigest()}"
+    object_store_request = flow(
+        "PUT",
+        "https://objects.example.com/v1/objects/report-1",
+    )
+    object_store_request.request.raw_content = object_store_body
+    object_store_operation = object_store_adapter.operation_fields(
+        object_store_request,
+        object_store_route,
+        {"artifact_id": "report-1"},
+    )
+    assert object_store_operation == {
+        "operation": "object_store.objects.put",
+        "artifact_id": "report-1",
+        "requestBodySha256": expected_object_store_digest,
+    }
+    assert request_decision(
+        object_store_route,
+        object_store_request,
+        "object_store.objects.put",
+        operation_fields=object_store_operation,
+    ).allowed
+
+    caller_digest = "sha256:" + "0" * 64
+    caller_digest_request = copy.deepcopy(object_store_request)
+    caller_digest_request.request.raw_content = json.dumps(
+        {"content": "hello", "requestBodySha256": caller_digest},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    caller_digest_operation = object_store_adapter.operation_fields(
+        caller_digest_request,
+        object_store_route,
+        {"artifact_id": "report-1"},
+    )
+    assert caller_digest_operation["requestBodySha256"] == (
+        f"sha256:{hashlib.sha256(caller_digest_request.request.raw_content).hexdigest()}"
+    )
+    assert caller_digest_operation["requestBodySha256"] != caller_digest
+
     object_store_response = flow(
         "PUT",
         "https://objects.example.com/v1/objects/report-1",
-        response={"ok": True, "id": "report-1", "sha256": "sha256:" + "a" * 64},
+        response={"ok": True, "id": "report-1", "sha256": expected_object_store_digest},
     )
-    object_store_response.metadata["serverware_operation"] = {
-        "operation": "object_store.objects.put",
-        "artifact_id": "report-1",
-        "sha256": "sha256:" + "a" * 64,
-    }
+    object_store_response.metadata["serverware_operation"] = object_store_operation
     assert evaluate_response_constraints(object_store_response, object_store_route).allowed
+    mismatched_object_store_digest = copy.deepcopy(object_store_response)
+    mismatched_object_store_digest.response.raw_content = json.dumps(
+        {"ok": True, "id": "report-1", "sha256": "sha256:" + "a" * 64}
+    ).encode("utf-8")
+    assert_response_binding_denied(
+        evaluate_response_constraints(mismatched_object_store_digest, object_store_route),
+        "response_binding_mismatch",
+        binding_id="sha256",
+    )
     wrong_object_store_status = copy.deepcopy(object_store_response)
     wrong_object_store_status.response.raw_content = json.dumps(
-        {"ok": False, "id": "report-1", "sha256": "sha256:" + "a" * 64}
+        {"ok": False, "id": "report-1", "sha256": expected_object_store_digest}
     ).encode("utf-8")
     assert_denied(
         evaluate_response_constraints(wrong_object_store_status, object_store_route),
@@ -2326,6 +2564,18 @@ def main() -> None:
         "confirm": "true",
         "metadata.agent_request_id": "req-123",
     }, stripe_operation
+    stripe_digest_route = copy.deepcopy(stripe_route)
+    stripe_digest_route.adapter_config["request"]["operation"]["bodySha256Field"] = (
+        "requestBodySha256"
+    )
+    stripe_digest_operation = stripe_adapter.operation_fields(
+        stripe_request,
+        stripe_digest_route,
+        {},
+    )
+    assert stripe_digest_operation["requestBodySha256"] == (
+        f"sha256:{hashlib.sha256(stripe_request.request.raw_content).hexdigest()}"
+    )
     assert evaluate_response_binding_sources(stripe_route, stripe_operation).allowed
     assert request_decision(stripe_route, stripe_request, "stripe.payment_intents.create").allowed
 
@@ -3597,6 +3847,28 @@ def main() -> None:
             ),
             "credential_rate_limit_exceeded",
         )
+
+        for alias in ("twitter", "x.oauth", "x.oauth2", " X.OAUTH2 "):
+            alias_account = CredentialPolicy(
+                id=f"cred-x:{alias.strip().lower()}",
+                provider=alias,
+                provider_subject=account_credential.provider_subject,
+            )
+            alias_operation = {"operation": "tweets.write"}
+            assert _bind_provider_account_scope(account_route, alias_account, alias_operation) is None
+            assert alias_operation["providerAccount"] == first_operation["providerAccount"]
+            assert_denied(
+                request_decision(
+                    account_route,
+                    account_tweet,
+                    "tweets.write",
+                    consume=True,
+                    principal_id=f"agent:{alias.strip().lower()}",
+                    credential_ref=alias_account.id,
+                    operation_fields=alias_operation,
+                ),
+                "credential_rate_limit_exceeded",
+            )
 
         other_account = CredentialPolicy(
             id="cred-x:other-account",

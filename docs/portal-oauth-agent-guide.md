@@ -6,7 +6,7 @@ This guide covers the operator path for connecting OAuth-backed services in the 
 
 [Private deployment screenshot omitted from public source.]
 
-The screenshots in this guide are rendered from the real portal UI by the deterministic HTTPS browser journey in `scripts/test_portal_browser_oauth.py`. The desktop view above shows the empty operator-passkey inventory, pending configuration/runtime/hardware statuses, handoff field, and assignment controls after the demo state is seeded. The approval views below open a real pending request through its exact deep link. The OAuth and policy screenshots exercise real portal redirects and callback handling against a bounded local provider simulator. They are not evidence of a live Google/X tenant, production WebAuthn enrollment, or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
+The screenshots in this guide are rendered from the real portal UI by the repeatable HTTPS browser journey in `scripts/test_portal_browser_oauth.py`. IDs, timestamps, ports, and signatures are intentionally fresh, so pixel output is not deterministic and the tracked images are documentation captures rather than golden security evidence. The desktop view above shows the empty operator-passkey inventory, pending configuration/runtime/hardware statuses, handoff field, and assignment controls after the demo state is seeded. The approval views below open a real pending request through its exact deep link. The OAuth and policy screenshots exercise real portal redirects and callback handling against a bounded local provider simulator. They are not evidence of a live Google/X tenant, production WebAuthn enrollment, or completed production Setup run. The SVG diagrams remain architecture references, not screenshots.
 
 ## Authenticate The Operator
 
@@ -43,6 +43,8 @@ export SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE=/etc/serverware/secrets/google
 export SERVERWARE_GOOGLE_OAUTH_REDIRECT_URI=https://serverware.example.com/api/oauth/callback/google
 ```
 
+In Google Cloud, enable the Gmail API, configure the OAuth consent screen for the deployment's user type, and create a **Web application** OAuth client. Register the exact HTTPS redirect URI shown above; scheme, host, path, case, and trailing slash must match. Request only the Gmail and identity scopes required by the selected templates, complete Google's production verification when the chosen scopes require it, and place the client secret outside the source tree. Google's current primary instructions are [Using OAuth 2.0 for Web Server Applications](https://developers.google.com/identity/protocols/oauth2/web-server) and [OAuth 2.0 Policies](https://developers.google.com/identity/protocols/oauth2/policies).
+
 X/Twitter:
 
 ```bash
@@ -51,6 +53,8 @@ export SERVERWARE_X_OAUTH_CLIENT_ID=...
 export SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE=/etc/serverware/secrets/x-oauth-client-secret
 export SERVERWARE_X_OAUTH_REDIRECT_URI=https://serverware.example.com/api/oauth/callback/x
 ```
+
+In the X developer portal, create the application, enable OAuth 2.0 user authentication, register the exact HTTPS callback above, and configure the scopes needed by the assigned templates. Serverware is a confidential web client when a client secret is configured; keep that secret only in the owner-readable file. The current primary references are X's [OAuth 2.0 Authorization Code Flow with PKCE](https://docs.x.com/fundamentals/authentication/oauth-2-0/authorization-code) and [user access token guide](https://docs.x.com/fundamentals/authentication/oauth-2-0/user-access-token).
 
 Production secret files must be regular non-symlink files owned by the distroless control-plane UID `65532`, use mode `0400` or `0600`, and be readable to the privileged host preflight. Plaintext `SERVERWARE_*_OAUTH_CLIENT_SECRET` variables remain a local-development convenience and are rejected by production readiness.
 
@@ -85,8 +89,8 @@ The first portal section consolidates the common operator path without weakening
 1. Select a restriction template, principal, compatible credential, route ID, and any JIT approvers.
 2. Use **Connect credential** when the provider account is not connected. OAuth and exact-account activation still run through their dedicated, audited controls.
 3. **Preview assignment**, inspect every signed diff and allow/deny dry-run, then **Stage** and explicitly **Activate** the exact candidate.
-4. **Generate enrollment** only after the selected principal is assigned to the active route and that route references the selected credential. The packet pins the current active policy hash; **Verify server evidence** records the current credential version and requires matching post-enrollment runtime evidence.
-5. Download the signed packet, copy the verifier command, run it on the agent host, exercise the allowed route, complete JIT when required, and select **Verify server evidence**.
+4. **Generate enrollment** only after the selected principal is assigned to the active route and that route references the selected credential. The packet pins the current active policy hash; **Verify server evidence** records the current credential version and requires matching post-enrollment gateway evidence.
+5. Download the signed packet, copy the verifier command and packet-derived agent instructions, run the verifier on the agent host, exercise the allowed route, complete JIT when required, and select **Verify server evidence**.
 
 The Setup ledger's table and storage operations support both SQLite and PostgreSQL; that backend-neutral statement applies to the ledger, not to every service involved in the workflow. `POST /api/setup/sessions` creates a bounded, expiring session owned by the authenticated operator. `GET /api/setup/sessions` returns resumable session summaries without evidence or transition events. `GET /api/setup/sessions/{id}` returns the selected session with its evidence and transition events. The claim, handoff, cancel, credential, canary, policy, enrollment, and verify endpoints advance only named phases and require the caller's current `expectedRevision`; a stale writer receives a conflict with the current revision. Handoff by the owner or an admin records a bounded current-assignee subject string. It does not verify at handoff that the subject exists, grant that subject a role, reserve the run exclusively, or transfer OAuth ownership. When that subject later calls the API, normal authentication, role checks, participant checks, phase checks, and revision checks are enforced then.
 
@@ -97,7 +101,7 @@ Each transition and its evidence digests is written to a bounded audit outbox in
 The three status pills are intentionally independent:
 
 - **Configuration ready** means the active signed policy, principal, route, credential, verified OAuth subject/scopes, and access-token-only injection agree.
-- **Runtime exercised** additionally requires the signed enrollment packet's exact one-use CA capability to have been consumed and complete post-enrollment audit evidence for the exact policy/principal/route/credential/version. The server derives enrollment consumption, activated-canary monitoring, and the validated upstream response release from authoritative session, policy, canary, grant, and audit state; it does not accept browser claims for those facts. JIT routes require both the authoritative grant-store consumption record and the matching data-plane response record to agree on request, operation, flow, grant, and approval bindings.
+- **Gateway stages verified** additionally requires the signed enrollment packet's exact one-use CA capability to have been consumed and complete post-enrollment audit evidence for the exact policy/principal/route/credential/version. The server derives enrollment consumption, activated-canary monitoring, durable authorization immediately before dispatch, and correlated response validation from authoritative session, policy, canary, grant, and audit state; it does not accept browser claims for those facts. JIT routes require both the authoritative grant-store consumption record and the matching data-plane response record to agree on request, operation, flow, grant, and approval bindings. These events do not prove that the provider accepted the request or that response bytes reached the agent socket; final response proof and provider-specific receipts are separate evidence.
 - **Hardware unverified** remains pending until an independently signed hardware receipt is submitted. Server self-claims are not independent attestation verification. The portal and Setup API now issue the session-bound challenge, validate and store the exact signed hardware-assurance/proxy-statement bytes, enforce fresh challenge and cross-session replay checks, and retain the accepted evidence through completion. The separately trusted hardware verifier and off-host final authority must use distinct configured keys and bind the exact assignment, session, challenge, artifacts, release identity, and current host. Fixture authorities exercise this contract locally; no real production hardware receipt or independently operated authority exists for this checkout.
 
 The durable ledger, control-plane endpoints, receipt APIs, and inline first-screen workflow are implemented, including successful OAuth callback/pending-activation continuity and server-derived canary/runtime reconciliation. The portal creates and selects durable runs, includes the selected run in `?setup=<id>`, resumes it after the operator reauthenticates, records a bounded handoff subject, keeps committed backend bindings immutable, and advances preview, stage, activation, enrollment, verification, hardware evidence, and final receipt through revision-checked endpoints. A claim sets the current-assignee string to the authenticated caller but is not an exclusive work lock. The portal can reach hardware-verified and audit-gated complete states with valid independently signed receipts. Production acceptance remains open until independently operated enrollment, hardware, and final authorities produce a real EIF/PCR/current-host/proxy-bound receipt chain on the target TEE deployment.
@@ -113,6 +117,8 @@ The durable ledger, control-plane endpoints, receipt APIs, and inline first-scre
 7. Confirm that the active credential appears as `kind: oauth2`, shows the expected provider account, and reports a verified identity. Treat `identity unverified` as unusable and reconnect it.
 8. If **Provider issuance requires review** appears, revoke Serverware in the provider's app/security console before using the confirmation control. Record evidence, complete the passkey and second-operator workflow, and verify the uncertainty leaves the queue.
 
+The connection form shows the currently connected Google and X accounts beside the provider controls. This is the assignment inventory: operators can inspect provider identity, scope compatibility, expiry, reconnect/disconnect state, and pending activation without searching the complete credential table. Credential metadata remains available under an explicit disclosure instead of filling the default workspace with raw JSON.
+
 OAuth credentials store token material as encrypted JSON in the control plane. Managed Google/X policies must use the canonical access-token injection:
 
 ```json
@@ -127,7 +133,7 @@ Production policy should be published as a signed `PolicyBundle`, not as ad hoc 
 
 [Private deployment screenshot omitted from public source.]
 
-The screenshot is captured after the deterministic browser journey connects both Google and X accounts and drives signed preview, two required dry-runs, staging, and explicit activation. It shows the X seven-day search assignment and callback-derived credential metadata; the test independently reads the active policy API and requires both the Gmail 30-day and X seven-day routes to reference the exact created credential IDs, provider subjects, scope sets, and X OAuth app ID.
+The screenshot is captured after the repeatable browser journey connects both Google and X accounts and drives signed preview, two required dry-runs, staging, and explicit activation. It shows the X seven-day search assignment and callback-derived credential metadata; the test independently reads the active policy API and requires both the Gmail 30-day and X seven-day routes to reference the exact created credential IDs, provider subjects, scope sets, and X OAuth app ID.
 
 Run the browser proof independently with:
 
@@ -135,7 +141,7 @@ Run the browser proof independently with:
 make verify-portal-browser-oauth
 ```
 
-The target installs the pinned Chromium revision through Playwright, trusts only the simulator certificate's SPKI, checks desktop and mobile overflow, confirms OAuth state-cookie cleanup, and scans browser/API/disk evidence for simulator token values. Use `--screenshots-dir docs/images` with the underlying script only when intentionally refreshing these canonical screenshots.
+The target installs the pinned Chromium revision through Playwright, trusts only the simulator certificate's SPKI, checks desktop and mobile overflow, confirms OAuth state-cookie cleanup, and scans browser/API/disk evidence for simulator token values. Use `--screenshots-dir docs/images` with the underlying script only when intentionally refreshing the tracked documentation captures.
 
 The canonical, schema-valid examples live in [credential-limits.examples.json](../policies/credential-limits.examples.json). Extract one without copying a potentially stale fragment:
 
@@ -160,7 +166,7 @@ The canonical routes are:
 | `example.stripe.customers.list` | Only `GET /v1/customers`, page cap 25, and bounded list/customer projections including the provider's optional deleted marker. |
 | `example.stripe.customers.get` | Only `GET /v1/customers/{customer_id}`, with the returned customer ID bound exactly to the matched path parameter and an optional deleted marker. |
 | `example.stripe.payment_intent.tokenized_jit` | Only tokenized `pm_...` PaymentIntent creation, a required bounded `Idempotency-Key`, USD 50-50,000 minor-unit amount bounds, five shared attempts per principal/credential/route assignment per day, raw card/source fields denied, one-use hardware-backed JIT, an admitted PaymentIntent status, and response binding for `amount`, `currency`, and `payment_method`. Denied request bytes are handled transiently by the proxy; this is not card tokenization or PCI certification. |
-| `example.object_store.small_puts` | Exact bounded JSON PUT, ten shared writes per principal/credential/route assignment per hour, and response binding for the path artifact ID plus provider-echoed caller-declared digest metadata. It does not hash the uploaded content. |
+| `example.object_store.small_puts` | Exact bounded JSON PUT, ten shared writes per principal/credential/route assignment per hour, and response binding for the path artifact ID plus the SHA-256 Serverware computes from the exact admitted request bytes. The caller does not declare the digest being trusted. |
 | `example.basic.structured_secret_read` | Read-only Basic authentication using a fixed username and a password selected from a structured secret field. |
 | `example.query.structured_secret_read` | Read-only query-token injection selected from a nested secret field; the caller can supply `city` but cannot override the injected `api_key`. |
 | `example.cookie.structured_secret_read` | Read-only cookie injection selected from a nested secret field; ambient caller cookies remain outside the admitted request contract. |
@@ -168,6 +174,8 @@ The canonical routes are:
 Every template is an ordinary signed route: operators can narrow it further, but unknown fields, operations, hosts, paths, content types, policy extensions, and unsupported response modes fail admission or execution closed.
 
 The Stripe PaymentIntent template applies its `responseBinding` constraint only to `stripe.payment_intents.create`. A missing `amount`, `currency`, or `payment_method` request source is denied before credential release. The response must be an exact admitted `200 application/json` envelope, identify itself as a PaymentIntent with a bounded `pi_...` ID, and match the captured amount, currency, and payment-method token. Response paths traverse objects only, never arrays. A missing or mismatched field, wrong success status/media type, or wrong object identity becomes a synthetic `502` before any upstream response bytes are released to the agent. This describes Serverware's policy contract and local verification boundary. It does not claim validation against live Stripe or PCI validation or certification.
+
+This is a server-side, pre-tokenized payment example, not a checkout or Strong Customer Authentication implementation. Stripe's [PaymentIntent lifecycle](https://docs.stripe.com/payments/paymentintents/lifecycle) can legitimately return `requires_action`, `requires_payment_method`, or another nonterminal status after the approved request. The projection deliberately excludes `client_secret`, card details, and next-action payloads. An agent that receives a nonterminal status must report the PaymentIntent ID and status to the operator-owned payment workflow; it must not collect card data, attempt 3-D Secure, or create a replacement intent under a different idempotency key. Stripe recommends reusing a PaymentIntent for the same purchase and using an idempotency key, as described in the [Payment Intents API guide](https://docs.stripe.com/payments/payment-intents). Production payment policy should narrow allowed payment-method families, amounts, currencies, merchants, and terminal-status handling to the actual business workflow.
 
 Stripe uses a manually stored API credential in this release, not the Google/X OAuth connector. Choose **Tokenized PaymentIntent create + hardware JIT**, use **Connect credential**, and store a bearer credential whose metadata contains `{"provider":"stripe"}`; the Setup workflow prefills that metadata. The signed-template selector rejects unbound or differently labeled bearer credentials, and the weaker local-prototype editor intentionally does not offer Stripe shortcuts. This provider label is an operator assertion for a static secret, not provider-verified OAuth identity.
 
@@ -228,6 +236,7 @@ Generate an enrollment packet from the portal:
 2. In **Agent Enrollment**, choose the policy principal that will run the agent.
 3. Enter the Serverware proxy URL, proxy egress CIDR, namespace, CA mount path, and optional pod selector JSON. The control-plane origin is read-only and derived from `SERVERWARE_PUBLIC_URL`; a submitted mismatch is rejected.
 4. Click **Generate enrollment**, then **Download + copy verifier command**. The portal downloads the exact signed packet and copies a fail-closed command that verifies that file before any CA installation step.
+5. Click **Copy agent instructions** for a compact handoff generated from that signed packet. It contains the proxy and CA environment, required CONNECT and provider headers, token identifier when proxy authorization is required, allowed upstream URLs, and exact approval/error behavior. It never includes the proxy-authorization secret or a provider credential.
 
 The same packet can be generated from the CLI for automation:
 
@@ -298,6 +307,8 @@ If Serverware returns 428, give approval_url to the operator, honor retry_after_
 If Serverware returns 403 or 5xx, stop and report the route/error; do not bypass the proxy.
 ```
 
+The portal renders this block from the signed packet instead of a generic template. Give the generated block to the agent together with its separately provisioned proxy-authorization secret, when one is required. A new packet or policy assignment requires a fresh handoff; do not retain instructions whose packet has expired or whose pinned policy is no longer active.
+
 Enforce egress so the agent cannot bypass Serverware. The enrollment packet includes a Kubernetes `NetworkPolicy` and iptables rules that only allow outbound traffic to the configured Serverware proxy CIDRs.
 
 ## Exact Credential Lease Flow
@@ -332,10 +343,12 @@ Before installing the CA or enabling production credentials, verify:
 ```bash
 python3 scripts/verify_codebase_attestation.py \
   --base https://serverware.example.com \
-  --admin-token "$SERVERWARE_ADMIN_TOKEN"
+  --admin-token "$SERVERWARE_ADMIN_TOKEN" \
+  --release-signing-trusted-key /etc/serverware/trust/release-signing.pub.pem \
+  --image-signing-trusted-key /etc/serverware/trust/image-signing.pub.pem
 ```
 
-In development this verifier checks internal consistency among the signed quote, runtime manifest, policy signature, policy high-water record, `serverware.sourceTree/v2` digest, release provenance, image-signature digest, CA SPKI, and a nonce-bound **control-plane** response signature. Source manifest v2 commits to path, type, normalized mode, file bytes, symlink targets, tracked deletions, all tracked inputs, and relevant untracked source/build/config inputs. It does not prove that the Rust proxy ran in a hardware TEE.
+Pin the trusted release and image signing keys from an independently authenticated channel; keys downloaded from the server being verified are circular trust. In development this verifier checks internal consistency among the signed quote, runtime manifest, policy signature, policy high-water record, `serverware.sourceTree/v2` digest, release provenance, image-signature digest, CA SPKI, and a nonce-bound **control-plane** response signature. Source manifest v2 commits to path, type, normalized mode, file bytes, symlink targets, tracked deletions, all tracked inputs, and relevant untracked source/build/config inputs. It does not prove that the Rust proxy ran in a hardware TEE.
 
 For a safe, buffered `GET`, `serverware-proof-client` can send a fresh proof nonce through the CONNECT TLS tunnel and write `serverware.proxyResponseProof/v3`; `HEAD` is rejected. The proof pairs a v2 external client capture with the Rust `serverware.proxyResponseStatement/v2`. Both bind the exact atomic authorization historically observed at upstream dispatch, including observation time and reservation expiry, grant/approval identity when present, credential version, request/operation/attempt/consumption identity, raw upstream status/body/policy-header digests, exact projected status/body/selected headers, policy, runtime manifest, measured binary, release, server instance, and TLS exporter. The gate sends a fresh nonce in the actual dispatch call and embeds its canonical request plus the signed control-plane response as `serverware.controlPlaneAuthorizationReceipt/v1`. Production verification independently pins that response-signing key and requires the embedded receipt to match the complete authority tuple and timing; no separately supplied receipt artifact is accepted. The inline statement makes no current-authorization or downstream-completion claim; the client demonstrates receipt by possessing the response and valid proof. This is a real end-to-end byte binding in the development stack, but its `vendor_tee` is explicitly `none-dev`/`development-fixture`.
 

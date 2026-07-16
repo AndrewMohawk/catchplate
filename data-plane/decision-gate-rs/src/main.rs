@@ -35,7 +35,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Condvar, Mutex, RwLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
@@ -339,6 +339,7 @@ enum PathSegment {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum GenericOperationSource {
+    BodySha256,
     Form,
     Json,
     Path,
@@ -1549,6 +1550,12 @@ const PROVIDER_ACCOUNT_OPERATION_FIELD: &str = "providerAccount";
 
 fn provider_account_scope_value(provider: &str, provider_subject: Option<&str>) -> Option<String> {
     let provider_subject = provider_subject.filter(|subject| !subject.is_empty())?;
+    let provider = provider.trim().to_ascii_lowercase();
+    let provider = match provider.as_str() {
+        "twitter" | "x.oauth" | "x.oauth2" => "x",
+        "google.oauth" | "google.oauth2" => "google",
+        provider => provider,
+    };
     if provider.is_empty() {
         return None;
     }
@@ -2616,6 +2623,7 @@ fn generic_operation_sources<'a>(
 
     if let Some(field) = operation.keys().find(|field| {
         field.as_str() != "name"
+            && field.as_str() != "bodySha256Field"
             && !SOURCE_LISTS
                 .iter()
                 .any(|(supported, _, _)| field.as_str() == *supported)
@@ -2655,6 +2663,29 @@ fn generic_operation_sources<'a>(
                     "request.operation source {field} is declared in more than one source list"
                 ));
             }
+        }
+    }
+    if let Some(raw_field) = operation.get("bodySha256Field") {
+        let field = raw_field.as_str().unwrap_or_default();
+        if field == "operation" || !valid_operation_field(field) {
+            return Err(
+                "request.operation.bodySha256Field must name a valid non-reserved operation field"
+                    .to_string(),
+            );
+        }
+        if !matches!(body_mode, "json" | "formUrlencoded") {
+            return Err(
+                "request.operation.bodySha256Field requires buffered bodyMode json or formUrlencoded"
+                    .to_string(),
+            );
+        }
+        if sources
+            .insert(field, GenericOperationSource::BodySha256)
+            .is_some()
+        {
+            return Err(format!(
+                "request.operation source {field} is duplicated by bodySha256Field"
+            ));
         }
     }
     Ok(sources)
@@ -4773,7 +4804,17 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
                         }
                         continue;
                     }
+                    if *source_kind == GenericOperationSource::BodySha256 {
+                        if binding.get("comparison").and_then(Value::as_str) != Some("exactString")
+                        {
+                            return Err(format!(
+                                "route {route_id} responseBinding {constraint_id} bodySha256 source {source} supports only exactString"
+                            ));
+                        }
+                        continue;
+                    }
                     let body_constraint_type = match source_kind {
+                        GenericOperationSource::BodySha256 => unreachable!(),
                         GenericOperationSource::Form => "formBody",
                         GenericOperationSource::Json => "jsonBody",
                         GenericOperationSource::Path => unreachable!(),
@@ -5290,6 +5331,106 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
     Ok(())
 }
 
+static POLICY_BUNDLE_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> =
+    OnceLock::new();
+static GENERIC_REST_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> =
+    OnceLock::new();
+static GMAIL_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> = OnceLock::new();
+static NPM_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> = OnceLock::new();
+static X_SCHEMA_VALIDATOR: OnceLock<Result<jsonschema::Validator, String>> = OnceLock::new();
+
+fn cached_json_schema_validator(
+    cache: &'static OnceLock<Result<jsonschema::Validator, String>>,
+    schema_source: &'static str,
+    context: &'static str,
+) -> Result<&'static jsonschema::Validator, String> {
+    cache
+        .get_or_init(|| {
+            let schema = strict_json_value_from_str(schema_source)
+                .map_err(|error| format!("parse embedded {context} schema: {error}"))?;
+            jsonschema::draft202012::options()
+                .build(&schema)
+                .map_err(|error| format!("compile embedded {context} schema: {error}"))
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+fn validate_json_schema(
+    instance: &Value,
+    validator: &jsonschema::Validator,
+    context: &str,
+) -> Result<(), String> {
+    validator.validate(instance).map_err(|error| {
+        let path = error.instance_path().to_string();
+        let location = if path.is_empty() {
+            String::new()
+        } else {
+            format!(" at {path}")
+        };
+        format!("{context} schema validation failed{location}: {error}")
+    })
+}
+
+fn validate_policy_schema(raw: &Value) -> Result<(), String> {
+    let bundle_validator = cached_json_schema_validator(
+        &POLICY_BUNDLE_SCHEMA_VALIDATOR,
+        include_str!("../../../schemas/policy-bundle.v1.schema.json"),
+        "policy bundle",
+    )?;
+    validate_json_schema(raw, bundle_validator, "policy bundle")?;
+    let routes = raw
+        .get("routes")
+        .and_then(Value::as_array)
+        .ok_or("policy routes missing after schema validation")?;
+    for (index, route) in routes.iter().enumerate() {
+        let route_id = route.get("id").and_then(Value::as_str).unwrap_or("unnamed");
+        let adapter = route
+            .get("adapter")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("route {route_id} adapter missing after schema validation"))?;
+        let adapter_type = adapter.get("type").and_then(Value::as_str).ok_or_else(|| {
+            format!("route {route_id} adapter type missing after schema validation")
+        })?;
+        let validator = match adapter_type {
+            "generic.rest" => cached_json_schema_validator(
+                &GENERIC_REST_SCHEMA_VALIDATOR,
+                include_str!("../../../schemas/adapters/generic.rest.schema.json"),
+                "generic.rest adapter",
+            )?,
+            "gmail.v1" => cached_json_schema_validator(
+                &GMAIL_SCHEMA_VALIDATOR,
+                include_str!("../../../schemas/adapters/gmail.v1.schema.json"),
+                "gmail.v1 adapter",
+            )?,
+            "npm.registry" => cached_json_schema_validator(
+                &NPM_SCHEMA_VALIDATOR,
+                include_str!("../../../schemas/adapters/npm.registry.schema.json"),
+                "npm.registry adapter",
+            )?,
+            "x.v2" => cached_json_schema_validator(
+                &X_SCHEMA_VALIDATOR,
+                include_str!("../../../schemas/adapters/x.v2.schema.json"),
+                "x.v2 adapter",
+            )?,
+            _ => {
+                return Err(format!(
+                    "route {route_id} adapter type {adapter_type} has no policy schema"
+                ));
+            }
+        };
+        let config = adapter.get("config").ok_or_else(|| {
+            format!("route {route_id} adapter config missing after schema validation")
+        })?;
+        validate_json_schema(
+            config,
+            validator,
+            &format!("route {index} ({route_id}) {adapter_type} adapter"),
+        )?;
+    }
+    Ok(())
+}
+
 fn parse_cidrs(value: Option<&Value>, context: &str) -> Result<Vec<IpNet>, String> {
     let mut networks = Vec::new();
     for cidr in value.and_then(Value::as_array).into_iter().flatten() {
@@ -5473,6 +5614,7 @@ fn load_snapshot(
         }
     }
     validate_policy_capabilities(&raw)?;
+    validate_policy_schema(&raw)?;
 
     let mut principals = Vec::new();
     for item in raw
@@ -11378,6 +11520,15 @@ fn generic_operation_fields(
                 fields.insert(field, Value::String(found[0].clone()));
             }
         }
+    }
+    if let Some((field, _)) = configured
+        .iter()
+        .find(|(_, source)| **source == GenericOperationSource::BodySha256)
+    {
+        fields.insert(
+            (*field).to_string(),
+            Value::String(sha256_prefixed(req.body.as_bytes())),
+        );
     }
     Ok(Value::Object(fields))
 }
@@ -25471,6 +25622,7 @@ mod tests {
                 "validationFailure":"block"
             },
             "principals":[{"id":"agent:test","sourceCidrs":["127.0.0.1/32"]}],
+            "credentials":[],
             "routes":[route]
         })
     }
@@ -27751,6 +27903,106 @@ mod tests {
     }
 
     #[test]
+    fn signed_policy_loader_rejects_unknown_fields_at_every_policy_layer() {
+        let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
+        let policy_path = env::temp_dir().join(format!("serverware-policy-schema-{suffix}.json"));
+        let trust_path = env::temp_dir().join(format!("serverware-policy-schema-key-{suffix}.pem"));
+        let (signing_key, public_key_pem, signing_key_id) =
+            response_proof_signing_material().expect("test policy signing material");
+        fs::write(&trust_path, public_key_pem).expect("write policy trust fixture");
+        let trust_source = PolicyTrustRootSource::File(trust_path.to_string_lossy().into_owned());
+        let base = strict_json_value_from_str(include_str!(
+            "../../../policies/credential-limits.examples.json"
+        ))
+        .expect("parse canonical policy fixture");
+
+        let valid = sign_test_policy(base.clone(), &signing_key, &signing_key_id, 2);
+        fs::write(
+            &policy_path,
+            serde_json::to_vec(&valid).expect("serialize valid policy"),
+        )
+        .expect("write valid policy");
+        load_snapshot(
+            &policy_path.to_string_lossy(),
+            &trust_source,
+            "sha256:test-binary",
+        )
+        .expect("canonical signed policy fixture must load");
+
+        let mut mutations = Vec::new();
+
+        let mut top = base.clone();
+        top["unknownPolicyField"] = json!(true);
+        mutations.push(("top-level", top));
+
+        let mut defaults = base.clone();
+        defaults["defaults"]["unknownDefaultField"] = json!(true);
+        mutations.push(("defaults", defaults));
+
+        let mut route = base.clone();
+        route["routes"][0]["unknownRouteField"] = json!(true);
+        mutations.push(("route", route));
+
+        let mut jit = base.clone();
+        let jit_route = jit["routes"]
+            .as_array_mut()
+            .expect("policy routes")
+            .iter_mut()
+            .find(|route| route.get("jit").is_some())
+            .expect("JIT route");
+        jit_route["jit"]["unknownJitField"] = json!(true);
+        mutations.push(("JIT", jit));
+
+        let mut generic_request = base;
+        let generic_route = generic_request["routes"]
+            .as_array_mut()
+            .expect("policy routes")
+            .iter_mut()
+            .find(|route| {
+                route
+                    .get("adapter")
+                    .and_then(|adapter| adapter.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("generic.rest")
+            })
+            .expect("generic REST route");
+        generic_route["adapter"]["config"]["request"]["unknownRequestField"] = json!(true);
+        mutations.push(("generic request", generic_request));
+
+        for (index, (layer, mutation)) in mutations.into_iter().enumerate() {
+            let signed =
+                sign_test_policy(mutation, &signing_key, &signing_key_id, 3 + index as u64);
+            fs::write(
+                &policy_path,
+                serde_json::to_vec(&signed).expect("serialize mutated policy"),
+            )
+            .expect("write mutated policy");
+            let error = match load_snapshot(
+                &policy_path.to_string_lossy(),
+                &trust_source,
+                "sha256:test-binary",
+            ) {
+                Ok(_) => panic!("signed policy with unknown {layer} field passed admission"),
+                Err(error) => error,
+            };
+            if matches!(layer, "top-level" | "route" | "generic request") {
+                assert!(
+                    error.contains("schema validation failed"),
+                    "{layer}: {error}"
+                );
+            } else {
+                assert!(
+                    error.contains("not supported") || error.contains("schema validation failed"),
+                    "{layer}: {error}"
+                );
+            }
+        }
+
+        fs::remove_file(policy_path).expect("remove policy fixture");
+        fs::remove_file(trust_path).expect("remove policy trust fixture");
+    }
+
+    #[test]
     fn policy_reload_retains_secret_semantic_floor_for_relevant_credential_ids() {
         let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
         let policy_path = env::temp_dir().join(format!("serverware-policy-{suffix}.json"));
@@ -28065,6 +28317,80 @@ mod tests {
             &operation,
         );
         assert_eq!(first_key, rotated_key);
+
+        for alias in ["twitter", "x.oauth", "x.oauth2", " X.OAUTH2 "] {
+            let alias_credential = Credential {
+                provider: alias.to_string(),
+                provider_subject: credential.provider_subject.clone(),
+                injection: json!({"type":"bearer"}),
+            };
+            let mut alias_operation = json!({"operation":"tweets.write"});
+            bind_provider_account_scope(&route, Some(&alias_credential), &mut alias_operation)
+                .expect("X provider alias binds account quota");
+            assert_eq!(
+                alias_operation[PROVIDER_ACCOUNT_OPERATION_FIELD],
+                operation[PROVIDER_ACCOUNT_OPERATION_FIELD]
+            );
+            let alias_key = rate_limit_key(
+                &route.constraints[0],
+                &route,
+                &format!("agent:{alias}"),
+                Some(&format!("credential:{alias}")),
+                100,
+                &alias_operation,
+            );
+            assert_eq!(first_key, alias_key, "X alias {alias} split account quota");
+        }
+
+        let mut google_key = None;
+        for alias in ["google", "google.oauth", "google.oauth2", " GOOGLE.OAUTH2 "] {
+            let google_credential = Credential {
+                provider: alias.to_string(),
+                provider_subject: Some("verified-google-sub".to_string()),
+                injection: json!({"type":"bearer"}),
+            };
+            let mut google_operation = json!({"operation":"messages.read"});
+            bind_provider_account_scope(&route, Some(&google_credential), &mut google_operation)
+                .expect("Google provider alias binds account quota");
+            let alias_key = rate_limit_key(
+                &route.constraints[0],
+                &route,
+                &format!("agent:{alias}"),
+                Some(&format!("credential:{alias}")),
+                200,
+                &google_operation,
+            );
+            if let Some(expected) = google_key.as_ref() {
+                assert_eq!(
+                    expected, &alias_key,
+                    "Google alias {alias} split account quota"
+                );
+            } else {
+                google_key = Some(alias_key);
+            }
+        }
+
+        let different_subject = Credential {
+            provider: "twitter".to_string(),
+            provider_subject: Some("different-x-user-id".to_string()),
+            injection: json!({"type":"bearer"}),
+        };
+        let mut different_operation = json!({"operation":"tweets.write"});
+        bind_provider_account_scope(&route, Some(&different_subject), &mut different_operation)
+            .expect("different provider subject binds an independent quota");
+        assert_ne!(
+            different_operation[PROVIDER_ACCOUNT_OPERATION_FIELD],
+            operation[PROVIDER_ACCOUNT_OPERATION_FIELD]
+        );
+        let different_key = rate_limit_key(
+            &route.constraints[0],
+            &route,
+            "agent:different",
+            Some("credential:different"),
+            1,
+            &different_operation,
+        );
+        assert_ne!(first_key, different_key);
 
         let missing = Credential {
             provider: "custom-x".to_string(),
@@ -29781,6 +30107,69 @@ mod tests {
     }
 
     #[test]
+    fn generic_body_sha256_operation_source_is_computed_and_bound() {
+        let request_config = json!({
+            "bodyMode":"json",
+            "operation":{
+                "name":"object_store.objects.put",
+                "bodySha256Field":"requestBodySha256",
+                "pathParams":["artifact_id"]
+            }
+        });
+        let body = r#"{"content":"hello","contentType":"text/plain"}"#;
+        let expected = "sha256:292df0fecc76d806319901d8e74c1f5de3cd776d05d4e4e72bdc44e83492d010";
+        assert_eq!(sha256_prefixed(body.as_bytes()), expected);
+
+        let mut request = decision_request_with_body(body);
+        request.body_sha256 = Some(format!("sha256:{}", "0".repeat(64)));
+        let operation = generic_operation_fields(
+            &request,
+            request_config.as_object().expect("request config"),
+            &BTreeMap::from([("artifact_id".to_string(), "report-1".to_string())]),
+        )
+        .expect("computed body digest operation source");
+        assert_eq!(operation["operation"], "object_store.objects.put");
+        assert_eq!(operation["artifact_id"], "report-1");
+        assert_eq!(operation["requestBodySha256"], expected);
+        assert_ne!(
+            operation["requestBodySha256"],
+            request.body_sha256.clone().expect("caller digest")
+        );
+
+        let mut route = test_snapshot(1).routes[0].clone();
+        route.constraints = vec![json!({
+            "id":"object-store-response-binding",
+            "type":"responseBinding",
+            "phase":"response",
+            "successStatusCodes":[200],
+            "contentTypes":["application/json"],
+            "operations":["object_store.objects.put"],
+            "bindings":[{
+                "id":"sha256",
+                "operationField":"requestBodySha256",
+                "responseField":"sha256",
+                "comparison":"exactString"
+            }]
+        })];
+        validate_response_binding_sources(&route, &operation)
+            .expect("computed digest source must pass preflight");
+        validate_response_constraints(
+            &route,
+            format!(r#"{{"sha256":"{expected}"}}"#).as_bytes(),
+            Some(&operation),
+        )
+        .expect("matching computed digest must satisfy response binding");
+        let denied = validate_response_constraints(
+            &route,
+            format!(r#"{{"sha256":"sha256:{}"}}"#, "a".repeat(64)).as_bytes(),
+            Some(&operation),
+        )
+        .expect_err("mismatched response digest must fail closed");
+        assert_eq!(denied["error"], "response_binding_mismatch");
+        assert_eq!(denied["binding_id"], "sha256");
+    }
+
+    #[test]
     fn generic_form_operation_and_constraints_match_stripe_policy() {
         let mut route = test_snapshot(1).routes[0].clone();
         route.host = "api.stripe.com".to_string();
@@ -29801,6 +30190,7 @@ mod tests {
                 "maxBodyBytes":16384,
                 "operation":{
                     "name":"stripe.payment_intents.create",
+                    "bodySha256Field":"requestBodySha256",
                     "formFields":["amount","currency","payment_method","confirm","metadata.agent_request_id"]
                 }
             },
@@ -29856,6 +30246,10 @@ mod tests {
         assert_eq!(operation["operation"], "stripe.payment_intents.create");
         assert_eq!(operation["amount"], "5000");
         assert_eq!(operation["metadata.agent_request_id"], "req-123");
+        assert_eq!(
+            operation["requestBodySha256"],
+            sha256_prefixed(request.body.as_bytes())
+        );
         assert_eq!(operation.get("ratio"), None);
         enforce_form_body(&constraint, &request, &headers).expect("valid form constraint");
 
@@ -30061,6 +30455,106 @@ mod tests {
 
         validate_policy_capabilities(&policy_with_route(json_path_route()))
             .expect("bounded JSON and path sources must load");
+
+        let mut body_sha256 = json_path_route();
+        body_sha256["adapter"]["config"]["request"]["operation"]["bodySha256Field"] =
+            json!("requestBodySha256");
+        validate_policy_capabilities(&policy_with_route(body_sha256))
+            .expect("computed body digest source must load for buffered JSON");
+
+        let mut form_body_sha256 = generic_policy_route("formUrlencoded", json!(65_536));
+        form_body_sha256["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"artifacts.put",
+            "bodySha256Field":"requestBodySha256"
+        });
+        validate_policy_capabilities(&policy_with_route(form_body_sha256))
+            .expect("computed body digest source must load for buffered form requests");
+
+        for invalid_mode in [
+            "none",
+            "any",
+            "stream",
+            "jsonlStream",
+            "jsonArrayStream",
+            "jsonSseStream",
+            "jsonNestedStream",
+            "formUrlencodedStream",
+            "csvStream",
+        ] {
+            let mut route = generic_policy_route(invalid_mode, json!(65_536));
+            route["adapter"]["config"]["request"]["operation"] = json!({
+                "name":"artifacts.put",
+                "bodySha256Field":"requestBodySha256"
+            });
+            let error = validate_policy_capabilities(&policy_with_route(route))
+                .expect_err("computed body digest requires a buffered structured body");
+            assert!(
+                error.contains("bodySha256Field requires buffered bodyMode"),
+                "{error}"
+            );
+        }
+
+        for invalid_name in [
+            Value::Null,
+            json!("operation"),
+            json!("1digest"),
+            json!("digest/value"),
+            json!("a".repeat(129)),
+        ] {
+            let mut route = json_path_route();
+            route["adapter"]["config"]["request"]["operation"]["bodySha256Field"] = invalid_name;
+            let error = validate_policy_capabilities(&policy_with_route(route))
+                .expect_err("invalid computed body digest field name must fail admission");
+            assert!(
+                error.contains("valid non-reserved operation field"),
+                "{error}"
+            );
+        }
+
+        for (body_mode, source_name) in [
+            ("json", "jsonFields"),
+            ("json", "pathParams"),
+            ("formUrlencoded", "formFields"),
+        ] {
+            let mut route = generic_policy_route(body_mode, json!(65_536));
+            route["adapter"]["config"]["request"]["operation"] = json!({
+                "name":"artifacts.put",
+                "bodySha256Field":"requestBodySha256",
+                (source_name):["requestBodySha256"]
+            });
+            let error = validate_policy_capabilities(&policy_with_route(route))
+                .expect_err("computed body digest field must be disjoint from request sources");
+            assert!(error.contains("duplicated by bodySha256Field"), "{error}");
+        }
+
+        let mut digest_binding = generic_policy_route("json", json!(65_536));
+        digest_binding["adapter"]["config"]["request"]["operation"] = json!({
+            "name":"artifacts.put",
+            "bodySha256Field":"requestBodySha256"
+        });
+        digest_binding["constraints"] = json!([{
+            "id":"artifact-response",
+            "type":"responseBinding",
+            "phase":"response",
+            "successStatusCodes":[200],
+            "contentTypes":["application/json"],
+            "operations":["artifacts.put"],
+            "bindings":[{
+                "id":"sha256",
+                "operationField":"requestBodySha256",
+                "responseField":"sha256",
+                "comparison":"exactString"
+            }]
+        }]);
+        validate_policy_capabilities(&policy_with_route(digest_binding.clone()))
+            .expect("computed digest response binding must use exactString");
+        digest_binding["constraints"][0]["bindings"][0]["comparison"] = json!("canonicalInteger");
+        let error = validate_policy_capabilities(&policy_with_route(digest_binding))
+            .expect_err("computed digest response binding must reject numeric comparison");
+        assert!(
+            error.contains("bodySha256 source") && error.contains("exactString"),
+            "{error}"
+        );
 
         for (operation, expected) in [
             (

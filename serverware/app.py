@@ -720,6 +720,78 @@ class DataPlaneAuditBatch(BaseModel):
     events: list[DataPlaneAuditEvent] = Field(default_factory=list, max_length=200)
 
 
+_PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES = frozenset(
+    {
+        "data_plane.connect.denied",
+        "data_plane.connect.established",
+        "data_plane.connect.keep_alive",
+        "data_plane.credential.release_started",
+        "data_plane.grant.received",
+        "data_plane.jit.grant_consumed",
+        "data_plane.policy.reload_failed",
+        "data_plane.policy.reloaded",
+        "data_plane.request.denied",
+        "data_plane.request.streamed",
+        "data_plane.response.blocked",
+        "data_plane.response.released",
+        "data_plane.response_proof.denied",
+        "data_plane.response_proof.emitted",
+        "data_plane.response_proof.failed",
+        "data_plane.streaming_response_proof.denied",
+        "data_plane.streaming_response_proof.emitted",
+        "data_plane.streaming_response_proof.failed",
+    }
+)
+_DATA_PLANE_AUDIT_SECRET_FIELDS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "api_token",
+        "authorization",
+        "bearer_token",
+        "client_secret",
+        "cookie",
+        "credential_value",
+        "id_token",
+        "key_b64",
+        "password",
+        "passwd",
+        "plaintext",
+        "private_key",
+        "proxy_authorization",
+        "refresh_token",
+        "secret",
+        "secret_value",
+        "set_cookie",
+        "token",
+    }
+)
+
+
+def _audit_field_name(value: object) -> str:
+    camel_split = re.sub(r"(?<!^)(?=[A-Z])", "_", str(value)).lower()
+    return re.sub(r"[^a-z0-9]+", "_", camel_split).strip("_")
+
+
+def _data_plane_audit_secret_path(
+    value: Any, path: tuple[str, ...] = ()
+) -> tuple[str, ...] | None:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            next_path = (*path, str(key))
+            if _audit_field_name(key) in _DATA_PLANE_AUDIT_SECRET_FIELDS:
+                return next_path
+            nested = _data_plane_audit_secret_path(item, next_path)
+            if nested is not None:
+                return nested
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            nested = _data_plane_audit_secret_path(item, (*path, str(index)))
+            if nested is not None:
+                return nested
+    return None
+
+
 class CredentialLeaseRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
@@ -5073,14 +5145,14 @@ def _build_setup_verification(payload: SetupVerificationRequest) -> dict[str, An
                 "runtime.credentialRelease",
                 passed=release_evidence is not None,
                 required=False,
-                summary="A durable pre-release audit event proves this exact assignment began an upstream send.",
+                summary="A durable pre-release audit event proves the gateway authorized this exact assignment for dispatch before the upstream send.",
                 evidence=release_evidence,
             ),
             _setup_check(
                 "runtime.responseReleased",
                 passed=response_evidence is not None,
                 required=False,
-                summary="A correlated response passed policy validation and was released to the enrolled agent.",
+                summary="A correlated response passed policy validation and was prepared for release by the gateway.",
                 evidence=response_evidence,
             ),
             _setup_check(
@@ -5214,11 +5286,15 @@ def _require_authoritative_setup_route_binding(
 ) -> None:
     if route_id is None and route_policy_digest is None:
         return
-    if route_id is None or route_policy_digest is None:
+    if route_id is None:
         raise HTTPException(
             status_code=409,
-            detail="setup route and reviewed route policy digest must be bound together",
+            detail="a reviewed route policy digest requires a setup route",
         )
+    # A new Setup run may reserve its intended route ID before the route exists.
+    # That draft is not authoritative until candidate binding stores the digest.
+    if route_policy_digest is None:
+        return
     snapshot = get_policy_snapshot()
     if snapshot is None:
         raise HTTPException(
@@ -7131,18 +7207,16 @@ def oauth_start(
                     int(setup_session["revision"]),
                 )
             )
-        if (
-            setup_session.get("route_id") is None
-            or setup_session.get("route_policy_digest") is None
-        ):
+        if setup_session.get("route_id") is None:
             raise HTTPException(
                 status_code=409,
-                detail="setup OAuth consent requires an authoritative route and reviewed policy digest",
+                detail="setup OAuth consent requires an intended route ID",
             )
-        _require_authoritative_setup_route_binding(
-            route_id=setup_session.get("route_id"),
-            route_policy_digest=setup_session.get("route_policy_digest"),
-        )
+        if setup_session.get("route_policy_digest") is not None:
+            _require_authoritative_setup_route_binding(
+                route_id=setup_session.get("route_id"),
+                route_policy_digest=setup_session.get("route_policy_digest"),
+            )
     reconnect_binding = None
     credential_name = payload.credential_name
     authorization_metadata = payload.metadata
@@ -8678,15 +8752,17 @@ def approve(
                 "request_digest": updated.get("request_digest"),
                 "operation_digest": updated.get("operation_digest"),
                 "ok": bool(gate_publish.get("ok")),
-                "error": gate_publish.get("error"),
-                "decision_gate_response": gate_publish.get("response"),
+                "error": str(gate_publish.get("error") or "")[:500] or None,
             },
             actor_id=identity.user_id,
         )
-    updated["data_plane_grant_publish"] = {
-        key: value for key, value in gate_publish.items() if key != "payload"
+    public = db.approval_public_summary(updated)
+    public["data_plane_grant_publish"] = {
+        "enabled": bool(gate_publish.get("enabled")),
+        "ok": bool(gate_publish.get("ok")),
+        "error": str(gate_publish.get("error") or "")[:500] or None,
     }
-    return updated
+    return public
 
 
 @app.post("/api/approvals/{approval_id}/deny")
@@ -8715,7 +8791,7 @@ def deny(
         raise HTTPException(
             status_code=409, detail="approval state changed before it could be denied"
         )
-    return updated
+    return db.approval_public_summary(updated)
 
 
 @app.post("/api/approvals/{approval_id}/webauthn/options")
@@ -10015,11 +10091,34 @@ def data_plane_audit(
     _require_data_plane_token(
         x_serverware_data_plane_token, DATA_PLANE_AUDIT_INGEST_TOKEN
     )
+    production_release = RELEASE_CHANNEL.strip().lower() not in {
+        "dev",
+        "development",
+        "local",
+        "test",
+    }
     for item in batch.events:
-        if not item.event_type.startswith("data_plane."):
+        if not re.fullmatch(r"data_plane\.[a-z0-9_]+(?:\.[a-z0-9_]+)*", item.event_type):
             raise HTTPException(
                 status_code=400,
-                detail="data-plane audit event_type must start with data_plane.",
+                detail="data-plane audit event_type is not canonical",
+            )
+        if (
+            production_release
+            and item.event_type not in _PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="data-plane audit event_type is not admitted in production",
+            )
+        secret_path = _data_plane_audit_secret_path(item.event)
+        if secret_path is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "data-plane audit event contains a forbidden credential field at "
+                    + ".".join(secret_path)
+                ),
             )
         try:
             db.validate_audit_event(item.event)
@@ -11026,7 +11125,12 @@ def _upsert_policy_route(route_id: str, payload: dict[str, Any]) -> dict[str, An
 
 @app.post("/api/demo/seed")
 def seed_demo(_: AdminIdentity = Depends(require_role("admin"))) -> dict[str, Any]:
-    if not DEV_AUTHENTICATOR_ENABLED:
+    if not DEV_AUTHENTICATOR_ENABLED or RELEASE_CHANNEL.strip().lower() not in {
+        "dev",
+        "development",
+        "local",
+        "test",
+    }:
         raise HTTPException(status_code=404, detail="not found")
     current_snapshot = get_policy_snapshot()
     bundle = demo_policy_bundle("cred-demo-bearer")
@@ -11324,6 +11428,25 @@ UI_HTML = r"""
     h1 { margin: 0; font-size: 18px; line-height: 1.2; }
     .mark { width: 30px; height: 30px; border-radius: 7px; background: linear-gradient(135deg, var(--accent), var(--accent-2)); }
     .status { display: flex; gap: 12px; align-items: center; color: var(--muted); }
+    .workspace-nav {
+      display: flex;
+      gap: 4px;
+      padding: 7px 24px;
+      overflow-x: auto;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfa;
+    }
+    .workspace-nav a {
+      flex: 0 0 auto;
+      border-radius: 4px;
+      padding: 7px 10px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 800;
+      text-decoration: none;
+    }
+    .workspace-nav a:hover,
+    .workspace-nav a:focus-visible { color: var(--text); background: #eef3ef; }
     .token-field { width: 220px; }
     main { display: grid; grid-template-columns: 360px minmax(0, 1fr); width: 100%; min-width: 0; min-height: calc(100vh - 64px); }
     aside { grid-column: 1; grid-row: 1 / span 7; min-width: 0; border-right: 1px solid var(--line); background: #fbfcfa; padding: 18px; }
@@ -11411,7 +11534,11 @@ UI_HTML = r"""
     .selected-row > td { background: #f0fdfa; }
     .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 12px; }
     .pending-oauth-list { display: grid; gap: 8px; margin-top: 12px; }
-    .pending-oauth-item { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: var(--panel); min-width: 0; }
+    .pending-oauth-item { border: 1px solid var(--line); border-radius: 6px; padding: 10px; background: var(--panel); min-width: 0; overflow-wrap: anywhere; }
+    .connected-oauth-list { margin-top: 14px; }
+    .connected-oauth-item { border-left: 3px solid var(--accent); }
+    .metadata-disclosure summary { color: var(--muted); cursor: pointer; font-size: 12px; font-weight: 700; }
+    .metadata-disclosure pre { margin: 8px 0 0; max-width: 420px; white-space: pre-wrap; overflow-wrap: anywhere; }
     .oauth-uncertain-item { border-color: #f59e0b; background: #fffbeb; }
     .oauth-revocation-confirm { display: flex; align-items: flex-start; gap: 8px; margin: 0; font-size: 12px; line-height: 1.4; }
     .oauth-revocation-confirm input { width: auto; flex: 0 0 auto; margin-top: 2px; }
@@ -11436,6 +11563,7 @@ UI_HTML = r"""
       .main-grid > section { grid-column: 1; }
       aside { grid-column: 1; grid-row: auto; border-right: 0; border-bottom: 1px solid var(--line); }
       header { padding: 0 14px; }
+      .workspace-nav { padding-inline: 14px; }
       section { padding: 16px 14px; overflow-x: auto; }
       .setup-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
@@ -11556,6 +11684,14 @@ UI_HTML = r"""
       <button type="button" onclick="runUiAction('Seed demo', seedDemo)">Seed demo</button>
     </div>
   </header>
+  <nav class="workspace-nav" aria-label="Portal workspaces">
+    <a href="#setup-workspace">Setup</a>
+    <a href="#credential-workspace">Credentials</a>
+    <a href="#policy-workspace">Policies</a>
+    <a href="#approval-workspace">Approvals</a>
+    <a href="#audit-workspace">Audit</a>
+    <a href="#attestation-workspace">Attestation</a>
+  </nav>
   <div id="operator-status" class="operator-status" role="status" aria-live="polite" aria-atomic="true"></div>
   <div id="pending-mutation" class="operator-status pending pending-mutation" aria-live="polite"></div>
   <dialog id="webauthn-bootstrap-dialog">
@@ -11582,11 +11718,11 @@ UI_HTML = r"""
         <tbody id="webauthn-credentials"><tr class="empty-row"><td colspan="5" class="muted">No passkeys registered</td></tr></tbody>
       </table>
     </section>
-      <section class="setup-section">
+      <section id="setup-workspace" class="setup-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Setup and Verify</h2>
           <span id="setup-configuration-status" class="pill warn">Configuration pending</span>
-          <span id="setup-runtime-status" class="pill warn">Path not exercised</span>
+          <span id="setup-runtime-status" class="pill warn">Gateway stages pending</span>
           <span id="setup-hardware-status" class="pill warn">Hardware unverified</span>
         </div>
         <p class="section-kicker">Active assignment and independently reported runtime evidence</p>
@@ -11630,7 +11766,7 @@ UI_HTML = r"""
         <div id="setup-summary" class="setup-summary" role="status" aria-live="polite"></div>
         <div id="setup-checks" class="setup-checks"></div>
       </section>
-      <section class="jit-approvals-section">
+      <section id="approval-workspace" class="jit-approvals-section">
         <h2>Approvals</h2>
         <div class="filter-grid">
           <div><label for="jit-approval-status-filter">Status</label><select id="jit-approval-status-filter"><option value="pending">Pending</option><option value="all">All</option><option value="approved">Approved</option><option value="denied">Denied</option><option value="expired">Expired</option></select></div>
@@ -11654,7 +11790,7 @@ UI_HTML = r"""
           <tbody id="control-plane-approvals"></tbody>
         </table>
       </section>
-    <aside>
+    <aside id="credential-workspace">
       <div class="stack">
         <section>
           <h2>Credential</h2>
@@ -11680,7 +11816,7 @@ UI_HTML = r"""
             <button type="submit">Create credential</button>
           </form>
         </section>
-        <section>
+        <section id="oauth-workspace" class="oauth-connect-section">
           <h2>Connect Provider Credential</h2>
           <form id="oauth-form">
             <label for="oauth-provider">Provider</label>
@@ -11694,6 +11830,10 @@ UI_HTML = r"""
             <p class="hint" id="oauth-status" role="status" aria-live="polite"></p>
             <button id="oauth-submit" type="submit">Connect with OAuth</button>
           </form>
+          <div id="oauth-connected-section" class="pending-oauth-list connected-oauth-list" hidden>
+            <h3>Connected provider accounts</h3>
+            <div id="oauth-connected-accounts"></div>
+          </div>
           <div id="pending-oauth-section" class="pending-oauth-list" hidden>
             <h3>Verified accounts awaiting activation</h3>
             <div id="pending-oauth-credentials"></div>
@@ -11728,9 +11868,10 @@ UI_HTML = r"""
           <div class="toolbar" style="margin-top:8px">
             <button class="secondary" type="button" onclick="runUiAction('Copy enrollment', copyEnrollment)">Copy</button>
             <button class="secondary" type="button" onclick="downloadEnrollment()">Download</button>
+            <button id="enrollment-copy-agent-instructions" class="secondary" type="button" onclick="runUiAction('Copy agent instructions', copyAgentInstructions)">Copy agent instructions</button>
           </div>
         </section>
-        <section>
+        <section id="policy-workspace" class="policy-authoring-section">
           <h2>PolicyBundle route assignment</h2>
           <p class="section-kicker">Production signed policy candidate</p>
           <form id="policy-route-form">
@@ -11806,19 +11947,19 @@ UI_HTML = r"""
           <h2 style="margin-right:auto">Credentials</h2>
           <button class="secondary" type="button" onclick="runUiAction('Download packet and copy verifier command', copyEnrollmentVerifier)">Download + copy verifier command</button>
         </div>
-        <table>
+        <table class="mobile-table">
           <thead><tr><th>Name</th><th>Kind</th><th>Account / status</th><th>Metadata</th><th></th></tr></thead>
           <tbody id="credentials"></tbody>
         </table>
       </section>
       <section class="routes-section">
         <h2>Local prototype routes</h2>
-        <table>
+        <table class="mobile-table">
           <thead><tr><th>Name</th><th>Match</th><th>Credential</th><th>Injection</th><th>Policies</th><th></th></tr></thead>
           <tbody id="routes"></tbody>
         </table>
       </section>
-      <section class="audit-investigation-section">
+      <section id="audit-workspace" class="audit-investigation-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Audit investigation</h2>
           <button class="secondary" type="button" onclick="runUiAction('Verify audit chain', verifyAuditChain)">Verify chain</button>
@@ -11842,7 +11983,7 @@ UI_HTML = r"""
           <tbody id="audit-events"></tbody>
         </table>
       </section>
-      <section class="attestation-section">
+      <section id="attestation-workspace" class="attestation-section">
         <div class="toolbar">
           <h2 style="margin-right:auto">Attestation</h2>
           <button class="secondary" type="button" onclick="runUiAction('Refresh attestation', refreshAttestation)">Refresh evidence</button>
@@ -11855,7 +11996,7 @@ UI_HTML = r"""
           <h2 style="margin-right:auto">Traffic</h2>
           <button class="secondary" type="button" onclick="runUiAction('Clear traffic log', clearLogs)">Clear</button>
         </div>
-        <table>
+        <table class="mobile-table">
           <thead><tr><th>Time</th><th>Action</th><th>Status</th><th>Route</th><th>Request</th><th>Reason</th></tr></thead>
           <tbody id="logs"></tbody>
         </table>
@@ -12028,17 +12169,17 @@ UI_HTML = r"""
         jit: {required: true, mode: 'perOperation', ttlSeconds: 60, maxUses: 1, consumeOn: 'forwardStart', binding: {type: 'requestDigest', fields: ['principal', 'routeId', 'credentialRef', 'credentialVersion', 'policyHash', 'method', 'authority', 'path', 'query', 'selectedHeaders', 'bodySha256']}, approvers: {quorum: 1, users: [], authn: {webauthnRequired: true, userVerification: 'required', allowedAuthenticatorClasses: ['yubikey', 'hardware'], requireHardwareAttestation: true}}}
       },
       object_store_put: {
-        label: 'Object store bounded PUT with echoed client digest',
+        label: 'Object store bounded PUT with verified request digest',
         routeId: 'example.object_store.small_puts',
         provider: 'object-store',
         injection: {type: 'header', name: 'X-Api-Key'},
         match: {scheme: 'https', host: 'objects.example.com', port: 443, methods: ['PUT'], paths: ['/v1/objects/{artifact_id}']},
-        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'json', maxBodyBytes: 65536, operation: {name: 'object_store.objects.put', jsonFields: ['sha256'], pathParams: ['artifact_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'id', 'sha256'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'code', 'message'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
+        adapter: {type: 'generic.rest', config: {request: {allowedHeaders: ['accept', 'content-type', 'user-agent'], allowedQueryKeys: [], bodyMode: 'json', maxBodyBytes: 65536, operation: {name: 'object_store.objects.put', bodySha256Field: 'requestBodySha256', pathParams: ['artifact_id']}}, response: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['ok', 'id', 'sha256'], allowedHeaders: [], error: {mode: 'json', maxBodyBytes: 65536, allowedFields: ['error', 'code', 'message'], allowedHeaders: ['retry-after'], onInvalid: 'block'}}}},
         constraints: [
-          {id: 'object-store-json-payload', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['content', 'contentType', 'sha256'], requiredFields: ['content', 'sha256'], fields: {content: {type: 'string', minLength: 1, maxLength: 4096}, contentType: {type: 'string', maxLength: 128}, sha256: {type: 'string', maxLength: 71, pattern: '^sha256:[0-9a-f]{64,64}$'}}},
+          {id: 'object-store-json-payload', type: 'jsonBody', contentTypes: ['application/json'], allowedFields: ['content', 'contentType'], requiredFields: ['content'], fields: {content: {type: 'string', minLength: 1, maxLength: 4096}, contentType: {type: 'string', maxLength: 128}}},
           {id: 'object-store-ten-puts-per-assignment-hour', type: 'rateLimit', max: 10, windowSeconds: 3600, store: 'shared', key: {scope: ['principal', 'credential', 'route']}},
           {id: 'object-store-response-contract', type: 'responseJson', phase: 'response', operations: ['object_store.objects.put'], fields: {ok: {required: true, type: 'boolean', equals: true}, id: {required: true, type: 'string', maxLength: 128, pattern: '^[A-Za-z0-9._-]{1,128}$'}, sha256: {required: true, type: 'string', maxLength: 71, pattern: '^sha256:[0-9a-f]{64,64}$'}}},
-          {id: 'object-store-response-binding', type: 'responseBinding', phase: 'response', operations: ['object_store.objects.put'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'artifact-id', operationField: 'artifact_id', responseField: 'id', comparison: 'exactString'}, {id: 'sha256', operationField: 'sha256', responseField: 'sha256', comparison: 'exactString'}]}
+          {id: 'object-store-response-binding', type: 'responseBinding', phase: 'response', operations: ['object_store.objects.put'], successStatusCodes: [200], contentTypes: ['application/json'], bindings: [{id: 'artifact-id', operationField: 'artifact_id', responseField: 'id', comparison: 'exactString'}, {id: 'sha256', operationField: 'requestBodySha256', responseField: 'sha256', comparison: 'exactString'}]}
         ]
       },
       custom_json: {
@@ -12603,7 +12744,8 @@ UI_HTML = r"""
         ]);
         const setupSessions = setupSessionsResult.status === 'fulfilled' ? setupSessionsResult.value.sessions || [] : [];
         const requestedSetupId = new URLSearchParams(window.location.search).get('setup');
-        const selectedSetupId = requestedSetupId || retained.setupSession?.id || setupSessions[0]?.id || null;
+        const defaultActiveSetup = setupSessions.find((item) => item.status === 'active');
+        const selectedSetupId = requestedSetupId || retained.setupSession?.id || defaultActiveSetup?.id || null;
         let setupSession = null;
         if (selectedSetupId) {
           try {
@@ -12710,6 +12852,26 @@ UI_HTML = r"""
       return `<div class="toolbar"><button type="button" onclick="runUiAction('Reconnect OAuth credential', () => reconnectOAuthCredential('${item.id}'))">Reconnect</button><button class="danger" type="button" onclick="runUiAction('Disconnect OAuth credential', () => deleteCredential('${item.id}'))">Disconnect</button></div>`;
     }
 
+    function credentialMetadataDisclosure(item) {
+      const metadata = item.metadata || {};
+      const provider = metadata.provider_id || metadata.provider || 'stored';
+      const keys = Object.keys(metadata).sort();
+      const summary = `${provider} / ${keys.length} metadata field${keys.length === 1 ? '' : 's'}`;
+      return `<details class="metadata-disclosure"><summary>${esc(summary)}</summary><pre><code>${json(metadata)}</code></pre></details>`;
+    }
+
+    function renderOAuthConnectedAccounts() {
+      const items = (state.credentials || []).filter(
+        (item) => item.kind === 'oauth2' && item.metadata?.oauth === true
+      );
+      $('oauth-connected-section').hidden = !items.length;
+      $('oauth-connected-accounts').innerHTML = items.map((item) => `
+        <div class="pending-oauth-item connected-oauth-item stack">
+          <div class="toolbar"><strong>${esc(item.name)}</strong>${credentialActions(item)}</div>
+          ${credentialAccountStatus(item)}
+        </div>`).join('');
+    }
+
     function renderPendingOAuthCredentials() {
       const items = state.pendingOAuthCredentials || [];
       $('pending-oauth-section').hidden = !items.length;
@@ -12806,7 +12968,7 @@ UI_HTML = r"""
     function renderPolicyCredentialOptions(preferredCredential = '') {
       const template = policyTemplates[$('policy-template').value];
       const items = template ? policyCredentialOptions(template) : [];
-      $('policy-credential').innerHTML = items.map((item) => `<option value="${esc(item.id)}" ${item.compatible ? '' : 'disabled'} title="${esc(item.reason)}">${esc(item.label)}${item.compatible ? '' : ' (not compatible)'}</option>`).join('');
+      $('policy-credential').innerHTML = items.map((item) => `<option value="${esc(item.id)}" ${item.compatible ? '' : 'disabled'}>${esc(item.label)}${item.compatible ? '' : ` - unavailable: ${esc(item.reason)}`}</option>`).join('');
       const preferred = items.find((item) => item.id === preferredCredential && item.compatible);
       const selected = preferred || items.find((item) => item.compatible);
       $('policy-credential').value = selected?.id || '';
@@ -12846,16 +13008,15 @@ UI_HTML = r"""
         throw new Error('Select a template, principal, and route before creating a setup run');
       }
       const activeRoute = (state.activePolicy?.bundle?.routes || []).find((item) => item.id === selection.routeId);
-      if (!activeRoute) throw new Error('The selected route is not present in the active signed policy');
-      const routePolicyDigest = await sha256CanonicalJson(activeRoute);
+      const body = {
+        templateId: selection.template,
+        principalId: selection.principalId,
+        routeId: selection.routeId
+      };
+      if (activeRoute) body.routePolicyDigest = await sha256CanonicalJson(activeRoute);
       const result = await api('/api/setup/sessions', {
         method: 'POST',
-        body: JSON.stringify({
-          templateId: selection.template,
-          principalId: selection.principalId,
-          routeId: selection.routeId,
-          routePolicyDigest
-        })
+        body: JSON.stringify(body)
       });
       rememberSetupSession(result.session);
       state.setupVerification = null;
@@ -12988,7 +13149,7 @@ UI_HTML = r"""
 
       const savedCredential = setupSession?.credentialId || controlState['id:setup-credential']?.value || $('setup-credential').value;
       const credentials = template ? policyCredentialOptions(template) : [];
-      $('setup-credential').innerHTML = credentials.map((item) => `<option value="${esc(item.id)}" ${item.compatible ? '' : 'disabled'} title="${esc(item.reason)}">${esc(item.label)}${item.compatible ? '' : ' (not compatible)'}</option>`).join('');
+      $('setup-credential').innerHTML = credentials.map((item) => `<option value="${esc(item.id)}" ${item.compatible ? '' : 'disabled'}>${esc(item.label)}${item.compatible ? '' : ` - unavailable: ${esc(item.reason)}`}</option>`).join('');
       const selectedCredential = credentials.find((item) => item.id === savedCredential && item.compatible) || credentials.find((item) => item.compatible);
       $('setup-credential').value = selectedCredential?.id || '';
       $('setup-credential').disabled = !selectedCredential;
@@ -13044,7 +13205,7 @@ UI_HTML = r"""
       $('setup-copy-challenge-button').disabled = !state.setupChallenge?.value || state.setupChallenge.setupSessionId !== setupSession?.id;
 
       setupStatusPill('setup-configuration-status', verification?.configurationReady === true, 'Configuration ready', active ? 'Evidence pending' : 'Configuration pending');
-      setupStatusPill('setup-runtime-status', verification?.runtimeVerified === true, 'Path exercised', 'Path not exercised');
+      setupStatusPill('setup-runtime-status', verification?.runtimeVerified === true, 'Gateway stages verified', 'Gateway stages pending');
       const hardwareVerified = ['hardware_verified', 'completion_pending_audit', 'complete'].includes(setupSession?.phase);
       setupStatusPill('setup-hardware-status', hardwareVerified, setupSession?.phase === 'complete' ? 'Attestation complete' : 'Hardware verified', 'Hardware unverified');
 
@@ -13127,23 +13288,24 @@ UI_HTML = r"""
       renderEnrollmentOutput();
       renderPendingOAuthCredentials();
       renderOAuthIssuanceUncertainties();
+      renderOAuthConnectedAccounts();
       $('credentials').innerHTML = state.credentials.map((item) => `
         <tr>
-          <td><strong>${esc(item.name)}</strong><br><code>${esc(item.id)}</code></td>
-          <td>${esc(item.kind)}</td>
-          <td>${credentialAccountStatus(item)}</td>
-          <td><code class="json">${json(item.metadata)}</code></td>
-          <td>${credentialActions(item)}</td>
+          <td data-label="Credential"><strong>${esc(item.name)}</strong><br><code>${esc(item.id)}</code></td>
+          <td data-label="Kind">${esc(item.kind)}</td>
+          <td data-label="Account / status">${credentialAccountStatus(item)}</td>
+          <td data-label="Metadata">${credentialMetadataDisclosure(item)}</td>
+          <td data-label="Action">${credentialActions(item)}</td>
         </tr>`).join('') || '<tr><td colspan="5" class="muted">No credentials</td></tr>';
 
       $('routes').innerHTML = state.routes.map((item) => `
         <tr>
-          <td>${item.enabled ? pill('enabled') : pill('paused')}<br><strong>${esc(item.name)}</strong><br><code>${esc(item.id)}</code></td>
-          <td><code>${esc(item.match_host)}${esc(item.match_path_prefix)}</code></td>
-          <td>${esc(credentialName(item.credential_id))}</td>
-          <td><code class="json">${json(item.injection)}</code></td>
-          <td><code class="json">${json(item.policies)}</code></td>
-          <td><button class="danger" type="button" onclick="runUiAction('Delete local route', () => deleteRoute('${item.id}'))">Delete</button></td>
+          <td data-label="Route">${item.enabled ? pill('enabled') : pill('paused')}<br><strong>${esc(item.name)}</strong><br><code>${esc(item.id)}</code></td>
+          <td data-label="Match"><code>${esc(item.match_host)}${esc(item.match_path_prefix)}</code></td>
+          <td data-label="Credential">${esc(credentialName(item.credential_id))}</td>
+          <td data-label="Injection"><code class="json">${json(item.injection)}</code></td>
+          <td data-label="Policies"><code class="json">${json(item.policies)}</code></td>
+          <td data-label="Action"><button class="danger" type="button" onclick="runUiAction('Delete local route', () => deleteRoute('${item.id}'))">Delete</button></td>
         </tr>`).join('') || '<tr><td colspan="6" class="muted">No routes</td></tr>';
 
       renderJitApprovals();
@@ -13155,12 +13317,12 @@ UI_HTML = r"""
 
       $('logs').innerHTML = state.logs.map((item) => `
         <tr>
-          <td><code>${esc(item.created_at)}</code></td>
-          <td>${pill(item.action)}</td>
-          <td>${esc(item.status_code || '')}</td>
-          <td>${esc(routeName(item.route_id))}</td>
-          <td><strong>${esc(item.method)}</strong><br><code>${esc(item.url)}</code></td>
-          <td>${esc(item.reason || '')}</td>
+          <td data-label="Time"><code>${esc(item.created_at)}</code></td>
+          <td data-label="Action">${pill(item.action)}</td>
+          <td data-label="Status">${esc(item.status_code || '')}</td>
+          <td data-label="Route">${esc(routeName(item.route_id))}</td>
+          <td data-label="Request"><strong>${esc(item.method)}</strong><br><code>${esc(item.url)}</code></td>
+          <td data-label="Reason">${esc(item.reason || '')}</td>
         </tr>`).join('') || '<tr><td colspan="6" class="muted">No traffic</td></tr>';
       restoreControlState(controlState);
       syncCredentialKindFields();
@@ -14093,6 +14255,50 @@ UI_HTML = r"""
     async function copyEnrollment() {
       if (!state.enrollmentPacket) return;
       await navigator.clipboard.writeText(JSON.stringify(state.enrollmentPacket, null, 2));
+    }
+
+    function agentInstructionText(packet) {
+      if (!packet || packet.apiVersion !== 'serverware.agentEnrollment/v1') {
+        throw new Error('Generate a current enrollment packet first');
+      }
+      const handoff = packet.agentHandoff || {};
+      const environment = handoff.proxyEnvironment || {};
+      const proxyHeaders = handoff.requiredProxyHeaders || {};
+      const providerHeaders = handoff.requiredProviderHeaders || {};
+      const proxyAuthorization = handoff.proxyAuthorization || {};
+      const handling = handoff.requestHandling || {};
+      const lines = [
+        `Serverware enrollment for ${packet.principalId}`,
+        '',
+        'Use normal provider SDKs and the upstream URLs listed below.',
+        'Never request, store, print, or cache provider credentials.',
+        'Do not bypass Serverware when a request is denied or unavailable.',
+        '',
+        'Environment:'
+      ];
+      for (const [name, value] of Object.entries(environment).sort(([left], [right]) => left.localeCompare(right))) {
+        lines.push(`${name}=${value}`);
+      }
+      lines.push('', `CA path: ${packet.ca?.installPath || ''}`);
+      lines.push(`CONNECT proxy headers: ${JSON.stringify(proxyHeaders)}`);
+      lines.push(`Provider request identity headers: ${JSON.stringify(providerHeaders)}`);
+      if (proxyAuthorization.required === true) {
+        lines.push(`Proxy authorization must be provisioned separately${proxyAuthorization.tokenId ? ` for token ID ${proxyAuthorization.tokenId}` : ''}; it is not in this packet.`);
+      }
+      lines.push('', 'Allowed upstream URLs:');
+      for (const url of handoff.allowedUrls || []) lines.push(`- ${url}`);
+      lines.push(
+        '',
+        `On HTTP ${handling.approvalRequired?.statusCode || 428}, give approval_url to the operator, honor retry_after_seconds, wait for approval, and retry only the identical request.`,
+        'On HTTP 403 or any 5xx response, stop and report the route and error. Never retry through a direct provider connection.'
+      );
+      return lines.join('\n');
+    }
+
+    async function copyAgentInstructions() {
+      const instructions = agentInstructionText(state.enrollmentPacket);
+      await navigator.clipboard.writeText(instructions);
+      return {copied: true, principalId: state.enrollmentPacket.principalId};
     }
 
     function enrollmentFilename(packet) {

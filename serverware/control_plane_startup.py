@@ -10,10 +10,19 @@ from serverware.config import (
     CONTROL_PLANE_MUTATION_ALLOWED_AUTHENTICATOR_CLASSES,
     CONTROL_PLANE_MUTATION_REQUIRE_HARDWARE_ATTESTATION,
     CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+    CONTROL_PLANE_TWO_PERSON_ACTIONS,
     CONTROL_PLANE_TWO_PERSON_REQUIRED,
+    DEV_AUTHENTICATOR_ENABLED,
+    DIRECT_CA_DOWNLOAD_ENABLED,
     MASTER_KEY_UNSEAL_COMMAND,
     NITRO_NSM_UNSEAL_COMMAND_TEMPLATE,
     OIDC_SESSION_WEBAUTHN_REQUIRED,
+    POLICY_CANARY_MAX_DENIALS,
+    POLICY_CANARY_MIN_AUDIT_EVENTS,
+    POLICY_CANARY_MIN_OBSERVATION_SECONDS,
+    POLICY_CANARY_REQUIRED,
+    POLICY_PUBLISH_DRY_RUN_REQUIRED,
+    PRODUCTION_IMAGE,
     RELEASE_CHANNEL,
     RELEASE_AUTHORIZATION_RECONCILE_LIMIT,
     WEBAUTHN_BOOTSTRAP_TOKEN,
@@ -44,6 +53,25 @@ from serverware.webauthn_trust import trust_public_key_hash
 
 _DEVELOPMENT_RELEASE_CHANNELS = {"dev", "development", "local", "test"}
 _STARTUP_VALIDATED_PID_ENV = "SERVERWARE_CONTROL_PLANE_STARTUP_VALIDATED_PID"
+_PRODUCTION_TWO_PERSON_ACTIONS = {
+    "credential.create",
+    "credential.oauth.activate",
+    "credential.oauth.uncertain.resolve",
+    "credential.update",
+    "credential.delete",
+    "route.create",
+    "route.update",
+    "route.delete",
+    "policy.publish",
+    "webauthn.credential.register",
+    "webauthn.credential.revoke",
+    "webauthn.trust.publish",
+    "rbac.role.change",
+    "rbac.deprovision",
+    "control_plane.token.rotate",
+    "break_glass.grant",
+    "setup.attestation.finalize",
+}
 
 
 def control_plane_startup_required() -> bool:
@@ -57,6 +85,10 @@ def production_release() -> bool:
 def validate_control_plane_configuration() -> None:
     """Validate launch-invariant configuration before starting any workers."""
     production = production_release()
+    if PRODUCTION_IMAGE and not production:
+        raise RuntimeError(
+            "the production control-plane image requires a non-development release channel"
+        )
     if bool(WEB_TLS_CERT_FILE) != bool(WEB_TLS_KEY_FILE):
         raise RuntimeError(
             "SERVERWARE_WEB_TLS_CERT_FILE and SERVERWARE_WEB_TLS_KEY_FILE must be set together"
@@ -115,6 +147,31 @@ def validate_control_plane_configuration() -> None:
         )
     if not CONTROL_PLANE_TWO_PERSON_REQUIRED:
         raise RuntimeError("production requires two-person control-plane authorization")
+    configured_actions = set(CONTROL_PLANE_TWO_PERSON_ACTIONS)
+    if "*" not in configured_actions and not _PRODUCTION_TWO_PERSON_ACTIONS.issubset(
+        configured_actions
+    ):
+        missing = sorted(_PRODUCTION_TWO_PERSON_ACTIONS - configured_actions)
+        raise RuntimeError(
+            "production two-person control is missing mandatory actions: "
+            + ", ".join(missing)
+        )
+    if DEV_AUTHENTICATOR_ENABLED:
+        raise RuntimeError("production forbids the development authenticator and demo seed")
+    if DIRECT_CA_DOWNLOAD_ENABLED:
+        raise RuntimeError(
+            "production forbids direct CA download; use verifier-mediated install sessions"
+        )
+    if not POLICY_PUBLISH_DRY_RUN_REQUIRED:
+        raise RuntimeError("production policy publishing requires dry-run decision tests")
+    if not POLICY_CANARY_REQUIRED:
+        raise RuntimeError("production policy publishing requires canary activation")
+    if POLICY_CANARY_MIN_OBSERVATION_SECONDS <= 0:
+        raise RuntimeError("production policy canaries require a positive observation window")
+    if POLICY_CANARY_MIN_AUDIT_EVENTS <= 0:
+        raise RuntimeError("production policy canaries require audit evidence")
+    if POLICY_CANARY_MAX_DENIALS != 0:
+        raise RuntimeError("production policy canaries must fail on every denial")
     if not MASTER_KEY_UNSEAL_COMMAND:
         raise RuntimeError("production requires SERVERWARE_MASTER_KEY_UNSEAL_COMMAND")
     if not NITRO_NSM_UNSEAL_COMMAND_TEMPLATE:

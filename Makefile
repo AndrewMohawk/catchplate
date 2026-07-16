@@ -683,7 +683,7 @@ verify-production-readiness-claims:
 	python3 scripts/test_production_readiness_claims.py
 
 verify-production-readiness-runner:
-	python3 scripts/test_run_production_readiness.py
+	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_run_production_readiness.py
 
 verify-release-completion:
 	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_release_completion.py

@@ -78,6 +78,7 @@ def main() -> None:
         os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
         os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
         os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
         os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
         os.environ["SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "1"
         os.environ["SERVERWARE_POLICY_PUBLISH_DRY_RUN_REQUIRED"] = "1"

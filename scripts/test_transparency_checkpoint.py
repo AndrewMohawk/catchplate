@@ -41,6 +41,16 @@ def b64e(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
 
 
+def isolated_transparency_env() -> dict[str, str]:
+    return {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith(
+            ("SERVERWARE_TRANSPARENCY_", "SERVERWARE_EXTERNAL_TRANSPARENCY_")
+        )
+    }
+
+
 def public_key_info() -> dict[str, str]:
     public_key = HTTP_KEY.public_key()
     pem = public_key.public_bytes(
@@ -234,11 +244,12 @@ def main() -> None:
 
     payload = checkpoint_payload()
     with tempfile.TemporaryDirectory() as tmp:
-        fixture_env = os.environ.copy()
+        fixture_env = isolated_transparency_env()
         fixture_env.update(
             {
                 "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE": "fixture",
                 "SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH": str(Path(tmp) / "managed-log.jsonl"),
+                "SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_KEY": str(Path(tmp) / "managed-log-key.pem"),
                 "SERVERWARE_EXTERNAL_TRANSPARENCY_PROVIDER": "managed-fixture-test",
             }
         )
@@ -297,7 +308,7 @@ def main() -> None:
 
     server, base = start_server()
     try:
-        http_env = os.environ.copy()
+        http_env = isolated_transparency_env()
         http_env.update(
             {
                 "SERVERWARE_TRANSPARENCY_CHECKPOINT_MODE": "http",

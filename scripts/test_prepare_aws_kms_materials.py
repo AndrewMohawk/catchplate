@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shlex
 import subprocess
 import sys
@@ -48,11 +49,9 @@ print(json.dumps(response, sort_keys=True))
 
 
 def run_helper(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
-    run_env = None
+    run_env = os.environ.copy()
+    run_env.pop("SERVERWARE_FAKE_AWS_RETURN_PLAINTEXT", None)
     if env is not None:
-        import os
-
-        run_env = os.environ.copy()
         run_env.update(env)
     return subprocess.run(
         [sys.executable, "scripts/prepare_aws_kms_materials.py", *args],

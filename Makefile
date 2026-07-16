@@ -179,20 +179,53 @@ bench-gate-rs:
 		$(MAKE) verify-production-readiness-runner
 		$(MAKE) verify-release-completion
 		docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
-		./scripts/test_audit_anchor.sh
+		BASE=http://localhost:3000 AUDIT_ANCHOR_BASE=http://localhost:9100 \
+			SERVERWARE_ADMIN_TOKEN=dev-admin-token \
+			SERVERWARE_AUDIT_ANCHOR_TOKEN=dev-audit-anchor-token \
+			./scripts/test_audit_anchor.sh
 	docker compose exec -T \
 		-e DECISION_GATE_BASE=http://decision-gate-rs:9091 \
 		-e PROXY=http://decision-gate-rs:9090 \
 		-e BASE=http://localhost:3000 \
 		serverware python scripts/bench_decision_gate.py --self-test > .tmp/decision-gate-rs-bench.json
 	cat .tmp/decision-gate-rs-bench.json
-	./scripts/test_decision_gate_shared_rate_limits.sh
-	SERVERWARE_IMAGE_SIGNATURE_PROVIDER="$${SERVERWARE_IMAGE_SIGNATURE_PROVIDER:-sigstore-command}" \
-	SERVERWARE_IMAGE_SIGN_COMMAND="$${SERVERWARE_IMAGE_SIGN_COMMAND:-python3 scripts/cosign_sigstore.py sign}" \
-	SERVERWARE_IMAGE_VERIFY_COMMAND="$${SERVERWARE_IMAGE_VERIFY_COMMAND:-python3 scripts/cosign_sigstore.py verify}" \
-	SERVERWARE_COSIGN_BINARY="$${SERVERWARE_COSIGN_BINARY:-python3 scripts/cosign_fixture.py}" \
-	SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY="$${SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY:-1}" \
-	python3 scripts/sign_release_images.py > .tmp/image-signatures-summary.json
+	BASE=http://localhost:3000 DECISION_GATE_BASE=http://localhost:9091 \
+		DECISION_GATE_HOST=localhost DECISION_GATE_PORT=9090 \
+		SERVERWARE_ADMIN_TOKEN=dev-admin-token \
+		SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN=dev-rust-management-token \
+		./scripts/test_decision_gate_shared_rate_limits.sh
+	env -u SERVERWARE_PRODUCTION_IMAGES \
+		-u SERVERWARE_RELEASE_PROVENANCE_TRUSTED_PUBLIC_KEY \
+		-u SERVERWARE_EXTERNAL_CHECKPOINT_TRUSTED_PUBLIC_KEY \
+		-u SERVERWARE_TRANSPARENCY_EXPECTED_PROVIDER \
+		-u SERVERWARE_TRANSPARENCY_EXPECTED_LOG_ID \
+		-u SERVERWARE_COSIGN_CERT_IDENTITY \
+		-u SERVERWARE_COSIGN_CERT_OIDC_ISSUER \
+		-u SERVERWARE_COSIGN_KEY_ID \
+		-u SERVERWARE_COSIGN_EXPECTED_REKOR_LOG_ID \
+		-u SERVERWARE_COSIGN_REKOR_URL \
+		-u SERVERWARE_COSIGN_SIGN_EXTRA_ARGS \
+		-u SERVERWARE_COSIGN_VERIFY_EXTRA_ARGS \
+		-u SERVERWARE_COSIGN_TLOG_UPLOAD \
+		-u SERVERWARE_COSIGN_FIXTURE_NO_TRANSPARENCY \
+		-u SERVERWARE_COSIGN_FIXTURE_VERIFY_FAIL \
+		-u SERVERWARE_COSIGN_WORKLOAD_IDENTITY \
+		SERVERWARE_IMAGE_SIGNATURE_PROVIDER=sigstore-command \
+		SERVERWARE_IMAGE_SIGN_COMMAND="python3 scripts/cosign_sigstore.py sign" \
+		SERVERWARE_IMAGE_VERIFY_COMMAND="python3 scripts/cosign_sigstore.py verify" \
+		SERVERWARE_COSIGN_BINARY="python3 scripts/cosign_fixture.py" \
+		SERVERWARE_COSIGN_FIXTURE_KEY=.tmp/cosign-fixture-ed25519.pem \
+		SERVERWARE_COSIGN_FIXTURE_LOG=.tmp/cosign-fixture-rekor.jsonl \
+		SERVERWARE_COSIGN_KEY=.tmp/cosign-fixture-ed25519.pem \
+		SERVERWARE_COSIGN_YES=1 \
+		SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE= \
+		SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1 \
+		python3 scripts/sign_release_images.py \
+			--base http://localhost:3000 \
+			--gate http://localhost:9090 \
+			--anchor http://localhost:9100 \
+			--anchor-token dev-audit-anchor-token \
+			> .tmp/image-signatures-summary.json
 	cat .tmp/image-signatures-summary.json
 
 decision-gate-bench-evidence:

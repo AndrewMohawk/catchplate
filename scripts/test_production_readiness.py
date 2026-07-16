@@ -35,6 +35,22 @@ TEST_CONTROL_PLANE_GID = (
 )
 
 
+def clean_subprocess_env() -> dict[str, str]:
+    allowed = {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+    }
+    return {name: value for name, value in os.environ.items() if name in allowed}
+
+
 def oauth_secret_file(name: str, value: str, mode: int = 0o600) -> Path:
     path = Path(OAUTH_SECRET_TEMP_DIR.name) / name
     path.write_text(value + "\n", encoding="utf-8")
@@ -406,8 +422,7 @@ def expect_failure_without_secret(env: dict[str, str], expected: str, secret: st
 
 
 def good_env() -> dict[str, str]:
-    env = os.environ.copy()
-    env.pop("SERVERWARE_DECISION_GATE_BASE", None)
+    env = clean_subprocess_env()
     env.update(
         {
             "SERVERWARE_RELEASE_CHANNEL": "prod",
@@ -714,7 +729,7 @@ def run_live_probe_helpers() -> None:
                 serialization.PublicFormat.SubjectPublicKeyInfo,
             )
         ).hexdigest()
-        env = os.environ.copy()
+        env = clean_subprocess_env()
         env.update(
             {
                 "SERVERWARE_RELEASE_CHANNEL": "prod",
@@ -904,7 +919,7 @@ def assert_atomic_release_compose_gate() -> None:
     for compose_name in ("docker-compose.yml", "docker-compose.production.yml"):
         compose_path = ROOT / compose_name
         compose_text = compose_path.read_text(encoding="utf-8")
-        compose_env = os.environ.copy()
+        compose_env = clean_subprocess_env()
         for name in re.findall(r"\$\{([A-Z0-9_]+):\?[^}]*\}", compose_text):
             compose_env.setdefault(name, "serverware-compose-test-value")
         for name in re.findall(

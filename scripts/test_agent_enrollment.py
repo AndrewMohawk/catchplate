@@ -28,10 +28,14 @@ def canonical_json(value: object) -> str:
 
 def main() -> None:
     with tempfile.TemporaryDirectory(prefix="serverware-agent-enrollment-") as tmp:
+        for name in tuple(os.environ):
+            if name.startswith("SERVERWARE_"):
+                os.environ.pop(name)
         os.environ["SERVERWARE_DATA_DIR"] = tmp
         os.environ["SERVERWARE_POLICY_BUNDLE"] = str(Path(tmp) / "policy-bundle.json")
         os.environ["SERVERWARE_POLICY_SIGNING_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pem")
         os.environ["SERVERWARE_POLICY_SIGNING_PUBLIC_KEY"] = str(Path(tmp) / "policy-signing-ed25519.pub.pem")
+        os.environ["SERVERWARE_TEE_QUOTE_PROVIDER"] = "dev-signed-quote"
 
         from serverware.attestation import sign_quote
         from serverware.enrollment import (

@@ -24,6 +24,22 @@ import launch_authorization  # noqa: E402
 import run_production_readiness  # noqa: E402
 
 
+def clean_subprocess_env() -> dict[str, str]:
+    allowed = {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+    }
+    return {name: value for name, value in os.environ.items() if name in allowed}
+
+
 def canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -54,6 +70,7 @@ def run_runner(*args: str) -> subprocess.CompletedProcess[bytes]:
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=clean_subprocess_env(),
         check=False,
     )
 
@@ -885,7 +902,7 @@ def main() -> None:
         accepted_summary = run_production_readiness.run_collector(
             collector_command,
             collector_args,
-            os.environ.copy(),
+            clean_subprocess_env(),
         )
         if accepted_summary != collector_summary or not collector_summary_path.is_file():
             raise AssertionError("runner rejected a collector summary matching every independent digest pin")
@@ -908,7 +925,7 @@ def main() -> None:
             run_production_readiness.run_collector(
                 mismatched_collector_command,
                 collector_args,
-                os.environ.copy(),
+                clean_subprocess_env(),
             )
         except ValueError as exc:
             if "does not match the independent expected pin" not in str(exc):

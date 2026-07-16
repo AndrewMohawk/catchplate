@@ -21,6 +21,10 @@ def expect_ids(label: str, result: dict, expected: set[str]) -> None:
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
+        for store in ("METADATA", "GRANT", "AUDIT"):
+            os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "sqlite"
+            os.environ.pop(f"SERVERWARE_{store}_STORE_POSTGRES_DSN", None)
+        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
         from serverware import db
 
         db.init_db()

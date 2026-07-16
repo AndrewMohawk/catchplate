@@ -122,6 +122,7 @@ print(json.dumps(response, sort_keys=True))
 
 def run_adapter(payload: dict[str, Any], materials_file: Path, aws_binary: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[bytes]:
     run_env = os.environ.copy()
+    run_env.pop("SERVERWARE_FAKE_AWS_PLAINTEXT", None)
     if env:
         run_env.update(env)
     return subprocess.run(

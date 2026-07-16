@@ -104,12 +104,18 @@ def run_adapter(payload: dict[str, Any], command_template: str | None = None, *e
     if command_template is not None:
         command.extend(["--command-template", command_template])
     command.extend(extra)
+    env = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("SERVERWARE_NITRO_NSM_")
+    }
     return subprocess.run(
         command,
         cwd=ROOT,
         input=(canonical_json(payload) + "\n").encode("utf-8"),
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=env,
         check=False,
     )
 

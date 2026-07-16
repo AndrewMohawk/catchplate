@@ -26,6 +26,10 @@ def sha256_prefixed_json(value: Any) -> str:
 def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
+        for store in ("METADATA", "GRANT", "AUDIT"):
+            os.environ[f"SERVERWARE_{store}_STORE_BACKEND"] = "sqlite"
+            os.environ.pop(f"SERVERWARE_{store}_STORE_POSTGRES_DSN", None)
+        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
         os.environ["SERVERWARE_DEV_AUTHENTICATOR"] = "1"
         os.environ["SERVERWARE_CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED"] = "1"
         os.environ["SERVERWARE_PUBLIC_URL"] = "http://localhost:3000"

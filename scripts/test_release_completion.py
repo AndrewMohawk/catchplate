@@ -38,6 +38,22 @@ FIXTURE_LAUNCH_AUTHORITY_KEY_ID = "sha256:" + "1" * 64
 FIXTURE_LAUNCH_AUTHORITY_ROOT_SHA256 = "sha256:" + "2" * 64
 
 
+def clean_subprocess_env() -> dict[str, str]:
+    allowed = {
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "PATH",
+        "SYSTEMROOT",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "TZ",
+    }
+    return {name: value for name, value in os.environ.items() if name in allowed}
+
+
 def canonical_json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
@@ -3765,7 +3781,7 @@ def run_verifier(
     include_hardware_assurance: bool = False,
     hardware_expected_challenge_mode: str | None = "nonce",
 ) -> subprocess.CompletedProcess[bytes]:
-    env = os.environ.copy()
+    env = clean_subprocess_env()
     if allow_host_bypass:
         env["SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"] = "1"
     proxy_proof_args = (

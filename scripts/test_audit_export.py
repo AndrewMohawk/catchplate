@@ -21,8 +21,11 @@ def main() -> None:
         os.environ["SERVERWARE_DATA_DIR"] = tmp
         os.environ["SERVERWARE_AUDIT_STORE_BACKEND"] = "sqlite"
         os.environ["SERVERWARE_METADATA_STORE_BACKEND"] = "sqlite"
+        os.environ["SERVERWARE_GRANT_STORE_BACKEND"] = "sqlite"
         os.environ.pop("SERVERWARE_AUDIT_STORE_POSTGRES_DSN", None)
         os.environ.pop("SERVERWARE_METADATA_STORE_POSTGRES_DSN", None)
+        os.environ.pop("SERVERWARE_GRANT_STORE_POSTGRES_DSN", None)
+        os.environ["SERVERWARE_KEY_RELEASE_REQUIRED"] = "0"
 
         from serverware import app as app_module
         from serverware import db

@@ -110,6 +110,21 @@ def main() -> None:
         if "$(MAKE) verify-portal-browser-oauth" not in target_body(makefile, target):
             raise AssertionError(f"{target} omits the portal browser OAuth proof")
 
+    bench_body = target_body(makefile, "bench-gate-rs")
+    provenance_step = "./scripts/generate_release_provenance.py"
+    proof_step = "./scripts/test_response_proof_capture.sh"
+    image_signing_step = "python3 scripts/sign_release_images.py"
+    if bench_body.count(provenance_step) != 1:
+        raise AssertionError("bench-gate-rs must generate release provenance exactly once")
+    if not (
+        bench_body.index(provenance_step)
+        < bench_body.index(proof_step)
+        < bench_body.index(image_signing_step)
+    ):
+        raise AssertionError(
+            "bench-gate-rs must publish provenance before response-proof capture and image signing"
+        )
+
     input_preflight_body = target_body(makefile, "production-release-input-preflight")
     for required in (
         "scripts/production_release_input_preflight.py",

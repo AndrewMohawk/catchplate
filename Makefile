@@ -136,6 +136,8 @@ bench-gate-rs:
 			./scripts/test_decision_gate_form_urlencoded_streaming.sh
 			./scripts/test_decision_gate_csv_streaming.sh
 				./scripts/test_decision_gate_response.sh
+	./scripts/generate_release_provenance.py > .tmp/release-provenance-summary.json
+	cat .tmp/release-provenance-summary.json
 				./scripts/test_response_proof_capture.sh
 	docker compose exec -T serverware python scripts/test_webauthn_attestation.py
 	python3 scripts/verify_decision_gate_attestation.py
@@ -185,8 +187,6 @@ bench-gate-rs:
 		serverware python scripts/bench_decision_gate.py --self-test > .tmp/decision-gate-rs-bench.json
 	cat .tmp/decision-gate-rs-bench.json
 	./scripts/test_decision_gate_shared_rate_limits.sh
-	./scripts/generate_release_provenance.py > .tmp/release-provenance-summary.json
-	cat .tmp/release-provenance-summary.json
 	SERVERWARE_IMAGE_SIGNATURE_PROVIDER="$${SERVERWARE_IMAGE_SIGNATURE_PROVIDER:-sigstore-command}" \
 	SERVERWARE_IMAGE_SIGN_COMMAND="$${SERVERWARE_IMAGE_SIGN_COMMAND:-python3 scripts/cosign_sigstore.py sign}" \
 	SERVERWARE_IMAGE_VERIFY_COMMAND="$${SERVERWARE_IMAGE_VERIFY_COMMAND:-python3 scripts/cosign_sigstore.py verify}" \

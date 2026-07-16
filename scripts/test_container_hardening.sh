@@ -47,7 +47,7 @@ def seccomp_profile_matches(security_opt: list[str]) -> bool:
 for service in services:
     container_id = command(["docker", "compose", "ps", "-q", service])
     if not container_id:
-        continue
+        raise AssertionError(f"{service}: requested compose service is not running")
     data = json.loads(command(["docker", "inspect", container_id]))[0]
     config = data["Config"]
     host = data["HostConfig"]

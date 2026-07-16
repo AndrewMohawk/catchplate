@@ -4,6 +4,8 @@ import os
 import stat
 from pathlib import Path
 
+from serverware.rbac import RBACRoleValidationError, normalize_rbac_roles
+
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RELEASE_CHANNEL = os.getenv("SERVERWARE_RELEASE_CHANNEL", "dev")
@@ -258,14 +260,21 @@ if not X_OAUTH_CLIENT_SECRET and not X_OAUTH_CLIENT_SECRET_FILE:
     X_OAUTH_CLIENT_SECRET = _X_OAUTH_LEGACY_CLIENT_SECRET
 X_OAUTH_REDIRECT_URI = os.getenv("SERVERWARE_X_OAUTH_REDIRECT_URI", os.getenv("SERVERWARE_TWITTER_OAUTH_REDIRECT_URI", f"{PUBLIC_URL}/api/oauth/callback/x")).strip()
 ADMIN_USER_ID = os.getenv("SERVERWARE_ADMIN_USER", "user:admin")
-ADMIN_ROLES = tuple(
-    role.strip()
-    for role in os.getenv(
-        "SERVERWARE_ADMIN_ROLES",
-        "admin,approver,auditor,policy_author,policy_publisher,credential_owner,attestation_operator,attestation_reviewer",
-    ).split(",")
-    if role.strip()
-)
+try:
+    ADMIN_ROLES = tuple(
+        normalize_rbac_roles(
+            [
+                role.strip()
+                for role in os.getenv(
+                    "SERVERWARE_ADMIN_ROLES",
+                    "admin,approver,auditor,policy_author,policy_publisher,credential_owner,attestation_operator,attestation_reviewer",
+                ).split(",")
+                if role.strip()
+            ]
+        )
+    )
+except RBACRoleValidationError as exc:
+    raise RuntimeError("SERVERWARE_ADMIN_ROLES is invalid") from exc
 OIDC_ENABLED = os.getenv("SERVERWARE_OIDC_ENABLED", "0") == "1"
 OIDC_ISSUER = os.getenv("SERVERWARE_OIDC_ISSUER", "").strip()
 OIDC_AUDIENCE = os.getenv("SERVERWARE_OIDC_AUDIENCE", "").strip()

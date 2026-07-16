@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import json
 import os
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -79,6 +81,24 @@ def sign_mutation_assertion(
     if "new-admin-token" in serialized_options:
         raise AssertionError("control-plane WebAuthn challenge leaked token material")
     return webauthn.dev_assertion(options["publicKey"]["challenge"])
+
+
+def expect_generation_conflict(func: Any, *, expected: int, current: int) -> None:
+    from fastapi import HTTPException
+
+    try:
+        func()
+    except HTTPException as exc:
+        if exc.status_code != 409 or exc.detail != {
+            "error": "rbac_generation_conflict",
+            "expectedGeneration": expected,
+            "currentGeneration": current,
+        }:
+            raise AssertionError(
+                f"stale RBAC mutation failed incorrectly: {exc.status_code} {exc.detail}"
+            ) from exc
+        return
+    raise AssertionError("stale RBAC mutation unexpectedly succeeded")
 
 
 def main() -> None:
@@ -191,7 +211,11 @@ def main() -> None:
             db.list_logs = original_list_logs
 
         subject_id = "oidc:operator@example.com"
-        role_payload = app_module.RoleBindingUpdate(roles=["auditor", "policy_author"], reason="join on-call")
+        role_payload = app_module.RoleBindingUpdate(
+            roles=["auditor", "policy_author"],
+            expectedGeneration=0,
+            reason="join on-call",
+        )
         role_digest = app_module._rbac_change_payload_digest(subject_id, role_payload)
         role_payload.mfa = {
             "assertion": sign_mutation_assertion(
@@ -206,6 +230,13 @@ def main() -> None:
         updated = app_module.rbac_role_binding_update(subject_id, role_payload, identity=identity)
         if updated["binding"]["roles"] != ["auditor", "policy_author"]:
             raise AssertionError(f"role binding update returned wrong roles: {updated}")
+        with db.connect() as conn:
+            historical_active_row = dict(
+                conn.execute(
+                    "SELECT * FROM rbac_role_bindings WHERE subject_id = ?",
+                    (subject_id,),
+                ).fetchone()
+            )
         bindings = app_module.rbac_role_bindings(_=identity)
         if bindings["subjects"][subject_id]["status"] != "active":
             raise AssertionError(f"role binding state was not persisted: {bindings}")
@@ -231,7 +262,11 @@ def main() -> None:
             raise AssertionError("JWT admin role bypassed the authoritative role binding")
 
         unaffected_subject_id = "oidc:auditor@example.com"
-        unaffected_payload = app_module.RoleBindingUpdate(roles=["auditor"], reason="security review")
+        unaffected_payload = app_module.RoleBindingUpdate(
+            roles=["auditor"],
+            expectedGeneration=updated["generation"],
+            reason="security review",
+        )
         unaffected_digest = app_module._rbac_change_payload_digest(unaffected_subject_id, unaffected_payload)
         unaffected_payload.mfa = {
             "assertion": sign_mutation_assertion(
@@ -243,7 +278,11 @@ def main() -> None:
                 payload_digest=unaffected_digest,
             )
         }
-        app_module.rbac_role_binding_update(unaffected_subject_id, unaffected_payload, identity=identity)
+        unaffected_updated = app_module.rbac_role_binding_update(
+            unaffected_subject_id,
+            unaffected_payload,
+            identity=identity,
+        )
         unaffected_token = sign_jwt(
             private_key,
             kid=kid,
@@ -253,7 +292,11 @@ def main() -> None:
             subject="auditor@example.com",
         )
 
-        deprovision_payload = app_module.DeprovisionSubjectRequest(subjectId=subject_id, reason="left team")
+        deprovision_payload = app_module.DeprovisionSubjectRequest(
+            subjectId=subject_id,
+            expectedGeneration=unaffected_updated["generation"],
+            reason="left team",
+        )
         deprovision_digest = app_module._rbac_deprovision_payload_digest(deprovision_payload)
         deprovision_payload.mfa = {
             "assertion": sign_mutation_assertion(
@@ -283,11 +326,80 @@ def main() -> None:
         else:
             raise AssertionError("require_role trusted an OIDC identity created before deprovisioning")
 
+        with db.connect() as conn:
+            deprovisioned_row = dict(
+                conn.execute(
+                    "SELECT * FROM rbac_role_bindings WHERE subject_id = ?",
+                    (subject_id,),
+                ).fetchone()
+            )
+            conn.execute(
+                """
+                UPDATE rbac_role_bindings
+                SET roles_json = ?, status = ?, generation = ?, binding_digest = ?,
+                    updated_at = ?, updated_by = ?, reason = ?,
+                    deprovisioned_at = ?, deprovisioned_by = ?
+                WHERE subject_id = ?
+                """,
+                (
+                    historical_active_row["roles_json"],
+                    historical_active_row["status"],
+                    historical_active_row["generation"],
+                    historical_active_row["binding_digest"],
+                    historical_active_row["updated_at"],
+                    historical_active_row["updated_by"],
+                    historical_active_row["reason"],
+                    historical_active_row["deprovisioned_at"],
+                    historical_active_row["deprovisioned_by"],
+                    subject_id,
+                ),
+            )
+        try:
+            auth.require_admin(FakeRequest(operator_token), x_serverware_admin_token=None)
+        except HTTPException as exc:
+            if exc.status_code != 503 or "unavailable" not in str(exc.detail):
+                raise AssertionError(
+                    "historical RBAC replay failed incorrectly: "
+                    f"{exc.status_code} {exc.detail}"
+                ) from exc
+        else:
+            raise AssertionError("historical active RBAC row replay restored authorization")
+        with db.connect() as conn:
+            conn.execute(
+                """
+                UPDATE rbac_role_bindings
+                SET roles_json = ?, status = ?, generation = ?, binding_digest = ?,
+                    updated_at = ?, updated_by = ?, reason = ?,
+                    deprovisioned_at = ?, deprovisioned_by = ?
+                WHERE subject_id = ?
+                """,
+                (
+                    deprovisioned_row["roles_json"],
+                    deprovisioned_row["status"],
+                    deprovisioned_row["generation"],
+                    deprovisioned_row["binding_digest"],
+                    deprovisioned_row["updated_at"],
+                    deprovisioned_row["updated_by"],
+                    deprovisioned_row["reason"],
+                    deprovisioned_row["deprovisioned_at"],
+                    deprovisioned_row["deprovisioned_by"],
+                    subject_id,
+                ),
+            )
+            conn.execute(
+                "UPDATE rbac_authority_state SET verified_binding_table_revision = "
+                "binding_table_revision WHERE authority_id = 1"
+            )
+
         unaffected_identity = auth.require_admin(FakeRequest(unaffected_token), x_serverware_admin_token=None)
         if unaffected_identity.roles != frozenset({"auditor"}):
             raise AssertionError(f"deprovisioning another subject changed this binding: {unaffected_identity}")
 
-        reprovision_payload = app_module.RoleBindingUpdate(roles=["approver"], reason="returned to approval duty")
+        reprovision_payload = app_module.RoleBindingUpdate(
+            roles=["approver"],
+            expectedGeneration=deprovisioned["generation"],
+            reason="returned to approval duty",
+        )
         reprovision_digest = app_module._rbac_change_payload_digest(subject_id, reprovision_payload)
         reprovision_payload.mfa = {
             "assertion": sign_mutation_assertion(
@@ -307,6 +419,64 @@ def main() -> None:
         refreshed_stale_identity = auth.require_role("approver")(operator_identity)
         if refreshed_stale_identity.roles != frozenset({"approver"}):
             raise AssertionError(f"require_role did not refresh a stale OIDC identity: {refreshed_stale_identity}")
+
+        current_generation = db.get_rbac_authority_state()["generation"]
+        stale_generation = current_generation - 1
+        stale_role_payload = app_module.RoleBindingUpdate(
+            roles=["auditor"],
+            expectedGeneration=stale_generation,
+            reason="stale generation preflight",
+        )
+        stale_role_digest = app_module._rbac_change_payload_digest(
+            "oidc:stale-role@example.com", stale_role_payload
+        )
+        stale_role_payload.mfa = {
+            "assertion": sign_mutation_assertion(
+                app_module,
+                webauthn,
+                user_id=user_id,
+                action="rbac.role.change",
+                resource_id="oidc:stale-role@example.com",
+                payload_digest=stale_role_digest,
+            )
+        }
+        for _ in range(2):
+            expect_generation_conflict(
+                lambda: app_module.rbac_role_binding_update(
+                    "oidc:stale-role@example.com",
+                    stale_role_payload,
+                    identity=identity,
+                ),
+                expected=stale_generation,
+                current=current_generation,
+            )
+
+        stale_deprovision_payload = app_module.DeprovisionSubjectRequest(
+            subjectId=subject_id,
+            expectedGeneration=stale_generation,
+            reason="stale generation preflight",
+        )
+        stale_deprovision_digest = app_module._rbac_deprovision_payload_digest(
+            stale_deprovision_payload
+        )
+        stale_deprovision_payload.mfa = {
+            "assertion": sign_mutation_assertion(
+                app_module,
+                webauthn,
+                user_id=user_id,
+                action="rbac.deprovision",
+                resource_id=subject_id,
+                payload_digest=stale_deprovision_digest,
+            )
+        }
+        for _ in range(2):
+            expect_generation_conflict(
+                lambda: app_module.rbac_deprovision_subject(
+                    stale_deprovision_payload, identity=identity
+                ),
+                expected=stale_generation,
+                current=current_generation,
+            )
 
         rbac_path = Path(tmp) / "rbac-bindings.json"
         valid_rbac_state = rbac_path.read_bytes()
@@ -330,13 +500,50 @@ def main() -> None:
                 raise AssertionError("unbound production OIDC subject was accepted")
 
             rbac_path.write_text("{not-json")
+            projected_file_identity = auth.require_admin(
+                FakeRequest(operator_token),
+                x_serverware_admin_token=None,
+            )
+            if projected_file_identity.roles != frozenset({"approver"}):
+                raise AssertionError(
+                    "filesystem projection changed database-authoritative RBAC"
+                )
+            repaired = db.project_rbac_authority_state()
+            repaired_file = json.loads(rbac_path.read_text())
+            if (
+                repaired_file.get("generation") != repaired["generation"]
+                or repaired_file.get("state_digest") != repaired["state_digest"]
+            ):
+                raise AssertionError("RBAC projection was not repaired from database authority")
+
+            with db.connect() as conn:
+                stored = conn.execute(
+                    "SELECT roles_json FROM rbac_role_bindings WHERE subject_id = ?",
+                    (subject_id,),
+                ).fetchone()["roles_json"]
+                conn.execute(
+                    "UPDATE rbac_role_bindings SET roles_json = ? WHERE subject_id = ?",
+                    ('["admin"]', subject_id),
+                )
             try:
                 auth.require_admin(FakeRequest(operator_token), x_serverware_admin_token=None)
             except HTTPException as exc:
                 if exc.status_code != 503 or "unavailable" not in str(exc.detail):
-                    raise AssertionError(f"unreadable production RBAC state failed incorrectly: {exc.status_code} {exc.detail}") from exc
+                    raise AssertionError(
+                        "invalid database RBAC state failed incorrectly: "
+                        f"{exc.status_code} {exc.detail}"
+                    ) from exc
             else:
-                raise AssertionError("unreadable production RBAC state failed open")
+                raise AssertionError("invalid database RBAC state failed open")
+            with db.connect() as conn:
+                conn.execute(
+                    "UPDATE rbac_role_bindings SET roles_json = ? WHERE subject_id = ?",
+                    (stored, subject_id),
+                )
+                conn.execute(
+                    "UPDATE rbac_authority_state SET verified_binding_table_revision = "
+                    "binding_table_revision WHERE authority_id = 1"
+                )
 
             local_identity = auth.require_admin(FakeRequest(auth.admin_token()), x_serverware_admin_token=None)
             if local_identity.auth_method != "bearer-token":
@@ -344,6 +551,176 @@ def main() -> None:
         finally:
             rbac_path.write_bytes(valid_rbac_state)
             auth.RELEASE_CHANNEL = original_release_channel
+
+        race_generation = db.get_rbac_authority_state()["generation"]
+        race_barrier = threading.Barrier(2)
+
+        def race_writer(index: int) -> dict[str, Any]:
+            race_barrier.wait()
+            try:
+                result = db.mutate_rbac_role_binding(
+                    subject_id=f"oidc:race-{index}@example.com",
+                    roles=["auditor"],
+                    status="active",
+                    expected_generation=race_generation,
+                    actor_id=user_id,
+                    reason="generation race",
+                    event_type="rbac.role_changed",
+                    event={"test": "generation_race"},
+                )
+                return {"status": "committed", "result": result}
+            except db.RBACGenerationConflictError as exc:
+                return {
+                    "status": "conflict",
+                    "current_generation": exc.current_generation,
+                }
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            race_results = list(executor.map(race_writer, (1, 2)))
+        if sorted(item["status"] for item in race_results) != [
+            "committed",
+            "conflict",
+        ]:
+            raise AssertionError(f"RBAC generation race was not linearized: {race_results}")
+        post_race = db.get_rbac_authority_state()
+        if post_race["generation"] != race_generation + 1:
+            raise AssertionError(f"RBAC race advanced generation incorrectly: {post_race}")
+        race_bindings = [
+            subject
+            for subject in post_race["subjects"]
+            if subject.startswith("oidc:race-")
+        ]
+        if len(race_bindings) != 1:
+            raise AssertionError(f"RBAC race committed multiple writers: {race_bindings}")
+
+        rollback_generation = post_race["generation"]
+        original_append_audit_event = db.append_audit_event
+
+        def reject_audit_append(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            raise db.AuditStoreError("injected RBAC audit failure")
+
+        db.append_audit_event = reject_audit_append
+        try:
+            try:
+                db.mutate_rbac_role_binding(
+                    subject_id="oidc:audit-rollback@example.com",
+                    roles=["auditor"],
+                    status="active",
+                    expected_generation=rollback_generation,
+                    actor_id=user_id,
+                    reason="must roll back",
+                    event_type="rbac.role_changed",
+                    event={"test": "audit_rollback"},
+                )
+            except db.AuditStoreError:
+                pass
+            else:
+                raise AssertionError("RBAC mutation committed after audit append failure")
+        finally:
+            db.append_audit_event = original_append_audit_event
+        rolled_back = db.get_rbac_authority_state()
+        if (
+            rolled_back["generation"] != rollback_generation
+            or "oidc:audit-rollback@example.com" in rolled_back["subjects"]
+        ):
+            raise AssertionError(f"RBAC audit failure did not roll back: {rolled_back}")
+
+        original_projection_writer = db._write_rbac_projection
+
+        def reject_projection(_state: dict[str, Any]) -> None:
+            raise db.RBACBindingStoreError("injected RBAC projection failure")
+
+        db._write_rbac_projection = reject_projection
+        try:
+            projection_pending = db.mutate_rbac_role_binding(
+                subject_id="oidc:projection-pending@example.com",
+                roles=["auditor"],
+                status="active",
+                expected_generation=rollback_generation,
+                actor_id=user_id,
+                reason="projection failure",
+                event_type="rbac.role_changed",
+                event={"test": "projection_recovery"},
+            )
+        finally:
+            db._write_rbac_projection = original_projection_writer
+        if projection_pending["projection"]["status"] != "pending":
+            raise AssertionError(
+                f"RBAC projection failure was not surfaced: {projection_pending}"
+            )
+        if db.get_rbac_role_binding("oidc:projection-pending@example.com") is None:
+            raise AssertionError("committed RBAC binding depended on file projection")
+        recovered_projection = db.project_rbac_authority_state()
+        if recovered_projection["generation"] != projection_pending["generation"]:
+            raise AssertionError("RBAC projection did not converge after retry")
+        forged_projection = json.loads(rbac_path.read_text())
+        forged_projection["generation"] = recovered_projection["generation"] + 100
+        rbac_path.write_text(json.dumps(forged_projection, sort_keys=True))
+        repaired_projection = db.project_rbac_authority_state()
+        repaired_file = json.loads(rbac_path.read_text())
+        if (
+            repaired_projection["generation"] != recovered_projection["generation"]
+            or repaired_file["generation"] != recovered_projection["generation"]
+        ):
+            raise AssertionError(
+                f"forged projection generation blocked repair: {repaired_file}"
+            )
+
+        oidc_admin_id = "oidc:transaction-admin@example.com"
+        provisioned_admin = db.mutate_rbac_role_binding(
+            subject_id=oidc_admin_id,
+            roles=["admin"],
+            status="active",
+            expected_generation=recovered_projection["generation"],
+            actor_id=user_id,
+            reason="commit-time authorization fixture",
+            event_type="rbac.role_changed",
+            event={"test": "commit_time_actor_authorization"},
+        )
+        actor_committed = db.mutate_rbac_role_binding(
+            subject_id="oidc:transaction-target@example.com",
+            roles=["auditor"],
+            status="active",
+            expected_generation=provisioned_admin["generation"],
+            actor_id=oidc_admin_id,
+            reason="authorized OIDC admin mutation",
+            event_type="rbac.role_changed",
+            event={"test": "commit_time_actor_authorization"},
+        )
+        revoked_admin = db.mutate_rbac_role_binding(
+            subject_id=oidc_admin_id,
+            roles=[],
+            status="deprovisioned",
+            expected_generation=actor_committed["generation"],
+            actor_id=user_id,
+            reason="revoke transaction authority",
+            event_type="rbac.deprovisioned",
+            event={"test": "commit_time_actor_authorization"},
+        )
+        try:
+            db.mutate_rbac_role_binding(
+                subject_id="oidc:transaction-denied@example.com",
+                roles=["auditor"],
+                status="active",
+                expected_generation=revoked_admin["generation"],
+                actor_id=oidc_admin_id,
+                reason="must fail after actor revocation",
+                event_type="rbac.role_changed",
+                event={"test": "commit_time_actor_authorization"},
+            )
+        except db.RBACBindingStoreError as exc:
+            if "no longer holds" not in str(exc):
+                raise AssertionError(f"revoked RBAC actor failed incorrectly: {exc}") from exc
+        else:
+            raise AssertionError("revoked OIDC admin committed an RBAC mutation")
+        after_actor_rejection = db.get_rbac_authority_state()
+        if (
+            after_actor_rejection["generation"] != revoked_admin["generation"]
+            or "oidc:transaction-denied@example.com" in after_actor_rejection["subjects"]
+        ):
+            raise AssertionError(
+                f"rejected RBAC actor changed authoritative state: {after_actor_rejection}"
+            )
 
         old_token = auth.admin_token()
         rotate_payload = app_module.AdminTokenRotateRequest(reason="scheduled rotation")

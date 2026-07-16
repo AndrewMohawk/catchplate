@@ -2335,8 +2335,25 @@ def compile_policy_bundle(raw: dict[str, Any], *, verify_signature: bool = False
             approvers = jit.get("approvers") or {}
             if int(approvers.get("quorum", 0)) != 1:
                 raise PolicyBundleError(f"route {route_id} JIT approver quorum must be 1")
-            if not approvers.get("users"):
+            approver_users = approvers.get("users")
+            if not isinstance(approver_users, list) or not approver_users:
                 raise PolicyBundleError(f"route {route_id} JIT policy must define allowed approver users")
+            if len(approver_users) > 32 or len(set(approver_users)) != len(approver_users):
+                raise PolicyBundleError(
+                    f"route {route_id} JIT approver users must contain 1-32 unique IDs"
+                )
+            if any(
+                not isinstance(user_id, str)
+                or re.fullmatch(
+                    r"(?:user|oidc):[A-Za-z0-9][A-Za-z0-9._:@+|/\-]{0,239}",
+                    user_id,
+                )
+                is None
+                for user_id in approver_users
+            ):
+                raise PolicyBundleError(
+                    f"route {route_id} JIT approvers must use explicit user: or oidc: IDs"
+                )
             authn = approvers.get("authn") or {}
             if authn.get("webauthnRequired") and not authn.get("allowedAuthenticatorClasses"):
                 raise PolicyBundleError(f"route {route_id} WebAuthn JIT policy must define allowed authenticator classes")

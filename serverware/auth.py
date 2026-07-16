@@ -18,6 +18,7 @@ from cryptography.hazmat.primitives.asymmetric import ec, ed25519, padding, rsa,
 from cryptography.hazmat.primitives import hashes
 
 from serverware import db
+from serverware.rbac import RBACRoleValidationError, normalize_rbac_roles
 from serverware.config import (
     ADMIN_ROLES,
     ADMIN_TOKEN_PATH,
@@ -243,7 +244,10 @@ def _roles_from_claim(value: object) -> frozenset[str]:
         raw = [str(item) for item in value]
     else:
         raw = []
-    return frozenset(role.strip() for role in raw if role.strip())
+    try:
+        return frozenset(normalize_rbac_roles(raw))
+    except RBACRoleValidationError as exc:
+        raise OIDCAuthError("OIDC token contains invalid Serverware RBAC roles") from exc
 
 
 def _production_release() -> bool:
@@ -304,7 +308,7 @@ def oidc_identity_from_token(
     jwk = _oidc_key_for_header(header, algorithm)
     _verify_oidc_signature(algorithm, jwk, f"{parts[0]}.{parts[1]}".encode("ascii"), _b64url_decode(parts[2]))
     _validate_oidc_claims(payload, expected_nonce=expected_nonce)
-    subject = payload.get(OIDC_SUBJECT_CLAIM) or payload.get("sub")
+    subject = payload.get(OIDC_SUBJECT_CLAIM)
     if not isinstance(subject, str) or not subject:
         raise OIDCAuthError("OIDC token subject is missing")
     roles = _roles_from_claim(payload.get(OIDC_ROLE_CLAIM))
@@ -418,9 +422,10 @@ def oidc_identity_from_browser_session(
         if allowed_classes and not allowed_classes.intersection(credential_classes):
             raise OIDCAuthError("OIDC browser session authenticator is no longer allowed")
     user_id = str(session["user_id"])
-    roles = frozenset(str(role) for role in session.get("roles", []))
-    if not roles:
-        raise OIDCAuthError("OIDC browser session has no RBAC roles")
+    try:
+        roles = frozenset(normalize_rbac_roles(session.get("roles", [])))
+    except RBACRoleValidationError as exc:
+        raise OIDCAuthError("OIDC browser session has invalid RBAC roles") from exc
     return AdminIdentity(
         user_id,
         _authoritative_oidc_roles(user_id, roles),
@@ -432,8 +437,11 @@ def oidc_pending_session_identity(session: dict[str, object]) -> AdminIdentity:
     if session.get("status") != "pending_webauthn":
         raise OIDCAuthError("OIDC browser session is not awaiting WebAuthn")
     user_id = str(session.get("user_id") or "")
-    stored_roles = frozenset(str(role) for role in session.get("roles", []))
-    if not user_id or not stored_roles:
+    try:
+        stored_roles = frozenset(normalize_rbac_roles(session.get("roles", [])))
+    except RBACRoleValidationError as exc:
+        raise OIDCAuthError("OIDC browser session has invalid RBAC roles") from exc
+    if not user_id:
         raise OIDCAuthError("OIDC browser session identity is invalid")
     current_roles = _authoritative_oidc_roles(user_id, stored_roles)
     if current_roles != stored_roles:
@@ -553,7 +561,10 @@ def validate_csrf_request(request: Request) -> None:
 
 
 def require_role(*roles: str) -> Callable[..., AdminIdentity]:
-    required = set(roles)
+    try:
+        required = set(normalize_rbac_roles(roles))
+    except RBACRoleValidationError as exc:
+        raise RuntimeError("control-plane endpoint declares invalid RBAC roles") from exc
 
     def dependency(identity: AdminIdentity = Depends(require_admin)) -> AdminIdentity:
         identity = _refresh_oidc_authorization(identity)

@@ -814,8 +814,8 @@ def check_control_plane_security(env: dict[str, str], failures: list[str]) -> No
     }
     add(
         failures,
-        required_roles.issubset(roles),
-        "SERVERWARE_ADMIN_ROLES must include the administrative, policy, credential, audit, approval, and setup attestation roles",
+        roles == required_roles,
+        "SERVERWARE_ADMIN_ROLES must equal the closed administrative, policy, credential, audit, approval, and setup attestation role vocabulary",
     )
     setup_trust_roles = (
         (

@@ -535,7 +535,18 @@
                 "additionalProperties": false,
                 "properties": {
                   "quorum": {"const": 1},
-                  "users": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                  "users": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "minLength": 6,
+                      "maxLength": 245,
+                      "pattern": "^(?:user|oidc):[A-Za-z0-9][A-Za-z0-9._:@+|/-]{0,239}$"
+                    }
+                  },
                   "authn": {
                     "type": "object",
                     "required": ["webauthnRequired", "userVerification", "allowedAuthenticatorClasses", "requireHardwareAttestation"],

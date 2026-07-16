@@ -47,6 +47,8 @@ use zeroize::{Zeroize, Zeroizing};
 const MAX_CREDENTIAL_LEASE_RESPONSE_BYTES: u64 = 8 * 1024 * 1024;
 const MAX_CONTROL_PLANE_ATTESTATION_BYTES: u64 = 64 * 1024;
 const MAX_CONTROL_PLANE_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
+const MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES: u64 = 32 * 1024;
+const MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES: usize = 1536 * 1024;
 const MAX_CONTROL_PLANE_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
 const MAX_CONTROL_PLANE_RESPONSE_HEADER_BYTES: usize = 16 * 1024;
 const CONTROL_PLANE_AUTHORIZATION_RECEIPT_API_VERSION: &str =
@@ -505,6 +507,7 @@ struct GateState {
     policy_high_water_path: Option<PathBuf>,
     policy_high_water: Mutex<PolicyHighWater>,
     grants: Mutex<HashMap<String, Grant>>,
+    grant_cache_max: usize,
     gmail_proofs: Mutex<HashMap<GmailProofKey, GmailProof>>,
     gmail_proof_cache_max: usize,
     constraint_rate_counters: Mutex<HashMap<String, ConstraintRateCounter>>,
@@ -1029,11 +1032,62 @@ struct PolicyTrustRoot {
 }
 
 #[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AuditEvent {
+    event_id: String,
     event_type: String,
     event: Value,
     #[serde(skip)]
     required: bool,
+}
+
+impl AuditEvent {
+    fn new(event_type: &str, event: Value, required: bool) -> Result<Self, String> {
+        Ok(Self {
+            event_id: fresh_audit_event_id()?,
+            event_type: event_type.to_string(),
+            event,
+            required,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct DataPlaneAuditAck {
+    api_version: String,
+    ok: bool,
+    accepted: u64,
+    batch_digest: String,
+    instance_id: String,
+}
+
+#[derive(Debug)]
+struct AuditPostError {
+    message: String,
+    request_too_large: bool,
+}
+
+impl AuditPostError {
+    fn other(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            request_too_large: false,
+        }
+    }
+
+    fn request_too_large(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            request_too_large: true,
+        }
+    }
+}
+
+impl std::fmt::Display for AuditPostError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
 }
 
 struct AuditReservation<'a> {
@@ -1042,9 +1096,33 @@ struct AuditReservation<'a> {
 }
 
 impl AuditReservation<'_> {
+    fn reject(&mut self) -> bool {
+        let _queue = self
+            .state
+            .audit_queue
+            .lock()
+            .expect("audit queue mutex poisoned");
+        self.state.audit_reserved.fetch_sub(1, Ordering::Relaxed);
+        self.state
+            .audit_required_failed
+            .fetch_add(1, Ordering::Relaxed);
+        self.active = false;
+        false
+    }
+
     fn commit(&mut self, event_type: &str, event: Value) -> bool {
         if !self.active {
             return false;
+        }
+        let queued_event = match AuditEvent::new(event_type, event, true) {
+            Ok(event) => event,
+            Err(err) => {
+                eprintln!("required audit event ID generation failed: {err}");
+                return self.reject();
+            }
+        };
+        if !audit_event_fits_batch(&queued_event) {
+            return self.reject();
         }
         let mut queue = self
             .state
@@ -1059,11 +1137,7 @@ impl AuditReservation<'_> {
                 .fetch_add(1, Ordering::Relaxed);
             return false;
         }
-        queue.push_back(AuditEvent {
-            event_type: event_type.to_string(),
-            event,
-            required: true,
-        });
+        queue.push_back(queued_event);
         self.state.audit_enqueued.fetch_add(1, Ordering::Relaxed);
         true
     }
@@ -1379,10 +1453,12 @@ impl hkdf::KeyType for Aes256KeyLength {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct Grant {
     id: String,
     approval_id: Option<String>,
+    max_uses: u64,
+    ttl_seconds: u64,
     uses_remaining: u64,
     expires_at_ms: u128,
 }
@@ -1545,6 +1621,16 @@ fn sha256_prefixed(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("sha256:{}", hex::encode(hasher.finalize()))
+}
+
+fn fresh_audit_event_id() -> Result<String, String> {
+    let rng = ring_rand::SystemRandom::new();
+    let mut random_bytes = [0u8; 32];
+    rng.fill(&mut random_bytes)
+        .map_err(|_| "generate audit event ID failed".to_string())?;
+    let event_id = sha256_prefixed(&random_bytes);
+    random_bytes.zeroize();
+    Ok(event_id)
 }
 
 const PROVIDER_ACCOUNT_OPERATION_FIELD: &str = "providerAccount";
@@ -3358,6 +3444,26 @@ fn validate_signed_npm_publish_response_contract(
     Ok(())
 }
 
+fn valid_jit_approver_user(value: &str) -> bool {
+    if !(6..=245).contains(&value.len()) {
+        return false;
+    }
+    let Some(identifier) = value
+        .strip_prefix("user:")
+        .or_else(|| value.strip_prefix("oidc:"))
+    else {
+        return false;
+    };
+    let Some(first) = identifier.bytes().next() else {
+        return false;
+    };
+    first.is_ascii_alphanumeric()
+        && identifier.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric()
+                || matches!(byte, b'.' | b'_' | b':' | b'@' | b'+' | b'|' | b'/' | b'-')
+        })
+}
+
 fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
     const DEFAULTS: [(&str, &str); 5] = [
         ("action", "deny"),
@@ -3444,6 +3550,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         .get("principals")
         .and_then(Value::as_array)
         .ok_or("principals missing")?;
+    let mut principal_ids = HashSet::with_capacity(principals.len());
     for (index, item) in principals.iter().enumerate() {
         let principal = item
             .as_object()
@@ -3452,6 +3559,9 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .get("id")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("principal {index} id missing"))?;
+        if !principal_ids.insert(principal_id) {
+            return Err(format!("duplicate principal {principal_id}"));
+        }
 
         if principal.contains_key("spiffeIds") {
             return Err(format!(
@@ -3538,6 +3648,7 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
         .get("routes")
         .and_then(Value::as_array)
         .ok_or("routes missing")?;
+    let mut route_ids = HashSet::with_capacity(routes.len());
     for (index, item) in routes.iter().enumerate() {
         let route = item
             .as_object()
@@ -3546,6 +3657,23 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .get("id")
             .and_then(Value::as_str)
             .ok_or_else(|| format!("route {index} id missing"))?;
+        if !route_ids.insert(route_id) {
+            return Err(format!("duplicate route {route_id}"));
+        }
+        let assigned_principals = route
+            .get("principals")
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("route {route_id} principals missing"))?;
+        for (principal_index, principal) in assigned_principals.iter().enumerate() {
+            let principal = principal.as_str().ok_or_else(|| {
+                format!("route {route_id} principal {principal_index} must be a string")
+            })?;
+            if principal != "*" && !principal_ids.contains(principal) {
+                return Err(format!(
+                    "route {route_id} references unknown principal {principal}"
+                ));
+            }
+        }
         let adapter_type = route
             .get("adapter")
             .and_then(Value::as_object)
@@ -5263,10 +5391,26 @@ fn validate_policy_capabilities(raw: &Value) -> Result<(), String> {
             .get("users")
             .and_then(Value::as_array)
             .ok_or_else(|| format!("route {route_id} JIT approver users must be an array"))?;
-        if users.is_empty() || users.iter().any(|user| !user.is_string()) {
+        if !(1..=32).contains(&users.len()) {
             return Err(format!(
-                "route {route_id} JIT policy must define allowed approver users"
+                "route {route_id} JIT policy must define between 1 and 32 approver users"
             ));
+        }
+        let mut unique_users = HashSet::with_capacity(users.len());
+        for user in users {
+            let user = user
+                .as_str()
+                .ok_or_else(|| format!("route {route_id} JIT approver users must be strings"))?;
+            if !valid_jit_approver_user(user) {
+                return Err(format!(
+                    "route {route_id} JIT approver user {user:?} must match the explicit user:/oidc: ASCII identifier contract"
+                ));
+            }
+            if !unique_users.insert(user) {
+                return Err(format!(
+                    "route {route_id} JIT approver user {user} is duplicated"
+                ));
+            }
         }
         let authn = approvers
             .get("authn")
@@ -5960,6 +6104,30 @@ fn release_evidence_mtimes(
     )
 }
 
+fn same_signed_policy_identity(previous: &Snapshot, next: &Snapshot) -> bool {
+    previous.hash == next.hash
+        && previous.policy_id == next.policy_id
+        && previous.policy_sequence == next.policy_sequence
+        && previous.rollback_epoch == next.rollback_epoch
+        && previous.policy_signing_key_id == next.policy_signing_key_id
+}
+
+fn clear_local_grants_if_signed_policy_changed(
+    state: &GateState,
+    previous: &Snapshot,
+    next: &Snapshot,
+) -> bool {
+    if same_signed_policy_identity(previous, next) {
+        return false;
+    }
+    state
+        .grants
+        .lock()
+        .expect("grant cache mutex poisoned")
+        .clear();
+    true
+}
+
 fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, String> {
     let mtime = file_mtime(&state.policy_path);
     let evidence_mtimes = release_evidence_mtimes(
@@ -6067,11 +6235,18 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
             {
                 return Ok(false);
             }
-            let (credential_generation_floors_retained, credential_generation_floors_pruned) = {
+            let (
+                credential_generation_floors_retained,
+                credential_generation_floors_pruned,
+                grants_cleared,
+            ) = {
                 let mut current = state
                     .snapshot
                     .write()
                     .expect("policy snapshot lock poisoned");
+                *current = Arc::clone(&next);
+                let grants_cleared =
+                    clear_local_grants_if_signed_policy_changed(state, &previous, &next);
                 let mut leases = state
                     .credential_leases
                     .lock()
@@ -6080,15 +6255,11 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     .credential_generations
                     .lock()
                     .expect("credential generation mutex poisoned");
-                *current = Arc::clone(&next);
                 leases.clear();
-                retain_relevant_credential_generation_floors(&mut generations, &next)
+                let (retained, pruned) =
+                    retain_relevant_credential_generation_floors(&mut generations, &next);
+                (retained, pruned, grants_cleared)
             };
-            state
-                .grants
-                .lock()
-                .expect("grant cache mutex poisoned")
-                .clear();
             state
                 .gmail_proofs
                 .lock()
@@ -6112,7 +6283,7 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     "rollback_epoch":next.rollback_epoch,
                     "policy_signing_key_id":next.policy_signing_key_id.clone(),
                     "routes":next.routes.len(),
-                    "grants_cleared":true,
+                    "grants_cleared":grants_cleared,
                     "gmail_proofs_cleared":true,
                     "local_rate_counters_cleared":true,
                     "credential_leases_cleared":true,
@@ -8854,6 +9025,37 @@ fn audit_enabled(state: &GateState) -> bool {
     state.audit_url.is_some() && state.audit_token.is_some() && state.audit_queue_max > 0
 }
 
+fn audit_event_serialized_len(event: &AuditEvent) -> Option<usize> {
+    serde_json::to_vec(event)
+        .ok()
+        .map(|serialized| serialized.len())
+}
+
+fn audit_batch_serialized_len(batch: &[AuditEvent]) -> Option<usize> {
+    let mut size = br#"{"events":[]}"#.len();
+    for (index, event) in batch.iter().enumerate() {
+        let event_size = audit_event_serialized_len(event)?;
+        size = size.checked_add(event_size)?;
+        if index > 0 {
+            size = size.checked_add(1)?;
+        }
+    }
+    Some(size)
+}
+
+fn audit_event_fits_batch(event: &AuditEvent) -> bool {
+    audit_batch_serialized_len(std::slice::from_ref(event))
+        .is_some_and(|size| size <= MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES)
+}
+
+fn discard_unsendable_queued_audit_event(state: &GateState, event: &AuditEvent) {
+    if event.required {
+        state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+    } else {
+        state.audit_dropped.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 fn enqueue_audit(state: &GateState, event_type: &str, event: Value) {
     let _ = enqueue_audit_event(state, event_type, event, false);
 }
@@ -8869,9 +9071,9 @@ fn record_required_credential_release_start(
         state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
         return false;
     }
-    let batch = [AuditEvent {
-        event_type: "data_plane.credential.release_started".to_string(),
-        event: decision_audit_event(
+    let audit_event = match AuditEvent::new(
+        "data_plane.credential.release_started",
+        decision_audit_event(
             decision,
             method,
             url,
@@ -8882,8 +9084,16 @@ fn record_required_credential_release_start(
                 "credential_version":binding.version,
             }),
         ),
-        required: true,
-    }];
+        true,
+    ) {
+        Ok(event) => event,
+        Err(err) => {
+            state.audit_required_failed.fetch_add(1, Ordering::Relaxed);
+            eprintln!("required credential release audit event ID generation failed: {err}");
+            return false;
+        }
+    };
+    let batch = [audit_event];
     match post_audit_batch(state, &batch) {
         Ok(()) => {
             state.audit_sent.fetch_add(1, Ordering::Relaxed);
@@ -8927,6 +9137,18 @@ fn enqueue_audit_event(state: &GateState, event_type: &str, event: Value, requir
     if !audit_enabled(state) {
         return true;
     }
+    let queued_event = match AuditEvent::new(event_type, event, false) {
+        Ok(event) => event,
+        Err(err) => {
+            state.audit_dropped.fetch_add(1, Ordering::Relaxed);
+            eprintln!("audit event ID generation failed: {err}");
+            return false;
+        }
+    };
+    if !audit_event_fits_batch(&queued_event) {
+        state.audit_dropped.fetch_add(1, Ordering::Relaxed);
+        return false;
+    }
     let mut queue = state
         .audit_queue
         .lock()
@@ -8940,11 +9162,7 @@ fn enqueue_audit_event(state: &GateState, event_type: &str, event: Value, requir
         queue.remove(index);
         state.audit_dropped.fetch_add(1, Ordering::Relaxed);
     }
-    queue.push_back(AuditEvent {
-        event_type: event_type.to_string(),
-        event,
-        required: false,
-    });
+    queue.push_back(queued_event);
     state.audit_enqueued.fetch_add(1, Ordering::Relaxed);
     true
 }
@@ -8956,13 +9174,34 @@ fn pop_audit_batch(state: &GateState) -> Vec<AuditEvent> {
         .expect("audit queue mutex poisoned");
     let count = state.audit_batch_max.max(1).min(queue.len());
     let mut batch = Vec::with_capacity(count);
-    for _ in 0..count {
-        if let Some(event) = queue.pop_front() {
-            if event.required {
-                state.audit_reserved.fetch_add(1, Ordering::Relaxed);
+    let mut serialized_len = br#"{"events":[]}"#.len();
+    while batch.len() < count {
+        let Some(event) = queue.front() else {
+            break;
+        };
+        let Some(event_len) = audit_event_serialized_len(event) else {
+            let event = queue.pop_front().expect("audit queue front disappeared");
+            discard_unsendable_queued_audit_event(state, &event);
+            continue;
+        };
+        let separator_len = usize::from(!batch.is_empty());
+        let next_len = serialized_len
+            .saturating_add(separator_len)
+            .saturating_add(event_len);
+        if next_len > MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES {
+            if !batch.is_empty() {
+                break;
             }
-            batch.push(event);
+            let event = queue.pop_front().expect("audit queue front disappeared");
+            discard_unsendable_queued_audit_event(state, &event);
+            continue;
         }
+        serialized_len = next_len;
+        let event = queue.pop_front().expect("audit queue front disappeared");
+        if event.required {
+            state.audit_reserved.fetch_add(1, Ordering::Relaxed);
+        }
+        batch.push(event);
     }
     batch
 }
@@ -9005,27 +9244,144 @@ fn release_audit_batch_reservations(state: &GateState, batch: &[AuditEvent]) {
     }
 }
 
-fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), String> {
+fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), AuditPostError> {
+    let body = serde_json::to_vec(&json!({"events": batch}))
+        .map_err(|err| AuditPostError::other(format!("serialize audit batch: {err}")))?;
+    if body.len() > MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES {
+        return Err(AuditPostError::request_too_large(format!(
+            "serialized audit batch is {} bytes; maximum is {MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES}",
+            body.len()
+        )));
+    }
     let url = state
         .audit_url
         .as_ref()
-        .ok_or("audit URL is not configured")?;
+        .ok_or_else(|| AuditPostError::other("audit URL is not configured"))?;
     let token = state
         .audit_token
         .as_ref()
-        .ok_or("audit token is not configured")?;
-    let body = serde_json::to_vec(&json!({"events": batch}))
-        .map_err(|err| format!("serialize audit batch: {err}"))?;
+        .ok_or_else(|| AuditPostError::other("audit token is not configured"))?;
+    let expected_instance_id = state
+        .server_instance_id
+        .as_deref()
+        .ok_or_else(|| AuditPostError::other("audit acknowledgement instance is not configured"))?;
+    let body_len = body.len();
+    let batch_digest = sha256_prefixed(&body);
+    let snapshot = current_snapshot(state);
+    if !snapshot_is_active(state, &snapshot) {
+        return Err(AuditPostError::other(
+            "audit acknowledgement trust is not current",
+        ));
+    }
+    if snapshot.response_verifying_key.is_none()
+        || snapshot.response_signing_key_id.is_none()
+        || snapshot.attested_response_context.is_none()
+    {
+        return Err(AuditPostError::other(
+            "audit acknowledgement requires an attested response signing key",
+        ));
+    }
+    let response_nonce = fresh_control_plane_response_nonce().map_err(AuditPostError::other)?;
     let response = state
         .audit_client
         .post(url)
         .header("X-Serverware-Data-Plane-Token", token.as_str())
+        .header("X-Serverware-Response-Nonce", response_nonce.as_str())
         .header("Content-Type", "application/json")
         .body(body)
         .send()
-        .map_err(|err| format!("send audit batch: {err}"))?;
-    if !response.status().is_success() {
-        return Err(format!("audit ingest returned {}", response.status()));
+        .map_err(|err| AuditPostError::other(format!("send audit batch: {err}")))?;
+    let status = response.status();
+    let headers = response.headers().clone();
+    let mut response_body = Vec::new();
+    response
+        .take(MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES + 1)
+        .read_to_end(&mut response_body)
+        .map_err(|err| AuditPostError::other(format!("read audit acknowledgement: {err}")))?;
+    if response_body.len() as u64 > MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES {
+        return Err(AuditPostError::other(format!(
+            "audit acknowledgement exceeds {MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES} bytes"
+        )));
+    }
+    if !snapshot_is_active(state, &snapshot) {
+        return Err(AuditPostError::other(
+            "policy snapshot changed while audit acknowledgement was fetched",
+        ));
+    }
+    verify_control_plane_signed_response(
+        &snapshot,
+        url,
+        "POST",
+        &response_nonce,
+        status,
+        &headers,
+        &response_body,
+        "audit acknowledgement",
+    )
+    .map_err(AuditPostError::other)?;
+    if status == StatusCode::PAYLOAD_TOO_LARGE {
+        return Err(AuditPostError::request_too_large(format!(
+            "audit ingest rejected {} serialized bytes as too large",
+            body_len
+        )));
+    }
+    if !status.is_success() {
+        return Err(AuditPostError::other(format!(
+            "audit ingest returned {status}"
+        )));
+    }
+    let acknowledgement = strict_json_from_slice::<DataPlaneAuditAck>(&response_body)
+        .map_err(|err| AuditPostError::other(format!("parse audit acknowledgement: {err}")))?;
+    let expected_count = u64::try_from(batch.len()).map_err(|_| {
+        AuditPostError::other("audit batch count does not fit acknowledgement contract")
+    })?;
+    if acknowledgement.instance_id != expected_instance_id {
+        return Err(AuditPostError::other(
+            "audit acknowledgement instance binding mismatch",
+        ));
+    }
+    if acknowledgement.api_version != "serverware.dataPlaneAuditAck/v1"
+        || !acknowledgement.ok
+        || acknowledgement.accepted != expected_count
+        || acknowledgement.batch_digest != batch_digest
+    {
+        return Err(AuditPostError::other(
+            "audit acknowledgement binding mismatch",
+        ));
+    }
+    Ok(())
+}
+
+fn flush_audit_batch(state: &GateState, batch: Vec<AuditEvent>) -> Result<(), AuditPostError> {
+    let mut pending = VecDeque::from([batch]);
+    while let Some(mut batch) = pending.pop_front() {
+        let count = batch.len() as u64;
+        match post_audit_batch(state, &batch) {
+            Ok(()) => {
+                release_audit_batch_reservations(state, &batch);
+                state.audit_sent.fetch_add(count, Ordering::Relaxed);
+            }
+            Err(err) if err.request_too_large && batch.len() > 1 => {
+                state.audit_send_failed.fetch_add(count, Ordering::Relaxed);
+                let later = batch.split_off(batch.len() / 2);
+                pending.push_front(later);
+                pending.push_front(batch);
+            }
+            Err(err) if err.request_too_large => {
+                state.audit_send_failed.fetch_add(count, Ordering::Relaxed);
+                release_audit_batch_reservations(state, &batch);
+                discard_unsendable_queued_audit_event(state, &batch[0]);
+                eprintln!("discarding unsendable audit event: {err}");
+            }
+            Err(err) => {
+                state.audit_send_failed.fetch_add(count, Ordering::Relaxed);
+                for later in pending {
+                    batch.extend(later);
+                }
+                requeue_audit_batch(state, batch);
+                return Err(err);
+            }
+        }
     }
     Ok(())
 }
@@ -9037,18 +9393,9 @@ fn audit_worker(state: Arc<GateState>, interval: Duration) {
             thread::sleep(interval);
             continue;
         }
-        let count = batch.len() as u64;
-        match post_audit_batch(&state, &batch) {
-            Ok(()) => {
-                release_audit_batch_reservations(&state, &batch);
-                state.audit_sent.fetch_add(count, Ordering::Relaxed);
-            }
-            Err(err) => {
-                state.audit_send_failed.fetch_add(count, Ordering::Relaxed);
-                requeue_audit_batch(&state, batch);
-                eprintln!("audit batch send failed: {err}");
-                thread::sleep(Duration::from_secs(1));
-            }
+        if let Err(err) = flush_audit_batch(&state, batch) {
+            eprintln!("audit batch send failed: {err}");
+            thread::sleep(Duration::from_secs(1));
         }
     }
 }
@@ -9168,6 +9515,7 @@ fn audit_status(state: &GateState) -> Value {
         "reserved": state.audit_reserved.load(Ordering::Relaxed),
         "queue_max": state.audit_queue_max,
         "batch_max": state.audit_batch_max,
+        "batch_body_max_bytes": MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES,
         "enqueued": state.audit_enqueued.load(Ordering::Relaxed),
         "dropped": state.audit_dropped.load(Ordering::Relaxed),
         "required_failed": state.audit_required_failed.load(Ordering::Relaxed),
@@ -9312,7 +9660,7 @@ fn insert_grant_for_snapshot<F>(
     key: String,
     grant: Grant,
     linearized: F,
-) -> Result<(), String>
+) -> Result<(Grant, bool), GrantAdmissionError>
 where
     F: FnOnce(),
 {
@@ -9321,15 +9669,36 @@ where
         .read()
         .expect("policy snapshot lock poisoned");
     if active_snapshot.epoch != snapshot.epoch || !Arc::ptr_eq(&active_snapshot, snapshot) {
-        return Err(active_snapshot.hash.clone());
+        return Err(GrantAdmissionError::InactivePolicy(
+            active_snapshot.hash.clone(),
+        ));
     }
     linearized();
-    state
-        .grants
-        .lock()
-        .expect("grant cache mutex poisoned")
-        .insert(key, grant);
-    Ok(())
+    let mut grants = state.grants.lock().expect("grant cache mutex poisoned");
+    if let Some(existing) = grants.get(&key) {
+        if existing.id == grant.id
+            && existing.approval_id == grant.approval_id
+            && existing.max_uses == grant.max_uses
+            && existing.ttl_seconds == grant.ttl_seconds
+        {
+            return Ok((existing.clone(), false));
+        }
+        return Err(GrantAdmissionError::ScopeConflict);
+    }
+    if grants.len() >= state.grant_cache_max {
+        return Err(GrantAdmissionError::CapacityExhausted(
+            state.grant_cache_max,
+        ));
+    }
+    grants.insert(key, grant.clone());
+    Ok((grant, true))
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum GrantAdmissionError {
+    InactivePolicy(String),
+    ScopeConflict,
+    CapacityExhausted(usize),
 }
 
 fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
@@ -9343,11 +9712,11 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
             started,
         );
     }
-    if payload.ttl_seconds == 0 || payload.ttl_seconds > 300 {
+    if payload.ttl_seconds == 0 || payload.ttl_seconds > 3600 {
         return deny(
             400,
             "grant ttlSeconds is outside allowed bounds",
-            json!({"error":"invalid_grant_ttl_seconds","max":300}),
+            json!({"error":"invalid_grant_ttl_seconds","max":3600}),
             started,
         );
     }
@@ -9374,6 +9743,38 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
             started,
         );
     };
+    let Some(route_max_uses) = route.jit.get("maxUses").and_then(Value::as_u64) else {
+        return deny(
+            503,
+            "active route is missing a signed JIT maxUses bound",
+            json!({"error":"grant_route_jit_bounds_missing","field":"maxUses"}),
+            started,
+        );
+    };
+    if payload.max_uses > route_max_uses {
+        return deny(
+            400,
+            "grant maxUses exceeds the active route JIT bound",
+            json!({"error":"invalid_grant_max_uses","max":route_max_uses}),
+            started,
+        );
+    }
+    let Some(route_ttl_seconds) = route.jit.get("ttlSeconds").and_then(Value::as_u64) else {
+        return deny(
+            503,
+            "active route is missing a signed JIT ttlSeconds bound",
+            json!({"error":"grant_route_jit_bounds_missing","field":"ttlSeconds"}),
+            started,
+        );
+    };
+    if payload.ttl_seconds > route_ttl_seconds {
+        return deny(
+            400,
+            "grant ttlSeconds exceeds the active route JIT bound",
+            json!({"error":"invalid_grant_ttl_seconds","max":route_ttl_seconds}),
+            started,
+        );
+    }
     let scope =
         CredentialLeaseScope::new(&payload.principal_id, &route.id, &payload.credential_ref);
     match credential_generation(state, &snapshot, &scope) {
@@ -9416,48 +9817,86 @@ fn create_grant(state: &GateState, payload: GrantCreate) -> Value {
     let grant = Grant {
         id: grant_id.clone(),
         approval_id: payload.approval_id.clone(),
+        max_uses: payload.max_uses,
+        ttl_seconds: payload.ttl_seconds,
         uses_remaining: payload.max_uses,
         expires_at_ms,
     };
-    if let Err(active_policy_hash) =
-        insert_grant_for_snapshot(state, &snapshot, key.clone(), grant, || {})
-    {
-        return deny(
-            409,
-            "grant policy changed during admission",
-            json!({"error":"grant_policy_hash_inactive","active_policy_hash":active_policy_hash}),
-            started,
+    let (admitted_grant, inserted) = match insert_grant_for_snapshot(
+        state,
+        &snapshot,
+        key.clone(),
+        grant,
+        || {},
+    ) {
+        Ok(admission) => admission,
+        Err(GrantAdmissionError::InactivePolicy(active_policy_hash)) => {
+            return deny(
+                409,
+                "grant policy changed during admission",
+                json!({"error":"grant_policy_hash_inactive","active_policy_hash":active_policy_hash}),
+                started,
+            )
+        }
+        Err(GrantAdmissionError::ScopeConflict) => {
+            return deny(
+                409,
+                "grant scope already has a different admission",
+                json!({"error":"grant_scope_conflict"}),
+                started,
+            )
+        }
+        Err(GrantAdmissionError::CapacityExhausted(max)) => {
+            return deny(
+                503,
+                "local grant replay cache is at capacity",
+                json!({"error":"local_grant_capacity_exhausted","max":max}),
+                started,
+            )
+        }
+    };
+    if inserted {
+        enqueue_audit(
+            state,
+            "data_plane.grant.received",
+            json!({
+                "component":"serverware-decision-gate-rs",
+                "grant_id":grant_id.clone(),
+                "approval_id":payload.approval_id.clone(),
+                "principal_id":payload.principal_id.clone(),
+                "route_id":payload.route_id.clone(),
+                "credential_ref":payload.credential_ref.clone(),
+                "credential_version":payload.credential_version,
+                "policy_hash":snapshot.hash.clone(),
+                "request_digest":payload.request_digest.clone(),
+                "operation_digest":payload.operation_digest.clone(),
+                "max_uses":payload.max_uses,
+                "ttl_seconds":payload.ttl_seconds,
+                "expires_at_ms":expires_at_ms,
+            }),
         );
     }
-    enqueue_audit(
-        state,
-        "data_plane.grant.received",
-        json!({
-            "component":"serverware-decision-gate-rs",
-            "grant_id":grant_id.clone(),
-            "approval_id":payload.approval_id.clone(),
-            "principal_id":payload.principal_id.clone(),
-            "route_id":payload.route_id.clone(),
-            "credential_ref":payload.credential_ref.clone(),
-            "credential_version":payload.credential_version,
-            "policy_hash":snapshot.hash.clone(),
-            "request_digest":payload.request_digest.clone(),
-            "operation_digest":payload.operation_digest.clone(),
-            "max_uses":payload.max_uses,
-            "ttl_seconds":payload.ttl_seconds,
-            "expires_at_ms":expires_at_ms,
-        }),
-    );
     json!({
         "ok": true,
-        "grant_id": grant_id,
-        "approval_id": payload.approval_id,
+        "grant_id": admitted_grant.id,
+        "approval_id": admitted_grant.approval_id,
         "key": key,
-        "uses_remaining": payload.max_uses,
-        "expires_at_ms": expires_at_ms,
+        "uses_remaining": admitted_grant.uses_remaining,
+        "expires_at_ms": admitted_grant.expires_at_ms,
         "policy_hash": snapshot.hash,
+        "idempotent_replay": !inserted,
         "decision_us": started.elapsed().as_micros() as u64,
     })
+}
+
+fn create_grant_http_response(state: &GateState, payload: GrantCreate) -> Vec<u8> {
+    let result = create_grant(state, payload);
+    let status = if result.get("ok").and_then(Value::as_bool) == Some(true) {
+        StatusCode::OK
+    } else {
+        status_from_decision(&result)
+    };
+    json_status_response(status, result)
 }
 
 fn consume_local_grant(
@@ -9483,18 +9922,14 @@ fn consume_local_grant(
     let mut grants = state.grants.lock().expect("grant cache mutex poisoned");
     let grant = grants.get_mut(&key)?;
     if grant.expires_at_ms <= now || grant.uses_remaining == 0 {
-        grants.remove(&key);
+        // Retain used and expired entries as replay tombstones for this signed policy identity.
         return None;
     }
     grant.uses_remaining -= 1;
-    let consumed = ConsumedGrant {
+    Some(ConsumedGrant {
         id: grant.id.clone(),
         approval_id: grant.approval_id.clone(),
-    };
-    if grant.uses_remaining == 0 {
-        grants.remove(&key);
-    }
-    Some(consumed)
+    })
 }
 
 fn find_local_grant(
@@ -9517,10 +9952,9 @@ fn find_local_grant(
         operation_digest,
     );
     let now = now_epoch_ms();
-    let mut grants = state.grants.lock().expect("grant cache mutex poisoned");
+    let grants = state.grants.lock().expect("grant cache mutex poisoned");
     let grant = grants.get(&key)?;
     if grant.expires_at_ms <= now || grant.uses_remaining == 0 {
-        grants.remove(&key);
         return None;
     }
     Some(ConsumedGrant {
@@ -9823,10 +10257,10 @@ fn fresh_control_plane_response_nonce() -> Result<String, String> {
     let rng = ring_rand::SystemRandom::new();
     let mut nonce_bytes = [0u8; 32];
     rng.fill(&mut nonce_bytes)
-        .map_err(|_| "generate release authorization response nonce failed".to_string())?;
+        .map_err(|_| "generate control-plane response nonce failed".to_string())?;
     let nonce = general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
     nonce_bytes.zeroize();
-    validate_canonical_response_nonce(&nonce, "release authorization dispatch response")?;
+    validate_canonical_response_nonce(&nonce, "control-plane response")?;
     Ok(nonce)
 }
 
@@ -23078,7 +23512,7 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
         }
     } else if request.method == "POST" && request.target == "/v1/grants" {
         match strict_json_from_slice::<GrantCreate>(&request.body) {
-            Ok(req) => http_response("200 OK", create_grant(&state, req)),
+            Ok(req) => create_grant_http_response(&state, req),
             Err(err) => http_response(
                 "400 Bad Request",
                 json!({"error":"invalid_grant_request","detail":err.to_string()}),
@@ -23435,6 +23869,12 @@ fn main() -> Result<(), String> {
                 .to_string(),
         );
     }
+    if audit_url.is_some() && server_instance_id.is_none() {
+        return Err(
+            "SERVERWARE_CONTROL_PLANE_AUDIT_URL requires SERVERWARE_DATA_PLANE_INSTANCE_ID"
+                .to_string(),
+        );
+    }
     if credential_lease_url.is_some() && credential_lease_token.is_none() {
         return Err(
             "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL requires SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN"
@@ -23556,6 +23996,20 @@ fn main() -> Result<(), String> {
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .clamp(1, 200);
+    let grant_cache_max = env::var("SERVERWARE_DATA_PLANE_GRANT_CACHE_MAX")
+        .ok()
+        .map(|value| {
+            value
+                .parse::<usize>()
+                .map_err(|_| "SERVERWARE_DATA_PLANE_GRANT_CACHE_MAX must be an integer".to_string())
+        })
+        .transpose()?
+        .unwrap_or(100_000);
+    if !(1..=1_000_000).contains(&grant_cache_max) {
+        return Err(
+            "SERVERWARE_DATA_PLANE_GRANT_CACHE_MAX must be between 1 and 1000000".to_string(),
+        );
+    }
     let gmail_proof_cache_max = env::var("SERVERWARE_GMAIL_PROOF_CACHE_MAX")
         .ok()
         .and_then(|value| value.parse::<usize>().ok())
@@ -23716,6 +24170,7 @@ fn main() -> Result<(), String> {
         policy_high_water_path,
         policy_high_water: Mutex::new(policy_high_water),
         grants: Mutex::new(HashMap::new()),
+        grant_cache_max,
         gmail_proofs: Mutex::new(HashMap::new()),
         gmail_proof_cache_max,
         constraint_rate_counters: Mutex::new(HashMap::new()),
@@ -23848,6 +24303,19 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn test_audit_event_id(marker: u64) -> String {
+        format!("sha256:{marker:064x}")
+    }
+
+    fn test_audit_event(marker: u64, event_type: &str, event: Value, required: bool) -> AuditEvent {
+        AuditEvent {
+            event_id: test_audit_event_id(marker),
+            event_type: event_type.to_string(),
+            event,
+            required,
+        }
+    }
+
     fn test_snapshot(epoch: u64) -> Arc<Snapshot> {
         Arc::new(Snapshot {
             epoch,
@@ -23887,7 +24355,11 @@ mod tests {
                     "response": {"mode":"json","maxBodyBytes":1024,"allowedFields":["safe"]}
                 }),
                 constraints: Vec::new(),
-                jit: json!({"required":false}),
+                jit: json!({
+                    "required":false,
+                    "ttlSeconds":3600,
+                    "maxUses":1,
+                }),
             }],
         })
     }
@@ -23966,6 +24438,7 @@ mod tests {
             policy_high_water_path: None,
             policy_high_water: Mutex::new(policy_high_water),
             grants: Mutex::new(HashMap::new()),
+            grant_cache_max: 16,
             gmail_proofs: Mutex::new(HashMap::new()),
             gmail_proof_cache_max: 16,
             constraint_rate_counters: Mutex::new(HashMap::new()),
@@ -24086,7 +24559,11 @@ mod tests {
             },
         );
         snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
-        snapshot_value.routes[0].jit = json!({"required":true});
+        snapshot_value.routes[0].jit = json!({
+            "required":true,
+            "ttlSeconds":3600,
+            "maxUses":1,
+        });
         snapshot_value.routes[0].constraints = vec![json!({
             "id":"preview-rate",
             "type":"rateLimit",
@@ -24176,7 +24653,11 @@ mod tests {
             },
         );
         snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
-        snapshot_value.routes[0].jit = json!({"required":true});
+        snapshot_value.routes[0].jit = json!({
+            "required":true,
+            "ttlSeconds":3600,
+            "maxUses":1,
+        });
         let snapshot = Arc::new(snapshot_value);
         let state = test_gate_state(Arc::clone(&snapshot));
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
@@ -24221,6 +24702,259 @@ mod tests {
         assert_eq!(state.grants.lock().expect("grant cache").len(), 1);
     }
 
+    fn local_grant_admission_fixture() -> (Arc<Snapshot>, GateState) {
+        let mut snapshot_value = (*test_snapshot(1)).clone();
+        snapshot_value.credentials.insert(
+            "credential:test".to_string(),
+            Credential {
+                provider: "demo".to_string(),
+                provider_subject: None,
+                injection: json!({"type":"bearer","header":"Authorization"}),
+            },
+        );
+        snapshot_value.routes[0].credential_ref = Some("credential:test".to_string());
+        snapshot_value.routes[0].jit = json!({
+            "required":true,
+            "ttlSeconds":3600,
+            "maxUses":1,
+        });
+        let snapshot = Arc::new(snapshot_value);
+        let state = test_gate_state(Arc::clone(&snapshot));
+        state
+            .credential_generations
+            .lock()
+            .expect("credential generations")
+            .insert(
+                CredentialLeaseScope::new("agent:test", "route:test", "credential:test"),
+                CredentialLeaseGeneration {
+                    policy_hash: snapshot.hash.clone(),
+                    version: 7,
+                    secret_fingerprint: credential_secret_fingerprint("cold-secret"),
+                    metadata: BTreeMap::new(),
+                },
+            );
+        (snapshot, state)
+    }
+
+    fn local_grant_create(snapshot: &Snapshot) -> GrantCreate {
+        GrantCreate {
+            grant_id: Some("grant:idempotent".to_string()),
+            approval_id: Some("approval:idempotent".to_string()),
+            principal_id: "agent:test".to_string(),
+            route_id: "route:test".to_string(),
+            credential_ref: "credential:test".to_string(),
+            credential_version: 7,
+            policy_hash: snapshot.hash.clone(),
+            request_digest: sha256_prefixed(b"idempotent-request"),
+            operation_digest: sha256_prefixed(b"idempotent-operation"),
+            max_uses: 1,
+            ttl_seconds: 3600,
+        }
+    }
+
+    #[test]
+    fn exact_grant_retry_after_use_does_not_replenish_or_extend() {
+        let (snapshot, mut state) = local_grant_admission_fixture();
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("test-token".to_string());
+
+        let first = create_grant(&state, local_grant_create(&snapshot));
+        assert_eq!(first["ok"], true);
+        assert_eq!(first["idempotent_replay"], false);
+        assert_eq!(first["uses_remaining"], 1);
+        let original_expiry = first["expires_at_ms"].clone();
+
+        let consumed = consume_local_grant(
+            &state,
+            "agent:test",
+            "route:test",
+            "credential:test",
+            7,
+            &snapshot.hash,
+            local_grant_create(&snapshot).request_digest.as_str(),
+            local_grant_create(&snapshot).operation_digest.as_str(),
+        )
+        .expect("consume first grant use");
+        assert_eq!(consumed.id, "grant:idempotent");
+        thread::sleep(Duration::from_millis(5));
+
+        let replay = create_grant(&state, local_grant_create(&snapshot));
+        assert_eq!(replay["ok"], true);
+        assert_eq!(replay["idempotent_replay"], true);
+        assert_eq!(replay["uses_remaining"], 0);
+        assert_eq!(replay["expires_at_ms"], original_expiry);
+        assert_eq!(
+            state.audit_queue.lock().expect("audit queue").len(),
+            1,
+            "an exact replay must not enqueue another grant receipt audit"
+        );
+    }
+
+    #[test]
+    fn conflicting_grant_replacement_for_scope_is_rejected() {
+        let (snapshot, state) = local_grant_admission_fixture();
+        let first = create_grant(&state, local_grant_create(&snapshot));
+        assert_eq!(first["ok"], true);
+
+        let mut conflicting = local_grant_create(&snapshot);
+        conflicting.grant_id = Some("grant:conflicting".to_string());
+        conflicting.approval_id = Some("approval:conflicting".to_string());
+        let denied_response = create_grant_http_response(&state, conflicting);
+        assert!(denied_response.starts_with(b"HTTP/1.1 409 Conflict\r\n"));
+        let body_offset = denied_response
+            .windows(4)
+            .position(|window| window == b"\r\n\r\n")
+            .expect("grant response body")
+            + 4;
+        let denied: Value =
+            serde_json::from_slice(&denied_response[body_offset..]).expect("grant response JSON");
+        assert_eq!(denied["status_code"], 409);
+        assert_eq!(denied["payload"]["error"], "grant_scope_conflict");
+
+        let grants = state.grants.lock().expect("grant cache");
+        assert_eq!(grants.len(), 1);
+        let existing = grants.values().next().expect("original grant");
+        assert_eq!(existing.id, "grant:idempotent");
+        assert_eq!(existing.approval_id.as_deref(), Some("approval:idempotent"));
+        assert_eq!(existing.uses_remaining, 1);
+    }
+
+    #[test]
+    fn grant_ttl_matches_control_plane_bounds() {
+        let (snapshot, state) = local_grant_admission_fixture();
+        let accepted = create_grant(&state, local_grant_create(&snapshot));
+        assert_eq!(accepted["ok"], true);
+
+        let (snapshot, state) = local_grant_admission_fixture();
+        let mut too_long = local_grant_create(&snapshot);
+        too_long.ttl_seconds = 3601;
+        let denied = create_grant(&state, too_long);
+        assert_eq!(denied["status_code"], 400);
+        assert_eq!(denied["payload"]["error"], "invalid_grant_ttl_seconds");
+        assert_eq!(denied["payload"]["max"], 3600);
+        assert!(state.grants.lock().expect("grant cache").is_empty());
+    }
+
+    #[test]
+    fn local_grant_admission_enforces_active_route_jit_bounds() {
+        let (snapshot, state) = local_grant_admission_fixture();
+        let mut snapshot_value = (*snapshot).clone();
+        snapshot_value.routes[0].jit["maxUses"] = json!(2);
+        snapshot_value.routes[0].jit["ttlSeconds"] = json!(30);
+        let snapshot = Arc::new(snapshot_value);
+        *state.snapshot.write().expect("snapshot lock") = Arc::clone(&snapshot);
+
+        let mut at_bounds = local_grant_create(&snapshot);
+        at_bounds.max_uses = 2;
+        at_bounds.ttl_seconds = 30;
+        let accepted = create_grant(&state, at_bounds);
+        assert_eq!(accepted["ok"], true);
+
+        let (snapshot, state) = local_grant_admission_fixture();
+        let mut snapshot_value = (*snapshot).clone();
+        snapshot_value.routes[0].jit["maxUses"] = json!(2);
+        snapshot_value.routes[0].jit["ttlSeconds"] = json!(30);
+        let snapshot = Arc::new(snapshot_value);
+        *state.snapshot.write().expect("snapshot lock") = Arc::clone(&snapshot);
+        let mut too_many_uses = local_grant_create(&snapshot);
+        too_many_uses.max_uses = 3;
+        too_many_uses.ttl_seconds = 30;
+        let denied = create_grant(&state, too_many_uses);
+        assert_eq!(denied["status_code"], 400);
+        assert_eq!(denied["payload"]["error"], "invalid_grant_max_uses");
+        assert_eq!(denied["payload"]["max"], 2);
+
+        let (snapshot, state) = local_grant_admission_fixture();
+        let mut snapshot_value = (*snapshot).clone();
+        snapshot_value.routes[0].jit["maxUses"] = json!(2);
+        snapshot_value.routes[0].jit["ttlSeconds"] = json!(30);
+        let snapshot = Arc::new(snapshot_value);
+        *state.snapshot.write().expect("snapshot lock") = Arc::clone(&snapshot);
+        let mut too_long = local_grant_create(&snapshot);
+        too_long.max_uses = 2;
+        too_long.ttl_seconds = 31;
+        let denied = create_grant(&state, too_long);
+        assert_eq!(denied["status_code"], 400);
+        assert_eq!(denied["payload"]["error"], "invalid_grant_ttl_seconds");
+        assert_eq!(denied["payload"]["max"], 30);
+    }
+
+    #[test]
+    fn local_grant_tombstones_are_bounded_and_fail_closed_at_capacity() {
+        let (snapshot, mut state) = local_grant_admission_fixture();
+        state.grant_cache_max = 1;
+        let first = create_grant(&state, local_grant_create(&snapshot));
+        assert_eq!(first["ok"], true);
+        consume_local_grant(
+            &state,
+            "agent:test",
+            "route:test",
+            "credential:test",
+            7,
+            &snapshot.hash,
+            local_grant_create(&snapshot).request_digest.as_str(),
+            local_grant_create(&snapshot).operation_digest.as_str(),
+        )
+        .expect("consume grant into a replay tombstone");
+
+        let replay = create_grant(&state, local_grant_create(&snapshot));
+        assert_eq!(replay["ok"], true);
+        assert_eq!(replay["idempotent_replay"], true);
+        assert_eq!(replay["uses_remaining"], 0);
+
+        let mut distinct = local_grant_create(&snapshot);
+        distinct.grant_id = Some("grant:distinct".to_string());
+        distinct.approval_id = Some("approval:distinct".to_string());
+        distinct.request_digest = sha256_prefixed(b"distinct-request");
+        distinct.operation_digest = sha256_prefixed(b"distinct-operation");
+        let denied = create_grant(&state, distinct);
+        assert_eq!(denied["status_code"], 503);
+        assert_eq!(denied["payload"]["error"], "local_grant_capacity_exhausted");
+        assert_eq!(denied["payload"]["max"], 1);
+        assert_eq!(state.grants.lock().expect("grant cache").len(), 1);
+    }
+
+    #[test]
+    fn grant_tombstones_survive_same_signed_policy_identity_reload_only() {
+        let (snapshot, state) = local_grant_admission_fixture();
+        assert_eq!(
+            create_grant(&state, local_grant_create(&snapshot))["ok"],
+            true
+        );
+        consume_local_grant(
+            &state,
+            "agent:test",
+            "route:test",
+            "credential:test",
+            7,
+            &snapshot.hash,
+            local_grant_create(&snapshot).request_digest.as_str(),
+            local_grant_create(&snapshot).operation_digest.as_str(),
+        )
+        .expect("consume grant into a replay tombstone");
+
+        let mut same_policy = (*snapshot).clone();
+        same_policy.epoch = snapshot.epoch + 1;
+        same_policy.trust_generation = snapshot.trust_generation + 1;
+        same_policy.response_signing_key_id = Some("sha256:rotated-response-key".to_string());
+        assert!(!clear_local_grants_if_signed_policy_changed(
+            &state,
+            &snapshot,
+            &same_policy,
+        ));
+        assert_eq!(state.grants.lock().expect("grant cache").len(), 1);
+
+        let mut changed_policy = same_policy.clone();
+        changed_policy.hash = "sha256:changed-signed-policy".to_string();
+        changed_policy.policy_sequence += 1;
+        assert!(clear_local_grants_if_signed_policy_changed(
+            &state,
+            &same_policy,
+            &changed_policy,
+        ));
+        assert!(state.grants.lock().expect("grant cache").is_empty());
+    }
+
     #[test]
     fn grant_admission_linearizes_with_policy_reload() {
         let snapshot = test_snapshot(1);
@@ -24237,6 +24971,8 @@ mod tests {
                 Grant {
                     id: "grant:before-reload".to_string(),
                     approval_id: Some("approval:before-reload".to_string()),
+                    max_uses: 1,
+                    ttl_seconds: 30,
                     uses_remaining: 1,
                     expires_at_ms: now_epoch_ms() + 30_000,
                 },
@@ -24292,13 +25028,18 @@ mod tests {
             Grant {
                 id: "grant:after-reload".to_string(),
                 approval_id: Some("approval:after-reload".to_string()),
+                max_uses: 1,
+                ttl_seconds: 30,
                 uses_remaining: 1,
                 expires_at_ms: now_epoch_ms() + 30_000,
             },
             || panic!("stale admission must not reach its linearization callback"),
         )
         .expect_err("stale policy grant must be rejected");
-        assert_eq!(stale, "sha256:policy-2");
+        assert_eq!(
+            stale,
+            GrantAdmissionError::InactivePolicy("sha256:policy-2".to_string())
+        );
         assert!(state.grants.lock().expect("grant cache").is_empty());
     }
 
@@ -24546,6 +25287,7 @@ mod tests {
         request: &IncomingRequest,
         response_nonce: &str,
         issued_at_ms: u64,
+        status: StatusCode,
         body: Value,
     ) -> Vec<u8> {
         let body = serde_json::to_vec(&body).expect("signed response body");
@@ -24570,7 +25312,7 @@ mod tests {
                 "path":path,
                 "query":query,
             },
-            "status_code":200,
+            "status_code":status.as_u16(),
             "body_sha256":body_sha256,
             "nonce":response_nonce,
             "response_signing_key_id":key_id,
@@ -24587,7 +25329,7 @@ mod tests {
         let statement_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&statement);
         let signature = signing_key.sign(&statement);
         http_binary_response_with_headers(
-            StatusCode::OK,
+            status,
             Some("application/json"),
             body,
             &[
@@ -24612,6 +25354,86 @@ mod tests {
                     ),
                 ),
             ],
+        )
+    }
+
+    fn test_snapshot_with_control_plane_response_key(
+        epoch: u64,
+        signing_key: &SigningKey,
+    ) -> Arc<Snapshot> {
+        let mut snapshot = (*test_snapshot(epoch)).clone();
+        snapshot.response_signing_key_id =
+            Some(sha256_prefixed(signing_key.verifying_key().as_bytes()));
+        snapshot.response_verifying_key = Some(signing_key.verifying_key());
+        snapshot.attested_response_context = Some(AttestedResponseContext {
+            runtime_manifest_digest: sha256_prefixed(b"test-runtime-manifest"),
+            policy_bundle_digest: snapshot.hash.clone(),
+            provenance_digest: None,
+            image_signatures_digest: None,
+            source_tree_digest: None,
+        });
+        Arc::new(snapshot)
+    }
+
+    fn read_audit_test_request(listener: &TcpListener) -> (TcpStream, IncomingRequest) {
+        let (mut stream, _) = listener.accept().expect("audit request");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .expect("audit read timeout");
+        let head = read_request_head_from(&mut stream, None).expect("audit request head");
+        let request =
+            read_request_body_from_head(&mut stream, head, MAX_CONTROL_PLANE_AUDIT_ACK_BODY_BYTES)
+                .expect("audit request body");
+        (stream, request)
+    }
+
+    fn signed_audit_test_acknowledgement(
+        signing_key: &SigningKey,
+        snapshot: &Snapshot,
+        request: &IncomingRequest,
+        accepted: u64,
+        batch_digest: &str,
+    ) -> Vec<u8> {
+        signed_audit_test_response(
+            signing_key,
+            snapshot,
+            request,
+            StatusCode::OK,
+            accepted,
+            batch_digest,
+            "test-instance",
+        )
+    }
+
+    fn signed_audit_test_response(
+        signing_key: &SigningKey,
+        snapshot: &Snapshot,
+        request: &IncomingRequest,
+        status: StatusCode,
+        accepted: u64,
+        batch_digest: &str,
+        instance_id: &str,
+    ) -> Vec<u8> {
+        let response_nonce = request
+            .headers
+            .get("x-serverware-response-nonce")
+            .expect("audit response nonce");
+        validate_canonical_response_nonce(response_nonce, "test audit acknowledgement")
+            .expect("canonical audit response nonce");
+        signed_control_plane_test_response(
+            signing_key,
+            snapshot,
+            request,
+            response_nonce,
+            u64::try_from(now_epoch_ms()).expect("current epoch fits u64"),
+            status,
+            json!({
+                "apiVersion":"serverware.dataPlaneAuditAck/v1",
+                "ok":true,
+                "accepted":accepted,
+                "batchDigest":batch_digest,
+                "instanceId":instance_id,
+            }),
         )
     }
 
@@ -25094,6 +25916,7 @@ mod tests {
                         &request,
                         response_nonce,
                         now_ms,
+                        StatusCode::OK,
                         body,
                     )
                 } else {
@@ -25619,16 +26442,30 @@ mod tests {
 
     #[test]
     fn audit_batches_do_not_serialize_caller_actor_identity() {
-        let event = AuditEvent {
-            event_type: "data_plane.test".to_string(),
-            event: json!({"ok":true}),
-            required: false,
-        };
+        let event = test_audit_event(1, "data_plane.test", json!({"ok":true}), false);
         let serialized = serde_json::to_value(event).expect("serialize audit event");
         assert_eq!(
             serialized,
-            json!({"event_type":"data_plane.test","event":{"ok":true}})
+            json!({
+                "eventId":test_audit_event_id(1),
+                "eventType":"data_plane.test",
+                "event":{"ok":true},
+            })
         );
+    }
+
+    #[test]
+    fn audit_acknowledgement_rejects_unknown_fields() {
+        let acknowledgement = serde_json::to_vec(&json!({
+            "apiVersion":"serverware.dataPlaneAuditAck/v1",
+            "ok":true,
+            "accepted":1,
+            "batchDigest":test_audit_event_id(1),
+            "instanceId":"test-instance",
+            "replayed":true,
+        }))
+        .expect("serialize audit acknowledgement");
+        assert!(strict_json_from_slice::<DataPlaneAuditAck>(&acknowledgement).is_err());
     }
 
     #[test]
@@ -25704,6 +26541,8 @@ mod tests {
             Grant {
                 id: "grant:test".to_string(),
                 approval_id: Some("approval:test".to_string()),
+                max_uses: 1,
+                ttl_seconds: 30,
                 uses_remaining: 1,
                 expires_at_ms: now_epoch_ms() + 30_000,
             },
@@ -26778,6 +27617,85 @@ mod tests {
         empty_webauthn_classes["jit"]["approvers"]["authn"]["allowedAuthenticatorClasses"] =
             json!([]);
         assert!(validate_policy_capabilities(&policy_with_route(empty_webauthn_classes)).is_err());
+    }
+
+    #[test]
+    fn jit_approver_users_match_python_identifier_contract() {
+        let mut route = generic_policy_route("none", json!(1024));
+        route["jit"] = valid_jit_policy();
+        route["jit"]["approvers"]["users"] = json!([
+            "user:A",
+            "oidc:release.manager@example.test/team+ops|primary"
+        ]);
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("explicit user and OIDC approver IDs");
+
+        let maximum = format!("user:A{}", "x".repeat(239));
+        route["jit"]["approvers"]["users"] = json!([maximum]);
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("245-byte approver ID");
+
+        let thirty_two = (0..32)
+            .map(|index| json!(format!("user:approver{index}")))
+            .collect::<Vec<_>>();
+        route["jit"]["approvers"]["users"] = Value::Array(thirty_two.clone());
+        validate_policy_capabilities(&policy_with_route(route.clone()))
+            .expect("32 unique approvers");
+
+        let mut thirty_three = thirty_two;
+        thirty_three.push(json!("user:overflow"));
+        route["jit"]["approvers"]["users"] = Value::Array(thirty_three);
+        assert!(validate_policy_capabilities(&policy_with_route(route.clone())).is_err());
+
+        for users in [
+            json!(["user:duplicate", "user:duplicate"]),
+            json!(["*"]),
+            json!(["user:*"]),
+            json!(["release"]),
+            json!(["user:_leading"]),
+            json!(["user:jos\u{00e9}"]),
+            json!([format!("user:A{}", "x".repeat(240))]),
+        ] {
+            route["jit"]["approvers"]["users"] = users;
+            assert!(validate_policy_capabilities(&policy_with_route(route.clone())).is_err());
+        }
+    }
+
+    #[test]
+    fn policy_principal_and_route_ids_are_unique_and_resolved() {
+        let route = generic_policy_route("none", json!(1024));
+
+        let mut duplicate_principal = policy_with_route(route.clone());
+        duplicate_principal["principals"] = json!([
+            {"id":"agent:test","sourceCidrs":["127.0.0.1/32"]},
+            {"id":"agent:test","sourceCidrs":["127.0.0.2/32"]}
+        ]);
+        assert_eq!(
+            validate_policy_capabilities(&duplicate_principal)
+                .expect_err("duplicate principal IDs must fail"),
+            "duplicate principal agent:test"
+        );
+
+        let mut duplicate_route = policy_with_route(route.clone());
+        duplicate_route["routes"] = json!([route.clone(), route.clone()]);
+        assert_eq!(
+            validate_policy_capabilities(&duplicate_route)
+                .expect_err("duplicate route IDs must fail"),
+            "duplicate route route:test"
+        );
+
+        let mut unknown_principal_route = route.clone();
+        unknown_principal_route["principals"] = json!(["agent:missing"]);
+        assert_eq!(
+            validate_policy_capabilities(&policy_with_route(unknown_principal_route))
+                .expect_err("unknown route principal must fail"),
+            "route route:test references unknown principal agent:missing"
+        );
+
+        let mut wildcard_route = route;
+        wildcard_route["principals"] = json!(["*"]);
+        validate_policy_capabilities(&policy_with_route(wildcard_route))
+            .expect("route wildcard remains a supported built-in principal selector");
     }
 
     #[test]
@@ -29081,6 +29999,7 @@ mod tests {
                     &dispatch_request,
                     response_nonce,
                     dispatch_started_at,
+                    StatusCode::OK,
                     dispatch_body,
                 ))
                 .expect("dispatch response");
@@ -32009,10 +32928,15 @@ mod tests {
         ));
         assert!(state.audit_queue.lock().expect("audit queue").is_empty());
         assert!(reservation.commit("required", json!({"required":true})));
+        let event_id = state.audit_queue.lock().expect("audit queue")[0]
+            .event_id
+            .clone();
+        assert!(is_sha256_digest(&event_id));
 
         let batch = pop_audit_batch(&state);
         assert_eq!(batch.len(), 1);
         assert!(batch[0].required);
+        assert_eq!(batch[0].event_id, event_id);
         assert_eq!(state.audit_reserved.load(Ordering::Relaxed), 1);
         assert!(!enqueue_audit_event(
             &state,
@@ -32022,13 +32946,398 @@ mod tests {
         ));
         requeue_audit_batch(&state, batch);
         assert_eq!(state.audit_reserved.load(Ordering::Relaxed), 0);
-        assert!(state.audit_queue.lock().expect("audit queue")[0].required);
+        let queue = state.audit_queue.lock().expect("audit queue");
+        assert!(queue[0].required);
+        assert_eq!(queue[0].event_id, event_id);
+    }
+
+    #[test]
+    fn audit_batches_many_large_paths_under_the_wire_size_ceiling_in_order() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("token".to_string());
+        state.audit_queue_max = 64;
+        state.audit_batch_max = 64;
+
+        for marker in 0..24u64 {
+            let paths = (0..8)
+                .map(|path_index| format!("/{marker}/{path_index}/{}", "x".repeat(16 * 1024)))
+                .collect::<Vec<_>>();
+            assert!(enqueue_audit_event(
+                &state,
+                "data_plane.large_paths",
+                json!({"marker":marker,"paths":paths}),
+                false,
+            ));
+        }
+
+        let expected_event_ids = state
+            .audit_queue
+            .lock()
+            .expect("audit queue")
+            .iter()
+            .map(|event| event.event_id.clone())
+            .collect::<Vec<_>>();
+        assert!(expected_event_ids
+            .iter()
+            .all(|event_id| is_sha256_digest(event_id)));
+        assert_eq!(
+            expected_event_ids.iter().collect::<HashSet<_>>().len(),
+            expected_event_ids.len()
+        );
+        let mut markers = Vec::new();
+        let mut observed_event_ids = Vec::new();
+        let mut batch_count = 0;
+        while !state.audit_queue.lock().expect("audit queue").is_empty() {
+            let batch = pop_audit_batch(&state);
+            assert!(!batch.is_empty());
+            let calculated = audit_batch_serialized_len(&batch).expect("serialized batch size");
+            let actual = serde_json::to_vec(&json!({"events":&batch}))
+                .expect("serialize audit batch")
+                .len();
+            assert_eq!(calculated, actual);
+            assert!(actual <= MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES);
+            markers.extend(
+                batch
+                    .iter()
+                    .map(|event| event.event["marker"].as_u64().expect("event marker")),
+            );
+            observed_event_ids.extend(batch.iter().map(|event| event.event_id.clone()));
+            release_audit_batch_reservations(&state, &batch);
+            batch_count += 1;
+        }
+        assert!(
+            batch_count > 1,
+            "wire size must split the count-sized batch"
+        );
+        assert_eq!(markers, (0..24u64).collect::<Vec<_>>());
+        assert_eq!(observed_event_ids, expected_event_ids);
+    }
+
+    #[test]
+    fn single_oversized_audit_event_fails_required_commit_and_cannot_wedge_queue() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(snapshot);
+        state.audit_url = Some("https://audit.invalid/events".to_string());
+        state.audit_token = Some("token".to_string());
+        state.audit_queue_max = 4;
+        state.audit_batch_max = 4;
+        let oversized = "x".repeat(MAX_CONTROL_PLANE_AUDIT_BATCH_BODY_BYTES);
+
+        let mut reservation = reserve_required_audit(&state).expect("required audit slot");
+        assert!(!reservation.commit("data_plane.pathological", json!({"path":oversized.clone()}),));
+        assert_eq!(state.audit_reserved.load(Ordering::Relaxed), 0);
+        assert_eq!(state.audit_required_failed.load(Ordering::Relaxed), 1);
+        assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+
+        state.audit_queue.lock().expect("audit queue").extend([
+            test_audit_event(
+                1,
+                "data_plane.legacy_pathological",
+                json!({"path":oversized}),
+                true,
+            ),
+            test_audit_event(
+                2,
+                "data_plane.following",
+                json!({"marker":"following"}),
+                false,
+            ),
+        ]);
+        let batch = pop_audit_batch(&state);
+        assert_eq!(batch.len(), 1);
+        assert_eq!(batch[0].event_type, "data_plane.following");
+        assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+        assert_eq!(state.audit_required_failed.load(Ordering::Relaxed), 2);
+    }
+
+    #[test]
+    fn audit_request_size_rejection_splits_without_replaying_identical_batch() {
+        let response_signing_key = SigningKey::from_bytes(&[30u8; 32]);
+        let snapshot = test_snapshot_with_control_plane_response_key(1, &response_signing_key);
+        let server_snapshot = Arc::clone(&snapshot);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("audit listener");
+        let address = listener.local_addr().expect("audit listener address");
+        let server = thread::spawn(move || {
+            let mut event_batches = Vec::new();
+            for attempt in 0..3 {
+                let (mut stream, request) = read_audit_test_request(&listener);
+                let body = strict_json_value_from_slice(&request.body).expect("audit request JSON");
+                let events = body["events"]
+                    .as_array()
+                    .expect("audit events")
+                    .iter()
+                    .map(|event| {
+                        (
+                            event["event"]["marker"].as_u64().expect("event marker"),
+                            event["eventId"]
+                                .as_str()
+                                .expect("audit event ID")
+                                .to_string(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let batch_digest = sha256_prefixed(&request.body);
+                let status = if attempt == 0 {
+                    StatusCode::PAYLOAD_TOO_LARGE
+                } else {
+                    StatusCode::OK
+                };
+                let response = signed_audit_test_response(
+                    &response_signing_key,
+                    &server_snapshot,
+                    &request,
+                    status,
+                    if status.is_success() {
+                        events.len() as u64
+                    } else {
+                        0
+                    },
+                    &batch_digest,
+                    "test-instance",
+                );
+                stream
+                    .write_all(&response)
+                    .expect("write signed audit response");
+                event_batches.push(events);
+            }
+            event_batches
+        });
+        let mut state = test_gate_state(snapshot);
+        state.server_instance_id = Some("test-instance".to_string());
+        state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));
+        state.audit_token = Some("audit-token".to_string());
+        let batch = (0..4u64)
+            .map(|marker| {
+                test_audit_event(
+                    marker + 1,
+                    "data_plane.test",
+                    json!({"marker":marker}),
+                    false,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        flush_audit_batch(&state, batch).expect("split audit batch flush");
+        let event_batches = server.join().expect("audit server");
+        assert_eq!(
+            event_batches,
+            vec![
+                vec![
+                    (0, test_audit_event_id(1)),
+                    (1, test_audit_event_id(2)),
+                    (2, test_audit_event_id(3)),
+                    (3, test_audit_event_id(4)),
+                ],
+                vec![(0, test_audit_event_id(1)), (1, test_audit_event_id(2))],
+                vec![(2, test_audit_event_id(3)), (3, test_audit_event_id(4))],
+            ]
+        );
+        assert_eq!(state.audit_sent.load(Ordering::Relaxed), 4);
+        assert_eq!(state.audit_send_failed.load(Ordering::Relaxed), 4);
+        assert!(state.audit_queue.lock().expect("audit queue").is_empty());
+    }
+
+    #[test]
+    fn audit_post_rejects_unsigned_success_acknowledgement() {
+        let response_signing_key = SigningKey::from_bytes(&[31u8; 32]);
+        let snapshot = test_snapshot_with_control_plane_response_key(1, &response_signing_key);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("audit listener");
+        let address = listener.local_addr().expect("audit listener address");
+        let server = thread::spawn(move || {
+            let (mut stream, request) = read_audit_test_request(&listener);
+            let response = http_response(
+                "200 OK",
+                json!({
+                    "apiVersion":"serverware.dataPlaneAuditAck/v1",
+                    "accepted":1,
+                    "batchDigest":sha256_prefixed(&request.body),
+                }),
+            );
+            stream
+                .write_all(&response)
+                .expect("write unsigned audit acknowledgement");
+            request
+        });
+        let mut state = test_gate_state(snapshot);
+        state.server_instance_id = Some("test-instance".to_string());
+        state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));
+        state.audit_token = Some("audit-token".to_string());
+        let batch = [test_audit_event(
+            1,
+            "data_plane.test",
+            json!({"marker":"exact"}),
+            false,
+        )];
+
+        let error = post_audit_batch(&state, &batch)
+            .expect_err("bare HTTP success must not acknowledge an audit batch");
+        let request = server.join().expect("audit server");
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.target, "/api/data-plane/audit");
+        let expected_body = serde_json::to_vec(&json!({
+            "events":[{
+                "event":{"marker":"exact"},
+                "eventId":test_audit_event_id(1),
+                "eventType":"data_plane.test",
+            }],
+        }))
+        .expect("serialize expected audit body");
+        assert_eq!(request.body, expected_body);
+        assert!(request.headers.contains_key("x-serverware-response-nonce"));
+        assert!(
+            error.contains("missing X-Serverware-Response-Key-Id"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn audit_post_rejects_bogus_signed_success_acknowledgement() {
+        let trusted_signing_key = SigningKey::from_bytes(&[32u8; 32]);
+        let bogus_signing_key = SigningKey::from_bytes(&[33u8; 32]);
+        let snapshot = test_snapshot_with_control_plane_response_key(1, &trusted_signing_key);
+        let server_snapshot = Arc::clone(&snapshot);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("audit listener");
+        let address = listener.local_addr().expect("audit listener address");
+        let server = thread::spawn(move || {
+            let (mut stream, request) = read_audit_test_request(&listener);
+            let batch_digest = sha256_prefixed(&request.body);
+            let response = signed_audit_test_acknowledgement(
+                &bogus_signing_key,
+                &server_snapshot,
+                &request,
+                1,
+                &batch_digest,
+            );
+            stream
+                .write_all(&response)
+                .expect("write bogus signed audit acknowledgement");
+        });
+        let mut state = test_gate_state(snapshot);
+        state.server_instance_id = Some("test-instance".to_string());
+        state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));
+        state.audit_token = Some("audit-token".to_string());
+        let batch = [test_audit_event(
+            1,
+            "data_plane.test",
+            json!({"marker":"bogus"}),
+            false,
+        )];
+
+        let error = post_audit_batch(&state, &batch)
+            .expect_err("untrusted signature must not acknowledge an audit batch");
+        server.join().expect("audit server");
+        assert!(error.contains("signature verification failed"), "{error}");
+    }
+
+    #[test]
+    fn audit_post_rejects_signed_acknowledgement_for_another_instance() {
+        let response_signing_key = SigningKey::from_bytes(&[33u8; 32]);
+        let snapshot = test_snapshot_with_control_plane_response_key(1, &response_signing_key);
+        let server_snapshot = Arc::clone(&snapshot);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("audit listener");
+        let address = listener.local_addr().expect("audit listener address");
+        let server = thread::spawn(move || {
+            let (mut stream, request) = read_audit_test_request(&listener);
+            let batch_digest = sha256_prefixed(&request.body);
+            let response = signed_audit_test_response(
+                &response_signing_key,
+                &server_snapshot,
+                &request,
+                StatusCode::OK,
+                1,
+                &batch_digest,
+                "test-instance-other",
+            );
+            stream
+                .write_all(&response)
+                .expect("write wrong-instance audit acknowledgement");
+        });
+        let mut state = test_gate_state(snapshot);
+        state.server_instance_id = Some("test-instance".to_string());
+        state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));
+        state.audit_token = Some("audit-token".to_string());
+        let batch = [test_audit_event(
+            1,
+            "data_plane.test",
+            json!({"marker":"wrong-instance"}),
+            false,
+        )];
+
+        let error = post_audit_batch(&state, &batch)
+            .expect_err("another instance must not acknowledge this audit batch");
+        server.join().expect("audit server");
+        assert!(error.contains("instance binding mismatch"), "{error}");
+    }
+
+    #[test]
+    fn audit_post_accepts_exact_signed_acknowledgement_with_fresh_nonces() {
+        let response_signing_key = SigningKey::from_bytes(&[34u8; 32]);
+        let snapshot = test_snapshot_with_control_plane_response_key(1, &response_signing_key);
+        let server_snapshot = Arc::clone(&snapshot);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("audit listener");
+        let address = listener.local_addr().expect("audit listener address");
+        let server = thread::spawn(move || {
+            let mut requests = Vec::new();
+            for _ in 0..2 {
+                let (mut stream, request) = read_audit_test_request(&listener);
+                let batch_digest = sha256_prefixed(&request.body);
+                let response = signed_audit_test_acknowledgement(
+                    &response_signing_key,
+                    &server_snapshot,
+                    &request,
+                    1,
+                    &batch_digest,
+                );
+                stream
+                    .write_all(&response)
+                    .expect("write signed audit acknowledgement");
+                requests.push(request);
+            }
+            requests
+        });
+        let mut state = test_gate_state(snapshot);
+        state.server_instance_id = Some("test-instance".to_string());
+        state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));
+        state.audit_token = Some("audit-token".to_string());
+        let batch = [test_audit_event(
+            1,
+            "data_plane.test",
+            json!({"marker":"exact"}),
+            false,
+        )];
+
+        post_audit_batch(&state, &batch).expect("first signed audit acknowledgement");
+        post_audit_batch(&state, &batch).expect("second signed audit acknowledgement");
+        let requests = server.join().expect("audit server");
+        assert_eq!(requests[0].body, requests[1].body);
+        let expected_body = serde_json::to_vec(&json!({
+            "events":[{
+                "event":{"marker":"exact"},
+                "eventId":test_audit_event_id(1),
+                "eventType":"data_plane.test",
+            }],
+        }))
+        .expect("serialize expected audit body");
+        assert_eq!(requests[0].body, expected_body);
+        let first_nonce = requests[0]
+            .headers
+            .get("x-serverware-response-nonce")
+            .expect("first response nonce");
+        let second_nonce = requests[1]
+            .headers
+            .get("x-serverware-response-nonce")
+            .expect("second response nonce");
+        assert_ne!(first_nonce, second_nonce, "each POST needs a fresh nonce");
     }
 
     #[test]
     fn credential_release_requires_durable_audit_acknowledgement() {
-        let snapshot = test_snapshot(1);
-        let mut state = test_gate_state(snapshot);
+        let response_signing_key = SigningKey::from_bytes(&[35u8; 32]);
+        let snapshot = test_snapshot_with_control_plane_response_key(1, &response_signing_key);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.server_instance_id = Some("test-instance".to_string());
         let binding = CredentialLeaseReleaseBinding {
             scope: CredentialLeaseScope::new("agent:test", "route:test", "credential:test"),
             version: 7,
@@ -32049,42 +33358,21 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("audit test listener");
         let address = listener.local_addr().expect("audit test address");
+        let server_snapshot = Arc::clone(&snapshot);
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("audit request");
+            let (mut stream, request) = read_audit_test_request(&listener);
+            let batch_digest = sha256_prefixed(&request.body);
+            let response = signed_audit_test_acknowledgement(
+                &response_signing_key,
+                &server_snapshot,
+                &request,
+                1,
+                &batch_digest,
+            );
             stream
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .expect("audit read timeout");
-            let mut request = Vec::new();
-            let mut buffer = [0u8; 4096];
-            loop {
-                let count = stream.read(&mut buffer).expect("read audit request");
-                if count == 0 {
-                    break;
-                }
-                request.extend_from_slice(&buffer[..count]);
-                let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n")
-                else {
-                    continue;
-                };
-                let head = String::from_utf8_lossy(&request[..header_end]);
-                let content_length = head
-                    .lines()
-                    .find_map(|line| {
-                        line.split_once(':').and_then(|(name, value)| {
-                            name.eq_ignore_ascii_case("content-length")
-                                .then(|| value.trim().parse::<usize>().ok())
-                                .flatten()
-                        })
-                    })
-                    .unwrap_or(0);
-                if request.len() >= header_end + 4 + content_length {
-                    break;
-                }
-            }
-            stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .write_all(&response)
                 .expect("write audit acknowledgement");
-            String::from_utf8(request).expect("audit request UTF-8")
+            request
         });
         state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));
         state.audit_token = Some("token".to_string());
@@ -32093,9 +33381,24 @@ mod tests {
             &state, &decision, "GET", &url, &binding,
         ));
         let captured = server.join().expect("audit test server");
-        assert!(captured.contains("data_plane.credential.release_started"));
-        assert!(captured.contains("credential:test"));
-        assert!(captured.contains("\"enrollment_session_id\":\"A_-0123456789abcdefghijk\""));
+        let captured = strict_json_value_from_slice(&captured.body).expect("audit batch JSON");
+        assert_eq!(
+            captured["events"][0]["eventType"],
+            "data_plane.credential.release_started"
+        );
+        assert!(is_sha256_digest(
+            captured["events"][0]["eventId"]
+                .as_str()
+                .expect("credential release audit event ID")
+        ));
+        assert_eq!(
+            captured["events"][0]["event"]["credential_ref"],
+            "credential:test"
+        );
+        assert_eq!(
+            captured["events"][0]["event"]["enrollment_session_id"],
+            "A_-0123456789abcdefghijk"
+        );
         assert!(state.audit_queue.lock().expect("audit queue").is_empty());
         assert_eq!(state.audit_sent.load(Ordering::Relaxed), 1);
         assert!(!record_required_credential_release_start(
@@ -32106,8 +33409,10 @@ mod tests {
 
     #[test]
     fn delayed_audit_acknowledgement_requires_lease_revalidation() {
-        let snapshot = test_snapshot(1);
+        let response_signing_key = SigningKey::from_bytes(&[36u8; 32]);
+        let snapshot = test_snapshot_with_control_plane_response_key(1, &response_signing_key);
         let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.server_instance_id = Some("test-instance".to_string());
         let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
         let expiry = Instant::now() + Duration::from_millis(40);
         state.credential_leases.lock().expect("lease cache").insert(
@@ -32133,25 +33438,20 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("audit test listener");
         let address = listener.local_addr().expect("audit test address");
+        let server_snapshot = Arc::clone(&snapshot);
         let server = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().expect("audit request");
-            let mut request = Vec::with_capacity(4096);
-            while request.len() < 16 * 1024 {
-                let mut buffer = [0u8; 1024];
-                let read = stream.read(&mut buffer).expect("read audit request");
-                assert!(read > 0, "audit request ended before headers completed");
-                request.extend_from_slice(&buffer[..read]);
-                if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            assert!(
-                request.windows(4).any(|window| window == b"\r\n\r\n"),
-                "audit request headers exceeded test bound"
-            );
+            let (mut stream, request) = read_audit_test_request(&listener);
             thread::sleep(Duration::from_millis(80));
+            let batch_digest = sha256_prefixed(&request.body);
+            let response = signed_audit_test_acknowledgement(
+                &response_signing_key,
+                &server_snapshot,
+                &request,
+                1,
+                &batch_digest,
+            );
             stream
-                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}")
+                .write_all(&response)
                 .expect("write audit acknowledgement");
         });
         state.audit_url = Some(format!("http://{address}/api/data-plane/audit"));

@@ -57,6 +57,7 @@ def main() -> None:
         requester = AdminIdentity("user:requester", frozenset({"credential_owner", "policy_publisher"}), "admin-token-header")
         credential_approver = AdminIdentity("user:credential-approver", frozenset({"credential_owner"}), "admin-token-header")
         policy_approver = AdminIdentity("user:policy-approver", frozenset({"policy_publisher"}), "admin-token-header")
+        route_approver = AdminIdentity("user:route-approver", frozenset({"policy_author"}), "admin-token-header")
         wrong_approver = AdminIdentity("user:policy-author", frozenset({"policy_author"}), "admin-token-header")
 
         credential_payload = app_module.CredentialCreate(
@@ -121,6 +122,90 @@ def main() -> None:
             "approval_consumed",
         )
 
+        rollback_credential = app_module.CredentialCreate(
+            name="Rollback credential",
+            kind="bearer",
+            secret="rollback-secret",
+            metadata={"purpose": "transaction-regression"},
+        )
+        rollback_detail = expect_http_error(
+            "credential rollback approval request",
+            lambda: app_module.create_credential(rollback_credential, identity=requester),
+            428,
+            "control_plane_approval_required",
+        )
+        rollback_approval_id = rollback_detail["approvalId"]
+        app_module.control_plane_approval_approve(
+            rollback_approval_id, payload=None, identity=credential_approver
+        )
+        rollback_credential.mfa = {"approvalId": rollback_approval_id}
+        original_append_audit_event = db.append_audit_event
+
+        def reject_credential_audit(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            if kwargs.get("event_type") == "credential.created":
+                raise db.AuditStoreError("injected credential audit failure")
+            return original_append_audit_event(*args, **kwargs)
+
+        db.append_audit_event = reject_credential_audit
+        try:
+            try:
+                app_module.create_credential(rollback_credential, identity=requester)
+            except db.AuditStoreError:
+                pass
+            else:
+                raise AssertionError("credential mutation committed after audit failure")
+        finally:
+            db.append_audit_event = original_append_audit_event
+        if db.get_control_plane_approval(rollback_approval_id)["status"] != "approved":
+            raise AssertionError("credential audit failure consumed its approval")
+        if any(item["name"] == rollback_credential.name for item in db.list_credentials()):
+            raise AssertionError("credential audit failure committed the credential")
+        retried_credential = app_module.create_credential(
+            rollback_credential, identity=requester
+        )
+        if retried_credential["name"] != rollback_credential.name:
+            raise AssertionError("credential approval was not reusable after rollback")
+
+        rollback_route = app_module.RouteCreate(
+            name="Rollback route",
+            match_host="rollback.example",
+            match_path_prefix="/transaction",
+        )
+        route_detail = expect_http_error(
+            "route rollback approval request",
+            lambda: app_module.create_route(rollback_route, identity=requester),
+            428,
+            "control_plane_approval_required",
+        )
+        route_approval_id = route_detail["approvalId"]
+        app_module.control_plane_approval_approve(
+            route_approval_id, payload=None, identity=route_approver
+        )
+        rollback_route.mfa = {"approvalId": route_approval_id}
+
+        def reject_route_audit(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            if kwargs.get("event_type") == "route.created":
+                raise db.AuditStoreError("injected route audit failure")
+            return original_append_audit_event(*args, **kwargs)
+
+        db.append_audit_event = reject_route_audit
+        try:
+            try:
+                app_module.create_route(rollback_route, identity=requester)
+            except db.AuditStoreError:
+                pass
+            else:
+                raise AssertionError("route mutation committed after audit failure")
+        finally:
+            db.append_audit_event = original_append_audit_event
+        if db.get_control_plane_approval(route_approval_id)["status"] != "approved":
+            raise AssertionError("route audit failure consumed its approval")
+        if any(item["name"] == rollback_route.name for item in db.list_routes()):
+            raise AssertionError("route audit failure committed the route")
+        retried_route = app_module.create_route(rollback_route, identity=requester)
+        if retried_route["name"] != rollback_route.name:
+            raise AssertionError("route approval was not reusable after rollback")
+
         policy_bundle.write_policy_bundle(candidate_bundle(policy_bundle, 1))
         publish_payload = app_module.PolicyPublishRequest(bundle=candidate_bundle(policy_bundle, 2), dryRun=[])
         policy_pending = expect_http_error(
@@ -141,6 +226,52 @@ def main() -> None:
         policy_audit = next(item for item in db.list_audit_events(limit=50) if item["event_type"] == "policy.published")
         if policy_audit["event"].get("control_plane_approval", {}).get("approved_by") != policy_approver.user_id:
             raise AssertionError(f"policy audit missing second-person evidence: {policy_audit}")
+
+        policy_before_rollback = policy_bundle.get_policy_snapshot()
+        high_water_before_rollback = db.get_policy_high_water()
+        rollback_publish = app_module.PolicyPublishRequest(
+            bundle=candidate_bundle(policy_bundle, 3), dryRun=[]
+        )
+        policy_rollback_detail = expect_http_error(
+            "policy rollback approval request",
+            lambda: app_module.policy_publish(rollback_publish, identity=requester),
+            428,
+            "control_plane_approval_required",
+        )
+        policy_rollback_approval_id = policy_rollback_detail["approvalId"]
+        app_module.control_plane_approval_approve(
+            policy_rollback_approval_id, payload=None, identity=policy_approver
+        )
+        rollback_publish.mfa = {"approvalId": policy_rollback_approval_id}
+
+        def reject_policy_audit(*args: Any, **kwargs: Any) -> dict[str, Any]:
+            if kwargs.get("event_type") == "policy.published":
+                raise db.AuditStoreError("injected policy audit failure")
+            return original_append_audit_event(*args, **kwargs)
+
+        db.append_audit_event = reject_policy_audit
+        try:
+            try:
+                app_module.policy_publish(rollback_publish, identity=requester)
+            except db.AuditStoreError:
+                pass
+            else:
+                raise AssertionError("policy mutation committed after audit failure")
+        finally:
+            db.append_audit_event = original_append_audit_event
+        if db.get_control_plane_approval(policy_rollback_approval_id)["status"] != "approved":
+            raise AssertionError("policy audit failure consumed its approval")
+        policy_after_rollback = policy_bundle.get_policy_snapshot()
+        if (
+            policy_before_rollback is None
+            or policy_after_rollback is None
+            or policy_after_rollback.hash != policy_before_rollback.hash
+            or db.get_policy_high_water() != high_water_before_rollback
+        ):
+            raise AssertionError("policy audit failure changed active policy state")
+        retried_policy = app_module.policy_publish(rollback_publish, identity=requester)
+        if retried_policy.get("published") is not True:
+            raise AssertionError("policy approval was not reusable after rollback")
 
         search = db.search_audit_events(event_type="control_plane.approval.consumed", approval_id=policy_approval_id)
         if search["count"] != 1:
@@ -204,6 +335,58 @@ def main() -> None:
                 raise AssertionError(f"consumption crossed approval expiry: {result}")
         finally:
             db._lock_webauthn_authority = original_authority_lock
+
+        oidc_approver_id = "oidc:credential-approver@example.com"
+        authority = db.get_rbac_authority_state()
+        provisioned_approver = db.mutate_rbac_role_binding(
+            subject_id=oidc_approver_id,
+            roles=["credential_owner"],
+            status="active",
+            expected_generation=authority["generation"],
+            actor_id=requester.user_id,
+            reason="approval revocation fixture",
+            event_type="rbac.role_changed",
+            event={"test": "approver_commit_time_authorization"},
+        )
+        revocation_approval = db.ensure_control_plane_approval(
+            action="credential.create",
+            resource_id="revoked-approver",
+            payload_digest="sha256:" + "d" * 64,
+            requester_id=requester.user_id,
+            request={"summary": "approver revocation test"},
+            ttl_seconds=300,
+        )
+        if db.approve_control_plane_approval(
+            revocation_approval["id"], actor_id=oidc_approver_id
+        ) is None:
+            raise AssertionError("OIDC approver fixture was not approved")
+        db.mutate_rbac_role_binding(
+            subject_id=oidc_approver_id,
+            roles=[],
+            status="deprovisioned",
+            expected_generation=provisioned_approver["generation"],
+            actor_id=requester.user_id,
+            reason="revoke before approval consumption",
+            event_type="rbac.deprovisioned",
+            event={"test": "approver_commit_time_authorization"},
+        )
+        revoked_consumption = db.consume_control_plane_approval(
+            revocation_approval["id"],
+            action="credential.create",
+            resource_id="revoked-approver",
+            payload_digest="sha256:" + "d" * 64,
+            actor_id=requester.user_id,
+            required_approver_roles={"credential_owner"},
+        )
+        if revoked_consumption != {
+            "ok": False,
+            "reason": "approval_approver_role_revoked",
+        }:
+            raise AssertionError(
+                f"revoked OIDC approver was not rejected: {revoked_consumption}"
+            )
+        if db.get_control_plane_approval(revocation_approval["id"])["status"] != "approved":
+            raise AssertionError("rejected OIDC approval was consumed")
 
         original_audit_backend = db.AUDIT_STORE_BACKEND
         original_postgres_append = db._append_postgres_audit_event

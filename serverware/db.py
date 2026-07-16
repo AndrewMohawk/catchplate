@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+import stat
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -74,6 +75,7 @@ from serverware.crypto import (
     load_bound_secret_keyring,
     load_master_key,
 )
+from serverware.rbac import RBACRoleValidationError, normalize_rbac_roles
 
 _AUDIT_EVENT_JSON_WRITE_MAX_BYTES = 2 * 1024 * 1024
 _AUDIT_EVENT_JSON_STORED_MAX_BYTES = 8 * 1024 * 1024
@@ -349,6 +351,10 @@ class AuditStoreError(RuntimeError):
     pass
 
 
+class AuditBatchConflictError(AuditStoreError):
+    pass
+
+
 class MetadataStoreError(RuntimeError):
     pass
 
@@ -387,6 +393,16 @@ class _OIDCBrowserSessionActivationDenied(Exception):
 
 class RBACBindingStoreError(RuntimeError):
     pass
+
+
+class RBACGenerationConflictError(RBACBindingStoreError):
+    def __init__(self, expected_generation: int, current_generation: int):
+        self.expected_generation = expected_generation
+        self.current_generation = current_generation
+        super().__init__(
+            "RBAC authority generation changed: "
+            f"expected {expected_generation}, current {current_generation}"
+        )
 
 
 class ManagedOAuthCredentialError(ValueError):
@@ -455,6 +471,8 @@ _SETUP_SESSION_LOCK_KEY = 0x5357525345545550
 _WEBAUTHN_AUTHORITY_LOCK_KEY = 0x5357525745415554
 _METADATA_MIGRATION_LOCK_KEY = 0x5357524D4554414D
 _METADATA_AUDIT_OUTBOX_LOCK_KEY = 0x5357524D4155444F
+_RBAC_AUTHORITY_LOCK_KEY = 0x5357525242414341
+_rbac_authority_validation_cache_key: tuple[int, str, int] | None = None
 _PENDING_APPROVAL_MAX_COUNT = 10_000
 _PENDING_APPROVAL_MAX_PAYLOAD_BYTES = 64 * 1024
 _APPROVAL_REVIEW_RECEIPT_MAX_COUNT = 10_000
@@ -467,7 +485,6 @@ _OIDC_LOGIN_RATE_BUCKET_RETENTION_SECONDS = 180
 _OIDC_BROWSER_SESSION_GLOBAL_LIVE_MAX = 10_000
 _OIDC_BROWSER_SESSION_USER_LIVE_MAX = 20
 _OIDC_BROWSER_SESSION_ROLE_MAX_COUNT = 32
-_OIDC_BROWSER_SESSION_ROLE_MAX_BYTES = 128
 _OIDC_BROWSER_SESSION_ROLES_JSON_MAX_BYTES = 4 * 1024
 _OIDC_BROWSER_SESSION_TTL_MIN_SECONDS = 1
 _OIDC_BROWSER_SESSION_TTL_MAX_SECONDS = 24 * 60 * 60
@@ -498,14 +515,6 @@ _RELEASE_AUTHORIZATION_STATES = {
     "committed_indeterminate",
 }
 _RBAC_BINDINGS_MAX_BYTES = 4 * 1024 * 1024
-_VALID_RBAC_ROLES = {
-    "admin",
-    "approver",
-    "auditor",
-    "credential_owner",
-    "policy_author",
-    "policy_publisher",
-}
 _SENSITIVE_CREDENTIAL_METADATA_KEYS = {
     "access_token",
     "api_secret",
@@ -806,57 +815,797 @@ def metadata_uses_postgres() -> bool:
     return metadata_store_backend_name() == "postgres"
 
 
-def get_rbac_role_binding(subject_id: str) -> dict[str, Any] | None:
-    """Read one OIDC subject from the control plane's authoritative RBAC ledger."""
-    if not subject_id or not subject_id.startswith("oidc:"):
+def _validate_rbac_subject_id(subject_id: object) -> str:
+    if (
+        not isinstance(subject_id, str)
+        or not subject_id.startswith("oidc:")
+        or len(subject_id.encode("utf-8")) > 1024
+        or subject_id != subject_id.strip()
+        or any(ord(character) < 32 or ord(character) == 127 for character in subject_id)
+    ):
         raise RBACBindingStoreError("RBAC subject ID is invalid")
+    return subject_id
+
+
+def _rbac_roles_from_json(value: object, *, status: str) -> list[str]:
+    try:
+        roles = normalize_rbac_roles(
+            loads(value if isinstance(value, str) else None, None),
+            require_nonempty=status == "active",
+        )
+    except (json.JSONDecodeError, RBACRoleValidationError) as exc:
+        raise RBACBindingStoreError("RBAC subject roles are invalid") from exc
+    if status == "deprovisioned" and roles:
+        raise RBACBindingStoreError("deprovisioned RBAC subjects cannot retain roles")
+    return roles
+
+
+def _rbac_binding_from_row(row: Any) -> dict[str, Any]:
+    subject_id = _validate_rbac_subject_id(row["subject_id"])
+    status = str(row["status"])
+    if status not in {"active", "deprovisioned"}:
+        raise RBACBindingStoreError("RBAC subject binding status is invalid")
+    roles = _rbac_roles_from_json(row["roles_json"], status=status)
+    binding: dict[str, Any] = {
+        "subject_id": subject_id,
+        "roles": roles,
+        "status": status,
+        "generation": int(row["generation"]),
+        "updated_at": str(row["updated_at"]),
+        "updated_by": str(row["updated_by"]),
+        "reason": row["reason"],
+    }
+    if status == "deprovisioned":
+        binding["deprovisioned_at"] = str(row["deprovisioned_at"])
+        binding["deprovisioned_by"] = str(row["deprovisioned_by"])
+    expected_digest = _rbac_binding_digest(binding)
+    if not hmac.compare_digest(expected_digest, str(row["binding_digest"])):
+        raise RBACBindingStoreError("RBAC subject binding digest is invalid")
+    return binding
+
+
+def _rbac_binding_digest(binding: dict[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(dumps(binding).encode("utf-8")).hexdigest()
+
+
+def _backfill_rbac_binding_digests(conn: Any) -> None:
+    rows = conn.execute(
+        "SELECT * FROM rbac_role_bindings ORDER BY subject_id ASC"
+    ).fetchall()
+    for row in rows:
+        subject_id = _validate_rbac_subject_id(row["subject_id"])
+        status = str(row["status"])
+        roles = _rbac_roles_from_json(row["roles_json"], status=status)
+        binding: dict[str, Any] = {
+            "subject_id": subject_id,
+            "roles": roles,
+            "status": status,
+            "generation": int(row["generation"]),
+            "updated_at": str(row["updated_at"]),
+            "updated_by": str(row["updated_by"]),
+            "reason": row["reason"],
+        }
+        if status == "deprovisioned":
+            binding["deprovisioned_at"] = str(row["deprovisioned_at"])
+            binding["deprovisioned_by"] = str(row["deprovisioned_by"])
+        expected = _rbac_binding_digest(binding)
+        stored = row["binding_digest"]
+        if stored is None:
+            conn.execute(
+                "UPDATE rbac_role_bindings SET binding_digest = ? WHERE subject_id = ?",
+                (expected, subject_id),
+            )
+        elif not hmac.compare_digest(str(stored), expected):
+            raise RBACBindingStoreError("stored RBAC binding digest is invalid")
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.execute(
+            "ALTER TABLE rbac_role_bindings ALTER COLUMN binding_digest SET NOT NULL"
+        )
+
+
+def _install_rbac_binding_revision_triggers(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.executescript(
+            """
+            CREATE OR REPLACE FUNCTION serverware_rbac_binding_revision()
+            RETURNS trigger LANGUAGE plpgsql AS $$
+            BEGIN
+                UPDATE rbac_authority_state
+                SET binding_table_revision = binding_table_revision + 1
+                WHERE authority_id = 1;
+                RETURN NULL;
+            END;
+            $$;
+            DROP TRIGGER IF EXISTS serverware_rbac_binding_revision
+                ON rbac_role_bindings;
+            CREATE TRIGGER serverware_rbac_binding_revision
+                AFTER INSERT OR UPDATE OR DELETE ON rbac_role_bindings
+                FOR EACH STATEMENT EXECUTE FUNCTION serverware_rbac_binding_revision();
+            """
+        )
+        return
+    conn.executescript(
+        """
+        CREATE TRIGGER IF NOT EXISTS rbac_binding_revision_insert
+        AFTER INSERT ON rbac_role_bindings
+        BEGIN
+            UPDATE rbac_authority_state
+            SET binding_table_revision = binding_table_revision + 1
+            WHERE authority_id = 1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS rbac_binding_revision_update
+        AFTER UPDATE ON rbac_role_bindings
+        BEGIN
+            UPDATE rbac_authority_state
+            SET binding_table_revision = binding_table_revision + 1
+            WHERE authority_id = 1;
+        END;
+        CREATE TRIGGER IF NOT EXISTS rbac_binding_revision_delete
+        AFTER DELETE ON rbac_role_bindings
+        BEGIN
+            UPDATE rbac_authority_state
+            SET binding_table_revision = binding_table_revision + 1
+            WHERE authority_id = 1;
+        END;
+        """
+    )
+
+
+def _rbac_projection_material(
+    *, generation: int, subjects: dict[str, dict[str, Any]]
+) -> dict[str, Any]:
+    return {
+        "version": "serverware.rbacBindings/v2",
+        "generation": generation,
+        "subjects": subjects,
+    }
+
+
+def _rbac_projection_digest(material: dict[str, Any]) -> str:
+    return "sha256:" + hashlib.sha256(dumps(material).encode("utf-8")).hexdigest()
+
+
+def _rbac_authority_validation_key(authority: Any) -> tuple[int, str, int]:
+    binding_table_revision = int(authority["binding_table_revision"])
+    verified_revision = int(authority["verified_binding_table_revision"])
+    if binding_table_revision < 0 or verified_revision != binding_table_revision:
+        raise RBACBindingStoreError("RBAC authority binding-table revision is invalid")
+    return (
+        int(authority["generation"]),
+        str(authority["state_digest"]),
+        binding_table_revision,
+    )
+
+
+def _rbac_authority_state_from_conn(
+    conn: Any, *, authority: Any | None = None
+) -> dict[str, Any]:
+    global _rbac_authority_validation_cache_key
+    authority = authority or conn.execute(
+        "SELECT generation, state_digest, binding_table_revision, "
+        "verified_binding_table_revision, updated_at "
+        "FROM rbac_authority_state WHERE authority_id = 1"
+    ).fetchone()
+    if authority is None:
+        raise RBACBindingStoreError("RBAC authority is not initialized")
+    validation_key = _rbac_authority_validation_key(authority)
+    generation = int(authority["generation"])
+    rows = conn.execute(
+        "SELECT * FROM rbac_role_bindings ORDER BY subject_id ASC"
+    ).fetchall()
+    subjects = {
+        str(row["subject_id"]): _rbac_binding_from_row(row)
+        for row in rows
+    }
+    material = _rbac_projection_material(
+        generation=generation,
+        subjects=subjects,
+    )
+    state_digest = _rbac_projection_digest(material)
+    if not hmac.compare_digest(state_digest, str(authority["state_digest"])):
+        raise RBACBindingStoreError("RBAC authority digest is invalid")
+    _rbac_authority_validation_cache_key = validation_key
+    return {
+        **material,
+        "state_digest": state_digest,
+        "updated_at": str(authority["updated_at"]),
+    }
+
+
+def _validate_rbac_authority_from_conn(conn: Any, authority: Any) -> None:
+    validation_key = _rbac_authority_validation_key(authority)
+    if validation_key != _rbac_authority_validation_cache_key:
+        _rbac_authority_state_from_conn(conn, authority=authority)
+
+
+def _lock_rbac_authority(conn: Any) -> None:
+    if isinstance(conn, PostgresMetadataConnection):
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(?)",
+            (_RBAC_AUTHORITY_LOCK_KEY,),
+        )
+    elif not conn.in_transaction:
+        conn.execute("BEGIN IMMEDIATE")
+
+
+def get_rbac_authority_state() -> dict[str, Any]:
+    try:
+        with connect() as conn:
+            _lock_rbac_authority(conn)
+            return _rbac_authority_state_from_conn(conn)
+    except RBACBindingStoreError:
+        raise
+    except Exception as exc:
+        raise RBACBindingStoreError("RBAC authority is unavailable") from exc
+
+
+def get_rbac_authority_generation() -> int:
+    try:
+        with connect() as conn:
+            _lock_rbac_authority(conn)
+            authority = conn.execute(
+                "SELECT generation, state_digest, binding_table_revision, "
+                "verified_binding_table_revision, updated_at "
+                "FROM rbac_authority_state WHERE authority_id = 1"
+            ).fetchone()
+            if authority is None:
+                raise RBACBindingStoreError("RBAC authority is not initialized")
+            _validate_rbac_authority_from_conn(conn, authority)
+            return int(authority["generation"])
+    except RBACBindingStoreError:
+        raise
+    except Exception as exc:
+        raise RBACBindingStoreError("RBAC authority is unavailable") from exc
+
+
+def get_rbac_role_binding(subject_id: str) -> dict[str, Any] | None:
+    """Read one OIDC subject from the database-authoritative RBAC ledger."""
+    subject_id = _validate_rbac_subject_id(subject_id)
+    try:
+        with connect() as conn:
+            row = conn.execute(
+                "SELECT binding.*, authority.generation AS authority_generation, "
+                "authority.state_digest AS authority_state_digest, "
+                "authority.binding_table_revision AS authority_binding_table_revision, "
+                "authority.verified_binding_table_revision "
+                "AS authority_verified_binding_table_revision, "
+                "authority.updated_at AS authority_updated_at "
+                "FROM rbac_authority_state AS authority "
+                "LEFT JOIN rbac_role_bindings AS binding ON binding.subject_id = ? "
+                "WHERE authority.authority_id = 1",
+                (subject_id,),
+            ).fetchone()
+            if row is None:
+                raise RBACBindingStoreError("RBAC authority is not initialized")
+            _validate_rbac_authority_from_conn(
+                conn,
+                {
+                    "generation": row["authority_generation"],
+                    "state_digest": row["authority_state_digest"],
+                    "binding_table_revision": row[
+                        "authority_binding_table_revision"
+                    ],
+                    "verified_binding_table_revision": row[
+                        "authority_verified_binding_table_revision"
+                    ],
+                    "updated_at": row["authority_updated_at"],
+                },
+            )
+            if row["subject_id"] is None:
+                return None
+            binding = _rbac_binding_from_row(row)
+            if binding["generation"] > int(row["authority_generation"]):
+                raise RBACBindingStoreError("RBAC binding generation is invalid")
+            return binding
+    except RBACBindingStoreError:
+        raise
+    except Exception as exc:
+        raise RBACBindingStoreError("RBAC authority is unavailable") from exc
+
+
+def mutate_rbac_role_binding(
+    *,
+    subject_id: str,
+    roles: list[str],
+    status: str,
+    expected_generation: int,
+    actor_id: str,
+    reason: str | None,
+    event_type: str,
+    event: dict[str, Any],
+    _connection: Any | None = None,
+) -> dict[str, Any]:
+    subject_id = _validate_rbac_subject_id(subject_id)
+    if not isinstance(expected_generation, int) or expected_generation < 0:
+        raise RBACBindingStoreError("RBAC expected generation is invalid")
+    if status not in {"active", "deprovisioned"}:
+        raise RBACBindingStoreError("RBAC mutation status is invalid")
+    try:
+        normalized_roles = normalize_rbac_roles(
+            roles,
+            require_nonempty=status == "active",
+        )
+    except RBACRoleValidationError as exc:
+        raise RBACBindingStoreError("RBAC mutation roles are invalid") from exc
+    if status == "deprovisioned" and normalized_roles:
+        raise RBACBindingStoreError("deprovisioned RBAC subjects cannot retain roles")
+    try:
+        connection_scope = (
+            connect() if _connection is None else contextlib.nullcontext(_connection)
+        )
+        with connection_scope as conn:
+            _lock_rbac_authority(conn)
+            authority = conn.execute(
+                "SELECT generation, state_digest, binding_table_revision, "
+                "verified_binding_table_revision, updated_at "
+                "FROM rbac_authority_state WHERE authority_id = 1"
+            ).fetchone()
+            if authority is None:
+                raise RBACBindingStoreError("RBAC authority is not initialized")
+            _validate_rbac_authority_from_conn(conn, authority)
+            current_generation = int(authority["generation"])
+            if current_generation != expected_generation:
+                raise RBACGenerationConflictError(
+                    expected_generation,
+                    current_generation,
+                )
+            if actor_id.startswith("oidc:") and not _rbac_subject_has_any_role_on_connection(
+                conn,
+                actor_id,
+                {"admin"},
+            ):
+                raise RBACBindingStoreError(
+                    "RBAC actor no longer holds the required role"
+                )
+            previous_row = conn.execute(
+                "SELECT * FROM rbac_role_bindings WHERE subject_id = ?",
+                (subject_id,),
+            ).fetchone()
+            previous_binding = (
+                _rbac_binding_from_row(previous_row)
+                if previous_row is not None
+                else None
+            )
+            generation = current_generation + 1
+            now_s = _metadata_utcnow(conn).isoformat()
+            deprovisioned_at = now_s if status == "deprovisioned" else None
+            deprovisioned_by = actor_id if status == "deprovisioned" else None
+            binding_material: dict[str, Any] = {
+                "subject_id": subject_id,
+                "roles": normalized_roles,
+                "status": status,
+                "generation": generation,
+                "updated_at": now_s,
+                "updated_by": actor_id,
+                "reason": reason,
+            }
+            if status == "deprovisioned":
+                binding_material["deprovisioned_at"] = deprovisioned_at
+                binding_material["deprovisioned_by"] = deprovisioned_by
+            binding_digest = _rbac_binding_digest(binding_material)
+            conn.execute(
+                """
+                INSERT INTO rbac_role_bindings (
+                    subject_id, roles_json, status, generation, binding_digest, updated_at,
+                    updated_by, reason, deprovisioned_at, deprovisioned_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (subject_id) DO UPDATE SET
+                    roles_json = excluded.roles_json,
+                    status = excluded.status,
+                    generation = excluded.generation,
+                    binding_digest = excluded.binding_digest,
+                    updated_at = excluded.updated_at,
+                    updated_by = excluded.updated_by,
+                    reason = excluded.reason,
+                    deprovisioned_at = excluded.deprovisioned_at,
+                    deprovisioned_by = excluded.deprovisioned_by
+                """,
+                (
+                    subject_id,
+                    dumps(normalized_roles),
+                    status,
+                    generation,
+                    binding_digest,
+                    now_s,
+                    actor_id,
+                    reason,
+                    deprovisioned_at,
+                    deprovisioned_by,
+                ),
+            )
+            rows = conn.execute(
+                "SELECT * FROM rbac_role_bindings ORDER BY subject_id ASC"
+            ).fetchall()
+            subjects = {
+                str(row["subject_id"]): _rbac_binding_from_row(row)
+                for row in rows
+            }
+            material = _rbac_projection_material(
+                generation=generation,
+                subjects=subjects,
+            )
+            state_digest = _rbac_projection_digest(material)
+            updated = conn.execute(
+                "UPDATE rbac_authority_state SET generation = ?, state_digest = ?, "
+                "updated_at = ?, verified_binding_table_revision = "
+                "binding_table_revision WHERE authority_id = 1 AND generation = ? "
+                "AND binding_table_revision > verified_binding_table_revision",
+                (generation, state_digest, now_s, expected_generation),
+            )
+            if updated.rowcount != 1:
+                raise RBACGenerationConflictError(
+                    expected_generation,
+                    int(
+                        conn.execute(
+                            "SELECT generation FROM rbac_authority_state "
+                            "WHERE authority_id = 1"
+                        ).fetchone()["generation"]
+                    ),
+                )
+            audit_event = {
+                **event,
+                "subject_id": subject_id,
+                "previous_roles": (
+                    previous_binding["roles"] if previous_binding is not None else []
+                ),
+                "new_roles": normalized_roles,
+                "status": status,
+                "previous_generation": current_generation,
+                "generation": generation,
+                "state_digest": state_digest,
+            }
+            audit = append_audit_event(
+                conn,
+                event_type=event_type,
+                actor_type="user",
+                actor_id=actor_id,
+                event=audit_event,
+            )
+            binding = subjects[subject_id]
+        if _connection is None:
+            try:
+                projected = project_rbac_authority_state()
+                projection = {
+                    "status": "current",
+                    "generation": projected["generation"],
+                    "state_digest": projected["state_digest"],
+                }
+            except RBACBindingStoreError:
+                projection = {"status": "pending", "generation": generation}
+        else:
+            projection = {"status": "deferred", "generation": generation}
+        return {
+            "binding": binding,
+            "previous_binding": previous_binding,
+            "generation": generation,
+            "state_digest": state_digest,
+            "audit": audit,
+            "projection": projection,
+        }
+    except (RBACBindingStoreError, AuditStoreError):
+        raise
+    except Exception as exc:
+        raise RBACBindingStoreError("RBAC mutation failed") from exc
+
+
+def _rbac_subject_has_any_role_on_connection(
+    conn: Any,
+    subject_id: str,
+    required_roles: set[str],
+) -> bool:
+    subject_id = _validate_rbac_subject_id(subject_id)
+    try:
+        normalized_required = set(normalize_rbac_roles(required_roles))
+    except RBACRoleValidationError as exc:
+        raise RBACBindingStoreError("required RBAC roles are invalid") from exc
+    row = conn.execute(
+        "SELECT binding.*, authority.generation AS authority_generation, "
+        "authority.state_digest AS authority_state_digest, "
+        "authority.binding_table_revision AS authority_binding_table_revision, "
+        "authority.verified_binding_table_revision "
+        "AS authority_verified_binding_table_revision, "
+        "authority.updated_at AS authority_updated_at "
+        "FROM rbac_authority_state AS authority "
+        "LEFT JOIN rbac_role_bindings AS binding ON binding.subject_id = ? "
+        "WHERE authority.authority_id = 1",
+        (subject_id,),
+    ).fetchone()
+    if row is None:
+        raise RBACBindingStoreError("RBAC authority is not initialized")
+    _validate_rbac_authority_from_conn(
+        conn,
+        {
+            "generation": row["authority_generation"],
+            "state_digest": row["authority_state_digest"],
+            "binding_table_revision": row["authority_binding_table_revision"],
+            "verified_binding_table_revision": row[
+                "authority_verified_binding_table_revision"
+            ],
+            "updated_at": row["authority_updated_at"],
+        },
+    )
+    if row["subject_id"] is None:
+        return False
+    binding = _rbac_binding_from_row(row)
+    if binding["generation"] > int(row["authority_generation"]):
+        raise RBACBindingStoreError("RBAC binding generation is invalid")
+    if binding["status"] != "active":
+        return False
+    roles = set(binding["roles"])
+    return "admin" in roles or bool(roles & normalized_required)
+
+
+@contextlib.contextmanager
+def _rbac_projection_lock():
+    try:
+        RBAC_BINDINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = RBAC_BINDINGS_PATH.with_suffix(RBAC_BINDINGS_PATH.suffix + ".lock")
+        descriptor = os.open(
+            lock_path,
+            os.O_CREAT
+            | os.O_RDWR
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+    except OSError as exc:
+        raise RBACBindingStoreError("RBAC projection lock is unavailable") from exc
+    try:
+        file_stat = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(file_stat.st_mode)
+            or file_stat.st_uid != os.getuid()
+            or stat.S_IMODE(file_stat.st_mode) != 0o600
+            or file_stat.st_nlink != 1
+        ):
+            raise RBACBindingStoreError("RBAC projection lock is insecure")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(descriptor)
+
+
+def _write_rbac_projection(state: dict[str, Any]) -> None:
+    payload = (json.dumps(state, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    if len(payload) > _RBAC_BINDINGS_MAX_BYTES:
+        raise RBACBindingStoreError("RBAC projection exceeds the size limit")
+    parent = RBAC_BINDINGS_PATH.parent
+    temporary = parent / (
+        f".{RBAC_BINDINGS_PATH.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+    )
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("short RBAC projection write")
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        os.replace(temporary, RBAC_BINDINGS_PATH)
+        directory_descriptor = os.open(
+            parent,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except OSError as exc:
+        raise RBACBindingStoreError("RBAC projection could not be published") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError:
+            pass
+
+
+def project_rbac_authority_state() -> dict[str, Any]:
+    try:
+        for _attempt in range(8):
+            with connect() as conn:
+                _lock_rbac_authority(conn)
+                state = _rbac_authority_state_from_conn(conn)
+            with _rbac_projection_lock():
+                with connect() as conn:
+                    _lock_rbac_authority(conn)
+                    publication_head = _rbac_authority_state_from_conn(conn)
+                if publication_head["generation"] != state["generation"]:
+                    continue
+                _write_rbac_projection(state)
+            with connect() as conn:
+                _lock_rbac_authority(conn)
+                current = _rbac_authority_state_from_conn(conn)
+            if current["generation"] == state["generation"]:
+                return current
+        raise RBACBindingStoreError("RBAC projection did not converge")
+    except RBACBindingStoreError:
+        raise
+    except Exception as exc:
+        raise RBACBindingStoreError("RBAC projection failed") from exc
+
+
+def _read_legacy_rbac_bindings() -> dict[str, dict[str, Any]]:
     try:
         with RBAC_BINDINGS_PATH.open("rb") as handle:
             raw = handle.read(_RBAC_BINDINGS_MAX_BYTES + 1)
     except FileNotFoundError:
-        return None
+        return {}
     except OSError as exc:
-        raise RBACBindingStoreError("RBAC binding state is unreadable") from exc
+        raise RBACBindingStoreError("legacy RBAC projection is unreadable") from exc
     if len(raw) > _RBAC_BINDINGS_MAX_BYTES:
-        raise RBACBindingStoreError("RBAC binding state exceeds the size limit")
+        raise RBACBindingStoreError("legacy RBAC projection exceeds the size limit")
     try:
         state = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise RBACBindingStoreError("RBAC binding state is invalid") from exc
+        raise RBACBindingStoreError("legacy RBAC projection is invalid") from exc
     if (
         not isinstance(state, dict)
         or state.get("version") != "serverware.rbacBindings/v1"
         or not isinstance(state.get("subjects"), dict)
     ):
-        raise RBACBindingStoreError("RBAC binding state is invalid")
-    binding = state["subjects"].get(subject_id)
-    if binding is None:
-        return None
-    if not isinstance(binding, dict) or binding.get("subject_id") != subject_id:
-        raise RBACBindingStoreError("RBAC subject binding is invalid")
-    binding_status = binding.get("status")
-    raw_roles = binding.get("roles")
-    if binding_status not in {"active", "deprovisioned"} or not isinstance(
-        raw_roles, list
-    ):
-        raise RBACBindingStoreError("RBAC subject binding is invalid")
-    if any(
-        not isinstance(role, str) or not role or role != role.strip()
-        for role in raw_roles
-    ):
-        raise RBACBindingStoreError("RBAC subject roles are invalid")
-    roles = sorted(set(raw_roles))
-    if len(roles) != len(raw_roles) or set(roles) - _VALID_RBAC_ROLES:
-        raise RBACBindingStoreError("RBAC subject roles are invalid")
-    if (binding_status == "active" and not roles) or (
-        binding_status == "deprovisioned" and roles
-    ):
-        raise RBACBindingStoreError("RBAC subject binding is invalid")
-    return {
-        "subject_id": subject_id,
-        "status": binding_status,
-        "roles": roles,
-    }
+        raise RBACBindingStoreError("legacy RBAC projection is invalid")
+    subjects: dict[str, dict[str, Any]] = {}
+    for raw_subject_id, raw_binding in state["subjects"].items():
+        subject_id = _validate_rbac_subject_id(raw_subject_id)
+        if (
+            not isinstance(raw_binding, dict)
+            or raw_binding.get("subject_id") != subject_id
+        ):
+            raise RBACBindingStoreError("legacy RBAC subject binding is invalid")
+        status = raw_binding.get("status")
+        if status not in {"active", "deprovisioned"}:
+            raise RBACBindingStoreError("legacy RBAC subject status is invalid")
+        try:
+            roles = normalize_rbac_roles(
+                raw_binding.get("roles"),
+                require_nonempty=status == "active",
+            )
+        except RBACRoleValidationError as exc:
+            raise RBACBindingStoreError(
+                "legacy RBAC subject roles are invalid"
+            ) from exc
+        if status == "deprovisioned" and roles:
+            raise RBACBindingStoreError(
+                "legacy deprovisioned RBAC subject retained roles"
+            )
+        subjects[subject_id] = {
+            "subject_id": subject_id,
+            "roles": roles,
+            "status": status,
+            "updated_at": raw_binding.get("updated_at"),
+            "updated_by": raw_binding.get("updated_by"),
+            "reason": raw_binding.get("reason"),
+            "deprovisioned_at": raw_binding.get("deprovisioned_at"),
+            "deprovisioned_by": raw_binding.get("deprovisioned_by"),
+        }
+    return subjects
+
+
+def initialize_rbac_authority() -> dict[str, Any]:
+    try:
+        with connect() as conn:
+            _lock_rbac_authority(conn)
+            existing = conn.execute(
+                "SELECT generation FROM rbac_authority_state WHERE authority_id = 1"
+            ).fetchone()
+            if existing is not None:
+                state = _rbac_authority_state_from_conn(conn)
+            else:
+                legacy_subjects = _read_legacy_rbac_bindings()
+                generation = 1 if legacy_subjects else 0
+                now_s = _metadata_utcnow(conn).isoformat()
+                for subject_id, binding in sorted(legacy_subjects.items()):
+                    status = str(binding["status"])
+                    updated_at = str(binding.get("updated_at") or now_s)
+                    updated_by = str(binding.get("updated_by") or "system:rbac-migration")
+                    deprovisioned_at = (
+                        str(binding.get("deprovisioned_at") or updated_at)
+                        if status == "deprovisioned"
+                        else None
+                    )
+                    deprovisioned_by = (
+                        str(binding.get("deprovisioned_by") or updated_by)
+                        if status == "deprovisioned"
+                        else None
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO rbac_role_bindings (
+                            subject_id, roles_json, status, generation, binding_digest, updated_at,
+                            updated_by, reason, deprovisioned_at, deprovisioned_by
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            subject_id,
+                            dumps(binding["roles"]),
+                            status,
+                            generation,
+                            _rbac_binding_digest(
+                                {
+                                    "subject_id": subject_id,
+                                    "roles": binding["roles"],
+                                    "status": status,
+                                    "generation": generation,
+                                    "updated_at": updated_at,
+                                    "updated_by": updated_by,
+                                    "reason": binding.get("reason"),
+                                    **(
+                                        {
+                                            "deprovisioned_at": deprovisioned_at,
+                                            "deprovisioned_by": deprovisioned_by,
+                                        }
+                                        if status == "deprovisioned"
+                                        else {}
+                                    ),
+                                }
+                            ),
+                            updated_at,
+                            updated_by,
+                            binding.get("reason"),
+                            deprovisioned_at,
+                            deprovisioned_by,
+                        ),
+                    )
+                rows = conn.execute(
+                    "SELECT * FROM rbac_role_bindings ORDER BY subject_id ASC"
+                ).fetchall()
+                subjects = {
+                    str(row["subject_id"]): _rbac_binding_from_row(row)
+                    for row in rows
+                }
+                material = _rbac_projection_material(
+                    generation=generation,
+                    subjects=subjects,
+                )
+                state_digest = _rbac_projection_digest(material)
+                conn.execute(
+                    "INSERT INTO rbac_authority_state "
+                    "(authority_id, generation, state_digest, updated_at) "
+                    "VALUES (1, ?, ?, ?)",
+                    (generation, state_digest, now_s),
+                )
+                if legacy_subjects:
+                    append_audit_event(
+                        conn,
+                        event_type="rbac.authority_migrated",
+                        actor_type="system",
+                        actor_id="system:rbac-migration",
+                        event={
+                            "generation": generation,
+                            "state_digest": state_digest,
+                            "subject_count": len(subjects),
+                            "source_version": "serverware.rbacBindings/v1",
+                        },
+                    )
+                state = {
+                    **material,
+                    "state_digest": state_digest,
+                    "updated_at": now_s,
+                }
+        return project_rbac_authority_state()
+    except (RBACBindingStoreError, AuditStoreError):
+        raise
+    except Exception as exc:
+        raise RBACBindingStoreError("RBAC authority initialization failed") from exc
 
 
 def _audit_psycopg():
@@ -3407,18 +4156,88 @@ def record_audit_event(
         )
 
 
+def _data_plane_audit_row_id(instance_id: str, event_id: str) -> str:
+    if not isinstance(instance_id, str) or not instance_id:
+        raise AuditStoreError("data-plane audit instance identity is required")
+    if not isinstance(event_id, str) or re.fullmatch(
+        r"sha256:[0-9a-f]{64}", event_id
+    ) is None:
+        raise AuditStoreError(
+            "data-plane audit event ID must match sha256:<64 lowercase hex>"
+        )
+    identity = dumps(
+        {
+            "eventId": event_id,
+            "instanceId": instance_id,
+            "version": "serverware.dataPlaneAuditRow/v1",
+        }
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(identity).hexdigest()
+
+
+def _audit_batch_row_matches(
+    row: Any,
+    *,
+    event_type: str,
+    actor_type: str,
+    actor_id: str | None,
+    event_json: str,
+) -> bool:
+    return (
+        row["event_type"] == event_type
+        and row["actor_type"] == actor_type
+        and row["actor_id"] == actor_id
+        and row["event_json"] == event_json
+    )
+
+
+def _audit_batch_existing_result(row: Any) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "event_type": row["event_type"],
+        "actor_type": row["actor_type"],
+        "actor_id": row["actor_id"],
+        "event": loads(row["event_json"], {}),
+        "prev_event_hash": row["prev_event_hash"],
+        "event_hash": row["event_hash"],
+        "created_at": row["created_at"],
+    }
+
+
 def record_audit_event_batch(
     events: list[tuple[str, dict[str, Any]]],
     *,
     actor_type: str,
     actor_id: str | None,
+    producer_event_ids: list[str] | None = None,
+    producer_instance_id: str | None = None,
 ) -> list[dict[str, Any]]:
     if not events:
         return []
     if len(events) > 200:
         raise AuditStoreError("audit batch exceeds 200 events")
+    producer_idempotency = producer_event_ids is not None
+    if producer_idempotency != (producer_instance_id is not None):
+        raise AuditStoreError(
+            "producer event IDs and producer instance identity must be supplied together"
+        )
+    if producer_event_ids is not None and len(producer_event_ids) != len(events):
+        raise AuditStoreError("producer event ID count must match audit batch size")
+    if producer_event_ids is not None and any(
+        not isinstance(event_id, str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", event_id) is None
+        for event_id in producer_event_ids
+    ):
+        raise AuditStoreError(
+            "data-plane audit event ID must match sha256:<64 lowercase hex>"
+        )
+    if producer_event_ids is not None and len(set(producer_event_ids)) != len(
+        producer_event_ids
+    ):
+        raise AuditStoreError("data-plane audit batch contains duplicate event IDs")
+
     prepared: list[tuple[str, dict[str, Any], str, str]] = []
-    for event_type, event in events:
+    for index, (event_type, event) in enumerate(events):
         if not isinstance(event_type, str) or not 1 <= len(event_type) <= 128:
             raise AuditStoreError("audit event_type must contain 1-128 characters")
         if not isinstance(event, dict):
@@ -3426,12 +4245,48 @@ def record_audit_event_batch(
         event = _audit_event_for_storage(event_type, event)
         event_json = dumps(event)
         _validate_audit_event_json(event_json)
-        prepared.append((event_type, event, event_json, str(uuid.uuid4())))
+        event_id = (
+            _data_plane_audit_row_id(
+                producer_instance_id,
+                producer_event_ids[index],
+            )
+            if producer_event_ids is not None and producer_instance_id is not None
+            else str(uuid.uuid4())
+        )
+        prepared.append((event_type, event, event_json, event_id))
 
     if not audit_uses_postgres():
         with connect() as conn:
             if not conn.in_transaction:
                 conn.execute("BEGIN IMMEDIATE")
+            if producer_idempotency:
+                existing_by_id = {}
+                for _event_type, _event, _event_json, event_id in prepared:
+                    existing = conn.execute(
+                        "SELECT * FROM audit_events WHERE id = ?", (event_id,)
+                    ).fetchone()
+                    if existing is not None:
+                        existing_by_id[event_id] = existing
+                if existing_by_id:
+                    if len(existing_by_id) != len(prepared):
+                        raise AuditBatchConflictError(
+                            "data-plane audit batch is only partially present"
+                        )
+                    replay_results = []
+                    for event_type, _event, event_json, event_id in prepared:
+                        existing = existing_by_id[event_id]
+                        if not _audit_batch_row_matches(
+                            existing,
+                            event_type=event_type,
+                            actor_type=actor_type,
+                            actor_id=actor_id,
+                            event_json=event_json,
+                        ):
+                            raise AuditBatchConflictError(
+                                "data-plane audit event ID conflicts with immutable event data"
+                            )
+                        replay_results.append(_audit_batch_existing_result(existing))
+                    return replay_results
             results = []
             for event_type, event, _event_json, event_id in prepared:
                 results.append(
@@ -3451,6 +4306,34 @@ def record_audit_event_batch(
         with conn.transaction():
             with conn.cursor() as cur:
                 _lock_postgres_audit(conn, "chain")
+                if producer_idempotency:
+                    existing_by_id = {}
+                    for _event_type, _event, _event_json, event_id in prepared:
+                        existing = cur.execute(
+                            "SELECT * FROM serverware_audit_events WHERE id = %(id)s",
+                            {"id": event_id},
+                        ).fetchone()
+                        if existing is not None:
+                            existing_by_id[event_id] = existing
+                    if existing_by_id:
+                        if len(existing_by_id) != len(prepared):
+                            raise AuditBatchConflictError(
+                                "data-plane audit batch is only partially present"
+                            )
+                        for event_type, _event, event_json, event_id in prepared:
+                            existing = existing_by_id[event_id]
+                            if not _audit_batch_row_matches(
+                                existing,
+                                event_type=event_type,
+                                actor_type=actor_type,
+                                actor_id=actor_id,
+                                event_json=event_json,
+                            ):
+                                raise AuditBatchConflictError(
+                                    "data-plane audit event ID conflicts with immutable event data"
+                                )
+                            results.append(_audit_batch_existing_result(existing))
+                        return results
                 previous = cur.execute(
                     "SELECT event_hash FROM serverware_audit_events "
                     "ORDER BY sequence DESC LIMIT 1"
@@ -4157,6 +5040,42 @@ def init_db(path: Path = DB_PATH) -> None:
             CREATE INDEX IF NOT EXISTS metadata_audit_outbox_delivery
                 ON metadata_audit_outbox (status, claimed_at, created_at, id);
 
+            CREATE TABLE IF NOT EXISTS rbac_authority_state (
+                authority_id INTEGER PRIMARY KEY,
+                generation BIGINT NOT NULL,
+                state_digest TEXT NOT NULL,
+                binding_table_revision BIGINT NOT NULL DEFAULT 0,
+                verified_binding_table_revision BIGINT NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                CHECK (authority_id = 1),
+                CHECK (generation >= 0),
+                CHECK (binding_table_revision >= 0),
+                CHECK (verified_binding_table_revision >= 0),
+                CHECK (length(state_digest) = 71)
+            );
+
+            CREATE TABLE IF NOT EXISTS rbac_role_bindings (
+                subject_id TEXT PRIMARY KEY,
+                roles_json TEXT NOT NULL,
+                status TEXT NOT NULL,
+                generation BIGINT NOT NULL,
+                binding_digest TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL,
+                reason TEXT,
+                deprovisioned_at TEXT,
+                deprovisioned_by TEXT,
+                CHECK (status IN ('active', 'deprovisioned')),
+                CHECK (generation > 0),
+                CHECK (length(binding_digest) = 71),
+                CHECK (length(roles_json) <= 4096),
+                CHECK (length(subject_id) <= 1024),
+                CHECK (reason IS NULL OR length(reason) <= 500)
+            );
+
+            CREATE INDEX IF NOT EXISTS rbac_role_bindings_generation
+                ON rbac_role_bindings (generation, subject_id);
+
             CREATE TABLE IF NOT EXISTS webauthn_trust_publications (
                 id TEXT PRIMARY KEY,
                 scope TEXT NOT NULL,
@@ -4805,6 +5724,21 @@ def init_db(path: Path = DB_PATH) -> None:
         _ensure_column(
             conn, "metadata_audit_outbox", "storage_format_version", "BIGINT"
         )
+        _ensure_column(conn, "rbac_role_bindings", "binding_digest", "TEXT")
+        _backfill_rbac_binding_digests(conn)
+        _ensure_column(
+            conn,
+            "rbac_authority_state",
+            "binding_table_revision",
+            "BIGINT NOT NULL DEFAULT 0",
+        )
+        _ensure_column(
+            conn,
+            "rbac_authority_state",
+            "verified_binding_table_revision",
+            "BIGINT NOT NULL DEFAULT 0",
+        )
+        _install_rbac_binding_revision_triggers(conn)
         _install_metadata_storage_epoch_guards(conn)
         _remediate_metadata_rate_limit_storage(conn, keyring=keyring)
         if not isinstance(conn, PostgresMetadataConnection):
@@ -5180,6 +6114,7 @@ def init_db(path: Path = DB_PATH) -> None:
             _record_credential_generation(
                 conn, str(row["id"]), int(row["credential_version"] or 1)
             )
+    initialize_rbac_authority()
 
 
 def _ensure_column(conn: Any, table: str, column: str, decl: str) -> None:
@@ -6671,6 +7606,7 @@ def advance_policy_high_water(
     sequence: int,
     rollback_epoch: int,
     policy_hash: str,
+    _connection: Any | None = None,
 ) -> dict[str, Any]:
     if not policy_id or len(policy_id.encode("utf-8")) > 256:
         raise MetadataStoreError("policy id must be a non-empty string up to 256 bytes")
@@ -6684,7 +7620,10 @@ def advance_policy_high_water(
         raise MetadataStoreError("policy hash must be a canonical SHA-256 digest")
 
     now_s = iso_now()
-    with connect() as conn:
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
         if isinstance(conn, PostgresMetadataConnection):
             conn.execute(
                 "SELECT pg_advisory_xact_lock(?)", (_POLICY_HIGH_WATER_LOCK_KEY,)
@@ -7115,6 +8054,7 @@ def create_credential(
     setup_actor_id: str | None = None,
     setup_oauth_provider: str | None = None,
     setup_oauth_state_digest: str | None = None,
+    _connection: Any | None = None,
 ) -> dict[str, Any]:
     secret = validate_credential_secret(secret)
     metadata = validate_credential_metadata(metadata)
@@ -7134,9 +8074,12 @@ def create_credential(
     item_id = str(uuid.uuid4())
     now = utcnow()
     now_s = now.isoformat()
-    if setup_binding is not None:
+    if setup_binding is not None and _connection is None:
         _expire_setup_sessions_before_mutation(now)
-    with connect() as conn:
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
         if setup_binding is not None:
             _lock_setup_oauth_callback_binding(conn, setup_binding)
         _lock_credential_mutation(conn, item_id)
@@ -7809,16 +8752,10 @@ def _oidc_browser_session_roles(roles: Any) -> tuple[list[str], str]:
         raise MetadataStoreError(
             "OIDC browser session roles must be a non-empty bounded list"
         )
-    normalized: list[str] = []
-    for role in roles:
-        normalized.append(
-            _oidc_browser_session_text(
-                "role",
-                role,
-                maximum_bytes=_OIDC_BROWSER_SESSION_ROLE_MAX_BYTES,
-            )
-        )
-    normalized = sorted(set(normalized))
+    try:
+        normalized = normalize_rbac_roles(roles)
+    except RBACRoleValidationError as exc:
+        raise MetadataStoreError("OIDC browser session roles are invalid") from exc
     roles_json = dumps(normalized)
     if len(roles_json.encode("utf-8")) > _OIDC_BROWSER_SESSION_ROLES_JSON_MAX_BYTES:
         raise MetadataStoreError("OIDC browser session roles exceed 4 KiB")
@@ -7853,9 +8790,10 @@ def _prune_oidc_browser_sessions(conn: Any, now: datetime) -> int:
 
 
 def row_to_oidc_browser_session(row: Any) -> dict[str, Any]:
-    roles = loads(row["roles_json"], None)
-    if not isinstance(roles, list) or any(not isinstance(role, str) for role in roles):
-        raise MetadataStoreError("stored OIDC browser session roles are invalid")
+    try:
+        roles = normalize_rbac_roles(loads(row["roles_json"], None))
+    except (json.JSONDecodeError, RBACRoleValidationError) as exc:
+        raise MetadataStoreError("stored OIDC browser session roles are invalid") from exc
     return {
         "id": str(row["id"]),
         "token_digest": str(row["token_digest"]),
@@ -9779,6 +10717,7 @@ def activate_pending_oauth_credential(
         _expire_setup_sessions_before_mutation(now)
     with connect() as conn:
         _lock_webauthn_authority(conn)
+        _lock_rbac_authority(conn)
         now = _metadata_utcnow(conn)
         now_s = now.isoformat()
         setup_row = None
@@ -9894,6 +10833,13 @@ def activate_pending_oauth_credential(
             return {"ok": False, "reason": f"approval_{approval['status']}"}
         if approval["expires_at"] <= now_s:
             return {"ok": False, "reason": "approval_expired"}
+        approved_by = str(approval["approved_by"] or "")
+        if approved_by.startswith("oidc:") and not _rbac_subject_has_any_role_on_connection(
+            conn,
+            approved_by,
+            {"credential_owner"},
+        ):
+            return {"ok": False, "reason": "approval_approver_role_revoked"}
         approver_webauthn_credential_id = approval[
             "approver_webauthn_credential_id"
         ]
@@ -10273,7 +11219,12 @@ def upsert_credential_with_id(
     return row_to_credential(row)
 
 
-def update_credential(item_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+def update_credential(
+    item_id: str,
+    payload: dict[str, Any],
+    *,
+    _connection: Any | None = None,
+) -> dict[str, Any] | None:
     if "secret" in payload and payload["secret"] is not None:
         payload = {**payload, "secret": validate_credential_secret(payload["secret"])}
     if "metadata" in payload:
@@ -10283,7 +11234,10 @@ def update_credential(item_id: str, payload: dict[str, Any]) -> dict[str, Any] |
         }
     if ("secret" in payload and payload["secret"] is not None) or "metadata" in payload:
         load_master_key()
-    with connect() as conn:
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
         _lock_credential_mutation(conn, item_id)
         current = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
@@ -10600,8 +11554,11 @@ def finish_oauth_credential_disconnect(
     }
 
 
-def delete_credential(item_id: str) -> bool:
-    with connect() as conn:
+def delete_credential(item_id: str, *, _connection: Any | None = None) -> bool:
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
         _lock_credential_mutation(conn, item_id)
         row = conn.execute(
             "SELECT * FROM credentials WHERE id = ?", (item_id,)
@@ -10624,10 +11581,15 @@ def row_to_route(row: sqlite3.Row) -> dict[str, Any]:
     return item
 
 
-def create_route(payload: dict[str, Any]) -> dict[str, Any]:
+def create_route(
+    payload: dict[str, Any], *, _connection: Any | None = None
+) -> dict[str, Any]:
     item_id = str(uuid.uuid4())
     now = iso_now()
-    with connect() as conn:
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
         conn.execute(
             """
             INSERT INTO routes
@@ -10704,7 +11666,12 @@ def upsert_route_with_id(item_id: str, payload: dict[str, Any]) -> dict[str, Any
     return row_to_route(row)
 
 
-def update_route(item_id: str, payload: dict[str, Any]) -> dict[str, Any] | None:
+def update_route(
+    item_id: str,
+    payload: dict[str, Any],
+    *,
+    _connection: Any | None = None,
+) -> dict[str, Any] | None:
     field_map = {
         "name": "name",
         "enabled": "enabled",
@@ -10727,13 +11694,15 @@ def update_route(item_id: str, payload: dict[str, Any]) -> dict[str, Any] | None
     if "policies" in payload:
         fields.append("policies = ?")
         values.append(dumps(payload["policies"] or []))
-    if not fields:
-        return get_route(item_id)
-    fields.append("updated_at = ?")
-    values.append(iso_now())
-    values.append(item_id)
-    with connect() as conn:
-        conn.execute(f"UPDATE routes SET {', '.join(fields)} WHERE id = ?", values)
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
+        if fields:
+            fields.append("updated_at = ?")
+            values.append(iso_now())
+            values.append(item_id)
+            conn.execute(f"UPDATE routes SET {', '.join(fields)} WHERE id = ?", values)
         row = conn.execute("SELECT * FROM routes WHERE id = ?", (item_id,)).fetchone()
     return row_to_route(row) if row else None
 
@@ -10752,8 +11721,11 @@ def list_routes() -> list[dict[str, Any]]:
     return [row_to_route(row) for row in rows]
 
 
-def delete_route(item_id: str) -> bool:
-    with connect() as conn:
+def delete_route(item_id: str, *, _connection: Any | None = None) -> bool:
+    connection_scope = (
+        connect() if _connection is None else contextlib.nullcontext(_connection)
+    )
+    with connection_scope as conn:
         cur = conn.execute("DELETE FROM routes WHERE id = ?", (item_id,))
     return cur.rowcount > 0
 
@@ -10867,15 +11839,15 @@ def ensure_control_plane_approval(
     ttl_seconds: int,
     require_webauthn: bool = False,
 ) -> dict[str, Any]:
-    now = utcnow()
-    now_s = now.isoformat()
-    expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
     resource_clause = (
         "resource_id IS NULL" if resource_id is None else "resource_id = ?"
     )
     resource_args: tuple[Any, ...] = () if resource_id is None else (resource_id,)
     with connect() as conn:
         _lock_webauthn_authority(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
         if require_webauthn:
             legacy_rows = conn.execute(
                 f"""
@@ -11130,6 +12102,7 @@ def consume_control_plane_approval(
     payload_digest: str,
     actor_id: str,
     require_webauthn: bool = False,
+    required_approver_roles: set[str] | None = None,
     _connection: Any | None = None,
     _now: datetime | None = None,
 ) -> dict[str, Any]:
@@ -11138,6 +12111,17 @@ def consume_control_plane_approval(
     )
     with connection_scope as conn:
         _lock_webauthn_authority(conn)
+        normalized_approver_roles: set[str] = set()
+        if required_approver_roles is not None:
+            try:
+                normalized_approver_roles = set(
+                    normalize_rbac_roles(required_approver_roles, require_nonempty=True)
+                )
+            except RBACRoleValidationError as exc:
+                raise RBACBindingStoreError(
+                    "required approval roles are invalid"
+                ) from exc
+            _lock_rbac_authority(conn)
         now = _metadata_utcnow(conn)
         if _now is not None:
             supplied_now = _now
@@ -11164,6 +12148,17 @@ def consume_control_plane_approval(
             return {"ok": False, "reason": f"approval_{existing['status']}"}
         if existing["expires_at"] <= now_s:
             return {"ok": False, "reason": "approval_expired"}
+        approved_by = str(existing["approved_by"] or "")
+        if (
+            normalized_approver_roles
+            and approved_by.startswith("oidc:")
+            and not _rbac_subject_has_any_role_on_connection(
+            conn,
+            approved_by,
+            normalized_approver_roles,
+            )
+        ):
+            return {"ok": False, "reason": "approval_approver_role_revoked"}
         approver_webauthn_credential_id = existing[
             "approver_webauthn_credential_id"
         ]
@@ -11243,8 +12238,9 @@ def consume_control_plane_approval(
 def deny_control_plane_approval(
     item_id: str, *, actor_id: str, note: str | None = None
 ) -> dict[str, Any] | None:
-    now_s = iso_now()
     with connect() as conn:
+        _lock_webauthn_authority(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
         existing = conn.execute(
             "SELECT * FROM control_plane_approvals WHERE id = ?", (item_id,)
         ).fetchone()
@@ -11327,8 +12323,6 @@ def create_approval_request(
             "pending approval ttl_seconds must be between 1 and 3600"
         )
     _validate_pending_approval_payload(route_id, method, url)
-    now = utcnow()
-    now_s = now.isoformat()
     pending_key = _pending_approval_key(
         route_id=route_id,
         method=method,
@@ -11344,6 +12338,8 @@ def create_approval_request(
     )
     with connect() as conn:
         _lock_pending_approval_creation(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
         pending_count = _expire_and_count_pending_approvals(conn, now_s)
         existing = conn.execute(
             """
@@ -11373,6 +12369,19 @@ def create_approval_request(
                 (now + timedelta(seconds=ttl_seconds)).isoformat(),
                 pending_key,
             ),
+        )
+        append_audit_event(
+            conn,
+            event_type="approval.requested",
+            actor_type="proxy",
+            actor_id=route_id,
+            event={
+                "approval_request_id": item_id,
+                "route_id": route_id,
+                "method": method,
+                "url_commitment": _approval_url_commitment(url),
+                "expires_at": (now + timedelta(seconds=ttl_seconds)).isoformat(),
+            },
         )
         row = conn.execute(
             "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
@@ -11429,9 +12438,6 @@ def _ensure_jit_approval_request_on_connection(
         canonical_json,
         redacted_json,
     )
-    now = now or utcnow()
-    now_s = now.isoformat()
-    expires = (now + timedelta(seconds=pending_ttl_seconds)).isoformat()
     pending_key = _pending_approval_key(
         route_id=route_id,
         method=method,
@@ -11446,6 +12452,15 @@ def _ensure_jit_approval_request_on_connection(
         grant_max_uses=grant_max_uses,
     )
     _lock_pending_approval_creation(conn)
+    database_now = _metadata_utcnow(conn)
+    if now is not None:
+        supplied_now = now
+        if supplied_now.tzinfo is None:
+            supplied_now = supplied_now.replace(tzinfo=timezone.utc)
+        database_now = max(database_now, supplied_now.astimezone(timezone.utc))
+    now = database_now
+    now_s = now.isoformat()
+    expires = (now + timedelta(seconds=pending_ttl_seconds)).isoformat()
     pending_count = _expire_and_count_pending_approvals(conn, now_s)
     existing = conn.execute(
         """
@@ -11508,6 +12523,27 @@ def _ensure_jit_approval_request_on_connection(
             grant_max_uses,
             pending_key,
         ),
+    )
+    append_audit_event(
+        conn,
+        event_type="approval.requested",
+        actor_type="proxy",
+        actor_id=principal_id,
+        event={
+            "approval_request_id": item_id,
+            "route_id": route_id,
+            "principal_id": principal_id,
+            "credential_id": credential_id,
+            "credential_version": credential_version,
+            "policy_hash": policy_hash,
+            "request_digest": request_digest,
+            "operation_digest": operation_digest,
+            "method": method,
+            "url_commitment": _approval_url_commitment(url),
+            "expires_at": expires,
+            "grant_ttl_seconds": grant_ttl_seconds,
+            "grant_max_uses": grant_max_uses,
+        },
     )
     row = conn.execute(
         "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
@@ -11602,12 +12638,12 @@ def issue_approval_review_receipt(
         raise MetadataStoreError("approval review receipt digest is invalid")
     if not isinstance(ttl_seconds, int) or isinstance(ttl_seconds, bool) or not 30 <= ttl_seconds <= 300:
         raise MetadataStoreError("approval review receipt TTL must be between 30 and 300 seconds")
-    now = utcnow()
-    now_s = now.isoformat()
-    expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
     receipt_id = str(uuid.uuid4())
     with connect() as conn:
         _lock_pending_approval_creation(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
+        expires_at = (now + timedelta(seconds=ttl_seconds)).isoformat()
         approval = conn.execute(
             "SELECT status, expires_at FROM approval_requests WHERE id = ?",
             (approval_request_id,),
@@ -11619,6 +12655,18 @@ def issue_approval_review_receipt(
         conn.execute(
             "DELETE FROM approval_review_receipts WHERE used_at IS NOT NULL OR expires_at <= ?",
             (now_s,),
+        )
+        append_audit_event(
+            conn,
+            event_type="approval.review_opened",
+            actor_type="admin",
+            actor_id=reviewer_id,
+            event={
+                "approval_request_id": approval_request_id,
+                "review_digest": review_digest,
+                "review_receipt_id": receipt_id,
+                "review_receipt_expires_at": expires_at,
+            },
         )
         count_row = conn.execute(
             "SELECT COUNT(*) AS count FROM approval_review_receipts"
@@ -11657,15 +12705,19 @@ def get_active_approval_review_receipt(
     approval_request_id: str,
     reviewer_id: str,
 ) -> dict[str, Any] | None:
-    now_s = iso_now()
     with connect() as conn:
+        now_s = _metadata_utcnow(conn).isoformat()
         row = conn.execute(
             """
-            SELECT * FROM approval_review_receipts
-            WHERE id = ? AND approval_request_id = ? AND reviewer_id = ?
-              AND used_at IS NULL AND expires_at > ?
+            SELECT receipt.* FROM approval_review_receipts AS receipt
+            JOIN approval_requests AS approval
+              ON approval.id = receipt.approval_request_id
+            WHERE receipt.id = ? AND receipt.approval_request_id = ?
+              AND receipt.reviewer_id = ? AND receipt.used_at IS NULL
+              AND receipt.expires_at > ? AND approval.status = 'pending'
+              AND approval.expires_at > ?
             """,
-            (receipt_id, approval_request_id, reviewer_id, now_s),
+            (receipt_id, approval_request_id, reviewer_id, now_s, now_s),
         ).fetchone()
     if row is None:
         return None
@@ -11709,11 +12761,10 @@ def approve_request(
     review_digest: str | None = None,
     require_review_receipt: bool = False,
 ) -> dict[str, Any] | None:
-    now = utcnow()
-    now_s = now.isoformat()
-    approved_until = (now + timedelta(seconds=ttl_seconds)).isoformat()
     with connect() as conn:
         _lock_pending_approval_creation(conn)
+        now = _metadata_utcnow(conn)
+        now_s = now.isoformat()
         existing = conn.execute(
             "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
         ).fetchone()
@@ -11802,6 +12853,11 @@ def approve_request(
             )
             if consumed.rowcount != 1:
                 raise MetadataStoreError("approval review receipt changed before approval")
+        conn.execute(
+            "UPDATE approval_review_receipts SET used_at = ? "
+            "WHERE approval_request_id = ? AND used_at IS NULL",
+            (now_s, item_id),
+        )
         grant_result: dict[str, Any] | None = None
         if existing["request_digest"]:
             if grants.uses_postgres():
@@ -14281,12 +15337,13 @@ def deny_request(
     item_id: str, note: str | None = None, actor_id: str = "admin"
 ) -> dict[str, Any] | None:
     with connect() as conn:
+        _lock_pending_approval_creation(conn)
+        now_s = _metadata_utcnow(conn).isoformat()
         existing = conn.execute(
             "SELECT * FROM approval_requests WHERE id = ?", (item_id,)
         ).fetchone()
         if not existing:
             return None
-        now_s = iso_now()
         if existing["status"] != "pending" or existing["expires_at"] <= now_s:
             return None
         cur = conn.execute(
@@ -14299,6 +15356,11 @@ def deny_request(
         )
         if cur.rowcount != 1:
             return None
+        conn.execute(
+            "UPDATE approval_review_receipts SET used_at = ? "
+            "WHERE approval_request_id = ? AND used_at IS NULL",
+            (now_s, item_id),
+        )
         if existing:
             append_audit_event(
                 conn,
@@ -15258,8 +16320,13 @@ def create_webauthn_recovery_ceremony(
         ceremony_expiry = min(
             now + timedelta(seconds=ttl_seconds), pending_expiry
         ).isoformat()
-        roles = loads(session["roles_json"], [])
-        roles_json = dumps(sorted(str(role) for role in roles))
+        try:
+            roles = normalize_rbac_roles(loads(session["roles_json"], None))
+        except (json.JSONDecodeError, RBACRoleValidationError) as exc:
+            raise WebAuthnRecoveryError(
+                "pending OIDC browser session roles are invalid"
+            ) from exc
+        roles_json = dumps(roles)
         identity_digest = "sha256:" + hashlib.sha256(
             dumps(
                 {
@@ -15957,7 +17024,12 @@ def create_webauthn_recovery_revocation(
             root_state["last_consumed_sequence"] if root_state else 0
         )
         root_sequence = max(metadata_last_sequence, witness_last_sequence) + 1
-        roles = sorted(loads(session["roles_json"], []))
+        try:
+            roles = normalize_rbac_roles(loads(session["roles_json"], None))
+        except (json.JSONDecodeError, RBACRoleValidationError) as exc:
+            raise WebAuthnRecoveryError(
+                "pending OIDC browser session roles are invalid"
+            ) from exc
         identity_digest = "sha256:" + hashlib.sha256(
             dumps(
                 {
@@ -17694,6 +18766,8 @@ def metadata_store_status() -> dict[str, Any]:
         "setup_session_evidence",
         "setup_session_events",
         "metadata_audit_outbox",
+        "rbac_authority_state",
+        "rbac_role_bindings",
         "webauthn_trust_publications",
         "oidc_login_states",
         "oidc_browser_sessions",

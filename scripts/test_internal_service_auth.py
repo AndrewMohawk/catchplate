@@ -32,6 +32,18 @@ TOKENS = {
 }
 
 
+def audit_event_id(marker: int) -> str:
+    return f"sha256:{marker:064x}"
+
+
+def audit_event(marker: int, event_type: str, event: dict) -> dict:
+    return {
+        "eventId": audit_event_id(marker),
+        "eventType": event_type,
+        "event": event,
+    }
+
+
 def expect_http_error(call, status_code: int) -> str:
     try:
         call()
@@ -131,12 +143,14 @@ def assert_production_validation() -> None:
 
 def main() -> None:
     db.init_db()
+    rust_source = (
+        ROOT / "data-plane" / "decision-gate-rs" / "src" / "main.rs"
+    ).read_text(encoding="utf-8")
+    rust_source = rust_source.rsplit("\n#[cfg(test)]\nmod tests {", maxsplit=1)[0]
     rust_event_types = set(
         re.findall(
             r'"(data_plane\.[A-Za-z0-9_.-]+)"',
-            (ROOT / "data-plane" / "decision-gate-rs" / "src" / "main.rs").read_text(
-                encoding="utf-8"
-            ),
+            rust_source,
         )
     )
     rust_event_types.discard("data_plane.test")
@@ -146,10 +160,11 @@ def main() -> None:
             f"missing={sorted(rust_event_types - set(app_module._PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES))} "
             f"extra={sorted(set(app_module._PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES) - rust_event_types)}"
         )
-    audit_payload = {
-        "event_type": "data_plane.test.internal_auth",
-        "event": {"marker": "server-derived-actor"},
-    }
+    audit_payload = audit_event(
+        1,
+        "data_plane.test.internal_auth",
+        {"marker": "server-derived-actor"},
+    )
     rate_payload = {
         "counterKey": "sha256:" + "a" * 64,
         "principalId": "agent:test",
@@ -193,6 +208,33 @@ def main() -> None:
             raise AssertionError(
                 f"release reserve accepted caller-controlled {forbidden}"
             )
+
+    for invalid_event_id in (
+        "sha256:" + "A" * 64,
+        "sha256:" + "a" * 63,
+        "sha512:" + "a" * 64,
+    ):
+        try:
+            DataPlaneAuditEvent.model_validate(
+                {**audit_payload, "eventId": invalid_event_id}
+            )
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError(
+                f"audit model accepted invalid event ID {invalid_event_id!r}"
+            )
+    try:
+        DataPlaneAuditEvent.model_validate(
+            {
+                "eventType": audit_payload["eventType"],
+                "event": audit_payload["event"],
+            }
+        )
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("audit model accepted a missing production event ID")
 
     batch = DataPlaneAuditBatch(events=[DataPlaneAuditEvent.model_validate(audit_payload)])
     expect_http_error(
@@ -270,14 +312,138 @@ def main() -> None:
     accepted = data_plane_audit(batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"])
     if accepted != {"ok": True, "accepted": 1}:
         raise AssertionError(f"audit ingestion failed: {accepted}")
-    stored = next(item for item in db.list_audit_events() if item["event_type"] == audit_payload["event_type"])
+    exact_body = json.dumps(
+        {"events": [audit_payload]},
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    body_sent = False
+
+    async def receive_audit_body():
+        nonlocal body_sent
+        if body_sent:
+            return {"type": "http.disconnect"}
+        body_sent = True
+        return {"type": "http.request", "body": exact_body, "more_body": False}
+
+    audit_request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/data-plane/audit",
+            "query_string": b"",
+            "headers": [],
+        },
+        receive_audit_body,
+    )
+    signed_ack = asyncio.run(
+        app_module.data_plane_audit(
+            audit_request,
+            batch,
+            TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"],
+        )
+    )
+    expected_digest = "sha256:" + hashlib.sha256(exact_body).hexdigest()
+    if signed_ack != {
+        "apiVersion": "serverware.dataPlaneAuditAck/v1",
+        "ok": True,
+        "accepted": 1,
+        "batchDigest": expected_digest,
+        "instanceId": INSTANCE_ID,
+    }:
+        raise AssertionError(f"audit acknowledgement did not bind request bytes: {signed_ack}")
+    replayed = data_plane_audit(
+        batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+    )
+    if replayed != {"ok": True, "accepted": 1}:
+        raise AssertionError(f"lost-ACK audit replay failed: {replayed}")
+    matching = [
+        item
+        for item in db.list_audit_events()
+        if item["event_type"] == audit_payload["eventType"]
+    ]
+    if len(matching) != 1:
+        raise AssertionError(
+            f"lost-ACK retry created duplicate immutable rows: {matching}"
+        )
+    stored = matching[0]
     if stored.get("actor_type") != "data-plane" or stored.get("actor_id") != INSTANCE_ID:
         raise AssertionError(f"audit actor was not derived from authenticated configuration: {stored}")
+    expected_row_id = db._data_plane_audit_row_id(
+        INSTANCE_ID, audit_payload["eventId"]
+    )
+    if stored.get("id") != expected_row_id:
+        raise AssertionError(
+            f"audit row ID was not instance/event derived: {stored.get('id')}"
+        )
+
+    duplicate_id_batch = DataPlaneAuditBatch.model_validate(
+        {
+            "events": [
+                audit_event(2, "data_plane.test.duplicate.first", {"marker": 1}),
+                audit_event(2, "data_plane.test.duplicate.second", {"marker": 2}),
+            ]
+        }
+    )
+    expect_http_error(
+        lambda: data_plane_audit(
+            duplicate_id_batch, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+        ),
+        400,
+    )
+
+    replay_seed = DataPlaneAuditBatch.model_validate(
+        {
+            "events": [
+                audit_event(10, "data_plane.test.retry.first", {"marker": "first"}),
+                audit_event(11, "data_plane.test.retry.second", {"marker": "second"}),
+            ]
+        }
+    )
+    data_plane_audit(replay_seed, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"])
+    partial_replay = DataPlaneAuditBatch.model_validate(
+        {
+            "events": [
+                audit_event(10, "data_plane.test.retry.first", {"marker": "first"}),
+                audit_event(12, "data_plane.test.retry.third", {"marker": "third"}),
+            ]
+        }
+    )
+    expect_http_error(
+        lambda: data_plane_audit(
+            partial_replay, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+        ),
+        409,
+    )
+    if any(
+        item["event_type"] == "data_plane.test.retry.third"
+        for item in db.list_audit_events()
+    ):
+        raise AssertionError("partial audit replay appended its new suffix")
+
+    mismatched_replay = DataPlaneAuditBatch.model_validate(
+        {
+            "events": [
+                audit_event(
+                    10,
+                    "data_plane.test.retry.first",
+                    {"marker": "changed"},
+                )
+            ]
+        }
+    )
+    expect_http_error(
+        lambda: data_plane_audit(
+            mismatched_replay, TOKENS["SERVERWARE_DATA_PLANE_AUDIT_TOKEN"]
+        ),
+        409,
+    )
     secret_batch = DataPlaneAuditBatch.model_validate(
         {
             "events": [
                 {
-                    "event_type": "data_plane.test.secret_rejection",
+                    "eventId": audit_event_id(20),
+                    "eventType": "data_plane.test.secret_rejection",
                     "event": {
                         "nested": {
                             "accessToken": "must-not-enter-the-audit-chain"
@@ -306,7 +472,8 @@ def main() -> None:
             {
                 "events": [
                     {
-                        "event_type": "data_plane.policy.reloaded",
+                        "eventId": audit_event_id(21),
+                        "eventType": "data_plane.policy.reloaded",
                         "event": {
                             "component": "serverware-decision-gate-rs",
                             "policy_hash": "sha256:" + "f" * 64,
@@ -524,7 +691,7 @@ if __name__ == "__main__":
             DataPlaneReleaseAuthorizationComplete,
             DataPlaneReleaseAuthorizationDispatch,
             DataPlaneReleaseAuthorizationReserve,
-            data_plane_audit,
+            _ingest_data_plane_audit as data_plane_audit,
             data_plane_grant_consume,
             data_plane_rate_limit_consume,
             data_plane_release_authorization_complete,

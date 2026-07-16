@@ -7,6 +7,7 @@ DATA_PLANE_TOKEN="${SERVERWARE_DATA_PLANE_AUDIT_TOKEN:-dev-audit-ingest-token}"
 
 python3 - "$BASE" "$ADMIN_TOKEN" "$DATA_PLANE_TOKEN" <<'PY'
 import concurrent.futures
+import hashlib
 import json
 import sqlite3
 import sys
@@ -546,14 +547,22 @@ def request_json(path: str, *, method: str = "GET", headers: dict[str, str] | No
 admin_headers = {"X-Serverware-Admin-Token": admin_token}
 data_plane_headers = {"X-Serverware-Data-Plane-Token": data_plane_token}
 
+
+def producer_event_id(namespace: str, index: int) -> str:
+    value = hashlib.sha256(f"{namespace}:{index}".encode("utf-8")).hexdigest()
+    return f"sha256:{value}"
+
+
 partial_marker = f"audit-oversized-{time.time_ns()}"
 oversized_payload = {
     "events": [
         {
+            "eventId": producer_event_id(partial_marker, 0),
             "event_type": "data_plane.audit_store.must_not_commit",
             "event": {"marker": partial_marker, "index": 0},
         },
         {
+            "eventId": producer_event_id(partial_marker, 1),
             "event_type": "data_plane.audit_store.oversized",
             "event": {"marker": partial_marker, "value": "é" * 350_000},
         },
@@ -595,6 +604,7 @@ def post_event(index: int) -> dict:
     payload = {
         "events": [
             {
+                "eventId": producer_event_id(marker, index),
                 "event_type": "data_plane.audit_store.concurrent_append",
                 "event": {
                     "marker": marker,

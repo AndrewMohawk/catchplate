@@ -1693,6 +1693,17 @@ def main() -> None:
     assert_policy_rejected(invalid, "compiler accepted unsupported JIT quorum", validate_schema=validate_schema)
 
     invalid = copy.deepcopy(demo_bundle)
+    next(item for item in invalid["routes"] if item["id"] == jit_route["id"])["jit"]["approvers"]["users"] = ["*"]
+    assert_policy_rejected(invalid, "compiler accepted wildcard JIT approver authority", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
+    approver_users = next(
+        item for item in invalid["routes"] if item["id"] == jit_route["id"]
+    )["jit"]["approvers"]["users"]
+    approver_users.append(approver_users[0])
+    assert_policy_rejected(invalid, "compiler accepted duplicate JIT approvers", validate_schema=validate_schema)
+
+    invalid = copy.deepcopy(demo_bundle)
     next(item for item in invalid["routes"] if item["id"] == jit_route["id"])["jit"]["consumeOn"] = "successfulResponse"
     assert_policy_rejected(invalid, "compiler accepted unsupported JIT consumption", validate_schema=validate_schema)
 

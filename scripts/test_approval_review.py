@@ -851,6 +851,11 @@ def main() -> None:
             ),
         )
         receipt_test_token = receipt_test_review["review_receipt"]
+        sibling_receipt = db.issue_approval_review_receipt(
+            approval_request_id=receipt_test["id"],
+            reviewer_id="user:other",
+            review_digest=receipt_test_review["review_digest"],
+        )
         approved = db.approve_request(
             receipt_test["id"],
             actor_id="user:demo",
@@ -867,6 +872,89 @@ def main() -> None:
             reviewer_id="user:demo",
         ) is not None:
             raise AssertionError("approval review receipt remained reusable")
+        if db.get_active_approval_review_receipt(
+            sibling_receipt["id"],
+            approval_request_id=receipt_test["id"],
+            reviewer_id="user:other",
+        ) is not None:
+            raise AssertionError("terminal approval left a sibling review receipt active")
+        with db.connect() as conn:
+            sibling_row = conn.execute(
+                "SELECT used_at FROM approval_review_receipts WHERE id = ?",
+                (sibling_receipt["id"],),
+            ).fetchone()
+        if sibling_row is None or sibling_row["used_at"] is None:
+            raise AssertionError("terminal approval did not invalidate sibling receipts")
+
+        receipt_audit_failure = make_approval(
+            db,
+            snapshot,
+            digest_suffix="b",
+            redacted_display={"package": "@scope/audit-failure"},
+            canonical_request={
+                "principal": "agent:demo",
+                "operation": {"packageName": "@scope/audit-failure"},
+            },
+        )
+        original_append_audit_event = db.append_audit_event
+
+        def reject_review_audit(*_args, **_kwargs):
+            raise db.AuditStoreError("injected review receipt audit failure")
+
+        with patch.object(db, "append_audit_event", side_effect=reject_review_audit):
+            try:
+                db.issue_approval_review_receipt(
+                    approval_request_id=receipt_audit_failure["id"],
+                    reviewer_id="user:demo",
+                    review_digest="sha256:" + "7" * 64,
+                )
+            except db.AuditStoreError:
+                pass
+            else:
+                raise AssertionError("review receipt committed without its audit event")
+        db.append_audit_event = original_append_audit_event
+        with db.connect() as conn:
+            leaked_receipts = conn.execute(
+                "SELECT COUNT(*) AS count FROM approval_review_receipts "
+                "WHERE approval_request_id = ?",
+                (receipt_audit_failure["id"],),
+            ).fetchone()["count"]
+        if int(leaked_receipts) != 0:
+            raise AssertionError("review receipt survived an audit append rollback")
+
+        lock_expiry = make_approval(
+            db,
+            snapshot,
+            digest_suffix="8",
+            redacted_display={"package": "@scope/lock-expiry"},
+            canonical_request={
+                "principal": "agent:demo",
+                "operation": {"packageName": "@scope/lock-expiry"},
+            },
+        )
+        with db.connect() as conn:
+            conn.execute(
+                "UPDATE approval_requests SET expires_at = ? WHERE id = ?",
+                (
+                    (datetime.now(timezone.utc) + timedelta(milliseconds=50)).isoformat(),
+                    lock_expiry["id"],
+                ),
+            )
+        original_lock = db._lock_pending_approval_creation
+
+        def delayed_lock(conn):
+            original_lock(conn)
+            time.sleep(0.1)
+
+        with patch.object(db, "_lock_pending_approval_creation", side_effect=delayed_lock):
+            expired_approval = db.approve_request(
+                lock_expiry["id"],
+                actor_id="user:demo",
+            )
+        if expired_approval is not None:
+            raise AssertionError("approval used a timestamp captured before lock acquisition")
+        if db.get_approval_request(lock_expiry["id"])["status"] != "pending":
+            raise AssertionError("expired approval changed state after waiting for its lock")
 
         changed_bundle = policy_bundle.demo_policy_bundle("cred-demo-bearer")
         changed_bundle["metadata"]["sequence"] = 2

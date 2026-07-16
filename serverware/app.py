@@ -92,9 +92,10 @@ from serverware.config import (
     POLICY_CANARY_MIN_OBSERVATION_SECONDS,
     POLICY_CANARY_REQUIRED,
     POLICY_CANARY_STATE_PATH,
+    POLICY_MIN_ROLLBACK_EPOCH,
+    POLICY_MIN_SEQUENCE,
     POLICY_PUBLISH_DRY_RUN_REQUIRED,
     PUBLIC_URL,
-    RBAC_BINDINGS_PATH,
     RELEASE_CHANNEL,
     RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS,
     RELEASE_AUTHORIZATION_RECONCILE_LIMIT,
@@ -105,6 +106,10 @@ from serverware.config import (
     WEBAUTHN_RECOVERY_ENABLED,
 )
 from serverware import db, grants, runtime
+from serverware.rbac import (
+    RBACRoleValidationError,
+    normalize_rbac_roles,
+)
 from serverware.auth import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -612,6 +617,7 @@ class RoleBindingUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     roles: list[str] = Field(min_length=1)
+    expected_generation: int = Field(alias="expectedGeneration", ge=0)
     reason: str | None = Field(default=None, max_length=500)
     mfa: dict[str, Any] | None = None
 
@@ -620,6 +626,7 @@ class DeprovisionSubjectRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     subject_id: str = Field(alias="subjectId", min_length=1)
+    expected_generation: int = Field(alias="expectedGeneration", ge=0)
     reason: str | None = Field(default=None, max_length=500)
     mfa: dict[str, Any] | None = None
 
@@ -708,16 +715,22 @@ class DevAssertionRequest(BaseModel):
 
 
 class DataPlaneAuditEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
-    event_type: str = Field(min_length=1, max_length=128)
+    event_id: str = Field(
+        alias="eventId",
+        min_length=71,
+        max_length=71,
+        pattern=r"^sha256:[0-9a-f]{64}$",
+    )
+    event_type: str = Field(alias="eventType", min_length=1, max_length=128)
     event: dict[str, Any] = Field(default_factory=dict)
 
 
 class DataPlaneAuditBatch(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    events: list[DataPlaneAuditEvent] = Field(default_factory=list, max_length=200)
+    events: list[DataPlaneAuditEvent] = Field(min_length=1, max_length=200)
 
 
 _PRODUCTION_DATA_PLANE_AUDIT_EVENT_TYPES = frozenset(
@@ -1718,7 +1731,7 @@ def _approval_authn_policy(jit: dict[str, Any]) -> dict[str, Any]:
 def _assert_approver_allowed(identity: AdminIdentity, jit: dict[str, Any]) -> None:
     approvers = jit.get("approvers") or {}
     users = set(approvers.get("users") or [])
-    if users and "*" not in users and identity.user_id not in users:
+    if identity.user_id not in users:
         raise HTTPException(
             status_code=403,
             detail="current user is not an allowed approver for this route",
@@ -2044,7 +2057,12 @@ def _control_plane_approval_roles(action: str) -> set[str]:
         return {"credential_owner"}
     if action.startswith("route."):
         return {"policy_author"}
-    return {"admin"}
+    if action.startswith(("webauthn.", "rbac.", "control_plane.", "break_glass.")):
+        return {"admin"}
+    raise HTTPException(
+        status_code=400,
+        detail={"error": "unknown_control_plane_action", "action": action},
+    )
 
 
 def _assert_control_plane_approval_role(identity: AdminIdentity, action: str) -> None:
@@ -2076,6 +2094,7 @@ def _require_control_plane_two_person(
             payload_digest=payload_digest,
             actor_id=identity.user_id,
             require_webauthn=CONTROL_PLANE_MUTATION_WEBAUTHN_REQUIRED,
+            required_approver_roles=_control_plane_approval_roles(action),
             _connection=connection,
         )
         if not result.get("ok"):
@@ -3099,6 +3118,76 @@ def _write_policy_canary_bundle(signed_bundle: dict[str, Any]) -> None:
     temporary.replace(POLICY_CANARY_BUNDLE_PATH)
 
 
+@contextmanager
+def _restore_files_on_error(*paths: Path):
+    previous = {
+        path: path.read_bytes() if path.exists() else None
+        for path in paths
+    }
+    try:
+        yield
+    except BaseException:
+        for path, content in previous.items():
+            if content is None:
+                path.unlink(missing_ok=True)
+                continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".rollback",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+            temporary.replace(path)
+        if POLICY_BUNDLE_PATH in previous:
+            get_policy_snapshot()
+        raise
+
+
+def _advance_policy_high_water_in_transaction(
+    snapshot: Any, *, connection: Any
+) -> dict[str, Any]:
+    metadata = snapshot.raw.get("metadata")
+    if not isinstance(metadata, dict):
+        raise PolicyBundleError("policy metadata is missing")
+    policy_id = metadata.get("id")
+    sequence = metadata.get("sequence")
+    rollback_epoch = metadata.get("rollbackEpoch")
+    if not isinstance(policy_id, str) or not policy_id:
+        raise PolicyBundleError("policy metadata id is invalid")
+    if not isinstance(sequence, int) or isinstance(sequence, bool):
+        raise PolicyBundleError("policy metadata sequence is invalid")
+    if not isinstance(rollback_epoch, int) or isinstance(rollback_epoch, bool):
+        raise PolicyBundleError("policy metadata rollbackEpoch is invalid")
+    if sequence < POLICY_MIN_SEQUENCE:
+        raise PolicyBundleError(
+            f"policy sequence {sequence} is below configured floor {POLICY_MIN_SEQUENCE}"
+        )
+    if rollback_epoch < POLICY_MIN_ROLLBACK_EPOCH:
+        raise PolicyBundleError(
+            "policy rollbackEpoch "
+            f"{rollback_epoch} is below configured floor {POLICY_MIN_ROLLBACK_EPOCH}"
+        )
+    try:
+        return db.advance_policy_high_water(
+            policy_id=policy_id,
+            sequence=sequence,
+            rollback_epoch=rollback_epoch,
+            policy_hash=snapshot.hash,
+            _connection=connection,
+        )
+    except db.MetadataStoreError as exc:
+        raise PolicyBundleError(
+            f"policy rollback protection rejected bundle: {exc}"
+        ) from exc
+
+
 def _policy_canary_id(policy_hash_value: str, sequence: Any) -> str:
     digest = str(policy_hash_value).removeprefix("sha256:")[:16] or "unknown"
     return f"policy-canary-{sequence}-{digest}"
@@ -3252,7 +3341,7 @@ def _start_policy_canary(
     payload_digest: str,
     identity: AdminIdentity,
     mfa: dict[str, Any] | None,
-    two_person: dict[str, Any] | None,
+    approval_request: dict[str, Any],
 ) -> dict[str, Any]:
     existing = _read_policy_canary_state()
     if existing and existing.get("status") == "running":
@@ -3274,45 +3363,60 @@ def _start_policy_canary(
         report["candidate"]["policyHash"], metadata.get("sequence")
     )
     started_at = _now_iso()
-    _write_policy_canary_bundle(signed_bundle)
-    state = {
-        "version": "serverware.policyCanary/v1",
-        "id": canary_id,
-        "status": "running",
-        "policy_id": metadata.get("id"),
-        "previous_policy_hash": report["current"]["policyHash"],
-        "candidate_policy_hash": report["candidate"]["policyHash"],
-        "candidate_sequence": metadata.get("sequence"),
-        "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
-        "started_at": started_at,
-        "started_by": identity.user_id,
-        "bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
-        "diff": report["diff"],
-        "dry_run": report["dryRun"],
-        "payload_digest": payload_digest,
-        "signed_bundle": signed_bundle,
-        "control_plane_mfa": mfa,
-        "control_plane_approval": two_person,
-    }
-    _write_policy_canary_state(state)
-    db.record_audit_event(
-        "policy.canary.started",
-        {
-            "canary_id": canary_id,
-            "policy_id": metadata.get("id"),
-            "previous_policy_hash": report["current"]["policyHash"],
-            "candidate_policy_hash": report["candidate"]["policyHash"],
-            "candidate_sequence": metadata.get("sequence"),
-            "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
-            "canary_bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
-            "diff": report["diff"],
-            "dry_run": report["dryRun"],
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
+    with _restore_files_on_error(
+        POLICY_CANARY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH
+    ):
+        with db.connect() as connection:
+            two_person = _require_control_plane_two_person(
+                action="policy.publish",
+                resource_id=metadata.get("id"),
+                payload_digest=payload_digest,
+                mfa=payload.mfa,
+                identity=identity,
+                request=approval_request,
+                connection=connection,
+            )
+            _write_policy_canary_bundle(signed_bundle)
+            state = {
+                "version": "serverware.policyCanary/v1",
+                "id": canary_id,
+                "status": "running",
+                "policy_id": metadata.get("id"),
+                "previous_policy_hash": report["current"]["policyHash"],
+                "candidate_policy_hash": report["candidate"]["policyHash"],
+                "candidate_sequence": metadata.get("sequence"),
+                "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
+                "started_at": started_at,
+                "started_by": identity.user_id,
+                "bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
+                "diff": report["diff"],
+                "dry_run": report["dryRun"],
+                "payload_digest": payload_digest,
+                "signed_bundle": signed_bundle,
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+            }
+            _write_policy_canary_state(state)
+            db.append_audit_event(
+                connection,
+                event_type="policy.canary.started",
+                actor_type="admin",
+                actor_id=identity.user_id,
+                event={
+                    "canary_id": canary_id,
+                    "policy_id": metadata.get("id"),
+                    "previous_policy_hash": report["current"]["policyHash"],
+                    "candidate_policy_hash": report["candidate"]["policyHash"],
+                    "candidate_sequence": metadata.get("sequence"),
+                    "candidate_rollback_epoch": metadata.get("rollbackEpoch"),
+                    "canary_bundle_path": str(POLICY_CANARY_BUNDLE_PATH),
+                    "diff": report["diff"],
+                    "dry_run": report["dryRun"],
+                    "control_plane_mfa": mfa,
+                    "control_plane_approval": two_person,
+                    "payload_digest": payload_digest,
+                },
+            )
     response = dict(report)
     response.pop("signedBundle", None)
     response["published"] = False
@@ -3381,51 +3485,50 @@ def _require_policy_canary_activation_thresholds(
     }
 
 
-VALID_RBAC_ROLES = {
-    "admin",
-    "attestation_operator",
-    "attestation_reviewer",
-    "policy_author",
-    "policy_publisher",
-    "credential_owner",
-    "approver",
-    "auditor",
-}
-
-
 def _read_rbac_bindings() -> dict[str, Any]:
-    if not RBAC_BINDINGS_PATH.exists():
-        return {"version": "serverware.rbacBindings/v1", "subjects": {}}
     try:
-        data = json.loads(RBAC_BINDINGS_PATH.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
+        return db.get_rbac_authority_state()
+    except db.RBACBindingStoreError as exc:
         raise HTTPException(
-            status_code=503, detail="RBAC binding state is unreadable"
+            status_code=503, detail="RBAC binding authority is unavailable"
         ) from exc
-    if not isinstance(data, dict) or not isinstance(data.get("subjects"), dict):
-        raise HTTPException(status_code=503, detail="RBAC binding state is invalid")
-    return data
 
 
-def _write_rbac_bindings(data: dict[str, Any]) -> None:
-    RBAC_BINDINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    temporary = RBAC_BINDINGS_PATH.with_suffix(RBAC_BINDINGS_PATH.suffix + ".tmp")
-    temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
-    temporary.replace(RBAC_BINDINGS_PATH)
+def _rbac_generation_conflict(
+    expected_generation: int, current_generation: int
+) -> HTTPException:
+    return HTTPException(
+        status_code=409,
+        detail={
+            "error": "rbac_generation_conflict",
+            "expectedGeneration": expected_generation,
+            "currentGeneration": current_generation,
+        },
+    )
+
+
+def _preflight_rbac_generation(expected_generation: int) -> None:
+    try:
+        current_generation = db.get_rbac_authority_generation()
+    except db.RBACBindingStoreError as exc:
+        raise HTTPException(
+            status_code=503, detail="RBAC binding authority is unavailable"
+        ) from exc
+    if current_generation != expected_generation:
+        raise _rbac_generation_conflict(expected_generation, current_generation)
 
 
 def _normalized_rbac_roles(roles: list[str]) -> list[str]:
-    normalized = sorted({str(role).strip() for role in roles if str(role).strip()})
-    invalid = sorted(set(normalized) - VALID_RBAC_ROLES)
-    if invalid:
+    try:
+        return normalize_rbac_roles(roles)
+    except RBACRoleValidationError as exc:
+        detail: Any = str(exc)
+        if exc.invalid_roles:
+            detail = {"error": "invalid_rbac_roles", "roles": list(exc.invalid_roles)}
         raise HTTPException(
-            status_code=400, detail={"error": "invalid_rbac_roles", "roles": invalid}
-        )
-    if not normalized:
-        raise HTTPException(
-            status_code=400, detail="at least one RBAC role is required"
-        )
-    return normalized
+            status_code=400,
+            detail=detail,
+        ) from exc
 
 
 def _rbac_change_payload_digest(subject_id: str, payload: RoleBindingUpdate) -> str:
@@ -3433,6 +3536,7 @@ def _rbac_change_payload_digest(subject_id: str, payload: RoleBindingUpdate) -> 
         {
             "subjectId": subject_id,
             "roles": _normalized_rbac_roles(payload.roles),
+            "expectedGeneration": payload.expected_generation,
             "reason": payload.reason,
         }
     )
@@ -3442,6 +3546,7 @@ def _rbac_deprovision_payload_digest(payload: DeprovisionSubjectRequest) -> str:
     return _control_plane_payload_digest(
         {
             "subjectId": payload.subject_id,
+            "expectedGeneration": payload.expected_generation,
             "reason": payload.reason,
         }
     )
@@ -3912,10 +4017,16 @@ def control_plane_mutation_webauthn_options(
     payload: ControlPlaneMutationWebAuthnOptions,
     identity: AdminIdentity = Depends(
         require_role(
-            "admin", "policy_author", "policy_publisher", "credential_owner", "approver"
+            "admin",
+            "policy_author",
+            "policy_publisher",
+            "credential_owner",
+            "approver",
+            "attestation_reviewer",
         )
     ),
 ) -> dict[str, Any]:
+    _control_plane_approval_roles(payload.action)
     approval_context = None
     if payload.approval_id:
         approval_context = db.get_control_plane_approval(payload.approval_id)
@@ -3958,6 +4069,7 @@ def rbac_role_binding_update(
 ) -> dict[str, Any]:
     roles = _normalized_rbac_roles(payload.roles)
     payload_digest = _rbac_change_payload_digest(subject_id, payload)
+    _preflight_rbac_generation(payload.expected_generation)
     mfa = _require_control_plane_mutation_mfa(
         action="rbac.role.change",
         resource_id=subject_id,
@@ -3965,44 +4077,57 @@ def rbac_role_binding_update(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="rbac.role.change",
-        resource_id=subject_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={"subject_id": subject_id, "roles": roles, "reason": payload.reason},
-    )
-    state = _read_rbac_bindings()
-    subjects = state.setdefault("subjects", {})
-    previous = (
-        subjects.get(subject_id) if isinstance(subjects.get(subject_id), dict) else {}
-    )
-    previous_roles = previous.get("roles") or []
-    binding = {
-        "subject_id": subject_id,
-        "roles": roles,
-        "status": "active",
-        "updated_at": _now_iso(),
-        "updated_by": identity.user_id,
-        "reason": payload.reason,
-    }
-    subjects[subject_id] = binding
-    _write_rbac_bindings(state)
-    db.record_audit_event(
-        "rbac.role_changed",
-        {
-            "subject_id": subject_id,
-            "previous_roles": previous_roles,
-            "new_roles": roles,
-            "reason": payload.reason,
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
-    return {"ok": True, "binding": binding}
+    try:
+        with db.connect() as conn:
+            two_person = _require_control_plane_two_person(
+                action="rbac.role.change",
+                resource_id=subject_id,
+                payload_digest=payload_digest,
+                mfa=payload.mfa,
+                identity=identity,
+                request={
+                    "subject_id": subject_id,
+                    "roles": roles,
+                    "expected_generation": payload.expected_generation,
+                    "reason": payload.reason,
+                },
+                connection=conn,
+            )
+            result = db.mutate_rbac_role_binding(
+                subject_id=subject_id,
+                roles=roles,
+                status="active",
+                expected_generation=payload.expected_generation,
+                actor_id=identity.user_id,
+                reason=payload.reason,
+                event_type="rbac.role_changed",
+                event={
+                    "reason": payload.reason,
+                    "control_plane_mfa": mfa,
+                    "control_plane_approval": two_person,
+                    "payload_digest": payload_digest,
+                },
+                _connection=conn,
+            )
+    except db.RBACGenerationConflictError as exc:
+        raise _rbac_generation_conflict(
+            exc.expected_generation, exc.current_generation
+        ) from exc
+    except (db.RBACBindingStoreError, db.AuditStoreError) as exc:
+        raise HTTPException(status_code=503, detail="RBAC mutation failed") from exc
+    try:
+        projected = db.project_rbac_authority_state()
+        result["projection"] = {
+            "status": "current",
+            "generation": projected["generation"],
+            "state_digest": projected["state_digest"],
+        }
+    except db.RBACBindingStoreError:
+        result["projection"] = {
+            "status": "pending",
+            "generation": result["generation"],
+        }
+    return {"ok": True, **result}
 
 
 @app.post("/api/rbac/deprovision")
@@ -4011,6 +4136,7 @@ def rbac_deprovision_subject(
     identity: AdminIdentity = Depends(require_role("admin")),
 ) -> dict[str, Any]:
     payload_digest = _rbac_deprovision_payload_digest(payload)
+    _preflight_rbac_generation(payload.expected_generation)
     mfa = _require_control_plane_mutation_mfa(
         action="rbac.deprovision",
         resource_id=payload.subject_id,
@@ -4018,45 +4144,56 @@ def rbac_deprovision_subject(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="rbac.deprovision",
-        resource_id=payload.subject_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={"subject_id": payload.subject_id, "reason": payload.reason},
-    )
-    state = _read_rbac_bindings()
-    subjects = state.setdefault("subjects", {})
-    previous = (
-        subjects.get(payload.subject_id)
-        if isinstance(subjects.get(payload.subject_id), dict)
-        else {}
-    )
-    previous_roles = previous.get("roles") or []
-    binding = {
-        "subject_id": payload.subject_id,
-        "roles": [],
-        "status": "deprovisioned",
-        "deprovisioned_at": _now_iso(),
-        "deprovisioned_by": identity.user_id,
-        "reason": payload.reason,
-    }
-    subjects[payload.subject_id] = binding
-    _write_rbac_bindings(state)
-    db.record_audit_event(
-        "rbac.deprovisioned",
-        {
-            "subject_id": payload.subject_id,
-            "previous_roles": previous_roles,
-            "reason": payload.reason,
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
-    return {"ok": True, "binding": binding}
+    try:
+        with db.connect() as conn:
+            two_person = _require_control_plane_two_person(
+                action="rbac.deprovision",
+                resource_id=payload.subject_id,
+                payload_digest=payload_digest,
+                mfa=payload.mfa,
+                identity=identity,
+                request={
+                    "subject_id": payload.subject_id,
+                    "expected_generation": payload.expected_generation,
+                    "reason": payload.reason,
+                },
+                connection=conn,
+            )
+            result = db.mutate_rbac_role_binding(
+                subject_id=payload.subject_id,
+                roles=[],
+                status="deprovisioned",
+                expected_generation=payload.expected_generation,
+                actor_id=identity.user_id,
+                reason=payload.reason,
+                event_type="rbac.deprovisioned",
+                event={
+                    "reason": payload.reason,
+                    "control_plane_mfa": mfa,
+                    "control_plane_approval": two_person,
+                    "payload_digest": payload_digest,
+                },
+                _connection=conn,
+            )
+    except db.RBACGenerationConflictError as exc:
+        raise _rbac_generation_conflict(
+            exc.expected_generation, exc.current_generation
+        ) from exc
+    except (db.RBACBindingStoreError, db.AuditStoreError) as exc:
+        raise HTTPException(status_code=503, detail="RBAC mutation failed") from exc
+    try:
+        projected = db.project_rbac_authority_state()
+        result["projection"] = {
+            "status": "current",
+            "generation": projected["generation"],
+            "state_digest": projected["state_digest"],
+        }
+    except db.RBACBindingStoreError:
+        result["projection"] = {
+            "status": "pending",
+            "generation": result["generation"],
+        }
+    return {"ok": True, **result}
 
 
 @app.post("/api/control-plane/tokens/admin/rotate")
@@ -4116,7 +4253,13 @@ def control_plane_approvals(
     status: str | None = None,
     limit: int = Query(100, ge=1, le=500),
     _: AdminIdentity = Depends(
-        require_role("auditor", "policy_publisher", "credential_owner", "policy_author")
+        require_role(
+            "auditor",
+            "policy_publisher",
+            "credential_owner",
+            "policy_author",
+            "attestation_reviewer",
+        )
     ),
 ) -> list[dict[str, Any]]:
     return db.list_control_plane_approvals(status=status, limit=limit)
@@ -4244,24 +4387,17 @@ def policy_publish(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="policy.publish",
-        resource_id=policy_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={
-            "policy_id": policy_id,
-            "previous_policy_hash": report["current"]["policyHash"],
-            "candidate_policy_hash": report["candidate"]["policyHash"],
-            "previous_sequence": report["current"]["sequence"],
-            "new_sequence": metadata.get("sequence"),
-            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
-            "new_rollback_epoch": metadata.get("rollbackEpoch"),
-            "diff": report["diff"],
-            "dry_run": report["dryRun"],
-        },
-    )
+    approval_request = {
+        "policy_id": policy_id,
+        "previous_policy_hash": report["current"]["policyHash"],
+        "candidate_policy_hash": report["candidate"]["policyHash"],
+        "previous_sequence": report["current"]["sequence"],
+        "new_sequence": metadata.get("sequence"),
+        "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+        "new_rollback_epoch": metadata.get("rollbackEpoch"),
+        "diff": report["diff"],
+        "dry_run": report["dryRun"],
+    }
     if payload.activation_mode == "canary":
         return _start_policy_canary(
             report=report,
@@ -4269,28 +4405,46 @@ def policy_publish(
             payload_digest=payload_digest,
             identity=identity,
             mfa=mfa,
-            two_person=two_person,
+            approval_request=approval_request,
         )
-    snapshot = write_policy_bundle(report["signedBundle"], enforce_high_water=True)
-    db.record_audit_event(
-        "policy.published",
-        {
-            "activation_mode": "full",
-            "policy_id": policy_id,
-            "previous_policy_hash": report["current"]["policyHash"],
-            "new_policy_hash": snapshot.hash,
-            "previous_sequence": report["current"]["sequence"],
-            "new_sequence": metadata.get("sequence"),
-            "previous_rollback_epoch": report["current"]["rollbackEpoch"],
-            "new_rollback_epoch": metadata.get("rollbackEpoch"),
-            "diff": report["diff"],
-            "dry_run": report["dryRun"],
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
+    with _restore_files_on_error(POLICY_BUNDLE_PATH):
+        with db.connect() as connection:
+            two_person = _require_control_plane_two_person(
+                action="policy.publish",
+                resource_id=policy_id,
+                payload_digest=payload_digest,
+                mfa=payload.mfa,
+                identity=identity,
+                request=approval_request,
+                connection=connection,
+            )
+            snapshot = write_policy_bundle(
+                report["signedBundle"], enforce_high_water=False
+            )
+            _advance_policy_high_water_in_transaction(
+                snapshot, connection=connection
+            )
+            db.append_audit_event(
+                connection,
+                event_type="policy.published",
+                actor_type="admin",
+                actor_id=identity.user_id,
+                event={
+                    "activation_mode": "full",
+                    "policy_id": policy_id,
+                    "previous_policy_hash": report["current"]["policyHash"],
+                    "new_policy_hash": snapshot.hash,
+                    "previous_sequence": report["current"]["sequence"],
+                    "new_sequence": metadata.get("sequence"),
+                    "previous_rollback_epoch": report["current"]["rollbackEpoch"],
+                    "new_rollback_epoch": metadata.get("rollbackEpoch"),
+                    "diff": report["diff"],
+                    "dry_run": report["dryRun"],
+                    "control_plane_mfa": mfa,
+                    "control_plane_approval": two_person,
+                    "payload_digest": payload_digest,
+                },
+            )
     report = dict(report)
     report["published"] = True
     report["policyHash"] = snapshot.hash
@@ -4366,66 +4520,81 @@ def policy_canary_activate(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="policy.publish",
-        resource_id=policy_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={
-            "canary_id": state.get("id"),
-            "policy_id": policy_id,
-            "previous_policy_hash": state.get("previous_policy_hash"),
-            "candidate_policy_hash": state.get("candidate_policy_hash"),
-            "candidate_sequence": state.get("candidate_sequence"),
-            "candidate_rollback_epoch": state.get("candidate_rollback_epoch"),
-            "monitoring": monitor,
-            "thresholds": thresholds,
-        },
-    )
-    snapshot = write_policy_bundle(signed_bundle, enforce_high_water=True)
-    activated_at = _now_iso()
-    state.update(
-        {
-            "status": "activated",
-            "activated_at": activated_at,
-            "activated_by": identity.user_id,
-            "activation_payload_digest": payload_digest,
-            "activation_monitoring": monitor,
-            "activation_thresholds": thresholds,
-            "activation_control_plane_mfa": mfa,
-            "activation_control_plane_approval": two_person,
-        }
-    )
-    _write_policy_canary_state(state)
-    audit_payload = {
-        "activation_mode": "canary",
+    approval_request = {
         "canary_id": state.get("id"),
         "policy_id": policy_id,
         "previous_policy_hash": state.get("previous_policy_hash"),
-        "new_policy_hash": snapshot.hash,
-        "previous_sequence": (current.raw.get("metadata") or {}).get("sequence")
-        if current
-        else None,
-        "new_sequence": metadata.get("sequence"),
-        "previous_rollback_epoch": (current.raw.get("metadata") or {}).get(
-            "rollbackEpoch"
-        )
-        if current
-        else None,
-        "new_rollback_epoch": metadata.get("rollbackEpoch"),
-        "diff": state.get("diff"),
-        "dry_run": state.get("dry_run"),
-        "canary_monitoring": monitor,
-        "canary_thresholds": thresholds,
-        "control_plane_mfa": mfa,
-        "control_plane_approval": two_person,
-        "payload_digest": payload_digest,
+        "candidate_policy_hash": state.get("candidate_policy_hash"),
+        "candidate_sequence": state.get("candidate_sequence"),
+        "candidate_rollback_epoch": state.get("candidate_rollback_epoch"),
+        "monitoring": monitor,
+        "thresholds": thresholds,
     }
-    db.record_audit_event(
-        "policy.canary.activated", audit_payload, actor_id=identity.user_id
-    )
-    db.record_audit_event("policy.published", audit_payload, actor_id=identity.user_id)
+    with _restore_files_on_error(POLICY_BUNDLE_PATH, POLICY_CANARY_STATE_PATH):
+        with db.connect() as connection:
+            two_person = _require_control_plane_two_person(
+                action="policy.publish",
+                resource_id=policy_id,
+                payload_digest=payload_digest,
+                mfa=payload.mfa,
+                identity=identity,
+                request=approval_request,
+                connection=connection,
+            )
+            snapshot = write_policy_bundle(
+                signed_bundle, enforce_high_water=False
+            )
+            _advance_policy_high_water_in_transaction(
+                snapshot, connection=connection
+            )
+            activated_at = _now_iso()
+            state.update(
+                {
+                    "status": "activated",
+                    "activated_at": activated_at,
+                    "activated_by": identity.user_id,
+                    "activation_payload_digest": payload_digest,
+                    "activation_monitoring": monitor,
+                    "activation_thresholds": thresholds,
+                    "activation_control_plane_mfa": mfa,
+                    "activation_control_plane_approval": two_person,
+                }
+            )
+            _write_policy_canary_state(state)
+            audit_payload = {
+                "activation_mode": "canary",
+                "canary_id": state.get("id"),
+                "policy_id": policy_id,
+                "previous_policy_hash": state.get("previous_policy_hash"),
+                "new_policy_hash": snapshot.hash,
+                "previous_sequence": (current.raw.get("metadata") or {}).get(
+                    "sequence"
+                )
+                if current
+                else None,
+                "new_sequence": metadata.get("sequence"),
+                "previous_rollback_epoch": (
+                    current.raw.get("metadata") or {}
+                ).get("rollbackEpoch")
+                if current
+                else None,
+                "new_rollback_epoch": metadata.get("rollbackEpoch"),
+                "diff": state.get("diff"),
+                "dry_run": state.get("dry_run"),
+                "canary_monitoring": monitor,
+                "canary_thresholds": thresholds,
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+                "payload_digest": payload_digest,
+            }
+            for event_type in ("policy.canary.activated", "policy.published"):
+                db.append_audit_event(
+                    connection,
+                    event_type=event_type,
+                    actor_type="admin",
+                    actor_id=identity.user_id,
+                    event=audit_payload,
+                )
     return {
         "ok": True,
         "published": True,
@@ -8191,20 +8360,22 @@ def oauth_issuance_uncertainty_resolve(
                     "reason": result.get("reason"),
                 },
             )
-    db.record_audit_event(
-        "credential.oauth_issuance_uncertainty_resolved",
-        {
-            "provider": result["provider_id"],
-            "source": result["source"],
-            "revocation_work_id": work_id,
-            "confirmed_provider_revocation": True,
-            "note": payload.note,
-            "payload_digest": payload_digest,
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-        },
-        actor_id=identity.user_id,
-    )
+        db.append_audit_event(
+            conn,
+            event_type="credential.oauth_issuance_uncertainty_resolved",
+            actor_type="admin",
+            actor_id=identity.user_id,
+            event={
+                "provider": result["provider_id"],
+                "source": result["source"],
+                "revocation_work_id": work_id,
+                "confirmed_provider_revocation": True,
+                "note": payload.note,
+                "payload_digest": payload_digest,
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+            },
+        )
     return {"ok": True, "resolved": result}
 
 
@@ -8229,35 +8400,43 @@ def create_credential(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="credential.create",
-        resource_id=None,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={
-            "name": payload.name,
-            "kind": payload.kind,
-            "metadata_keys": sorted(payload.metadata),
-        },
-    )
-    created = db.create_credential(
-        payload.name, payload.kind, payload.secret, payload.metadata
-    )
-    db.record_audit_event(
-        "credential.created",
-        {
-            "credential_id": created["id"],
-            "name": created["name"],
-            "kind": created["kind"],
-            "credential_version": created.get("credential_version"),
-            "secret_kek_id": created.get("secret_kek_id"),
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
+    with db.connect() as connection:
+        two_person = _require_control_plane_two_person(
+            action="credential.create",
+            resource_id=None,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request={
+                "name": payload.name,
+                "kind": payload.kind,
+                "metadata_keys": sorted(payload.metadata),
+            },
+            connection=connection,
+        )
+        created = db.create_credential(
+            payload.name,
+            payload.kind,
+            payload.secret,
+            payload.metadata,
+            _connection=connection,
+        )
+        db.append_audit_event(
+            connection,
+            event_type="credential.created",
+            actor_type="admin",
+            actor_id=identity.user_id,
+            event={
+                "credential_id": created["id"],
+                "name": created["name"],
+                "kind": created["kind"],
+                "credential_version": created.get("credential_version"),
+                "secret_kek_id": created.get("secret_kek_id"),
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+                "payload_digest": payload_digest,
+            },
+        )
     runtime.invalidate_secret_leases(created["id"])
     return created
 
@@ -8281,39 +8460,45 @@ def update_credential(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="credential.update",
-        resource_id=credential_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={
-            "credential_id": credential_id,
-            "changed_fields": sorted(changes),
-            "secret_changed": "secret" in changes,
-        },
-    )
     try:
-        updated = db.update_credential(credential_id, changes)
+        with db.connect() as connection:
+            two_person = _require_control_plane_two_person(
+                action="credential.update",
+                resource_id=credential_id,
+                payload_digest=payload_digest,
+                mfa=payload.mfa,
+                identity=identity,
+                request={
+                    "credential_id": credential_id,
+                    "changed_fields": sorted(changes),
+                    "secret_changed": "secret" in changes,
+                },
+                connection=connection,
+            )
+            updated = db.update_credential(
+                credential_id, changes, _connection=connection
+            )
+            if not updated:
+                raise HTTPException(status_code=404, detail="credential not found")
+            db.append_audit_event(
+                connection,
+                event_type="credential.updated",
+                actor_type="admin",
+                actor_id=identity.user_id,
+                event={
+                    "credential_id": credential_id,
+                    "name": updated["name"],
+                    "changed_fields": sorted(changes),
+                    "secret_changed": "secret" in changes,
+                    "credential_version": updated.get("credential_version"),
+                    "secret_kek_id": updated.get("secret_kek_id"),
+                    "control_plane_mfa": mfa,
+                    "control_plane_approval": two_person,
+                    "payload_digest": payload_digest,
+                },
+            )
     except db.ManagedOAuthCredentialError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    if not updated:
-        raise HTTPException(status_code=404, detail="credential not found")
-    db.record_audit_event(
-        "credential.updated",
-        {
-            "credential_id": credential_id,
-            "name": updated["name"],
-            "changed_fields": sorted(changes),
-            "secret_changed": "secret" in changes,
-            "credential_version": updated.get("credential_version"),
-            "secret_kek_id": updated.get("secret_kek_id"),
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
     runtime.invalidate_secret_leases(credential_id)
     return updated
 
@@ -8377,35 +8562,39 @@ def create_route(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="route.create",
-        resource_id=None,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={
-            "name": data.get("name"),
-            "match_host": data.get("match_host"),
-            "match_path_prefix": data.get("match_path_prefix"),
-            "credential_id": data.get("credential_id"),
-            "enabled": data.get("enabled"),
-        },
-    )
-    created = db.create_route(data)
-    db.record_audit_event(
-        "route.created",
-        {
-            "route_id": created["id"],
-            "name": created["name"],
-            "match_host": created["match_host"],
-            "match_path_prefix": created["match_path_prefix"],
-            "credential_id": created["credential_id"],
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
+    with db.connect() as connection:
+        two_person = _require_control_plane_two_person(
+            action="route.create",
+            resource_id=None,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request={
+                "name": data.get("name"),
+                "match_host": data.get("match_host"),
+                "match_path_prefix": data.get("match_path_prefix"),
+                "credential_id": data.get("credential_id"),
+                "enabled": data.get("enabled"),
+            },
+            connection=connection,
+        )
+        created = db.create_route(data, _connection=connection)
+        db.append_audit_event(
+            connection,
+            event_type="route.created",
+            actor_type="admin",
+            actor_id=identity.user_id,
+            event={
+                "route_id": created["id"],
+                "name": created["name"],
+                "match_host": created["match_host"],
+                "match_path_prefix": created["match_path_prefix"],
+                "credential_id": created["credential_id"],
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+                "payload_digest": payload_digest,
+            },
+        )
     return created
 
 
@@ -8428,39 +8617,43 @@ def update_route(
         mfa=payload.mfa,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="route.update",
-        resource_id=route_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa,
-        identity=identity,
-        request={
-            "route_id": route_id,
-            "changed_fields": sorted(data),
-            "match_host": data.get("match_host"),
-            "match_path_prefix": data.get("match_path_prefix"),
-            "credential_id": data.get("credential_id"),
-            "enabled": data.get("enabled"),
-        },
-    )
-    updated = db.update_route(route_id, data)
-    if not updated:
-        raise HTTPException(status_code=404, detail="route not found")
-    db.record_audit_event(
-        "route.updated",
-        {
-            "route_id": route_id,
-            "name": updated["name"],
-            "changed_fields": sorted(data),
-            "match_host": updated["match_host"],
-            "match_path_prefix": updated["match_path_prefix"],
-            "credential_id": updated["credential_id"],
-            "control_plane_mfa": mfa,
-            "control_plane_approval": two_person,
-            "payload_digest": payload_digest,
-        },
-        actor_id=identity.user_id,
-    )
+    with db.connect() as connection:
+        two_person = _require_control_plane_two_person(
+            action="route.update",
+            resource_id=route_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa,
+            identity=identity,
+            request={
+                "route_id": route_id,
+                "changed_fields": sorted(data),
+                "match_host": data.get("match_host"),
+                "match_path_prefix": data.get("match_path_prefix"),
+                "credential_id": data.get("credential_id"),
+                "enabled": data.get("enabled"),
+            },
+            connection=connection,
+        )
+        updated = db.update_route(route_id, data, _connection=connection)
+        if not updated:
+            raise HTTPException(status_code=404, detail="route not found")
+        db.append_audit_event(
+            connection,
+            event_type="route.updated",
+            actor_type="admin",
+            actor_id=identity.user_id,
+            event={
+                "route_id": route_id,
+                "name": updated["name"],
+                "changed_fields": sorted(data),
+                "match_host": updated["match_host"],
+                "match_path_prefix": updated["match_path_prefix"],
+                "credential_id": updated["credential_id"],
+                "control_plane_mfa": mfa,
+                "control_plane_approval": two_person,
+                "payload_digest": payload_digest,
+            },
+        )
     return updated
 
 
@@ -8478,26 +8671,30 @@ def delete_route(
         mfa=payload.mfa if payload else None,
         identity=identity,
     )
-    two_person = _require_control_plane_two_person(
-        action="route.delete",
-        resource_id=route_id,
-        payload_digest=payload_digest,
-        mfa=payload.mfa if payload else None,
-        identity=identity,
-        request={"route_id": route_id},
-    )
-    deleted = db.delete_route(route_id)
-    if deleted:
-        db.record_audit_event(
-            "route.deleted",
-            {
-                "route_id": route_id,
-                "control_plane_mfa": mfa,
-                "control_plane_approval": two_person,
-                "payload_digest": payload_digest,
-            },
-            actor_id=identity.user_id,
+    with db.connect() as connection:
+        two_person = _require_control_plane_two_person(
+            action="route.delete",
+            resource_id=route_id,
+            payload_digest=payload_digest,
+            mfa=payload.mfa if payload else None,
+            identity=identity,
+            request={"route_id": route_id},
+            connection=connection,
         )
+        deleted = db.delete_route(route_id, _connection=connection)
+        if deleted:
+            db.append_audit_event(
+                connection,
+                event_type="route.deleted",
+                actor_type="admin",
+                actor_id=identity.user_id,
+                event={
+                    "route_id": route_id,
+                    "control_plane_mfa": mfa,
+                    "control_plane_approval": two_person,
+                    "payload_digest": payload_digest,
+                },
+            )
     return {"deleted": deleted}
 
 
@@ -8640,16 +8837,6 @@ def approval_review(
             )
         except db.MetadataStoreError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
-        db.record_audit_event(
-            "approval.review_opened",
-            {
-                "approval_request_id": approval_id,
-                "review_digest": review_digest,
-                "review_receipt_id": receipt["id"],
-                "review_receipt_expires_at": receipt["expires_at"],
-            },
-            actor_id=identity.user_id,
-        )
     review["review_digest"] = review_digest
     review["review_receipt"] = (
         {
@@ -10081,8 +10268,7 @@ def data_plane_credential_leases(
     )
 
 
-@app.post("/api/data-plane/audit")
-def data_plane_audit(
+def _ingest_data_plane_audit(
     batch: DataPlaneAuditBatch,
     x_serverware_data_plane_token: str | None = Header(
         default=None, alias="X-Serverware-Data-Plane-Token"
@@ -10097,7 +10283,14 @@ def data_plane_audit(
         "local",
         "test",
     }
+    event_ids: set[str] = set()
     for item in batch.events:
+        if item.event_id in event_ids:
+            raise HTTPException(
+                status_code=400,
+                detail="data-plane audit batch contains duplicate event IDs",
+            )
+        event_ids.add(item.event_id)
         if not re.fullmatch(r"data_plane\.[a-z0-9_]+(?:\.[a-z0-9_]+)*", item.event_type):
             raise HTTPException(
                 status_code=400,
@@ -10127,12 +10320,43 @@ def data_plane_audit(
                 status_code=413,
                 detail="canonical data-plane audit event exceeds 2 MiB",
             ) from exc
-    recorded = db.record_audit_event_batch(
-        [(item.event_type, item.event) for item in batch.events],
-        actor_type="data-plane",
-        actor_id=DATA_PLANE_INSTANCE_ID,
-    )
+    try:
+        recorded = db.record_audit_event_batch(
+            [(item.event_type, item.event) for item in batch.events],
+            actor_type="data-plane",
+            actor_id=DATA_PLANE_INSTANCE_ID,
+            producer_event_ids=[item.event_id for item in batch.events],
+            producer_instance_id=DATA_PLANE_INSTANCE_ID,
+        )
+    except db.AuditBatchConflictError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="data-plane audit batch conflicts with immutable audit history",
+        ) from exc
+    except db.AuditStoreError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="data-plane audit storage is unavailable",
+        ) from exc
     return {"ok": True, "accepted": len(recorded)}
+
+
+@app.post("/api/data-plane/audit")
+async def data_plane_audit(
+    request: Request,
+    batch: DataPlaneAuditBatch,
+    x_serverware_data_plane_token: str | None = Header(
+        default=None, alias="X-Serverware-Data-Plane-Token"
+    ),
+) -> dict[str, Any]:
+    request_body = await request.body()
+    result = _ingest_data_plane_audit(batch, x_serverware_data_plane_token)
+    return {
+        "apiVersion": "serverware.dataPlaneAuditAck/v1",
+        **result,
+        "batchDigest": "sha256:" + hashlib.sha256(request_body).hexdigest(),
+        "instanceId": DATA_PLANE_INSTANCE_ID,
+    }
 
 
 @app.post("/api/data-plane/grants/consume")

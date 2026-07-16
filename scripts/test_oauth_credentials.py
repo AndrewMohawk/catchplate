@@ -2103,13 +2103,73 @@ def main(*, setup_session_only: bool = False) -> None:
             if db.get_pending_oauth_credential(pending["id"]) is None:
                 raise AssertionError("failed OAuth activation removed the pending credential")
 
+            oidc_approver_id = "oidc:oauth-credential-approver@example.test"
+            authority = db.get_rbac_authority_state()
+            provisioned_approver = db.mutate_rbac_role_binding(
+                subject_id=oidc_approver_id,
+                roles=["credential_owner"],
+                status="active",
+                expected_generation=authority["generation"],
+                actor_id="user:operator",
+                reason="OAuth activation approval fixture",
+                event_type="rbac.role_changed",
+                event={"test": "oauth_activation_approver_revocation"},
+            )
             approved = db.approve_control_plane_approval(
                 str(approval_id),
-                actor_id="user:reviewer",
+                actor_id=oidc_approver_id,
                 note="verified exact account and scopes",
             )
             if approved is None or approved["status"] != "approved":
                 raise AssertionError(f"exact-account OAuth approval could not be approved: {approved}")
+            revoked_approver = db.mutate_rbac_role_binding(
+                subject_id=oidc_approver_id,
+                roles=[],
+                status="deprovisioned",
+                expected_generation=provisioned_approver["generation"],
+                actor_id="user:operator",
+                reason="revoke before OAuth activation",
+                event_type="rbac.deprovisioned",
+                event={"test": "oauth_activation_approver_revocation"},
+            )
+            try:
+                app_module.oauth_pending_credential_activate(
+                    pending["id"],
+                    app_module.OAuthPendingActivateRequest(
+                        mfa={"approvalId": approval_id}
+                    ),
+                    identity,
+                )
+            except app_module.HTTPException as exc:
+                if (
+                    exc.status_code != 409
+                    or not isinstance(exc.detail, dict)
+                    or exc.detail.get("reason") != "approval_approver_role_revoked"
+                ):
+                    raise AssertionError(
+                        f"revoked OAuth approver failed incorrectly: {exc.detail}"
+                    ) from exc
+            else:
+                raise AssertionError("revoked OIDC approver authorized OAuth activation")
+            rejected_approval = db.get_control_plane_approval(str(approval_id))
+            if (
+                rejected_approval is None
+                or rejected_approval["status"] != "approved"
+                or db.get_pending_oauth_credential(pending["id"]) is None
+            ):
+                raise AssertionError(
+                    "revoked OAuth approver rejection changed pending state"
+                )
+            db.mutate_rbac_role_binding(
+                subject_id=oidc_approver_id,
+                roles=["credential_owner"],
+                status="active",
+                expected_generation=revoked_approver["generation"],
+                actor_id="user:operator",
+                reason="restore OAuth activation approver fixture",
+                event_type="rbac.role_changed",
+                event={"test": "oauth_activation_approver_revocation"},
+            )
             activated = app_module.oauth_pending_credential_activate(
                 pending["id"],
                 app_module.OAuthPendingActivateRequest(mfa={"approvalId": approval_id}),

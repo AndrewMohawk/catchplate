@@ -380,14 +380,30 @@ python3 - "$TMP_DIR/approval-approved.json" <<'PY'
 import json, sys
 data = json.load(open(sys.argv[1]))
 assert data["approved_by"] == "user:demo", data
-assert data["approval_authn"]["method"] == "webauthn", data
-assert data["approval_authn"]["authenticator_class"] == "dev", data
-assert data["approval_authn"]["attestation_trusted"] is True, data
-assert data["approval_challenge_id"], data
 assert data["credential_id"] == "cred-demo-bearer", data
 assert isinstance(data["credential_version"], int) and data["credential_version"] >= 1, data
-assert data["canonical_request"]["credential_ref"] == "cred-demo-bearer", data
-assert data["canonical_request"]["credential_version"] == str(data["credential_version"]), data
+for forbidden in ("approval_authn", "approval_challenge_id", "canonical_request", "redacted_display"):
+    assert forbidden not in data, data
+PY
+curl -fsS "${ADMIN_HEADER[@]}" \
+  "$BASE/api/audit/search?eventType=approval.approved&approvalId=$approval_id" \
+  > "$TMP_DIR/approval-approved-audit.json"
+python3 - "$TMP_DIR/approval-approved-audit.json" "$approval_id" <<'PY'
+import json, sys
+result = json.load(open(sys.argv[1]))
+matching = [
+    item for item in result["items"]
+    if item["event_type"] == "approval.approved"
+    and item["event"].get("approval_request_id") == sys.argv[2]
+]
+assert len(matching) == 1, result
+event = matching[0]["event"]
+assert event["approval_authn"]["method"] == "webauthn", event
+assert event["approval_authn"]["authenticator_class"] == "dev", event
+assert event["approval_authn"]["attestation_trusted"] is True, event
+assert event["approval_challenge_id"], event
+assert event["credential_id"] == "cred-demo-bearer", event
+assert isinstance(event["credential_version"], int) and event["credential_version"] >= 1, event
 PY
 repeat_approval_code="$(curl -sS -o "$TMP_DIR/approval-repeat-block.json" -w "%{http_code}" "${ADMIN_HEADER[@]}" -H "Content-Type: application/json" -X POST \
   --data @"$TMP_DIR/approval-webauthn-approve.json" \

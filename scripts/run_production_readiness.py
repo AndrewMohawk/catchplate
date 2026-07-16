@@ -167,7 +167,8 @@ FINAL_CONTROL_PLANE_GID = 65532
 FINAL_SERVICE_USERS = {
     "serverware": "65532:65532",
     "audit-anchor": "nonroot:nonroot",
-    "decision-gate-rs": "nonroot:nonroot",
+    "custody-runtime": "65531:65530",
+    "decision-gate-rs": "65532:65532",
 }
 LAUNCHER_TRUSTED_ENV_PATH_INPUT = "SERVERWARE_LAUNCHER_TRUSTED_PRODUCTION_ENV_PATH"
 LAUNCHER_TRUSTED_ENV_SHA256_INPUT = "SERVERWARE_LAUNCHER_TRUSTED_PRODUCTION_ENV_SHA256"
@@ -1177,7 +1178,12 @@ def open_measured_executable(
     validate_secure_ancestors(path, setting)
     if SHA256_RE.fullmatch(expected_digest) is None:
         raise ValueError(f"{setting} digest pin is invalid")
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_RDONLY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except FileNotFoundError:
@@ -1220,7 +1226,12 @@ def open_measured_script(
     validate_secure_ancestors(path, setting)
     if expected_digest is not None and SHA256_RE.fullmatch(expected_digest) is None:
         raise ValueError(f"{setting} digest pin is invalid")
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_RDONLY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
@@ -1603,7 +1614,12 @@ def read_regular_file_once(
 ) -> tuple[bytes, os.stat_result]:
     if not hasattr(os, "O_NOFOLLOW"):
         raise ValueError(f"{label} cannot be opened safely on this platform")
-    flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_RDONLY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except FileNotFoundError:
@@ -1612,8 +1628,8 @@ def read_regular_file_once(
         raise ValueError(f"{label} could not be opened without following symlinks: {path}") from exc
     try:
         opened = os.fstat(descriptor)
-        if not stat.S_ISREG(opened.st_mode):
-            raise ValueError(f"{label} must be a regular file: {path}")
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+            raise ValueError(f"{label} must be a single-link regular file: {path}")
         if opened.st_size <= 0 or opened.st_size > max_bytes:
             raise ValueError(f"{label} must contain between 1 and {max_bytes} bytes: {path}")
         if owner_only:

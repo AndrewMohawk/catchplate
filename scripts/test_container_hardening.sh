@@ -55,6 +55,9 @@ for service in services:
     if service == "grant-store":
         if user in {"", "0", "0:0", "root"}:
             raise AssertionError(f"{service}: expected a non-root database user, got {user!r}")
+    elif service == "custody-runtime":
+        if user != "10002:10003":
+            raise AssertionError(f"{service}: expected the isolated custody identity, got {user!r}")
     elif user not in {"serverware", "10001", "10001:10001"}:
         raise AssertionError(f"{service}: expected non-root Serverware user, got {user!r}")
     if host.get("ReadonlyRootfs") is not True:

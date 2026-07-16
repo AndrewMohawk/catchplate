@@ -4832,7 +4832,7 @@ mod tests {
             "context":{
                 "runtime_manifest_digest":digest(22),
                 "policy_bundle_digest":digest(3),
-                "provenance_digest":digest(23),
+                "provenance_digest":digest(7),
                 "image_signatures_digest":digest(24),
                 "source_tree_digest":digest(25),
             },

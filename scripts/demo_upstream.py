@@ -202,6 +202,7 @@ def request_view(request: Request) -> dict[str, Any]:
 
 @app.api_route("/echo", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def echo(request: Request) -> dict[str, Any]:
+    _record_request(request)
     view = request_view(request)
     view["query"]["_data_plane_token_seen"] = "x-serverware-data-plane-token" in request.headers
     if request.query_params.get("reflectCredential") == "1":

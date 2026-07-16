@@ -47,6 +47,10 @@ DEV_SERVICES = (
     "demo-upstream",
     "decision-gate-rs",
 )
+CUSTODY_DEV_SERVICES = (*DEV_SERVICES[:-1], "custody-runtime", DEV_SERVICES[-1])
+PRODUCTION_CONTROL_HEALTHCHECK_SHA256 = (
+    "sha256:edbdc5b8790e94a6e3ccd62f190763d5ba2ef3acc17d93a8a38a8bd4aa1b33df"
+)
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 PRODUCTION_PROVENANCE_VERSION = 2
 PRODUCTION_PROVENANCE_RECORD_TYPE = "release.provenance.v2"
@@ -627,10 +631,29 @@ def cyclonedx_sbom(
     }
 
 
-def image_inventory() -> dict[str, Any]:
+def development_compose_command(
+    compose_files: list[str], compose_profiles: list[str]
+) -> list[str]:
+    command = ["docker", "compose"]
+    project_name = os.environ.get("COMPOSE_PROJECT_NAME", "")
+    if project_name:
+        command.extend(["--project-name", project_name])
+    for compose_file in compose_files:
+        command.extend(["--file", compose_file])
+    for profile in compose_profiles:
+        command.extend(["--profile", profile])
+    return command
+
+
+def image_inventory(
+    services: tuple[str, ...] = DEV_SERVICES,
+    *,
+    compose_command: list[str] | None = None,
+) -> dict[str, Any]:
+    compose_command = compose_command or ["docker", "compose"]
     images = {}
-    for service in DEV_SERVICES:
-        image_id = run(["docker", "compose", "images", "-q", service])
+    for service in services:
+        image_id = run([*compose_command, "images", "-q", service])
         if not image_id:
             raise RuntimeError(f"compose image is missing for {service}")
         inspect = json.loads(run(["docker", "image", "inspect", image_id]))[0]
@@ -645,13 +668,51 @@ def image_inventory() -> dict[str, Any]:
     return images
 
 
-def container_inventory() -> dict[str, Any]:
+def container_inventory(
+    services: tuple[str, ...] = DEV_SERVICES,
+    *,
+    compose_command: list[str] | None = None,
+) -> dict[str, Any]:
+    compose_command = compose_command or ["docker", "compose"]
+    inspected: dict[str, dict[str, Any]] | None = None
+    for _ in range(50):
+        candidate: dict[str, dict[str, Any]] = {}
+        for service in services:
+            container_ids = run(
+                [*compose_command, "ps", "--status", "running", "-q", service]
+            ).splitlines()
+            if len(container_ids) != 1:
+                candidate = {}
+                break
+            inspect = json.loads(run(["docker", "inspect", container_ids[0]]))[0]
+            labels = (inspect.get("Config") or {}).get("Labels") or {}
+            if (
+                inspect.get("State", {}).get("Running") is not True
+                or labels.get("com.docker.compose.service") != service
+            ):
+                candidate = {}
+                break
+            candidate[service] = inspect
+        if len(candidate) == len(services) and all(
+            run([*compose_command, "ps", "--status", "running", "-q", service])
+            == candidate[service]["Id"]
+            and json.loads(run(["docker", "inspect", candidate[service]["Id"]]))[0]
+            .get("State", {})
+            .get("Running")
+            is True
+            for service in services
+        ):
+            inspected = candidate
+            break
+        time.sleep(0.1)
+    if inspected is None:
+        raise RuntimeError(
+            "development Compose containers did not provide one stable running generation"
+        )
+
     containers = {}
-    for service in DEV_SERVICES:
-        container_id = run(["docker", "compose", "ps", "-q", service])
-        if not container_id:
-            raise RuntimeError(f"compose container is not running for {service}")
-        inspect = json.loads(run(["docker", "inspect", container_id]))[0]
+    for service in services:
+        inspect = inspected[service]
         host = inspect["HostConfig"]
         config = inspect["Config"]
         containers[service] = {
@@ -674,6 +735,59 @@ def container_inventory() -> dict[str, Any]:
             ],
         }
     return containers
+
+
+def development_compose_services(
+    model: dict[str, Any], compose_files: list[str], compose_profiles: list[str]
+) -> tuple[str, ...]:
+    services = model.get("services") if isinstance(model, dict) else None
+    if not isinstance(services, dict):
+        raise ValueError("rendered development Compose model has no services")
+    service_set = set(services)
+    if service_set == set(DEV_SERVICES):
+        return DEV_SERVICES
+    if service_set != set(CUSTODY_DEV_SERVICES):
+        raise ValueError(
+            "development Compose services must be exactly the ordinary or custody topology"
+        )
+
+    if [Path(value).name for value in compose_files] != [
+        "docker-compose.yml",
+        "docker-compose.custody.yml",
+    ] or compose_profiles != ["custody"]:
+        raise ValueError(
+            "custody provenance requires the base Compose file, custody override, and custody profile"
+        )
+    custody = services.get("custody-runtime") or {}
+    gate = services.get("decision-gate-rs") or {}
+    custody_env = custody.get("environment") or {}
+    gate_env = gate.get("environment") or {}
+    if (
+        custody.get("network_mode") != "none"
+        or custody.get("user") != "10002:10003"
+        or gate.get("user") != "10001:10001"
+        or custody_env.get("SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID") != "10001"
+        or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET")
+        != "/run/serverware-custody/custody.sock"
+        or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "10002"
+        or {str(value) for value in (gate.get("group_add") or [])} != {"10003"}
+        or ((gate.get("depends_on") or {}).get("custody-runtime") or {}).get(
+            "condition"
+        )
+        != "service_started"
+    ):
+        raise ValueError(
+            "rendered development gate is not configured for the custody runtime"
+        )
+    if not any(
+        isinstance(item, dict)
+        and item.get("source") == "serverware-custody-socket"
+        and item.get("target") == "/run/serverware-custody"
+        and bool(item.get("read_only", False))
+        for item in (gate.get("volumes") or [])
+    ):
+        raise ValueError("rendered development gate lacks the read-only custody socket mount")
+    return CUSTODY_DEV_SERVICES
 
 
 def production_image_inventory(
@@ -1026,6 +1140,201 @@ def production_reproducibility_binding(
     }
 
 
+def validate_production_custody_topology(
+    model: dict[str, Any], loaded_env: dict[str, str]
+) -> None:
+    services = model.get("services") if isinstance(model, dict) else None
+    if not isinstance(services, dict):
+        raise ValueError("rendered production Compose model has no services")
+    serverware = services.get("serverware") or {}
+    custody = services.get("custody-runtime") or {}
+    gate = services.get("decision-gate-rs") or {}
+
+    if custody.get("network_mode") != "none":
+        raise ValueError("production custody must use network_mode none")
+    if custody.get("user") != "65531:65530":
+        raise ValueError("production custody must run as explicit UID 65531 and socket GID 65530")
+    if gate.get("user") != "65532:65532":
+        raise ValueError("production decision gate must run as explicit UID 65532")
+    if {str(value) for value in (gate.get("group_add") or [])} != {"65530"}:
+        raise ValueError("production decision gate must receive only custody socket GID 65530")
+
+    custody_env = custody.get("environment") or {}
+    gate_env = gate.get("environment") or {}
+    if custody_env.get("SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID") != "65532":
+        raise ValueError("production custody must authenticate decision-gate UID 65532")
+    if (
+        custody_env.get("SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY")
+        != "/var/lib/serverware-custody"
+    ):
+        raise ValueError("production custody must use its private persistent attempt ledger")
+    if (
+        gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET")
+        != "/run/serverware-custody/custody.sock"
+        or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "65531"
+        or gate_env.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS") != "30000"
+    ):
+        raise ValueError("production decision gate must pin custody UID 65531 with a 30-second startup deadline")
+
+    def mounts(service: dict[str, Any]) -> list[dict[str, Any]]:
+        return [item for item in (service.get("volumes") or []) if isinstance(item, dict)]
+
+    def require_mount(
+        service_name: str,
+        *,
+        source: str,
+        target: str,
+        read_only: bool,
+    ) -> None:
+        service = services[service_name]
+        if not any(
+            item.get("source") == source
+            and item.get("target") == target
+            and bool(item.get("read_only", False)) is read_only
+            for item in mounts(service)
+        ):
+            access = "read-only" if read_only else "read-write"
+            raise ValueError(
+                f"production {service_name} must {access} mount {source} at {target}"
+            )
+
+    def consumers(source: str) -> set[str]:
+        return {
+            name
+            for name, service in services.items()
+            if any(item.get("source") == source for item in mounts(service))
+        }
+
+    response_key_source = loaded_env.get("SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE", "")
+    if not response_key_source:
+        raise ValueError("production response-signing private key source is not configured")
+    require_mount(
+        "serverware",
+        source=response_key_source,
+        target="/run/secrets/serverware-response-signing-key",
+        read_only=True,
+    )
+    if consumers(response_key_source) != {"serverware"}:
+        raise ValueError("production response-signing private key must be mounted only by serverware")
+
+    control_plane_tls_source = loaded_env.get("SERVERWARE_CONTROL_PLANE_TLS_DIR", "")
+    if not control_plane_tls_source:
+        raise ValueError("production control-plane TLS source is not configured")
+    gate_ca_source = str(Path(control_plane_tls_source) / "ca.pem")
+    require_mount(
+        "decision-gate-rs",
+        source=gate_ca_source,
+        target="/run/serverware/tls/ca.pem",
+        read_only=True,
+    )
+    if any(
+        str(item.get("target", "")).startswith("/run/serverware/tls")
+        and not (
+            item.get("source") == gate_ca_source
+            and item.get("target") == "/run/serverware/tls/ca.pem"
+            and bool(item.get("read_only", False))
+        )
+        for item in mounts(gate)
+    ):
+        raise ValueError("production decision gate may mount only the control-plane CA file")
+
+    def canonical_host_path(value: str) -> Path:
+        path = Path(value).expanduser()
+        if not path.is_absolute():
+            raise ValueError("production bind-mount sources must use absolute host paths")
+        return path.resolve(strict=False)
+
+    def host_paths_alias_or_overlap(left: str, right: str) -> bool:
+        left_path = canonical_host_path(left)
+        right_path = canonical_host_path(right)
+        if left_path == right_path or left_path in right_path.parents or right_path in left_path.parents:
+            return True
+        try:
+            return left_path.exists() and right_path.exists() and left_path.samefile(right_path)
+        except OSError:
+            return False
+
+    for mount in mounts(gate):
+        source = mount.get("source")
+        if mount.get("type") == "bind" and isinstance(source, str):
+            if host_paths_alias_or_overlap(response_key_source, source):
+                raise ValueError(
+                    "production response-signing private key must not alias or fall beneath a gate-visible bind mount"
+                )
+
+    trust_source = "serverware-custody-trust"
+    require_mount(
+        "serverware",
+        source=trust_source,
+        target="/run/serverware/custody-trust",
+        read_only=False,
+    )
+    require_mount(
+        "custody-runtime",
+        source=trust_source,
+        target="/run/serverware/custody-trust",
+        read_only=True,
+    )
+    if consumers(trust_source) != {"serverware", "custody-runtime"}:
+        raise ValueError("production custody trust volume has an unexpected consumer")
+
+    socket_source = "serverware-custody-socket"
+    require_mount(
+        "custody-runtime",
+        source=socket_source,
+        target="/run/serverware-custody",
+        read_only=False,
+    )
+    require_mount(
+        "decision-gate-rs",
+        source=socket_source,
+        target="/run/serverware-custody",
+        read_only=True,
+    )
+    if consumers(socket_source) != {"custody-runtime", "decision-gate-rs"}:
+        raise ValueError("production custody socket volume has an unexpected consumer")
+
+    state_source = "serverware-custody-state"
+    require_mount(
+        "custody-runtime",
+        source=state_source,
+        target="/var/lib/serverware-custody",
+        read_only=False,
+    )
+    if consumers(state_source) != {"custody-runtime"}:
+        raise ValueError("production custody state volume must be private to custody")
+
+    serverware_healthcheck = serverware.get("healthcheck") or {}
+    healthcheck_test = serverware_healthcheck.get("test") or []
+    healthcheck_command = str(healthcheck_test[3]) if len(healthcheck_test) == 4 else ""
+    if healthcheck_test[:3] != ["CMD", "/usr/bin/python3", "-c"] or (
+        sha256_prefixed_bytes(healthcheck_command.encode("utf-8"))
+        != PRODUCTION_CONTROL_HEALTHCHECK_SHA256
+    ):
+        raise ValueError("production control-plane readiness program is not the pinned command")
+    if not all(
+        marker in healthcheck_command
+        for marker in (
+            "/run/serverware/custody-trust/control-plane-response-signing.pub.pem",
+            "/run/serverware/custody-trust/control-plane-response-signing.key-id",
+            "/run/secrets/serverware-response-signing-key",
+            "https://serverware:3000/healthz",
+            "/run/serverware/tls/ca.pem",
+            "validate_response_signing_key_custody",
+            "sys.exit(1)",
+        )
+    ) or "assert " in healthcheck_command or "__debug__" in healthcheck_command:
+        raise ValueError(
+            "production control-plane readiness must verify live HTTPS health and published custody trust against the active private key"
+        )
+    if ((custody.get("depends_on") or {}).get("serverware") or {}).get("condition") != "service_healthy":
+        raise ValueError("production custody must wait for control-plane trust publication readiness")
+    if ((gate.get("depends_on") or {}).get("custody-runtime") or {}).get("condition") != "service_started":
+        raise ValueError("production decision gate must start only after custody starts")
+    if gate.get("restart") != "on-failure":
+        raise ValueError("production decision gate must restart after a custody startup failure")
+
+
 def production_compose_model(
     *, compose_file: Path, env_file: Path, images: dict[str, Any]
 ) -> tuple[str, dict[str, Any]]:
@@ -1053,6 +1362,7 @@ def production_compose_model(
     expected_images = {
         "serverware": images["serverware-control"]["repo_digests"][0],
         "audit-anchor": images["serverware-control"]["repo_digests"][0],
+        "custody-runtime": images["serverware-decision-gate"]["repo_digests"][0],
         "decision-gate-rs": images["serverware-decision-gate"]["repo_digests"][0],
     }
     if set(services) != set(expected_images):
@@ -1069,6 +1379,7 @@ def production_compose_model(
             raise ValueError(
                 f"production Compose service {service} must not contain a build directive"
             )
+    validate_production_custody_topology(model, loaded_env)
     networks = model.get("networks") if isinstance(model.get("networks"), dict) else {}
     for name in ("gate-control", "anchor-control"):
         if (
@@ -1168,10 +1479,17 @@ def production_compose_model(
     return canonical, summary
 
 
-def write_container_file(service: str, path: str, data: bytes) -> None:
+def write_container_file(
+    service: str,
+    path: str,
+    data: bytes,
+    *,
+    compose_command: list[str] | None = None,
+) -> None:
+    compose_command = compose_command or ["docker", "compose"]
     command = f"cat > {shlex.quote(path)}"
     subprocess.run(
-        ["docker", "compose", "exec", "-T", service, "sh", "-c", command],
+        [*compose_command, "exec", "-T", service, "sh", "-c", command],
         cwd=ROOT,
         input=data,
         check=True,
@@ -1260,6 +1578,7 @@ def main() -> None:
     nonce = f"release-provenance-{int(time.time() * 1000)}"
 
     source = source_tree()
+    development_compose_cli: list[str] | None = None
     if args.production:
         env_file = path_from_arg(args.env_file)
         compose_file = path_from_arg(args.compose_file)
@@ -1323,14 +1642,34 @@ def main() -> None:
     else:
         args.anchor = args.anchor or "http://localhost:9100"
         args.anchor_token = args.anchor_token or "dev-audit-anchor-token"
-        compose_config = run(["docker", "compose", "config"])
+        compose_files = os.environ.get("COMPOSE_FILE", "docker-compose.yml").split(os.pathsep)
+        compose_profiles = sorted(
+            value
+            for value in os.environ.get("COMPOSE_PROFILES", "").split(",")
+            if value
+        )
+        development_compose_cli = development_compose_command(
+            compose_files, compose_profiles
+        )
+        compose_config = run([*development_compose_cli, "config"])
+        compose_model = json.loads(
+            run([*development_compose_cli, "config", "--format", "json"])
+        )
+        development_services = development_compose_services(
+            compose_model, compose_files, compose_profiles
+        )
         compose_summary = {
-            "file": "docker-compose.yml",
-            "services": list(DEV_SERVICES),
+            "files": compose_files,
+            "profiles": compose_profiles,
+            "services": list(development_services),
             "sha256": sha256_prefixed_bytes(compose_config.encode("utf-8")),
         }
-        images = image_inventory()
-        containers = container_inventory()
+        images = image_inventory(
+            development_services, compose_command=development_compose_cli
+        )
+        containers = container_inventory(
+            development_services, compose_command=development_compose_cli
+        )
         control_attestation = None
         gate_attestation = None
         audit_verify = None
@@ -1476,7 +1815,12 @@ def main() -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     if not args.production:
         atomic_write_json(out_path, document)
-        write_container_file("serverware", args.container_out, out_path.read_bytes())
+        write_container_file(
+            "serverware",
+            args.container_out,
+            out_path.read_bytes(),
+            compose_command=development_compose_cli,
+        )
         wait_for_gate_response_context(
             args.gate,
             "provenance_digest",
@@ -1604,7 +1948,12 @@ def main() -> None:
     }
     atomic_write_json(out_path, document)
     if not args.production:
-        write_container_file("serverware", args.container_out, out_path.read_bytes())
+        write_container_file(
+            "serverware",
+            args.container_out,
+            out_path.read_bytes(),
+            compose_command=development_compose_cli,
+        )
 
     print(
         json.dumps(

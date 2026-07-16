@@ -6,14 +6,16 @@ use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::{Date, Duration as TimeDuration, Month, OffsetDateTime};
@@ -44,12 +46,24 @@ const MAX_AUTHORIZATION_RECEIPT_BODY_BYTES: usize = 32 * 1024;
 const MAX_SIGNED_RESPONSE_STATEMENT_BYTES: usize = 8 * 1024;
 const MAX_RELEASE_AUTHORIZATION_BINDING_BYTES: usize = 64 * 1024;
 const MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES: usize = 1024;
+const MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_BYTES: usize = 72;
+const MAX_ATTEMPT_STATEMENT_BINDINGS: usize = MAX_REQUESTS_PER_BOOT;
+const MAX_ATTEMPT_LEDGER_RECORD_BYTES: usize = 1024;
+const MAX_ATTEMPT_LEDGER_MANIFEST_BYTES: usize = 1024;
+const ATTEMPT_LEDGER_DIRECTORY_MODE: u32 = 0o700;
+const ATTEMPT_LEDGER_FILE_MODE: u32 = 0o600;
+const ATTEMPT_LEDGER_API_VERSION: &str = "serverware.custodyAttemptLedger/v2";
+const ATTEMPT_LEDGER_MANIFEST_FILE: &str = "manifest.json";
+const ATTEMPT_LEDGER_LOCK_FILE: &str = "ledger.lock";
+const MAX_RELEASE_AUTHORIZATION_LIFETIME_MS: u64 = 300_000;
 const AUTHORIZATION_RECEIPT_API_VERSION: &str = "serverware.controlPlaneAuthorizationReceipt/v1";
 const RELEASE_AUTHORIZATION_DISPATCH_PATH: &str = "/api/data-plane/release-authorizations/dispatch";
 const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV: &str =
     "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY";
 const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV: &str =
     "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID";
+const CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_ENV: &str =
+    "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID_FILE";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProtocolError {
@@ -130,7 +144,7 @@ struct SignParams {
     authorization_binding: ReleaseAuthorizationBinding,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProxyResponseStatement {
     #[serde(rename = "apiVersion")]
@@ -154,7 +168,7 @@ pub struct ProxyResponseStatement {
     pub tls_channel_binding: TlsChannelBinding,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlPlaneAuthorizationReceipt {
     #[serde(rename = "apiVersion")]
@@ -167,7 +181,7 @@ pub struct ControlPlaneAuthorizationReceipt {
     pub response: ControlPlaneAuthorizationReceiptResponse,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlPlaneAuthorizationReceiptRequest {
     pub method: String,
@@ -178,7 +192,7 @@ pub struct ControlPlaneAuthorizationReceiptRequest {
     pub body_sha256: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ControlPlaneAuthorizationReceiptResponse {
     pub status: u16,
@@ -407,6 +421,7 @@ struct ErrorBody {
 struct HelloResult<'a> {
     public_key_pem: &'a str,
     key_id: &'a str,
+    control_plane_response_signing_key_id: Option<&'a str>,
     capabilities: [&'static str; 2],
     limits: RuntimeLimits,
     hardware_proof: bool,
@@ -430,39 +445,111 @@ struct SignResult<'a> {
     key_id: &'a str,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttemptBindingPayload {
+    api_version: String,
+    attempt_id: String,
+    statement_digest: String,
+    retain_until_epoch_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttemptBindingRecord {
+    payload: AttemptBindingPayload,
+    checksum: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttemptLedgerManifestPayload {
+    api_version: String,
+    commit_sequence: u64,
+    active_binding_count: usize,
+    active_bindings_accumulator: String,
+    pruned_through_epoch_ms: u64,
+    max_observed_epoch_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AttemptLedgerManifestRecord {
+    payload: AttemptLedgerManifestPayload,
+    checksum: String,
+}
+
+struct AttemptStatementLedger {
+    directory: Option<PathBuf>,
+    _lock_file: Option<fs::File>,
+    bindings: BTreeMap<String, AttemptBindingPayload>,
+    expiry_index: BTreeSet<(u64, String)>,
+    manifest: AttemptLedgerManifestPayload,
+    max_bindings: usize,
+    poisoned: bool,
+}
+
 pub struct CustodyRuntime {
     boot_id: String,
     signing_key: SigningKey,
     public_key_pem: String,
     key_id: String,
     control_plane_response_verifying_key: Option<VerifyingKey>,
+    control_plane_response_signing_key_id: Option<String>,
     seen_request_ids: Mutex<HashSet<String>>,
+    response_proof_validation: Mutex<()>,
+    attempt_statement_ledger: Mutex<AttemptStatementLedger>,
 }
 
 impl CustodyRuntime {
-    pub fn generate() -> Result<Self, ProtocolError> {
-        let control_plane_response_verifying_key =
-            configured_control_plane_response_verifying_key()?;
+    pub fn initialize_attempt_ledger_directory(directory: &Path) -> Result<(), ProtocolError> {
+        AttemptStatementLedger::initialize(directory)
+    }
+
+    pub fn generate(attempt_ledger_directory: &Path) -> Result<Self, ProtocolError> {
+        Self::generate_with_configured_control_plane_response_key(
+            configured_control_plane_response_verifying_key()?,
+            attempt_ledger_directory,
+        )
+    }
+
+    fn generate_with_configured_control_plane_response_key(
+        control_plane_response_verifying_key: Option<VerifyingKey>,
+        attempt_ledger_directory: &Path,
+    ) -> Result<Self, ProtocolError> {
+        let control_plane_response_verifying_key = control_plane_response_verifying_key
+            .ok_or_else(|| {
+                ProtocolError::new(
+                    "invalid_control_plane_response_key_configuration",
+                    format!(
+                        "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} and exactly one pinned key ID source are required"
+                    ),
+                )
+            })?;
         Self::generate_with_optional_control_plane_response_key(
-            control_plane_response_verifying_key,
+            Some(control_plane_response_verifying_key),
+            AttemptStatementLedger::open(attempt_ledger_directory)?,
         )
     }
 
     pub fn generate_with_control_plane_response_public_key(
         control_plane_response_verifying_key: VerifyingKey,
         expected_key_id: &str,
+        attempt_ledger_directory: &Path,
     ) -> Result<Self, ProtocolError> {
         validate_pinned_control_plane_response_key(
             &control_plane_response_verifying_key,
             expected_key_id,
         )?;
-        Self::generate_with_optional_control_plane_response_key(Some(
-            control_plane_response_verifying_key,
-        ))
+        Self::generate_with_optional_control_plane_response_key(
+            Some(control_plane_response_verifying_key),
+            AttemptStatementLedger::open(attempt_ledger_directory)?,
+        )
     }
 
     fn generate_with_optional_control_plane_response_key(
         control_plane_response_verifying_key: Option<VerifyingKey>,
+        attempt_statement_ledger: AttemptStatementLedger,
     ) -> Result<Self, ProtocolError> {
         let random = SystemRandom::new();
         let mut seed = [0u8; ED25519_SEED_BYTES];
@@ -477,30 +564,55 @@ impl CustodyRuntime {
                 "generate custody runtime boot ID",
             ));
         }
-        let runtime =
-            Self::from_secret_material(seed, boot_id_bytes, control_plane_response_verifying_key);
+        let runtime = Self::from_secret_material_with_ledger(
+            seed,
+            boot_id_bytes,
+            control_plane_response_verifying_key,
+            attempt_statement_ledger,
+        );
         seed.zeroize();
         boot_id_bytes.zeroize();
         Ok(runtime)
     }
 
-    fn from_secret_material(
+    fn from_secret_material_with_ledger(
         mut signing_seed: [u8; ED25519_SEED_BYTES],
         boot_id_bytes: [u8; BOOT_ID_BYTES],
         control_plane_response_verifying_key: Option<VerifyingKey>,
+        attempt_statement_ledger: AttemptStatementLedger,
     ) -> Self {
         let signing_key = SigningKey::from_bytes(&signing_seed);
         signing_seed.zeroize();
         let public_key = signing_key.verifying_key().to_bytes();
         let spki_der = ed25519_spki_der(&public_key);
+        let control_plane_response_signing_key_id = control_plane_response_verifying_key
+            .as_ref()
+            .map(control_plane_response_key_id);
         Self {
             boot_id: general_purpose::URL_SAFE_NO_PAD.encode(boot_id_bytes),
             signing_key,
             public_key_pem: pem_public_key(&spki_der),
             key_id: sha256_prefixed(&spki_der),
             control_plane_response_verifying_key,
+            control_plane_response_signing_key_id,
             seen_request_ids: Mutex::new(HashSet::new()),
+            response_proof_validation: Mutex::new(()),
+            attempt_statement_ledger: Mutex::new(attempt_statement_ledger),
         }
+    }
+
+    #[cfg(test)]
+    fn from_secret_material(
+        signing_seed: [u8; ED25519_SEED_BYTES],
+        boot_id_bytes: [u8; BOOT_ID_BYTES],
+        control_plane_response_verifying_key: Option<VerifyingKey>,
+    ) -> Self {
+        Self::from_secret_material_with_ledger(
+            signing_seed,
+            boot_id_bytes,
+            control_plane_response_verifying_key,
+            AttemptStatementLedger::in_memory(),
+        )
     }
 
     pub fn boot_id(&self) -> &str {
@@ -546,7 +658,6 @@ impl CustodyRuntime {
                 "apiVersion must be serverware.custodyProtocol/v1",
             ));
         }
-        self.claim_request_id(&request.request_id)?;
 
         match request.operation.as_str() {
             HELLO_OPERATION => {
@@ -560,6 +671,9 @@ impl CustodyRuntime {
                 serde_json::to_value(HelloResult {
                     public_key_pem: &self.public_key_pem,
                     key_id: &self.key_id,
+                    control_plane_response_signing_key_id: self
+                        .control_plane_response_signing_key_id
+                        .as_deref(),
                     capabilities: [HELLO_OPERATION, RESPONSE_PROOF_SIGN_OPERATION],
                     limits: RuntimeLimits {
                         max_frame_bytes: MAX_FRAME_BYTES,
@@ -578,6 +692,7 @@ impl CustodyRuntime {
                 })
             }
             RESPONSE_PROOF_SIGN_OPERATION => {
+                self.claim_request_id(&request.request_id)?;
                 let Some(boot_id) = request.boot_id.as_deref() else {
                     return Err(ProtocolError::new(
                         "missing_boot_id",
@@ -603,17 +718,50 @@ impl CustodyRuntime {
                             "control_plane_response_key_unavailable",
                             "responseProof.sign/v2 requires a pinned control-plane response public key",
                         )
-                    })?;
-                validate_response_statement_with_control_plane_response_key(
-                    &params.statement,
-                    control_plane_response_verifying_key,
+                })?;
+                let _validation = self.response_proof_validation.lock().map_err(|_| {
+                    ProtocolError::new(
+                        "internal_state_error",
+                        "response proof validation serialization is unavailable",
+                    )
+                })?;
+                let validation_epoch_ms = current_epoch_ms()?;
+                let validated = (|| {
+                    validate_response_statement_with_control_plane_response_key_at(
+                        &params.statement,
+                        control_plane_response_verifying_key,
+                        validation_epoch_ms,
+                    )?;
+                    validate_release_authorization_binding(
+                        &params.statement,
+                        &params.authorization_binding,
+                    )?;
+                    let canonical_statement = canonical_json_bytes(&params.statement)?;
+                    let statement_digest = sha256_prefixed(&canonical_statement);
+                    let retain_until_epoch_ms = params
+                        .statement
+                        .release_authority
+                        .dispatch_expires_at_epoch_ms;
+                    Ok::<_, ProtocolError>((
+                        canonical_statement,
+                        statement_digest,
+                        retain_until_epoch_ms,
+                    ))
+                })();
+                let (canonical_statement, statement_digest, retain_until_epoch_ms) = match validated
+                {
+                    Ok(validated) => validated,
+                    Err(error) => {
+                        self.observe_attempt_ledger_clock(validation_epoch_ms)?;
+                        return Err(error);
+                    }
+                };
+                self.claim_attempt_statement_digest(
+                    &params.statement.release_authority.attempt_id,
+                    &statement_digest,
+                    retain_until_epoch_ms,
+                    validation_epoch_ms,
                 )?;
-                validate_release_authorization_binding(
-                    &params.statement,
-                    &params.authorization_binding,
-                )?;
-                let canonical_statement = canonical_json_bytes(&params.statement)?;
-                let statement_digest = sha256_prefixed(&canonical_statement);
                 let signature = self.signing_key.sign(&canonical_statement);
                 serde_json::to_value(SignResult {
                     statement_digest,
@@ -659,31 +807,1111 @@ impl CustodyRuntime {
         seen.insert(request_id.to_string());
         Ok(())
     }
+
+    fn claim_attempt_statement_digest(
+        &self,
+        attempt_id: &str,
+        statement_digest: &str,
+        retain_until_epoch_ms: u64,
+        minimum_epoch_ms: u64,
+    ) -> Result<(), ProtocolError> {
+        self.claim_attempt_statement_digest_with_clock(
+            attempt_id,
+            statement_digest,
+            retain_until_epoch_ms,
+            minimum_epoch_ms,
+            current_epoch_ms,
+        )
+    }
+
+    fn claim_attempt_statement_digest_with_clock(
+        &self,
+        attempt_id: &str,
+        statement_digest: &str,
+        retain_until_epoch_ms: u64,
+        minimum_epoch_ms: u64,
+        clock: impl FnOnce() -> Result<u64, ProtocolError>,
+    ) -> Result<(), ProtocolError> {
+        let mut ledger = self.attempt_statement_ledger.lock().map_err(|_| {
+            ProtocolError::new(
+                "internal_state_error",
+                "attempt statement binding state is unavailable",
+            )
+        })?;
+        let now_epoch_ms = match clock() {
+            Ok(now_epoch_ms) => now_epoch_ms,
+            Err(error) => {
+                ledger.advance_max_observed_time(minimum_epoch_ms)?;
+                return Err(error);
+            }
+        };
+        if now_epoch_ms < minimum_epoch_ms {
+            ledger.advance_max_observed_time(minimum_epoch_ms)?;
+            return Err(attempt_ledger_error(
+                "attempt_ledger_clock_rollback",
+                format!(
+                    "wall clock {now_epoch_ms} moved backward after statement validation at {minimum_epoch_ms}"
+                ),
+            ));
+        }
+        ledger.claim(
+            attempt_id,
+            statement_digest,
+            retain_until_epoch_ms,
+            now_epoch_ms,
+        )
+    }
+
+    fn observe_attempt_ledger_clock(&self, observed_epoch_ms: u64) -> Result<(), ProtocolError> {
+        let mut ledger = self.attempt_statement_ledger.lock().map_err(|_| {
+            ProtocolError::new(
+                "internal_state_error",
+                "attempt statement binding state is unavailable",
+            )
+        })?;
+        ledger.advance_max_observed_time(observed_epoch_ms)
+    }
+}
+
+impl AttemptStatementLedger {
+    #[cfg(test)]
+    fn in_memory() -> Self {
+        Self {
+            directory: None,
+            _lock_file: None,
+            bindings: BTreeMap::new(),
+            expiry_index: BTreeSet::new(),
+            manifest: empty_attempt_ledger_manifest(),
+            max_bindings: MAX_ATTEMPT_STATEMENT_BINDINGS,
+            poisoned: false,
+        }
+    }
+
+    fn open(directory: &Path) -> Result<Self, ProtocolError> {
+        Self::open_with_limit(directory, MAX_ATTEMPT_STATEMENT_BINDINGS)
+    }
+
+    fn initialize(directory: &Path) -> Result<(), ProtocolError> {
+        validate_attempt_ledger_directory(directory)?;
+        let _lock_file = open_attempt_ledger_lock(directory)?;
+        for entry in fs::read_dir(directory).map_err(|error| {
+            attempt_ledger_error(
+                "attempt_ledger_io",
+                format!("list ledger directory: {error}"),
+            )
+        })? {
+            let entry = entry.map_err(|error| {
+                attempt_ledger_error("attempt_ledger_io", format!("read ledger entry: {error}"))
+            })?;
+            let name = entry.file_name();
+            if name == ATTEMPT_LEDGER_LOCK_FILE {
+                continue;
+            }
+            if name == ATTEMPT_LEDGER_MANIFEST_FILE {
+                return Err(attempt_ledger_error(
+                    "attempt_ledger_already_initialized",
+                    format!(
+                        "attempt ledger directory {} is already initialized",
+                        directory.display()
+                    ),
+                ));
+            }
+            return Err(attempt_ledger_error(
+                "attempt_ledger_corrupt",
+                "uninitialized ledger directory contains unexpected state",
+            ));
+        }
+        persist_attempt_ledger_manifest(directory, &empty_attempt_ledger_manifest())
+    }
+
+    fn open_with_limit(directory: &Path, max_bindings: usize) -> Result<Self, ProtocolError> {
+        Self::open_with_limit_at(directory, max_bindings, current_epoch_ms()?)
+    }
+
+    fn open_with_limit_at(
+        directory: &Path,
+        max_bindings: usize,
+        now_epoch_ms: u64,
+    ) -> Result<Self, ProtocolError> {
+        validate_attempt_ledger_directory(directory)?;
+        let lock_file = open_attempt_ledger_lock(directory)?;
+        let manifest_path = directory.join(ATTEMPT_LEDGER_MANIFEST_FILE);
+        let mut binding_paths = Vec::new();
+        let mut orphan_temporary_paths = Vec::new();
+        let mut manifest_present = false;
+        for entry in fs::read_dir(directory).map_err(|error| {
+            attempt_ledger_error(
+                "attempt_ledger_io",
+                format!("list ledger directory: {error}"),
+            )
+        })? {
+            let entry = entry.map_err(|error| {
+                attempt_ledger_error("attempt_ledger_io", format!("read ledger entry: {error}"))
+            })?;
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                return Err(attempt_ledger_error(
+                    "attempt_ledger_corrupt",
+                    "ledger directory contains a non-UTF-8 entry name",
+                ));
+            };
+            match name {
+                ATTEMPT_LEDGER_LOCK_FILE => {}
+                ATTEMPT_LEDGER_MANIFEST_FILE => manifest_present = true,
+                _ if parse_attempt_binding_filename(name).is_some() => {
+                    if binding_paths.len() >= max_bindings {
+                        return Err(attempt_ledger_error(
+                            "attempt_statement_capacity_exhausted",
+                            format!("ledger contains more than {max_bindings} binding records"),
+                        ));
+                    }
+                    binding_paths.push(entry.path());
+                }
+                _ if parse_attempt_ledger_temporary_filename(name) => {
+                    orphan_temporary_paths.push(entry.path());
+                }
+                _ => {
+                    return Err(attempt_ledger_error(
+                        "attempt_ledger_corrupt",
+                        format!("ledger directory contains unexpected entry: {name}"),
+                    ));
+                }
+            }
+        }
+        if !orphan_temporary_paths.is_empty() {
+            for path in orphan_temporary_paths {
+                remove_orphan_attempt_ledger_temporary(&path)?;
+            }
+            sync_directory(directory)?;
+        }
+        if !manifest_present {
+            return Err(attempt_ledger_error(
+                "attempt_ledger_not_initialized",
+                "attempt ledger manifest is missing; normal runtime startup never creates fresh state",
+            ));
+        }
+
+        let manifest = load_attempt_ledger_manifest(&manifest_path)?;
+        if now_epoch_ms < manifest.max_observed_epoch_ms {
+            return Err(attempt_ledger_error(
+                "attempt_ledger_clock_rollback",
+                format!(
+                    "wall clock {now_epoch_ms} precedes durable observation high-water mark {}",
+                    manifest.max_observed_epoch_ms
+                ),
+            ));
+        }
+
+        binding_paths.sort();
+        let mut bindings = BTreeMap::new();
+        let mut expiry_index = BTreeSet::new();
+        let mut active_accumulator = [0u8; 32];
+        let mut stale_paths = Vec::new();
+        for path in binding_paths {
+            let record = load_attempt_binding_record(&path)?;
+            let filename = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .ok_or_else(|| {
+                    attempt_ledger_error(
+                        "attempt_ledger_corrupt",
+                        "binding record has an invalid filename",
+                    )
+                })?;
+            if parse_attempt_binding_filename(filename).as_deref()
+                != Some(record.payload.attempt_id.as_str())
+            {
+                return Err(attempt_ledger_error(
+                    "attempt_ledger_corrupt",
+                    format!("binding filename does not match its attempt ID: {filename}"),
+                ));
+            }
+            if record.payload.retain_until_epoch_ms <= manifest.pruned_through_epoch_ms {
+                stale_paths.push(path);
+                continue;
+            }
+            if bindings
+                .insert(record.payload.attempt_id.clone(), record.payload.clone())
+                .is_some()
+            {
+                return Err(attempt_ledger_error(
+                    "attempt_ledger_corrupt",
+                    "ledger contains a duplicate attempt binding",
+                ));
+            }
+            expiry_index.insert((
+                record.payload.retain_until_epoch_ms,
+                record.payload.attempt_id.clone(),
+            ));
+            xor_accumulator(&mut active_accumulator, checksum_bytes(&record.checksum)?);
+        }
+        if manifest.active_binding_count != bindings.len()
+            || manifest.active_bindings_accumulator
+                != general_purpose::URL_SAFE_NO_PAD.encode(active_accumulator)
+        {
+            return Err(attempt_ledger_error(
+                "attempt_ledger_corrupt",
+                "ledger manifest does not match the active binding record set",
+            ));
+        }
+
+        for path in stale_paths {
+            fs::remove_file(&path).map_err(|error| {
+                attempt_ledger_error(
+                    "attempt_ledger_io",
+                    format!("remove durably pruned binding {}: {error}", path.display()),
+                )
+            })?;
+        }
+        sync_directory(directory)?;
+
+        let mut ledger = Self {
+            directory: Some(directory.to_path_buf()),
+            _lock_file: Some(lock_file),
+            bindings,
+            expiry_index,
+            manifest,
+            max_bindings,
+            poisoned: false,
+        };
+        ledger.prune_expired(now_epoch_ms)?;
+        ledger.advance_max_observed_time(now_epoch_ms)?;
+        Ok(ledger)
+    }
+
+    fn claim(
+        &mut self,
+        attempt_id: &str,
+        statement_digest: &str,
+        retain_until_epoch_ms: u64,
+        now_epoch_ms: u64,
+    ) -> Result<(), ProtocolError> {
+        self.ensure_available()?;
+        if now_epoch_ms < self.manifest.max_observed_epoch_ms {
+            return Err(attempt_ledger_error(
+                "attempt_ledger_clock_rollback",
+                format!(
+                    "wall clock {now_epoch_ms} precedes durable observation high-water mark {}",
+                    self.manifest.max_observed_epoch_ms
+                ),
+            ));
+        }
+        self.prune_expired(now_epoch_ms)?;
+        if let Some(existing_statement_digest) = self
+            .bindings
+            .get(attempt_id)
+            .map(|existing| existing.statement_digest.clone())
+        {
+            self.advance_max_observed_time(now_epoch_ms)?;
+            if existing_statement_digest != statement_digest {
+                return Err(ProtocolError::new(
+                    "attempt_statement_substitution",
+                    "release_authority.attempt_id is durably bound to a different canonical statement digest",
+                ));
+            }
+            return Ok(());
+        }
+        if retain_until_epoch_ms <= now_epoch_ms {
+            self.advance_max_observed_time(now_epoch_ms)?;
+            return Err(ProtocolError::new(
+                "attempt_statement_expired",
+                "release authorization expired before its attempt binding could be committed",
+            ));
+        }
+        if self.bindings.len() >= self.max_bindings {
+            self.advance_max_observed_time(now_epoch_ms)?;
+            return Err(ProtocolError::new(
+                "attempt_statement_capacity_exhausted",
+                "runtime attempt statement binding capacity is exhausted by unexpired receipts",
+            ));
+        }
+
+        let payload = AttemptBindingPayload {
+            api_version: ATTEMPT_LEDGER_API_VERSION.to_string(),
+            attempt_id: attempt_id.to_string(),
+            statement_digest: statement_digest.to_string(),
+            retain_until_epoch_ms,
+        };
+        let checksum = checksum_payload(&payload)?;
+        let mut next_manifest = self.manifest.clone();
+        next_manifest.commit_sequence =
+            next_manifest
+                .commit_sequence
+                .checked_add(1)
+                .ok_or_else(|| {
+                    attempt_ledger_error(
+                        "attempt_ledger_corrupt",
+                        "ledger commit sequence is exhausted",
+                    )
+                })?;
+        next_manifest.active_binding_count = next_manifest
+            .active_binding_count
+            .checked_add(1)
+            .ok_or_else(|| {
+                attempt_ledger_error("attempt_ledger_corrupt", "ledger binding count overflow")
+            })?;
+        let mut accumulator = decode_accumulator(&next_manifest.active_bindings_accumulator)?;
+        xor_accumulator(&mut accumulator, checksum_bytes(&checksum)?);
+        next_manifest.active_bindings_accumulator =
+            general_purpose::URL_SAFE_NO_PAD.encode(accumulator);
+        next_manifest.max_observed_epoch_ms = now_epoch_ms;
+        if let Some(directory) = self.directory.as_deref() {
+            if let Err(error) = persist_attempt_binding_record(directory, &payload, &checksum) {
+                self.poisoned = true;
+                return Err(error);
+            }
+            if let Err(error) = persist_attempt_ledger_manifest(directory, &next_manifest) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+
+        self.manifest = next_manifest;
+        self.expiry_index
+            .insert((retain_until_epoch_ms, attempt_id.to_string()));
+        self.bindings.insert(attempt_id.to_string(), payload);
+        Ok(())
+    }
+
+    fn prune_expired(&mut self, now_epoch_ms: u64) -> Result<(), ProtocolError> {
+        self.ensure_available()?;
+        let expired = self
+            .expiry_index
+            .iter()
+            .take_while(|(expires_at, _)| *expires_at <= now_epoch_ms)
+            .cloned()
+            .collect::<Vec<_>>();
+        if expired.is_empty() {
+            return Ok(());
+        }
+
+        let mut next_manifest = self.manifest.clone();
+        next_manifest.commit_sequence =
+            next_manifest
+                .commit_sequence
+                .checked_add(1)
+                .ok_or_else(|| {
+                    attempt_ledger_error(
+                        "attempt_ledger_corrupt",
+                        "ledger commit sequence is exhausted",
+                    )
+                })?;
+        next_manifest.pruned_through_epoch_ms = next_manifest
+            .pruned_through_epoch_ms
+            .max(expired.last().expect("non-empty expiry list").0);
+        next_manifest.max_observed_epoch_ms = now_epoch_ms;
+        let mut accumulator = decode_accumulator(&next_manifest.active_bindings_accumulator)?;
+        for (_, attempt_id) in &expired {
+            let binding = self.bindings.get(attempt_id).ok_or_else(|| {
+                attempt_ledger_error(
+                    "attempt_ledger_corrupt",
+                    "expiry index references a missing binding",
+                )
+            })?;
+            xor_accumulator(
+                &mut accumulator,
+                checksum_bytes(&checksum_payload(binding)?)?,
+            );
+        }
+        next_manifest.active_binding_count = next_manifest
+            .active_binding_count
+            .checked_sub(expired.len())
+            .ok_or_else(|| {
+                attempt_ledger_error("attempt_ledger_corrupt", "ledger binding count underflow")
+            })?;
+        next_manifest.active_bindings_accumulator =
+            general_purpose::URL_SAFE_NO_PAD.encode(accumulator);
+        if let Some(directory) = self.directory.as_deref() {
+            if let Err(error) = persist_attempt_ledger_manifest(directory, &next_manifest) {
+                self.poisoned = true;
+                return Err(error);
+            }
+            self.manifest = next_manifest.clone();
+            for (_, attempt_id) in &expired {
+                let path = directory.join(attempt_binding_filename(attempt_id)?);
+                match fs::remove_file(&path) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                    Err(error) => {
+                        self.poisoned = true;
+                        return Err(attempt_ledger_error(
+                            "attempt_ledger_io",
+                            format!("remove expired binding {}: {error}", path.display()),
+                        ));
+                    }
+                }
+            }
+            if let Err(error) = sync_directory(directory) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+
+        self.manifest = next_manifest;
+        for entry in expired {
+            self.expiry_index.remove(&entry);
+            self.bindings.remove(&entry.1);
+        }
+        Ok(())
+    }
+
+    fn advance_max_observed_time(&mut self, now_epoch_ms: u64) -> Result<(), ProtocolError> {
+        self.ensure_available()?;
+        if now_epoch_ms <= self.manifest.max_observed_epoch_ms {
+            return Ok(());
+        }
+        let mut next_manifest = self.manifest.clone();
+        next_manifest.commit_sequence =
+            next_manifest
+                .commit_sequence
+                .checked_add(1)
+                .ok_or_else(|| {
+                    attempt_ledger_error(
+                        "attempt_ledger_corrupt",
+                        "ledger commit sequence is exhausted",
+                    )
+                })?;
+        next_manifest.max_observed_epoch_ms = now_epoch_ms;
+        if let Some(directory) = self.directory.as_deref() {
+            if let Err(error) = persist_attempt_ledger_manifest(directory, &next_manifest) {
+                self.poisoned = true;
+                return Err(error);
+            }
+        }
+        self.manifest = next_manifest;
+        Ok(())
+    }
+
+    fn ensure_available(&self) -> Result<(), ProtocolError> {
+        if self.poisoned {
+            return Err(attempt_ledger_error(
+                "attempt_ledger_unavailable",
+                "attempt ledger requires runtime restart after an incomplete durable update",
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn empty_attempt_ledger_manifest() -> AttemptLedgerManifestPayload {
+    AttemptLedgerManifestPayload {
+        api_version: ATTEMPT_LEDGER_API_VERSION.to_string(),
+        commit_sequence: 0,
+        active_binding_count: 0,
+        active_bindings_accumulator: general_purpose::URL_SAFE_NO_PAD.encode([0u8; 32]),
+        pruned_through_epoch_ms: 0,
+        max_observed_epoch_ms: 0,
+    }
+}
+
+fn current_epoch_ms() -> Result<u64, ProtocolError> {
+    let milliseconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| {
+            attempt_ledger_error(
+                "attempt_ledger_clock_rollback",
+                "system clock precedes the Unix epoch",
+            )
+        })?
+        .as_millis();
+    u64::try_from(milliseconds).map_err(|_| {
+        attempt_ledger_error(
+            "attempt_ledger_clock_invalid",
+            "system clock exceeds the supported epoch range",
+        )
+    })
+}
+
+fn attempt_ledger_error(code: &'static str, message: impl Into<String>) -> ProtocolError {
+    ProtocolError::new(code, message)
+}
+
+fn validate_attempt_ledger_directory(directory: &Path) -> Result<(), ProtocolError> {
+    if !directory.is_absolute() {
+        return Err(attempt_ledger_error(
+            "invalid_attempt_ledger_configuration",
+            "attempt ledger directory must be an absolute path",
+        ));
+    }
+    let mut current = PathBuf::new();
+    for component in directory.components() {
+        match component {
+            Component::RootDir => current.push(Path::new("/")),
+            Component::Normal(component) => current.push(component),
+            Component::CurDir | Component::ParentDir | Component::Prefix(_) => {
+                return Err(attempt_ledger_error(
+                    "invalid_attempt_ledger_configuration",
+                    "attempt ledger directory must be a normalized absolute path",
+                ));
+            }
+        }
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            attempt_ledger_error(
+                "invalid_attempt_ledger_configuration",
+                format!(
+                    "inspect attempt ledger ancestor {}: {error}",
+                    current.display()
+                ),
+            )
+        })?;
+        if !metadata.file_type().is_dir() {
+            return Err(attempt_ledger_error(
+                "invalid_attempt_ledger_configuration",
+                format!(
+                    "attempt ledger ancestor {} must be a non-symlink directory",
+                    current.display()
+                ),
+            ));
+        }
+        if current != directory && metadata.mode() & 0o022 != 0 {
+            return Err(attempt_ledger_error(
+                "invalid_attempt_ledger_configuration",
+                format!(
+                    "attempt ledger ancestor {} must not be group- or other-writable",
+                    current.display()
+                ),
+            ));
+        }
+    }
+    let metadata = fs::symlink_metadata(directory).map_err(|error| {
+        attempt_ledger_error(
+            "invalid_attempt_ledger_configuration",
+            format!("inspect attempt ledger directory: {error}"),
+        )
+    })?;
+    // SAFETY: geteuid has no memory-safety preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    // SAFETY: getegid has no memory-safety preconditions.
+    let effective_gid = unsafe { libc::getegid() };
+    if !metadata.file_type().is_dir()
+        || metadata.uid() != effective_uid
+        || metadata.gid() != effective_gid
+        || metadata.mode() & 0o7777 != ATTEMPT_LEDGER_DIRECTORY_MODE
+    {
+        return Err(attempt_ledger_error(
+            "invalid_attempt_ledger_configuration",
+            format!(
+                "attempt ledger directory {} must be a non-symlink directory owned by UID {} and GID {} with mode {:04o}",
+                directory.display(),
+                effective_uid,
+                effective_gid,
+                ATTEMPT_LEDGER_DIRECTORY_MODE
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn open_attempt_ledger_lock(directory: &Path) -> Result<fs::File, ProtocolError> {
+    let path = directory.join(ATTEMPT_LEDGER_LOCK_FILE);
+    let existed = fs::symlink_metadata(&path).is_ok();
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(ATTEMPT_LEDGER_FILE_MODE)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(&path)
+        .map_err(|error| {
+            attempt_ledger_error(
+                "invalid_attempt_ledger_configuration",
+                format!("open attempt ledger lock: {error}"),
+            )
+        })?;
+    validate_attempt_ledger_file_metadata(&file, &path, 0)?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_locked",
+            format!(
+                "attempt ledger directory {} is already locked by another runtime: {}",
+                directory.display(),
+                io::Error::last_os_error()
+            ),
+        ));
+    }
+    if !existed {
+        sync_directory(directory)?;
+    }
+    Ok(file)
+}
+
+fn load_attempt_ledger_manifest(
+    path: &Path,
+) -> Result<AttemptLedgerManifestPayload, ProtocolError> {
+    Ok(load_attempt_ledger_manifest_record(path)?.payload)
+}
+
+fn load_attempt_ledger_manifest_record(
+    path: &Path,
+) -> Result<AttemptLedgerManifestRecord, ProtocolError> {
+    let bytes = read_attempt_ledger_file(path, MAX_ATTEMPT_LEDGER_MANIFEST_BYTES)?;
+    let record: AttemptLedgerManifestRecord = decode_canonical_json(&bytes).map_err(|error| {
+        attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!("decode ledger manifest: {error}"),
+        )
+    })?;
+    validate_attempt_ledger_manifest_record(&record)?;
+    Ok(record)
+}
+
+fn validate_attempt_ledger_manifest_record(
+    record: &AttemptLedgerManifestRecord,
+) -> Result<(), ProtocolError> {
+    if record.payload.api_version != ATTEMPT_LEDGER_API_VERSION
+        || record.payload.max_observed_epoch_ms < record.payload.pruned_through_epoch_ms
+        || record.checksum != checksum_payload(&record.payload)?
+    {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            "ledger manifest version or checksum is invalid",
+        ));
+    }
+    decode_accumulator(&record.payload.active_bindings_accumulator)?;
+    Ok(())
+}
+
+fn load_attempt_binding_record(path: &Path) -> Result<AttemptBindingRecord, ProtocolError> {
+    let bytes = read_attempt_ledger_file(path, MAX_ATTEMPT_LEDGER_RECORD_BYTES)?;
+    let record: AttemptBindingRecord = decode_canonical_json(&bytes).map_err(|error| {
+        attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!("decode binding record {}: {error}", path.display()),
+        )
+    })?;
+    validate_attempt_binding_record(&record, &path.display().to_string())?;
+    Ok(record)
+}
+
+fn validate_attempt_binding_record(
+    record: &AttemptBindingRecord,
+    label: &str,
+) -> Result<(), ProtocolError> {
+    if record.payload.api_version != ATTEMPT_LEDGER_API_VERSION
+        || record.payload.retain_until_epoch_ms == 0
+        || record.checksum != checksum_payload(&record.payload)?
+    {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!("binding record {label} is invalid"),
+        ));
+    }
+    validate_sha256_digest("ledger attempt_id", &record.payload.attempt_id)
+        .map_err(|error| attempt_ledger_error("attempt_ledger_corrupt", error.message))?;
+    validate_sha256_digest("ledger statement_digest", &record.payload.statement_digest)
+        .map_err(|error| attempt_ledger_error("attempt_ledger_corrupt", error.message))?;
+    Ok(())
+}
+
+fn read_attempt_ledger_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>, ProtocolError> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| {
+            attempt_ledger_error(
+                "attempt_ledger_io",
+                format!("open ledger file {}: {error}", path.display()),
+            )
+        })?;
+    let initial = validate_attempt_ledger_file_metadata(&file, path, max_bytes)?;
+    let initial_modified = initial.modified().ok();
+    let mut bytes = Vec::with_capacity(initial.len() as usize);
+    let mut reader = file.take((max_bytes + 1) as u64);
+    reader.read_to_end(&mut bytes).map_err(|error| {
+        attempt_ledger_error(
+            "attempt_ledger_io",
+            format!("read ledger file {}: {error}", path.display()),
+        )
+    })?;
+    if bytes.len() > max_bytes {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!("ledger file {} exceeds {max_bytes} bytes", path.display()),
+        ));
+    }
+    let final_metadata = reader.get_ref().metadata().map_err(|error| {
+        attempt_ledger_error(
+            "attempt_ledger_io",
+            format!("reinspect ledger file {}: {error}", path.display()),
+        )
+    })?;
+    if final_metadata.len() != initial.len()
+        || final_metadata.len() != bytes.len() as u64
+        || initial_modified
+            .zip(final_metadata.modified().ok())
+            .is_some_and(|(before, after)| before != after)
+    {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!("ledger file {} changed while loading", path.display()),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn validate_attempt_ledger_file_metadata(
+    file: &fs::File,
+    path: &Path,
+    max_bytes: usize,
+) -> Result<fs::Metadata, ProtocolError> {
+    let metadata = file.metadata().map_err(|error| {
+        attempt_ledger_error(
+            "attempt_ledger_io",
+            format!("inspect ledger file {}: {error}", path.display()),
+        )
+    })?;
+    // SAFETY: geteuid has no memory-safety preconditions.
+    let effective_uid = unsafe { libc::geteuid() };
+    // SAFETY: getegid has no memory-safety preconditions.
+    let effective_gid = unsafe { libc::getegid() };
+    if !metadata.is_file()
+        || metadata.uid() != effective_uid
+        || metadata.gid() != effective_gid
+        || metadata.mode() & 0o7777 != ATTEMPT_LEDGER_FILE_MODE
+        || metadata.nlink() != 1
+        || metadata.len() > max_bytes as u64
+    {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!(
+                "ledger file {} must be a single-link regular file owned by UID {} and GID {} with mode {:04o} and at most {max_bytes} bytes",
+                path.display(),
+                effective_uid,
+                effective_gid,
+                ATTEMPT_LEDGER_FILE_MODE
+            ),
+        ));
+    }
+    Ok(metadata)
+}
+
+fn remove_orphan_attempt_ledger_temporary(path: &Path) -> Result<(), ProtocolError> {
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|error| {
+            attempt_ledger_error(
+                "attempt_ledger_corrupt",
+                format!(
+                    "open orphan ledger temporary file {} without following links: {error}",
+                    path.display()
+                ),
+            )
+        })?;
+    let opened = validate_attempt_ledger_file_metadata(
+        &file,
+        path,
+        MAX_ATTEMPT_LEDGER_RECORD_BYTES.max(MAX_ATTEMPT_LEDGER_MANIFEST_BYTES),
+    )?;
+    let path_metadata = fs::symlink_metadata(path).map_err(|error| {
+        attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!(
+                "reinspect orphan ledger temporary file {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+    if path_metadata.dev() != opened.dev()
+        || path_metadata.ino() != opened.ino()
+        || path_metadata.nlink() != opened.nlink()
+    {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!(
+                "orphan ledger temporary file changed before cleanup: {}",
+                path.display()
+            ),
+        ));
+    }
+    fs::remove_file(path).map_err(|error| {
+        attempt_ledger_error(
+            "attempt_ledger_io",
+            format!(
+                "remove validated orphan ledger temporary file {}: {error}",
+                path.display()
+            ),
+        )
+    })
+}
+
+fn persist_attempt_binding_record(
+    directory: &Path,
+    payload: &AttemptBindingPayload,
+    checksum: &str,
+) -> Result<(), ProtocolError> {
+    let path = directory.join(attempt_binding_filename(&payload.attempt_id)?);
+    if fs::symlink_metadata(&path).is_ok() {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!("unexpected existing binding record {}", path.display()),
+        ));
+    }
+    let record = AttemptBindingRecord {
+        payload: payload.clone(),
+        checksum: checksum.to_string(),
+    };
+    write_atomic_ledger_file(&path, &canonical_json_bytes(&record)?, false)
+}
+
+fn persist_attempt_ledger_manifest(
+    directory: &Path,
+    payload: &AttemptLedgerManifestPayload,
+) -> Result<(), ProtocolError> {
+    let record = AttemptLedgerManifestRecord {
+        payload: payload.clone(),
+        checksum: checksum_payload(payload)?,
+    };
+    write_atomic_ledger_file(
+        &directory.join(ATTEMPT_LEDGER_MANIFEST_FILE),
+        &canonical_json_bytes(&record)?,
+        true,
+    )
+}
+
+fn write_atomic_ledger_file(path: &Path, bytes: &[u8], replace: bool) -> Result<(), ProtocolError> {
+    let directory = path.parent().ok_or_else(|| {
+        attempt_ledger_error("attempt_ledger_io", "ledger file has no parent directory")
+    })?;
+    if !replace && fs::symlink_metadata(path).is_ok() {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            format!("refusing to replace ledger file {}", path.display()),
+        ));
+    }
+    if replace {
+        match fs::symlink_metadata(path) {
+            Ok(_) => {
+                let existing = fs::OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(path)
+                    .map_err(|error| {
+                        attempt_ledger_error(
+                            "attempt_ledger_io",
+                            format!("open existing ledger file {}: {error}", path.display()),
+                        )
+                    })?;
+                validate_attempt_ledger_file_metadata(
+                    &existing,
+                    path,
+                    MAX_ATTEMPT_LEDGER_MANIFEST_BYTES,
+                )?;
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(attempt_ledger_error(
+                    "attempt_ledger_io",
+                    format!("inspect ledger file {}: {error}", path.display()),
+                ));
+            }
+        }
+    }
+
+    let mut random_bytes = [0u8; 16];
+    SystemRandom::new().fill(&mut random_bytes).map_err(|_| {
+        attempt_ledger_error("entropy_unavailable", "generate ledger temporary filename")
+    })?;
+    let temporary_path = directory.join(format!(
+        ".ledger-tmp-{}-{}",
+        std::process::id(),
+        hex::encode(random_bytes)
+    ));
+    let result = (|| {
+        let mut temporary = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(ATTEMPT_LEDGER_FILE_MODE)
+            .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            .open(&temporary_path)
+            .map_err(|error| {
+                attempt_ledger_error(
+                    "attempt_ledger_io",
+                    format!("create ledger temporary file: {error}"),
+                )
+            })?;
+        temporary.write_all(bytes).map_err(|error| {
+            attempt_ledger_error(
+                "attempt_ledger_io",
+                format!("write ledger temporary file: {error}"),
+            )
+        })?;
+        temporary.sync_all().map_err(|error| {
+            attempt_ledger_error(
+                "attempt_ledger_io",
+                format!("synchronize ledger temporary file: {error}"),
+            )
+        })?;
+        drop(temporary);
+        if !replace && fs::symlink_metadata(path).is_ok() {
+            return Err(attempt_ledger_error(
+                "attempt_ledger_corrupt",
+                format!("refusing to replace ledger file {}", path.display()),
+            ));
+        }
+        fs::rename(&temporary_path, path).map_err(|error| {
+            attempt_ledger_error(
+                "attempt_ledger_io",
+                format!("atomically publish ledger file {}: {error}", path.display()),
+            )
+        })?;
+        sync_directory(directory)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary_path);
+    }
+    result
+}
+
+fn sync_directory(directory: &Path) -> Result<(), ProtocolError> {
+    let directory_file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_CLOEXEC | libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(directory)
+        .map_err(|error| {
+            attempt_ledger_error(
+                "attempt_ledger_io",
+                format!("open ledger directory for synchronization: {error}"),
+            )
+        })?;
+    directory_file.sync_all().map_err(|error| {
+        attempt_ledger_error(
+            "attempt_ledger_io",
+            format!("synchronize ledger directory: {error}"),
+        )
+    })
+}
+
+fn checksum_payload<T: Serialize>(payload: &T) -> Result<String, ProtocolError> {
+    Ok(sha256_prefixed(&canonical_json_bytes(payload)?))
+}
+
+fn checksum_bytes(checksum: &str) -> Result<[u8; 32], ProtocolError> {
+    validate_sha256_digest("ledger checksum", checksum)
+        .map_err(|error| attempt_ledger_error("attempt_ledger_corrupt", error.message))?;
+    let decoded = hex::decode(&checksum[7..]).map_err(|_| {
+        attempt_ledger_error("attempt_ledger_corrupt", "ledger checksum is not valid hex")
+    })?;
+    decoded.try_into().map_err(|_| {
+        attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            "ledger checksum has an invalid length",
+        )
+    })
+}
+
+fn decode_accumulator(value: &str) -> Result<[u8; 32], ProtocolError> {
+    let decoded = general_purpose::URL_SAFE_NO_PAD
+        .decode(value)
+        .map_err(|_| {
+            attempt_ledger_error(
+                "attempt_ledger_corrupt",
+                "ledger binding accumulator is not canonical base64url",
+            )
+        })?;
+    if general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != value {
+        return Err(attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            "ledger binding accumulator is not canonical base64url",
+        ));
+    }
+    decoded.try_into().map_err(|_| {
+        attempt_ledger_error(
+            "attempt_ledger_corrupt",
+            "ledger binding accumulator must be 32 bytes",
+        )
+    })
+}
+
+fn xor_accumulator(accumulator: &mut [u8; 32], value: [u8; 32]) {
+    for (target, source) in accumulator.iter_mut().zip(value) {
+        *target ^= source;
+    }
+}
+
+fn attempt_binding_filename(attempt_id: &str) -> Result<String, ProtocolError> {
+    validate_sha256_digest("release_authority.attempt_id", attempt_id)?;
+    Ok(format!("binding-{}.json", &attempt_id[7..]))
+}
+
+fn parse_attempt_binding_filename(filename: &str) -> Option<String> {
+    let digest = filename.strip_prefix("binding-")?.strip_suffix(".json")?;
+    if digest.len() != 64
+        || !digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return None;
+    }
+    Some(format!("sha256:{digest}"))
+}
+
+fn parse_attempt_ledger_temporary_filename(filename: &str) -> bool {
+    let Some(value) = filename.strip_prefix(".ledger-tmp-") else {
+        return false;
+    };
+    let Some((process_id, nonce)) = value.split_once('-') else {
+        return false;
+    };
+    process_id
+        .parse::<u32>()
+        .is_ok_and(|parsed| parsed != 0 && parsed.to_string() == process_id)
+        && nonce.len() == 32
+        && nonce
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn configured_control_plane_response_verifying_key() -> Result<Option<VerifyingKey>, ProtocolError>
 {
-    let (public_key_path, expected_key_id) = match (
+    configured_control_plane_response_verifying_key_from_values(
         env::var_os(CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV),
         env::var_os(CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV),
+        env::var_os(CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_ENV),
+    )
+}
+
+fn configured_control_plane_response_verifying_key_from_values(
+    public_key_path: Option<OsString>,
+    expected_key_id: Option<OsString>,
+    expected_key_id_file: Option<OsString>,
+) -> Result<Option<VerifyingKey>, ProtocolError> {
+    let (public_key_path, expected_key_id, key_id_source) = match (
+        public_key_path,
+        expected_key_id,
+        expected_key_id_file,
     ) {
-        (Some(public_key_path), Some(expected_key_id)) => (public_key_path, expected_key_id),
-        (None, None) => return Ok(None),
+        (None, None, None) => return Ok(None),
+        (Some(public_key_path), Some(expected_key_id), None) => {
+            let expected_key_id = expected_key_id.into_string().map_err(|_| {
+                ProtocolError::new(
+                    "invalid_control_plane_response_key_configuration",
+                    format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} must be valid UTF-8"),
+                )
+            })?;
+            (
+                public_key_path,
+                expected_key_id,
+                CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV,
+            )
+        }
+        (Some(public_key_path), None, Some(expected_key_id_file)) => (
+            public_key_path,
+            read_control_plane_response_public_key_id(Path::new(&expected_key_id_file))?,
+            CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_ENV,
+        ),
         _ => {
             return Err(ProtocolError::new(
                 "invalid_control_plane_response_key_configuration",
                 format!(
-                    "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} and {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} must be configured together"
+                    "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} must be configured with exactly one of {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} or {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_ENV}"
                 ),
             ))
         }
     };
-    let expected_key_id = expected_key_id.into_string().map_err(|_| {
-        ProtocolError::new(
-            "invalid_control_plane_response_key_configuration",
-            format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} must be valid UTF-8"),
-        )
-    })?;
     let public_key_pem = read_control_plane_response_public_key_pem(Path::new(&public_key_path))?;
     let verifying_key = VerifyingKey::from_public_key_pem(&public_key_pem).map_err(|error| {
         ProtocolError::new(
@@ -693,11 +1921,46 @@ fn configured_control_plane_response_verifying_key() -> Result<Option<VerifyingK
             ),
         )
     })?;
-    validate_pinned_control_plane_response_key(&verifying_key, &expected_key_id)?;
+    validate_pinned_control_plane_response_key_from_source(
+        &verifying_key,
+        &expected_key_id,
+        key_id_source,
+    )?;
     Ok(Some(verifying_key))
 }
 
 fn read_control_plane_response_public_key_pem(path: &Path) -> Result<String, ProtocolError> {
+    read_control_plane_response_configuration_file(
+        path,
+        CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV,
+        MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES,
+    )
+}
+
+fn read_control_plane_response_public_key_id(path: &Path) -> Result<String, ProtocolError> {
+    let contents = read_control_plane_response_configuration_file(
+        path,
+        CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_ENV,
+        MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_BYTES,
+    )?;
+    contents
+        .strip_suffix('\n')
+        .map(str::to_string)
+        .ok_or_else(|| {
+            ProtocolError::new(
+                "invalid_control_plane_response_key_configuration",
+                format!(
+                    "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_FILE_ENV} must contain one newline-terminated canonical lowercase sha256 digest"
+                ),
+            )
+        })
+}
+
+fn read_control_plane_response_configuration_file(
+    path: &Path,
+    configuration_name: &'static str,
+    max_bytes: usize,
+) -> Result<String, ProtocolError> {
     let file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_NONBLOCK)
@@ -705,52 +1968,48 @@ fn read_control_plane_response_public_key_pem(path: &Path) -> Result<String, Pro
         .map_err(|error| {
             ProtocolError::new(
                 "invalid_control_plane_response_key_configuration",
-                format!("open {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV}: {error}"),
+                format!("open {configuration_name}: {error}"),
             )
         })?;
     let initial_metadata = file.metadata().map_err(|error| {
         ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!("inspect {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV}: {error}"),
+            format!("inspect {configuration_name}: {error}"),
         )
     })?;
     if !initial_metadata.is_file() {
         return Err(ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} must be a regular file"),
+            format!("{configuration_name} must be a regular file"),
         ));
     }
-    if initial_metadata.len() > MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES as u64 {
+    if initial_metadata.len() > max_bytes as u64 {
         return Err(ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!(
-                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} exceeds {MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES} bytes"
-            ),
+            format!("{configuration_name} exceeds {max_bytes} bytes"),
         ));
     }
 
     let initial_modified = initial_metadata.modified().ok();
     let mut bytes = Vec::with_capacity(initial_metadata.len() as usize);
-    let mut bounded_reader = file.take((MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES + 1) as u64);
+    let mut bounded_reader = file.take((max_bytes + 1) as u64);
     bounded_reader.read_to_end(&mut bytes).map_err(|error| {
         ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!("read {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV}: {error}"),
+            format!("read {configuration_name}: {error}"),
         )
     })?;
-    if bytes.len() > MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES {
+    if bytes.len() > max_bytes {
         return Err(ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!(
-                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} exceeds {MAX_CONTROL_PLANE_RESPONSE_PUBLIC_KEY_BYTES} bytes"
-            ),
+            format!("{configuration_name} exceeds {max_bytes} bytes"),
         ));
     }
 
     let final_metadata = bounded_reader.get_ref().metadata().map_err(|error| {
         ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!("reinspect {CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV}: {error}"),
+            format!("reinspect {configuration_name}: {error}"),
         )
     })?;
     let modified_during_read = initial_modified
@@ -763,14 +2022,14 @@ fn read_control_plane_response_public_key_pem(path: &Path) -> Result<String, Pro
     {
         return Err(ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} changed while it was being loaded"),
+            format!("{configuration_name} changed while it was being loaded"),
         ));
     }
 
     String::from_utf8(bytes).map_err(|_| {
         ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!("{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ENV} must contain valid UTF-8"),
+            format!("{configuration_name} must contain valid UTF-8"),
         )
     })
 }
@@ -778,6 +2037,18 @@ fn read_control_plane_response_public_key_pem(path: &Path) -> Result<String, Pro
 fn validate_pinned_control_plane_response_key(
     verifying_key: &VerifyingKey,
     expected_key_id: &str,
+) -> Result<(), ProtocolError> {
+    validate_pinned_control_plane_response_key_from_source(
+        verifying_key,
+        expected_key_id,
+        CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV,
+    )
+}
+
+fn validate_pinned_control_plane_response_key_from_source(
+    verifying_key: &VerifyingKey,
+    expected_key_id: &str,
+    key_id_source: &'static str,
 ) -> Result<(), ProtocolError> {
     if expected_key_id.len() != 71
         || !expected_key_id.starts_with("sha256:")
@@ -787,18 +2058,14 @@ fn validate_pinned_control_plane_response_key(
     {
         return Err(ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!(
-                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} must be a canonical lowercase sha256 digest"
-            ),
+            format!("{key_id_source} must be a canonical lowercase sha256 digest"),
         ));
     }
     let actual_key_id = control_plane_response_key_id(verifying_key);
     if expected_key_id != actual_key_id {
         return Err(ProtocolError::new(
             "invalid_control_plane_response_key_configuration",
-            format!(
-                "{CONTROL_PLANE_RESPONSE_PUBLIC_KEY_ID_ENV} does not match the configured Ed25519 public key"
-            ),
+            format!("{key_id_source} does not match the configured Ed25519 public key"),
         ));
     }
     Ok(())
@@ -966,29 +2233,43 @@ where
 pub fn validate_response_statement(
     statement: &ProxyResponseStatement,
 ) -> Result<(), ProtocolError> {
-    validate_response_statement_inner(statement, None)
+    validate_response_statement_inner(statement, None, current_epoch_ms()?)
 }
 
 pub fn validate_response_statement_with_control_plane_response_key(
     statement: &ProxyResponseStatement,
     control_plane_response_verifying_key: &VerifyingKey,
 ) -> Result<(), ProtocolError> {
-    validate_response_statement_inner(statement, Some(control_plane_response_verifying_key))
+    validate_response_statement_with_control_plane_response_key_at(
+        statement,
+        control_plane_response_verifying_key,
+        current_epoch_ms()?,
+    )
+}
+
+fn validate_response_statement_with_control_plane_response_key_at(
+    statement: &ProxyResponseStatement,
+    control_plane_response_verifying_key: &VerifyingKey,
+    now_epoch_ms: u64,
+) -> Result<(), ProtocolError> {
+    validate_response_statement_inner(
+        statement,
+        Some(control_plane_response_verifying_key),
+        now_epoch_ms,
+    )
 }
 
 fn validate_response_statement_inner(
     statement: &ProxyResponseStatement,
     control_plane_response_verifying_key: Option<&VerifyingKey>,
+    now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
     if statement.api_version != RESPONSE_STATEMENT_API_VERSION {
         return Err(invalid_statement(
             "apiVersion must be serverware.proxyResponseStatement/v2",
         ));
     }
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
+    let now = now_epoch_ms / 1000;
     if statement.issued_at_unix > now.saturating_add(30)
         || now.saturating_sub(statement.issued_at_unix) > MAX_STATEMENT_AGE_SECONDS
     {
@@ -1056,7 +2337,11 @@ fn validate_response_statement_inner(
         ));
     }
     validate_release_authority(statement)?;
-    validate_control_plane_authorization_receipt(statement, control_plane_response_verifying_key)?;
+    validate_control_plane_authorization_receipt(
+        statement,
+        control_plane_response_verifying_key,
+        now_epoch_ms,
+    )?;
     if statement.upstream_response.status != statement.response.status {
         return Err(invalid_statement(
             "upstream_response.status must match response.status",
@@ -1150,6 +2435,18 @@ fn validate_release_authority(statement: &ProxyResponseStatement) -> Result<(), 
     {
         return Err(invalid_statement(
             "release_authority historical authorization observation is temporally invalid",
+        ));
+    }
+    let maximum_expiry = authority
+        .authorization_state_observed_at_epoch_ms
+        .saturating_add(MAX_RELEASE_AUTHORIZATION_LIFETIME_MS);
+    if authority.dispatch_expires_at_epoch_ms > maximum_expiry
+        || authority
+            .reservation_expires_at_epoch_ms
+            .is_some_and(|expires_at| expires_at > maximum_expiry)
+    {
+        return Err(invalid_statement(
+            "release_authority expiry exceeds the bounded response-proof authorization lifetime",
         ));
     }
     Ok(())
@@ -1453,6 +2750,7 @@ fn decode_receipt_base64url(
 fn validate_control_plane_authorization_receipt(
     statement: &ProxyResponseStatement,
     control_plane_response_verifying_key: Option<&VerifyingKey>,
+    now_epoch_ms: u64,
 ) -> Result<(), ProtocolError> {
     let receipt = &statement.control_plane_authorization_receipt;
     if receipt.api_version != AUTHORIZATION_RECEIPT_API_VERSION
@@ -1629,9 +2927,19 @@ fn validate_control_plane_authorization_receipt(
             validate_sha256_digest(name, digest)?;
         }
     }
+    // The receipt measures the control plane, while the proxy response statement measures the
+    // decision gate. The pinned control-plane signature authenticates the former; equating the two
+    // would collapse two distinct service identities into one impossible runtime measurement.
     if signed_statement.context.policy_bundle_digest != statement.policy_digest {
         return Err(invalid_statement(
             "control-plane authorization receipt policy context mismatch",
+        ));
+    }
+    if signed_statement.context.provenance_digest.as_deref()
+        != Some(statement.release_digest.as_str())
+    {
+        return Err(invalid_statement(
+            "control-plane authorization receipt provenance context mismatch",
         ));
     }
     let statement_end_epoch_ms = statement
@@ -1639,18 +2947,13 @@ fn validate_control_plane_authorization_receipt(
         .saturating_add(1)
         .saturating_mul(1000)
         .saturating_sub(1);
-    let now_epoch_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
     if signed_statement.issued_at_ms < dispatch_started_at_epoch_ms
         || signed_statement.issued_at_ms >= dispatch_expires_at_epoch_ms
         || signed_statement.issued_at_ms >= reservation_expires_at_epoch_ms
         || signed_statement.issued_at_ms > statement_end_epoch_ms
         || statement_end_epoch_ms.saturating_sub(dispatch_started_at_epoch_ms)
             > MAX_STATEMENT_AGE_SECONDS.saturating_mul(1000)
-        || u128::from(dispatch_expires_at_epoch_ms) <= now_epoch_ms
-        || u128::from(reservation_expires_at_epoch_ms) <= now_epoch_ms
+        || dispatch_expires_at_epoch_ms <= now_epoch_ms
     {
         return Err(invalid_statement(
             "control-plane authorization receipt temporal relation is invalid",
@@ -2053,6 +3356,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::Verifier;
     use serde_json::json;
+    use std::os::unix::fs::PermissionsExt;
 
     const CONTROL_PLANE_RESPONSE_SIGNING_SEED: [u8; 32] = [19u8; 32];
 
@@ -2091,6 +3395,40 @@ mod tests {
         format!("sha256:{}", hex::encode([byte; 32]))
     }
 
+    fn uninitialized_ledger_directory(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let directory = env::temp_dir().join(format!(
+            "serverware-ledger-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&directory).expect("create ledger fixture directory");
+        fs::set_permissions(
+            &directory,
+            fs::Permissions::from_mode(ATTEMPT_LEDGER_DIRECTORY_MODE),
+        )
+        .expect("protect ledger fixture directory");
+        fs::canonicalize(directory).expect("canonical ledger fixture directory")
+    }
+
+    fn ledger_directory(label: &str) -> PathBuf {
+        let directory = uninitialized_ledger_directory(label);
+        CustodyRuntime::initialize_attempt_ledger_directory(&directory)
+            .expect("initialize ledger fixture directory");
+        directory
+    }
+
+    fn persistent_runtime(directory: &Path, signing_byte: u8, boot_byte: u8) -> CustodyRuntime {
+        CustodyRuntime::from_secret_material_with_ledger(
+            [signing_byte; 32],
+            [boot_byte; 32],
+            Some(pinned_control_plane_response_verifying_key()),
+            AttemptStatementLedger::open(directory).expect("open persistent attempt ledger"),
+        )
+    }
+
     fn statement() -> ProxyResponseStatement {
         statement_signed_by(&control_plane_response_signing_key())
     }
@@ -2105,6 +3443,9 @@ mod tests {
         let operation_digest = digest(3);
         let policy_digest = digest(4);
         let body_digest = digest(5);
+        let runtime_manifest_digest = digest(6);
+        let control_plane_runtime_manifest_digest = digest(19);
+        let release_digest = digest(8);
         let principal_id = "agent:custody-test".to_string();
         let route_id = "route:custody-test".to_string();
         let attempt_id = digest(11);
@@ -2226,9 +3567,9 @@ mod tests {
             nonce: Some(response_nonce.clone()),
             response_signing_key_id: response_signing_key_id.clone(),
             context: SignedResponseContext {
-                runtime_manifest_digest: digest(15),
+                runtime_manifest_digest: control_plane_runtime_manifest_digest,
                 policy_bundle_digest: policy_digest.clone(),
-                provenance_digest: Some(digest(16)),
+                provenance_digest: Some(release_digest.clone()),
                 image_signatures_digest: Some(digest(17)),
                 source_tree_digest: Some(digest(18)),
             },
@@ -2293,9 +3634,9 @@ mod tests {
                 body_digest,
             },
             policy_digest,
-            runtime_manifest_digest: digest(6),
+            runtime_manifest_digest,
             data_plane_binary_digest: digest(7),
-            release_digest: digest(8),
+            release_digest,
             server_instance: ServerInstance {
                 identity_digest: sha256_prefixed(instance_id.as_bytes()),
                 id: instance_id,
@@ -2305,6 +3646,44 @@ mod tests {
                 value: general_purpose::URL_SAFE_NO_PAD.encode([12u8; 32]),
             },
         }
+    }
+
+    fn set_reservation_expiry_and_resign(
+        statement: &mut ProxyResponseStatement,
+        reservation_expires_at_epoch_ms: u64,
+    ) {
+        statement.release_authority.reservation_expires_at_epoch_ms =
+            Some(reservation_expires_at_epoch_ms);
+        statement
+            .control_plane_authorization_receipt
+            .release_authority = statement.release_authority.clone();
+
+        let response = &mut statement.control_plane_authorization_receipt.response;
+        let dispatch_body = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.body_b64)
+            .expect("decode dispatch response body");
+        let mut dispatch_body: Value =
+            decode_canonical_json(&dispatch_body).expect("decode canonical dispatch response body");
+        dispatch_body["reservationExpiresAtEpochMs"] = Value::from(reservation_expires_at_epoch_ms);
+        let dispatch_body = canonical_json_bytes(&dispatch_body).expect("encode dispatch body");
+        response.body_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&dispatch_body);
+        response.body_sha256 = sha256_prefixed(&dispatch_body);
+
+        let signed_statement = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.statement_b64)
+            .expect("decode signed dispatch statement");
+        let mut signed_statement: SignedResponseStatement =
+            decode_canonical_json(&signed_statement).expect("decode signed dispatch statement");
+        signed_statement.body_sha256 = response.body_sha256.clone();
+        let signed_statement =
+            canonical_json_bytes(&signed_statement).expect("encode signed dispatch statement");
+        let signature = control_plane_response_signing_key().sign(&signed_statement);
+        response.statement_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&signed_statement);
+        response.statement_sha256 = sha256_prefixed(&signed_statement);
+        response.signature = format!(
+            "ed25519:{}",
+            general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        );
     }
 
     fn authorization_binding_for_statement(
@@ -2431,6 +3810,28 @@ mod tests {
         decode_canonical_json(bytes).expect("canonical response")
     }
 
+    fn resign_control_plane_response_context(
+        statement: &mut ProxyResponseStatement,
+        mutate: impl FnOnce(&mut SignedResponseContext),
+    ) {
+        let response = &mut statement.control_plane_authorization_receipt.response;
+        let statement_bytes = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.statement_b64)
+            .expect("decode signed response statement");
+        let mut signed_statement: SignedResponseStatement =
+            decode_canonical_json(&statement_bytes).expect("signed response statement");
+        mutate(&mut signed_statement.context);
+        let statement_bytes =
+            canonical_json_bytes(&signed_statement).expect("canonical signed response statement");
+        let signature = control_plane_response_signing_key().sign(&statement_bytes);
+        response.statement_b64 = general_purpose::URL_SAFE_NO_PAD.encode(&statement_bytes);
+        response.statement_sha256 = sha256_prefixed(&statement_bytes);
+        response.signature = format!(
+            "ed25519:{}",
+            general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        );
+    }
+
     #[test]
     fn hello_discloses_only_public_material_capabilities_limits_and_false_hardware_proof() {
         let runtime = runtime();
@@ -2457,11 +3858,16 @@ mod tests {
             .as_str()
             .expect("public key")
             .starts_with("-----BEGIN PUBLIC KEY-----"));
+        assert_eq!(
+            response["result"]["controlPlaneResponseSigningKeyId"],
+            control_plane_response_key_id(&pinned_control_plane_response_verifying_key())
+        );
         let result = response["result"].as_object().expect("hello result");
         assert_eq!(
             result.keys().map(String::as_str).collect::<HashSet<_>>(),
             HashSet::from([
                 "capabilities",
+                "controlPlaneResponseSigningKeyId",
                 "hardwareProof",
                 "keyId",
                 "limits",
@@ -2472,6 +3878,78 @@ mod tests {
             .expect("UTF-8 response");
         assert!(!serialized.to_ascii_lowercase().contains("private"));
         assert!(!serialized.contains(&general_purpose::URL_SAFE_NO_PAD.encode([7u8; 32])));
+    }
+
+    #[test]
+    fn repeated_hello_is_accounting_neutral_and_request_id_remains_available_for_sign() {
+        let runtime = runtime();
+        let repeated_request_id = request_id(2);
+        let request = canonical_json_bytes(&json!({
+            "apiVersion": PROTOCOL_API_VERSION,
+            "bootId": null,
+            "operation": HELLO_OPERATION,
+            "params": {},
+            "requestId": repeated_request_id,
+        }))
+        .expect("canonical hello request");
+        let replay_state_before = runtime
+            .seen_request_ids
+            .lock()
+            .expect("request replay state")
+            .clone();
+        let ledger_state_before = {
+            let ledger = runtime
+                .attempt_statement_ledger
+                .lock()
+                .expect("attempt statement ledger");
+            (
+                canonical_json_bytes(&ledger.bindings).expect("canonical ledger bindings"),
+                ledger.expiry_index.clone(),
+                canonical_json_bytes(&ledger.manifest).expect("canonical ledger manifest"),
+            )
+        };
+
+        for _ in 0..3 {
+            let response = response_value(
+                &runtime
+                    .handle_canonical_request(&request)
+                    .expect("repeated hello response"),
+            );
+            assert_eq!(response["ok"], true, "unexpected response: {response}");
+        }
+
+        assert_eq!(
+            *runtime
+                .seen_request_ids
+                .lock()
+                .expect("request replay state"),
+            replay_state_before,
+            "hello must not consume sign requestId capacity"
+        );
+        let ledger = runtime
+            .attempt_statement_ledger
+            .lock()
+            .expect("attempt statement ledger");
+        assert_eq!(
+            canonical_json_bytes(&ledger.bindings).expect("canonical ledger bindings"),
+            ledger_state_before.0
+        );
+        assert_eq!(ledger.expiry_index, ledger_state_before.1);
+        assert_eq!(
+            canonical_json_bytes(&ledger.manifest).expect("canonical ledger manifest"),
+            ledger_state_before.2
+        );
+        drop(ledger);
+
+        let sign_response = response_value(
+            &runtime
+                .handle_canonical_request(&request_bytes(&runtime, 2, statement()))
+                .expect("sign response using the hello requestId"),
+        );
+        assert_eq!(
+            sign_response["ok"], true,
+            "hello requestId must remain available for signing: {sign_response}"
+        );
     }
 
     #[test]
@@ -2511,6 +3989,144 @@ mod tests {
     }
 
     #[test]
+    fn configured_response_key_accepts_exactly_one_inline_or_file_key_id() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let public_key_path = env::temp_dir().join(format!(
+            "serverware-control-plane-response-key-{}-{unique}.pem",
+            std::process::id()
+        ));
+        let key_id_path = env::temp_dir().join(format!(
+            "serverware-control-plane-response-key-id-{}-{unique}",
+            std::process::id()
+        ));
+        let verifying_key = pinned_control_plane_response_verifying_key();
+        let key_id = control_plane_response_key_id(&verifying_key);
+        fs::write(
+            &public_key_path,
+            pem_public_key(&ed25519_spki_der(verifying_key.as_bytes())),
+        )
+        .expect("write public key fixture");
+        fs::write(&key_id_path, format!("{key_id}\n")).expect("write key ID fixture");
+
+        let inline = configured_control_plane_response_verifying_key_from_values(
+            Some(public_key_path.clone().into_os_string()),
+            Some(OsString::from(&key_id)),
+            None,
+        )
+        .expect("inline key ID configuration")
+        .expect("configured inline verifying key");
+        assert_eq!(inline, verifying_key);
+
+        let from_file = configured_control_plane_response_verifying_key_from_values(
+            Some(public_key_path.clone().into_os_string()),
+            None,
+            Some(key_id_path.clone().into_os_string()),
+        )
+        .expect("file key ID configuration")
+        .expect("configured file verifying key");
+        assert_eq!(from_file, verifying_key);
+
+        for error in [
+            configured_control_plane_response_verifying_key_from_values(
+                Some(public_key_path.clone().into_os_string()),
+                None,
+                None,
+            )
+            .expect_err("missing key ID source must fail closed"),
+            configured_control_plane_response_verifying_key_from_values(
+                Some(public_key_path.clone().into_os_string()),
+                Some(OsString::from(&key_id)),
+                Some(key_id_path.clone().into_os_string()),
+            )
+            .expect_err("ambiguous key ID sources must fail closed"),
+            configured_control_plane_response_verifying_key_from_values(
+                None,
+                Some(OsString::from(&key_id)),
+                None,
+            )
+            .expect_err("key ID without public key must fail closed"),
+        ] {
+            assert_eq!(
+                error.code,
+                "invalid_control_plane_response_key_configuration"
+            );
+            assert!(error.message.contains("exactly one"));
+        }
+
+        fs::remove_file(public_key_path).expect("remove public key fixture");
+        fs::remove_file(key_id_path).expect("remove key ID fixture");
+    }
+
+    #[test]
+    fn configured_response_key_id_file_requires_canonical_newline_terminated_matching_id() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let public_key_path = env::temp_dir().join(format!(
+            "serverware-control-plane-response-key-format-{}-{unique}.pem",
+            std::process::id()
+        ));
+        let key_id_path = env::temp_dir().join(format!(
+            "serverware-control-plane-response-key-id-format-{}-{unique}",
+            std::process::id()
+        ));
+        let verifying_key = pinned_control_plane_response_verifying_key();
+        let key_id = control_plane_response_key_id(&verifying_key);
+        fs::write(
+            &public_key_path,
+            pem_public_key(&ed25519_spki_der(verifying_key.as_bytes())),
+        )
+        .expect("write public key fixture");
+
+        let load = || {
+            configured_control_plane_response_verifying_key_from_values(
+                Some(public_key_path.clone().into_os_string()),
+                None,
+                Some(key_id_path.clone().into_os_string()),
+            )
+        };
+
+        fs::write(&key_id_path, &key_id).expect("write unterminated key ID fixture");
+        assert!(load()
+            .expect_err("unterminated key ID must fail closed")
+            .message
+            .contains("newline-terminated"));
+
+        fs::write(&key_id_path, format!("{}\n", key_id.to_ascii_uppercase()))
+            .expect("write uppercase key ID fixture");
+        assert!(load()
+            .expect_err("uppercase key ID must fail closed")
+            .message
+            .contains("canonical lowercase"));
+
+        fs::write(&key_id_path, format!("sha256:{}\n", "0".repeat(64)))
+            .expect("write mismatched key ID fixture");
+        assert!(load()
+            .expect_err("mismatched key ID must fail closed")
+            .message
+            .contains("does not match"));
+
+        fs::write(&key_id_path, [0xff, b'\n']).expect("write non-UTF8 key ID fixture");
+        assert!(load()
+            .expect_err("non-UTF8 key ID must fail closed")
+            .message
+            .contains("valid UTF-8"));
+
+        fs::write(&key_id_path, format!("{key_id}\n\n")).expect("write oversized key ID fixture");
+        assert!(load()
+            .expect_err("multiple-line key ID must fail closed")
+            .message
+            .contains("exceeds 72 bytes"));
+
+        fs::remove_file(public_key_path).expect("remove public key fixture");
+        fs::remove_file(key_id_path).expect("remove key ID fixture");
+    }
+
+    #[test]
     fn sign_returns_a_verifiable_signature_over_the_exact_canonical_statement() {
         let runtime = runtime();
         let statement = statement();
@@ -2547,6 +4163,602 @@ mod tests {
                 &Signature::from_bytes(&signature_bytes),
             )
             .expect("valid signature");
+    }
+
+    #[test]
+    fn receipt_context_distinguishes_control_plane_runtime_and_binds_provenance() {
+        let valid = statement();
+        let response = &valid.control_plane_authorization_receipt.response;
+        let signed_statement_bytes = general_purpose::URL_SAFE_NO_PAD
+            .decode(&response.statement_b64)
+            .expect("decode signed response statement");
+        let signed_statement: SignedResponseStatement =
+            decode_canonical_json(&signed_statement_bytes).expect("signed response statement");
+        assert_ne!(
+            signed_statement.context.runtime_manifest_digest, valid.runtime_manifest_digest,
+            "control plane and decision gate have distinct runtime measurements"
+        );
+        validate_test_statement(&valid).expect("distinct signed service measurements are valid");
+
+        let mut provenance_substitution = statement();
+        resign_control_plane_response_context(&mut provenance_substitution, |context| {
+            context.provenance_digest = Some(digest(91));
+        });
+        assert!(validate_test_statement(&provenance_substitution)
+            .expect_err("provenance substitution must fail")
+            .message
+            .contains("provenance context mismatch"));
+
+        let mut missing_provenance = statement();
+        resign_control_plane_response_context(&mut missing_provenance, |context| {
+            context.provenance_digest = None;
+        });
+        assert!(validate_test_statement(&missing_provenance)
+            .expect_err("signed authorization receipt must bind the response release")
+            .message
+            .contains("provenance context mismatch"));
+    }
+
+    #[test]
+    fn attempt_binding_is_claimed_only_after_complete_validation() {
+        let runtime = runtime();
+        let mut invalid = statement();
+        invalid.response.selected_headers_digest = digest(92);
+        let rejected = response_value(
+            &runtime
+                .handle_canonical_request(&request_bytes(&runtime, 70, invalid))
+                .expect("closed validation response"),
+        );
+        assert_eq!(rejected["error"]["code"], "invalid_response_statement");
+        assert!(
+            runtime
+                .attempt_statement_ledger
+                .lock()
+                .expect("attempt statement ledger")
+                .manifest
+                .max_observed_epoch_ms
+                > 0,
+            "rejected signing validation must still latch its wall-clock observation"
+        );
+
+        let accepted = response_value(
+            &runtime
+                .handle_canonical_request(&request_bytes(&runtime, 71, statement()))
+                .expect("valid signing response"),
+        );
+        assert_eq!(accepted["ok"], true);
+    }
+
+    #[test]
+    fn persistent_attempt_binding_survives_restart_and_rejects_substitution() {
+        let directory = ledger_directory("restart");
+        let original = statement();
+        let expected_digest =
+            sha256_prefixed(&canonical_json_bytes(&original).expect("canonical statement"));
+
+        let first_runtime = persistent_runtime(&directory, 31, 41);
+        let first_response = response_value(
+            &first_runtime
+                .handle_canonical_request(&request_bytes(&first_runtime, 72, original.clone()))
+                .expect("first persistent sign response"),
+        );
+        assert_eq!(first_response["ok"], true);
+        assert_eq!(first_response["result"]["statementDigest"], expected_digest);
+        drop(first_runtime);
+
+        let second_runtime = persistent_runtime(&directory, 32, 42);
+        let retry_response = response_value(
+            &second_runtime
+                .handle_canonical_request(&request_bytes(&second_runtime, 72, original.clone()))
+                .expect("idempotent restart retry response"),
+        );
+        assert_eq!(retry_response["ok"], true);
+        assert_eq!(retry_response["result"]["statementDigest"], expected_digest);
+
+        let mut substituted = original;
+        substituted.client_nonce = general_purpose::URL_SAFE_NO_PAD.encode([99u8; 32]);
+        let substitution_response = response_value(
+            &second_runtime
+                .handle_canonical_request(&request_bytes(&second_runtime, 73, substituted))
+                .expect("restart substitution response"),
+        );
+        assert_eq!(substitution_response["ok"], false);
+        assert_eq!(
+            substitution_response["error"]["code"],
+            "attempt_statement_substitution"
+        );
+
+        drop(second_runtime);
+        fs::remove_dir_all(directory).expect("remove restart ledger fixture");
+    }
+
+    #[test]
+    fn binding_retention_uses_dispatch_expiry_when_reservation_expires_first() {
+        let runtime = runtime();
+        let mut slow_response = statement();
+        let dispatch_started = slow_response
+            .release_authority
+            .authorization_state_observed_at_epoch_ms;
+        let reservation_expiry = dispatch_started + 1;
+        let dispatch_expiry = slow_response.release_authority.dispatch_expires_at_epoch_ms;
+        assert!(reservation_expiry < dispatch_expiry);
+        set_reservation_expiry_and_resign(&mut slow_response, reservation_expiry);
+        validate_test_statement(&slow_response)
+            .expect("dispatch receipt remains valid after reservation expiry");
+
+        let attempt_id = slow_response.release_authority.attempt_id.clone();
+        let response = response_value(
+            &runtime
+                .handle_canonical_request(&request_bytes(&runtime, 74, slow_response))
+                .expect("slow response signing result"),
+        );
+        assert_eq!(response["ok"], true, "unexpected response: {response}");
+
+        let mut ledger = runtime
+            .attempt_statement_ledger
+            .lock()
+            .expect("attempt statement ledger");
+        assert_eq!(
+            ledger
+                .bindings
+                .get(&attempt_id)
+                .expect("durable attempt binding")
+                .retain_until_epoch_ms,
+            dispatch_expiry
+        );
+        ledger
+            .prune_expired(reservation_expiry)
+            .expect("reservation-expiry prune attempt");
+        assert!(ledger.bindings.contains_key(&attempt_id));
+        ledger
+            .prune_expired(dispatch_expiry)
+            .expect("dispatch-expiry prune");
+        assert!(!ledger.bindings.contains_key(&attempt_id));
+    }
+
+    #[test]
+    fn durable_ledger_reclaims_expired_capacity_and_rejects_clock_rollback() {
+        let directory = ledger_directory("retention");
+        let first_attempt = digest(51);
+        let second_attempt = digest(52);
+        let first_statement = digest(53);
+        let second_statement = digest(54);
+
+        let mut ledger = AttemptStatementLedger::open_with_limit_at(&directory, 1, 500)
+            .expect("open bounded ledger");
+        ledger
+            .claim(&first_attempt, &first_statement, 1_000, 500)
+            .expect("claim first binding");
+        assert_eq!(
+            ledger
+                .claim(&second_attempt, &second_statement, 2_000, 600)
+                .expect_err("unexpired binding must hold capacity")
+                .code,
+            "attempt_statement_capacity_exhausted"
+        );
+        drop(ledger);
+
+        let observed_time_rollback = AttemptStatementLedger::open_with_limit_at(&directory, 1, 599)
+            .err()
+            .expect("clock rollback below a non-pruning observation must fail");
+        assert_eq!(observed_time_rollback.code, "attempt_ledger_clock_rollback");
+
+        let mut ledger = AttemptStatementLedger::open_with_limit_at(&directory, 1, 1_000)
+            .expect("reopen and prune expired binding");
+        assert!(!ledger.bindings.contains_key(&first_attempt));
+        ledger
+            .claim(&second_attempt, &second_statement, 2_000, 1_000)
+            .expect("reclaimed capacity accepts new binding");
+        drop(ledger);
+
+        let rollback = AttemptStatementLedger::open_with_limit_at(&directory, 1, 999)
+            .err()
+            .expect("clock rollback below durable observation high-water must fail");
+        assert_eq!(rollback.code, "attempt_ledger_clock_rollback");
+        fs::remove_dir_all(directory).expect("remove retention ledger fixture");
+    }
+
+    #[test]
+    fn ledger_initialization_is_explicit_and_cannot_replace_existing_state() {
+        let directory = uninitialized_ledger_directory("initialization");
+        let missing = AttemptStatementLedger::open(&directory)
+            .err()
+            .expect("normal startup must reject a missing manifest");
+        assert_eq!(missing.code, "attempt_ledger_not_initialized");
+
+        CustodyRuntime::initialize_attempt_ledger_directory(&directory)
+            .expect("explicitly initialize ledger");
+        let ledger = AttemptStatementLedger::open(&directory).expect("open initialized ledger");
+        drop(ledger);
+        let repeated = CustodyRuntime::initialize_attempt_ledger_directory(&directory)
+            .expect_err("initialization must not replace an existing manifest");
+        assert_eq!(repeated.code, "attempt_ledger_already_initialized");
+
+        fs::remove_file(directory.join(ATTEMPT_LEDGER_MANIFEST_FILE))
+            .expect("remove manifest to simulate state deletion");
+        let deleted = AttemptStatementLedger::open(&directory)
+            .err()
+            .expect("deleted state must not be silently recreated");
+        assert_eq!(deleted.code, "attempt_ledger_not_initialized");
+        fs::remove_dir_all(directory).expect("remove initialization ledger fixture");
+    }
+
+    #[test]
+    fn ledger_startup_cleans_only_validated_orphan_temporary_files() {
+        assert!(parse_attempt_ledger_temporary_filename(
+            ".ledger-tmp-4294967295-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        assert!(!parse_attempt_ledger_temporary_filename(
+            ".ledger-tmp-000123-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        assert!(!parse_attempt_ledger_temporary_filename(
+            ".ledger-tmp-4294967296-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        assert!(!parse_attempt_ledger_temporary_filename(
+            ".ledger-tmp-0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        ));
+        let directory = ledger_directory("orphan-temporary");
+        let orphan = directory.join(".ledger-tmp-123-00000000000000000000000000000000");
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(ATTEMPT_LEDGER_FILE_MODE)
+            .open(&orphan)
+            .expect("create orphan ledger temporary");
+        file.write_all(b"partial")
+            .expect("write orphan ledger temporary");
+        file.sync_all().expect("sync orphan ledger temporary");
+        drop(file);
+        let ledger = AttemptStatementLedger::open(&directory)
+            .expect("validated orphan temporary must be cleaned at startup");
+        assert!(!orphan.exists());
+        drop(ledger);
+        fs::remove_dir_all(directory).expect("remove orphan-temporary ledger fixture");
+
+        let unsafe_directory = ledger_directory("unsafe-orphan-temporary");
+        let unsafe_orphan =
+            unsafe_directory.join(".ledger-tmp-456-11111111111111111111111111111111");
+        std::os::unix::fs::symlink(
+            unsafe_directory.join(ATTEMPT_LEDGER_MANIFEST_FILE),
+            &unsafe_orphan,
+        )
+        .expect("create symlinked orphan ledger temporary");
+        let error = AttemptStatementLedger::open(&unsafe_directory)
+            .err()
+            .expect("unsafe orphan temporary must fail closed");
+        assert_eq!(error.code, "attempt_ledger_corrupt");
+        fs::remove_file(unsafe_orphan).expect("remove unsafe orphan temporary");
+        fs::remove_dir_all(unsafe_directory).expect("remove unsafe-orphan ledger fixture");
+    }
+
+    #[test]
+    fn ledger_configuration_rejects_symlinks_and_writable_ancestors() {
+        let base = uninitialized_ledger_directory("path-security");
+        let real = base.join("real");
+        fs::create_dir(&real).expect("create real ledger directory");
+        fs::set_permissions(&real, fs::Permissions::from_mode(0o700))
+            .expect("protect real ledger directory");
+        let alias = base.join("alias");
+        std::os::unix::fs::symlink(&real, &alias).expect("create ledger symlink");
+        assert_eq!(
+            validate_attempt_ledger_directory(&alias)
+                .expect_err("symlinked ledger directory must fail")
+                .code,
+            "invalid_attempt_ledger_configuration"
+        );
+
+        let writable_parent = base.join("writable");
+        fs::create_dir(&writable_parent).expect("create writable parent");
+        fs::set_permissions(&writable_parent, fs::Permissions::from_mode(0o777))
+            .expect("make parent writable");
+        let nested = writable_parent.join("ledger");
+        fs::create_dir(&nested).expect("create nested ledger");
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700))
+            .expect("protect nested ledger");
+        let error = validate_attempt_ledger_directory(&nested)
+            .expect_err("writable ancestor must fail closed");
+        assert!(error.message.contains("group- or other-writable"));
+
+        fs::remove_dir_all(base).expect("remove path-security fixture");
+    }
+
+    #[test]
+    fn durable_ledger_rejects_corruption_missing_records_and_competing_runtimes() {
+        let locked_directory = ledger_directory("locked");
+        let first = AttemptStatementLedger::open(&locked_directory).expect("lock first ledger");
+        let lock_error = AttemptStatementLedger::open(&locked_directory)
+            .err()
+            .expect("second runtime must not share a ledger");
+        assert_eq!(lock_error.code, "attempt_ledger_locked");
+        drop(first);
+        fs::remove_dir_all(locked_directory).expect("remove locked ledger fixture");
+
+        let corrupt_directory = ledger_directory("corrupt");
+        let attempt_id = digest(61);
+        let mut ledger = AttemptStatementLedger::open_with_limit_at(&corrupt_directory, 4, 100)
+            .expect("open corruption ledger");
+        ledger
+            .claim(&attempt_id, &digest(62), 1_000, 100)
+            .expect("persist corruption fixture binding");
+        drop(ledger);
+        let binding_path = corrupt_directory.join(
+            attempt_binding_filename(&attempt_id).expect("corruption fixture binding filename"),
+        );
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&binding_path)
+            .expect("open binding for corruption")
+            .write_all(b"x")
+            .expect("corrupt binding record");
+        let corrupt_error = AttemptStatementLedger::open_with_limit_at(&corrupt_directory, 4, 100)
+            .err()
+            .expect("corrupt binding must fail closed");
+        assert_eq!(corrupt_error.code, "attempt_ledger_corrupt");
+        fs::remove_dir_all(corrupt_directory).expect("remove corrupt ledger fixture");
+
+        let missing_directory = ledger_directory("missing");
+        let attempt_id = digest(63);
+        let mut ledger = AttemptStatementLedger::open_with_limit_at(&missing_directory, 4, 100)
+            .expect("open missing-record ledger");
+        ledger
+            .claim(&attempt_id, &digest(64), 1_000, 100)
+            .expect("persist missing-record fixture binding");
+        drop(ledger);
+        fs::remove_file(
+            missing_directory
+                .join(attempt_binding_filename(&attempt_id).expect("missing binding filename")),
+        )
+        .expect("remove active binding behind manifest");
+        let missing_error = AttemptStatementLedger::open_with_limit_at(&missing_directory, 4, 100)
+            .err()
+            .expect("missing active binding must fail closed");
+        assert_eq!(missing_error.code, "attempt_ledger_corrupt");
+        fs::remove_dir_all(missing_directory).expect("remove missing ledger fixture");
+    }
+
+    #[test]
+    fn response_proof_authorization_lifetime_is_bounded() {
+        let mut excessive = statement();
+        excessive.release_authority.dispatch_expires_at_epoch_ms = excessive
+            .release_authority
+            .authorization_state_observed_at_epoch_ms
+            .saturating_add(MAX_RELEASE_AUTHORIZATION_LIFETIME_MS)
+            .saturating_add(1);
+        let error = validate_release_authority(&excessive)
+            .expect_err("far-future dispatch receipt must not pin the ledger indefinitely");
+        assert!(error.message.contains("bounded response-proof"));
+    }
+
+    #[test]
+    fn response_proof_temporal_validation_uses_the_claim_clock_boundary() {
+        let statement = statement();
+        let expiry = statement.release_authority.dispatch_expires_at_epoch_ms;
+        let verifying_key = pinned_control_plane_response_verifying_key();
+        validate_response_statement_with_control_plane_response_key_at(
+            &statement,
+            &verifying_key,
+            expiry - 1,
+        )
+        .expect("receipt remains valid immediately before dispatch expiry");
+        let error = validate_response_statement_with_control_plane_response_key_at(
+            &statement,
+            &verifying_key,
+            expiry,
+        )
+        .expect_err("receipt must fail exactly at dispatch expiry");
+        assert!(error.message.contains("temporal relation"));
+    }
+
+    #[test]
+    fn claim_clock_rollback_latches_the_forward_validation_sample() {
+        let runtime = runtime();
+        let minimum_epoch_ms = current_epoch_ms()
+            .expect("current epoch")
+            .checked_add(60_000)
+            .expect("future validation sample");
+        let error = runtime
+            .claim_attempt_statement_digest(
+                "attempt-clock-latch",
+                &digest(88),
+                minimum_epoch_ms + 60_000,
+                minimum_epoch_ms,
+            )
+            .expect_err("backward claim sample must fail closed");
+        assert_eq!(error.code, "attempt_ledger_clock_rollback");
+        let mut ledger = runtime
+            .attempt_statement_ledger
+            .lock()
+            .expect("attempt statement ledger");
+        assert_eq!(ledger.manifest.max_observed_epoch_ms, minimum_epoch_ms);
+        let rollback = ledger
+            .claim(
+                "attempt-after-clock-latch",
+                &digest(89),
+                minimum_epoch_ms + 60_000,
+                minimum_epoch_ms - 1,
+            )
+            .expect_err("latched forward observation must reject later rollback");
+        assert_eq!(rollback.code, "attempt_ledger_clock_rollback");
+    }
+
+    #[test]
+    fn invalid_claim_clock_latches_the_forward_validation_sample() {
+        let runtime = runtime();
+        let minimum_epoch_ms = current_epoch_ms()
+            .expect("current epoch")
+            .checked_add(60_000)
+            .expect("future validation sample");
+        let error = runtime
+            .claim_attempt_statement_digest_with_clock(
+                "attempt-invalid-clock-latch",
+                &digest(90),
+                minimum_epoch_ms + 60_000,
+                minimum_epoch_ms,
+                || {
+                    Err(attempt_ledger_error(
+                        "attempt_ledger_clock_rollback",
+                        "system clock precedes the Unix epoch",
+                    ))
+                },
+            )
+            .expect_err("an invalid claim clock must fail closed");
+        assert_eq!(error.code, "attempt_ledger_clock_rollback");
+        let ledger = runtime
+            .attempt_statement_ledger
+            .lock()
+            .expect("attempt statement ledger");
+        assert_eq!(ledger.manifest.max_observed_epoch_ms, minimum_epoch_ms);
+    }
+
+    #[test]
+    fn response_proof_clock_sampling_validation_and_claim_are_serialized() {
+        let runtime = std::sync::Arc::new(runtime());
+        let request = request_bytes(&runtime, 99, statement());
+        let validation_guard = runtime
+            .response_proof_validation
+            .lock()
+            .expect("response proof validation lock");
+        let worker_runtime = std::sync::Arc::clone(&runtime);
+        let (completed_tx, completed_rx) = std::sync::mpsc::sync_channel(0);
+        let worker = std::thread::spawn(move || {
+            completed_tx
+                .send(worker_runtime.handle_canonical_request(&request))
+                .expect("publish serialized validation result");
+        });
+        assert!(matches!(
+            completed_rx.recv_timeout(Duration::from_millis(50)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ));
+        drop(validation_guard);
+        completed_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("validation proceeds after serialization lock")
+            .expect("serialized response proof request succeeds");
+        worker.join().expect("serialized validation worker");
+    }
+
+    #[test]
+    fn poisoned_ledger_rejects_clock_advancement_without_mutation() {
+        let mut ledger = AttemptStatementLedger::in_memory();
+        ledger.manifest.max_observed_epoch_ms = 500;
+        ledger.poisoned = true;
+        let before = ledger.manifest.clone();
+        let error = ledger
+            .advance_max_observed_time(1_000)
+            .expect_err("poisoned ledger must reject every durable operation");
+        assert_eq!(error.code, "attempt_ledger_unavailable");
+        assert_eq!(ledger.manifest, before);
+        assert_eq!(
+            ledger
+                .prune_expired(1_000)
+                .expect_err("poisoned ledger must reject pruning")
+                .code,
+            "attempt_ledger_unavailable"
+        );
+    }
+
+    #[test]
+    fn identical_attempt_statement_is_idempotently_signed_concurrently() {
+        let runtime = std::sync::Arc::new(runtime());
+        let statement = statement();
+        let expected_digest =
+            sha256_prefixed(&canonical_json_bytes(&statement).expect("canonical statement"));
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(12));
+        let workers = (0..12)
+            .map(|index| {
+                let runtime = std::sync::Arc::clone(&runtime);
+                let barrier = std::sync::Arc::clone(&barrier);
+                let statement = statement.clone();
+                std::thread::spawn(move || {
+                    let request = request_bytes(&runtime, 80 + index, statement);
+                    barrier.wait();
+                    response_value(
+                        &runtime
+                            .handle_canonical_request(&request)
+                            .expect("idempotent signing response"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut signatures = HashSet::new();
+        for worker in workers {
+            let response = worker.join().expect("signing worker");
+            assert_eq!(response["ok"], true, "unexpected response: {response}");
+            assert_eq!(response["result"]["statementDigest"], expected_digest);
+            signatures.insert(
+                response["result"]["signature"]
+                    .as_str()
+                    .expect("signature")
+                    .to_string(),
+            );
+        }
+        assert_eq!(signatures.len(), 1);
+    }
+
+    #[test]
+    fn concurrent_attempt_statement_substitution_has_one_digest_winner() {
+        let runtime = std::sync::Arc::new(runtime());
+        let first = statement();
+        let mut substituted = first.clone();
+        substituted.client_nonce = general_purpose::URL_SAFE_NO_PAD.encode([99u8; 32]);
+        let first_digest =
+            sha256_prefixed(&canonical_json_bytes(&first).expect("first canonical statement"));
+        let substituted_digest = sha256_prefixed(
+            &canonical_json_bytes(&substituted).expect("substituted canonical statement"),
+        );
+        assert_ne!(first_digest, substituted_digest);
+
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let workers = (0..16)
+            .map(|index| {
+                let runtime = std::sync::Arc::clone(&runtime);
+                let barrier = std::sync::Arc::clone(&barrier);
+                let candidate = if index % 2 == 0 {
+                    first.clone()
+                } else {
+                    substituted.clone()
+                };
+                std::thread::spawn(move || {
+                    let request = request_bytes(&runtime, 100 + index, candidate);
+                    barrier.wait();
+                    response_value(
+                        &runtime
+                            .handle_canonical_request(&request)
+                            .expect("substitution response"),
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut accepted_digests = HashSet::new();
+        let mut accepted = 0;
+        let mut rejected = 0;
+        for worker in workers {
+            let response = worker.join().expect("substitution worker");
+            if response["ok"] == true {
+                accepted += 1;
+                accepted_digests.insert(
+                    response["result"]["statementDigest"]
+                        .as_str()
+                        .expect("statement digest")
+                        .to_string(),
+                );
+            } else {
+                rejected += 1;
+                assert_eq!(
+                    response["error"]["code"], "attempt_statement_substitution",
+                    "unexpected rejection: {response}"
+                );
+            }
+        }
+        assert_eq!(accepted, 8);
+        assert_eq!(rejected, 8);
+        assert_eq!(accepted_digests.len(), 1);
+        assert!(
+            accepted_digests.contains(&first_digest)
+                || accepted_digests.contains(&substituted_digest)
+        );
     }
 
     #[test]
@@ -2730,10 +4942,21 @@ mod tests {
             response["error"]["code"],
             "control_plane_response_key_unavailable"
         );
+        assert!(
+            CustodyRuntime::generate_with_configured_control_plane_response_key(
+                None,
+                Path::new("/unused"),
+            )
+            .err()
+            .expect("the production generation path must require a configured key")
+            .message
+            .contains("required")
+        );
 
         let construction_error = CustodyRuntime::generate_with_control_plane_response_public_key(
             pinned_control_plane_response_verifying_key(),
             &digest(99),
+            Path::new("/unused"),
         )
         .err()
         .expect("mismatched configured key ID");
@@ -2977,14 +5200,7 @@ mod tests {
         );
         assert_eq!(response["error"]["code"], "cross_boot_request");
 
-        let replay_request = json!({
-            "apiVersion": PROTOCOL_API_VERSION,
-            "bootId": null,
-            "operation": HELLO_OPERATION,
-            "params": {},
-            "requestId": request_id(10),
-        });
-        let replay_bytes = canonical_json_bytes(&replay_request).expect("request");
+        let replay_bytes = request_bytes(&runtime, 10, statement());
         assert_eq!(
             response_value(
                 &runtime

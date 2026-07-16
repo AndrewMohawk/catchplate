@@ -24,6 +24,8 @@ services:
       SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH: ${SERVERWARE_POLICY_MIN_ROLLBACK_EPOCH:?set signed minimum policy rollback epoch}
       SERVERWARE_POLICY_SIGNING_PUBLIC_KEY: /run/serverware/gate/policy-signing-ed25519.pub.pem
       SERVERWARE_RESPONSE_SIGNING_KEY: /run/secrets/serverware-response-signing-key
+      SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY: /run/serverware/custody-trust/control-plane-response-signing.pub.pem
+      SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH: /run/serverware/custody-trust/control-plane-response-signing.key-id
       SERVERWARE_DECISION_GATE_CA_CERT: /run/serverware/gate/decision-gate-ca-cert.pem
       SERVERWARE_DECISION_GATE_CA_KEY: /run/serverware/gate/decision-gate-ca-key.pem
       SERVERWARE_RELEASE_CHANNEL: ${SERVERWARE_RELEASE_CHANNEL:?set production release channel}
@@ -165,6 +167,7 @@ services:
     volumes:
       - serverware-data:/data
       - serverware-gate-materials:/run/serverware/gate
+      - serverware-custody-trust:/run/serverware/custody-trust
       - ${SERVERWARE_CONTROL_PLANE_TLS_DIR:?set control-plane TLS directory}:/run/serverware/tls:ro
       - ${SERVERWARE_ATTESTATION_HELPER_DIR:?set attestation helper directory}:/opt/serverware/bin:ro
       - ${SERVERWARE_NITRO_ROOT_CERT:?set Nitro root certificate}:/run/serverware/nitro/nitro-root.pem:ro
@@ -183,6 +186,16 @@ services:
       - /dev/nsm:/dev/nsm
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=64m
+    healthcheck:
+      test:
+        - CMD
+        - /usr/bin/python3
+        - -c
+        - "import json,ssl,sys,urllib.request; from pathlib import Path; from serverware.response_identity import validate_response_signing_key_custody; validate_response_signing_key_custody(Path('/run/secrets/serverware-response-signing-key'),Path('/run/serverware/custody-trust/control-plane-response-signing.pub.pem'),Path('/run/serverware/custody-trust/control-plane-response-signing.key-id')); context=ssl.create_default_context(cafile='/run/serverware/tls/ca.pem'); response=urllib.request.urlopen('https://serverware:3000/healthz',context=context,timeout=2); response.status == 200 or sys.exit(1); json.load(response).get('ok') is True or sys.exit(1)"
+      interval: 1s
+      timeout: 3s
+      retries: 30
+      start_period: 1s
     networks:
       - default
       - gate-control
@@ -221,8 +234,47 @@ services:
     networks:
       - anchor-control
 
+  custody-runtime:
+    image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65531:65530"
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+      - apparmor=serverware-docker
+    pids_limit: 64
+    mem_limit: 128m
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    entrypoint: ["/usr/local/bin/serverware-custody-runtime"]
+    command: ["--socket", "/run/serverware-custody/custody.sock"]
+    environment:
+      SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY: /run/serverware/custody-trust/control-plane-response-signing.pub.pem
+      SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID_FILE: /run/serverware/custody-trust/control-plane-response-signing.key-id
+      SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID: "65532"
+      SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY: /var/lib/serverware-custody
+    volumes:
+      - serverware-custody-socket:/run/serverware-custody
+      - serverware-custody-trust:/run/serverware/custody-trust:ro
+      - serverware-custody-state:/var/lib/serverware-custody
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      serverware:
+        condition: service_healthy
+    restart: on-failure
+
   decision-gate-rs:
     image: ${SERVERWARE_DECISION_GATE_IMAGE:?set immutable decision-gate image digest ref}
+    user: "65532:65532"
+    group_add:
+      - "65530"
     init: true
     read_only: true
     cap_drop:
@@ -247,6 +299,9 @@ services:
       SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS: "1.0"
       SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND: ${SERVERWARE_DATA_PLANE_RECIPIENT_ATTESTATION_COMMAND:?set recipient attestation command}
       SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND: ${SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND:?set response proof attestation command}
+      SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET: /run/serverware-custody/custody.sock
+      SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID: "65531"
+      SERVERWARE_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS: "30000"
       SERVERWARE_DATA_PLANE_INSTANCE_ID: ${SERVERWARE_DATA_PLANE_INSTANCE_ID:?set data-plane SPIFFE instance ID}
       SERVERWARE_MITM_CA_CERT: /run/serverware/gate/decision-gate-ca-cert.pem
       SERVERWARE_MITM_CA_KEY: /run/serverware/gate/decision-gate-ca-key.pem
@@ -277,7 +332,8 @@ services:
     volumes:
       - serverware-gate-materials:/run/serverware/gate:ro
       - serverware-gate-state:/var/lib/serverware
-      - ${SERVERWARE_CONTROL_PLANE_TLS_DIR:?set control-plane TLS directory}:/run/serverware/tls:ro
+      - serverware-custody-socket:/run/serverware-custody:ro
+      - ${SERVERWARE_CONTROL_PLANE_TLS_DIR:?set control-plane TLS directory}/ca.pem:/run/serverware/tls/ca.pem:ro
       - ${SERVERWARE_ATTESTATION_HELPER_DIR:?set attestation helper directory}:/opt/serverware/bin:ro
       - ${SERVERWARE_NITRO_ROOT_CERT:?set Nitro root certificate}:/run/serverware/nitro/nitro-root.pem:ro
       - ${SERVERWARE_RELEASE_PROVENANCE_FILE:?set release provenance artifact path}:/run/serverware/release/release-provenance.json:ro
@@ -289,12 +345,19 @@ services:
     networks:
       - default
       - gate-control
+    depends_on:
+      custody-runtime:
+        condition: service_started
+    restart: on-failure
 
 volumes:
   serverware-data:
   serverware-gate-materials:
   serverware-gate-state:
   serverware-audit-anchors:
+  serverware-custody-socket:
+  serverware-custody-state:
+  serverware-custody-trust:
 
 networks:
   gate-control:

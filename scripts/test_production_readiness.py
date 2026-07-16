@@ -1040,6 +1040,42 @@ def verify_response_key_runtime_readability() -> None:
             f"runtime-readable response key failed descriptor validation: {failures}"
         )
 
+    fifo_path = Path(OAUTH_SECRET_TEMP_DIR.name) / "runtime-response-key.fifo"
+    os.mkfifo(fifo_path, 0o600)
+    fifo_probe_code = (
+        "import os,stat,sys; "
+        "from pathlib import Path; "
+        "from unittest.mock import patch; "
+        "sys.path.insert(0,'scripts'); "
+        "import verify_production_readiness as readiness; "
+        f"regular=Path({str(runtime_key)!r}); fifo=Path({str(fifo_path)!r}); "
+        "failures=[]; "
+        "\nwith patch.object(Path,'lstat',return_value=regular.lstat()):\n "
+        " payload=readiness.read_bounded_regular_file("
+        "{'TEST_RESPONSE_KEY':str(fifo)},'TEST_RESPONSE_KEY',failures,"
+        "file_label='response-signing private-key',"
+        f"max_bytes={readiness.MAX_TRUSTED_PUBLIC_KEY_FILE_BYTES},"
+        "allowed_modes={0o600})"
+        "\n(payload is None and failures) or sys.exit('FIFO response key was accepted')"
+    )
+    try:
+        fifo_probe = subprocess.run(
+            [sys.executable, "-c", fifo_probe_code],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("readiness validation blocked on a raced FIFO") from exc
+    if fifo_probe.returncode != 0:
+        raise AssertionError(
+            "readiness FIFO rejection probe failed: "
+            + (fifo_probe.stderr or fifo_probe.stdout).strip()
+        )
+
     unreadable_uid = 1 if TEST_CONTROL_PLANE_UID != 1 else 2
     unreadable_gid = 1 if TEST_CONTROL_PLANE_GID != 1 else 2
     failures = []

@@ -97,11 +97,16 @@ services:
       SERVERWARE_RELEASE_CHANNEL: dev
       SERVERWARE_KEY_RELEASE_MIN_ROLLBACK_EPOCH: "1"
       SERVERWARE_KEY_RELEASE_REQUIRE_DATA_PLANE_DIGEST: "1"
-      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: sha256:044fee16d3f569f56904c745eb6d38fb93c701006aa2c2a48d7123252caf91af
+      SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST: ${SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST:-sha256:5cde7b8ff8a6ada7244d9e25c736a0146fd672ac28e24759cdf6785e65e3d8fa}
+      SERVERWARE_RESPONSE_SIGNING_KEY: /run/serverware/response-signing-private/response-signing-ed25519.pem
+      SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY: /custody-trust/control-plane-response-signing.pub.pem
+      SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY_ID_PATH: /custody-trust/control-plane-response-signing.key-id
     ports:
-      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:${SERVERWARE_CONTROL_PLANE_HOST_PORT:-3000}:3000"
     volumes:
       - serverware-data:/data
+      - serverware-custody-trust:/custody-trust
+      - serverware-response-signing-private:/run/serverware/response-signing-private
       - ${SERVERWARE_GOOGLE_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/serverware-google-oauth-client-secret:ro
       - ${SERVERWARE_X_OAUTH_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/serverware-x-oauth-client-secret:ro
       - ${SERVERWARE_OIDC_CLIENT_SECRET_FILE:-/dev/null}:/run/secrets/serverware-oidc-client-secret:ro
@@ -146,7 +151,7 @@ services:
       SERVERWARE_TRANSPARENCY_CHECKPOINT_REQUIRED: "1"
       SERVERWARE_EXTERNAL_TRANSPARENCY_LOG_PATH: /anchors/managed-transparency-log.jsonl
     ports:
-      - "127.0.0.1:9100:9100"
+      - "127.0.0.1:${SERVERWARE_AUDIT_ANCHOR_HOST_PORT:-9100}:9100"
     volumes:
       - serverware-audit-anchors:/anchors
     tmpfs:
@@ -214,10 +219,48 @@ services:
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
 
+  custody-runtime:
+    profiles: ["custody"]
+    build:
+      context: .
+      dockerfile: data-plane/decision-gate-rs/Dockerfile
+    init: true
+    read_only: true
+    network_mode: none
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./security/seccomp/serverware-deny-dangerous.json
+    pids_limit: 64
+    mem_limit: 128m
+    user: "10002:10003"
+    ulimits:
+      core:
+        soft: 0
+        hard: 0
+    entrypoint: ["/usr/local/bin/serverware-custody-runtime"]
+    command: ["--socket", "/run/serverware-custody/custody.sock"]
+    environment:
+      SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY: /custody-trust/control-plane-response-signing.pub.pem
+      SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID_FILE: /custody-trust/control-plane-response-signing.key-id
+      SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID: "10001"
+      SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY: /var/lib/serverware-custody
+    volumes:
+      - serverware-custody-socket:/run/serverware-custody
+      - serverware-custody-trust:/custody-trust:ro
+      - serverware-custody-state:/var/lib/serverware-custody
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    depends_on:
+      serverware:
+        condition: service_healthy
+
   decision-gate-rs:
     build:
       context: .
       dockerfile: data-plane/decision-gate-rs/Dockerfile
+    user: "10001:10001"
     init: true
     read_only: true
     cap_drop:
@@ -262,11 +305,13 @@ services:
       SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND: /usr/local/bin/serverware-response-proof-fixture
       SERVERWARE_DATA_PLANE_INSTANCE_ID: spiffe://development.serverware/decision-gate/local
     ports:
-      - "127.0.0.1:8080:9090"
-      - "127.0.0.1:9090:9090"
-      - "127.0.0.1:9091:9091"
+      # The ordinary proxy default remains "127.0.0.1:8080:9090"; isolated lifecycle tests use ephemeral host ports.
+      - "127.0.0.1:${SERVERWARE_DECISION_GATE_PROXY_HOST_PORT:-8080}:9090"
+      - "127.0.0.1:${SERVERWARE_DECISION_GATE_DIRECT_HOST_PORT:-9090}:9090"
+      - "127.0.0.1:${SERVERWARE_DECISION_GATE_MANAGEMENT_HOST_PORT:-9091}:9091"
     volumes:
       - serverware-data:/data:ro
+      - serverware-custody-socket:/run/serverware-custody:ro
     tmpfs:
       - /tmp:rw,noexec,nosuid,nodev,size=32m
     depends_on:
@@ -277,3 +322,7 @@ volumes:
   serverware-data:
   serverware-audit-anchors:
   serverware-grant-store:
+  serverware-custody-socket:
+  serverware-custody-trust:
+  serverware-custody-state:
+  serverware-response-signing-private:

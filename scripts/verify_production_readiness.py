@@ -1058,7 +1058,10 @@ def check_oauth_secret_file(env: dict[str, str], *, provider: str, setting_name:
     try:
         descriptor = os.open(
             path,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
         )
     except OSError:
         failures.append(f"{setting_name} must reference a readable, non-symlink secret file")
@@ -1141,8 +1144,8 @@ def read_bounded_regular_file(
     except OSError:
         failures.append(f"{setting_name} must reference a readable {file_label} file")
         return None
-    regular_file = stat.S_ISREG(file_stat.st_mode)
-    add(failures, regular_file, f"{setting_name} must reference a regular, non-symlink {file_label} file")
+    regular_file = stat.S_ISREG(file_stat.st_mode) and file_stat.st_nlink == 1
+    add(failures, regular_file, f"{setting_name} must reference a single-link regular, non-symlink {file_label} file")
     file_mode = stat.S_IMODE(file_stat.st_mode)
     mode_allowed = allowed_modes is None or file_mode in allowed_modes
     if allowed_modes is not None:
@@ -1163,7 +1166,10 @@ def read_bounded_regular_file(
     try:
         descriptor = os.open(
             path,
-            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            os.O_RDONLY
+            | getattr(os, "O_CLOEXEC", 0)
+            | getattr(os, "O_NOFOLLOW", 0)
+            | getattr(os, "O_NONBLOCK", 0),
         )
     except OSError:
         failures.append(f"{setting_name} must reference a readable, non-symlink {file_label} file")
@@ -1187,6 +1193,7 @@ def read_bounded_regular_file(
         os.close(descriptor)
     stable_file = (
         stat.S_ISREG(opened_stat.st_mode)
+        and opened_stat.st_nlink == 1
         and opened_stat.st_dev == file_stat.st_dev
         and opened_stat.st_ino == file_stat.st_ino
         and opened_stat.st_size == file_stat.st_size
@@ -1199,6 +1206,7 @@ def read_bounded_regular_file(
         and final_stat.st_mode == opened_stat.st_mode
         and final_stat.st_uid == opened_stat.st_uid
         and final_stat.st_gid == opened_stat.st_gid
+        and final_stat.st_nlink == opened_stat.st_nlink
         and final_stat.st_mtime_ns == opened_stat.st_mtime_ns
         and final_stat.st_ctime_ns == opened_stat.st_ctime_ns
         and len(payload) == opened_stat.st_size

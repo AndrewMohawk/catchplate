@@ -1,0 +1,10 @@
+services:
+  decision-gate-rs:
+    group_add:
+      - "10003"
+    environment:
+      SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET: /run/serverware-custody/custody.sock
+      SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID: "10002"
+    depends_on:
+      custody-runtime:
+        condition: service_started

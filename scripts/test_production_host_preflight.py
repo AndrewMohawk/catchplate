@@ -624,6 +624,182 @@ def verify_oauth_secret_mounts(tmp: Path) -> None:
         production_host_preflight.CONTROL_PLANE_RUNTIME_UID = original_uid
 
 
+def verify_response_signing_key_custody(tmp: Path) -> None:
+    tmp = tmp.resolve()
+    private_key = Ed25519PrivateKey.generate()
+    private_path = tmp / "response-signing-private.pem"
+    public_path = tmp / "response-signing-public.pem"
+    key_id_path = tmp / "response-signing-key-id"
+    key_id = sha256_prefixed(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    private_path.write_bytes(
+        private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    public_path.write_bytes(
+        private_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    key_id_path.write_text(key_id + "\n", encoding="ascii")
+    private_path.chmod(0o600)
+    public_path.chmod(0o644)
+    key_id_path.chmod(0o644)
+    env = {
+        "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(private_path),
+        "SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY": str(public_path),
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY": str(public_path),
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID": key_id,
+    }
+
+    status, failures = production_host_preflight.response_signing_key_custody_check(
+        env,
+        skip_host_check=False,
+        expected_control_plane_uid=os.getuid(),
+    )
+    if failures or status.get("ok") is not True or status.get("key_id") != key_id:
+        raise AssertionError(f"valid response-signing custody failed: {status} {failures}")
+
+    fifo_path = tmp / "response-signing-private.fifo"
+    os.mkfifo(fifo_path, 0o600)
+    fifo_env = {**env, "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(fifo_path)}
+    fifo_probe_code = (
+        "import json,os,sys; "
+        "from pathlib import Path; "
+        "sys.path.insert(0,'scripts'); "
+        "import production_host_preflight; "
+        "from serverware.response_identity import "
+        "ResponseIdentityPublicationError,validate_response_signing_key_custody; "
+        f"env=json.loads({json.dumps(json.dumps(fifo_env))}); "
+        "status,failures=production_host_preflight.response_signing_key_custody_check("
+        f"env,skip_host_check=False,expected_control_plane_uid={os.getuid()}); "
+        "failures or sys.exit('host preflight accepted a FIFO response key'); "
+        "rejected=False; "
+        "\ntry:\n "
+        f" validate_response_signing_key_custody(Path({str(fifo_path)!r}),"
+        f"Path({str(public_path)!r}),Path({str(key_id_path)!r}))"
+        "\nexcept ResponseIdentityPublicationError:\n rejected=True"
+        "\nrejected or sys.exit('runtime accepted a FIFO response key')"
+    )
+    try:
+        fifo_probe = subprocess.run(
+            [sys.executable, "-c", fifo_probe_code],
+            cwd=ROOT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=3,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise AssertionError("response-key validation blocked while opening a FIFO") from exc
+    if fifo_probe.returncode != 0:
+        raise AssertionError(
+            "response-key FIFO rejection probe failed: "
+            + (fifo_probe.stderr or fifo_probe.stdout).strip()
+        )
+
+    hardlink = tmp / "response-signing-private-hardlink.pem"
+    os.link(private_path, hardlink)
+    _, hardlink_failures = production_host_preflight.response_signing_key_custody_check(
+        env,
+        skip_host_check=False,
+        expected_control_plane_uid=os.getuid(),
+    )
+    hardlink.unlink()
+    if not any("single-link" in failure for failure in hardlink_failures):
+        raise AssertionError(f"hard-linked response key was accepted: {hardlink_failures}")
+
+    symlink = tmp / "response-signing-private-symlink.pem"
+    symlink.symlink_to(private_path)
+    symlink_env = {**env, "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE": str(symlink)}
+    _, symlink_failures = production_host_preflight.response_signing_key_custody_check(
+        symlink_env,
+        skip_host_check=False,
+        expected_control_plane_uid=os.getuid(),
+    )
+    if not symlink_failures:
+        raise AssertionError("symlinked response key was accepted")
+
+    private_path.chmod(0o644)
+    _, mode_failures = production_host_preflight.response_signing_key_custody_check(
+        env,
+        skip_host_check=False,
+        expected_control_plane_uid=os.getuid(),
+    )
+    private_path.chmod(0o600)
+    if not any("mode 0400 or 0600" in failure for failure in mode_failures):
+        raise AssertionError(f"permissive response key was accepted: {mode_failures}")
+
+    wrong_private = ec.generate_private_key(ec.SECP256R1())
+    private_path.write_bytes(
+        wrong_private.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    private_path.chmod(0o600)
+    _, type_failures = production_host_preflight.response_signing_key_custody_check(
+        env,
+        skip_host_check=False,
+        expected_control_plane_uid=os.getuid(),
+    )
+    if not any("Ed25519 PKCS8" in failure for failure in type_failures):
+        raise AssertionError(f"wrong response key type was accepted: {type_failures}")
+
+    private_path.write_bytes(
+        private_key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    private_path.chmod(0o600)
+    other_key = Ed25519PrivateKey.generate()
+    public_path.write_bytes(
+        other_key.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    _, mismatch_failures = production_host_preflight.response_signing_key_custody_check(
+        env,
+        skip_host_check=False,
+        expected_control_plane_uid=os.getuid(),
+    )
+    if not any("does not match" in failure for failure in mismatch_failures):
+        raise AssertionError(f"mismatched response public key was accepted: {mismatch_failures}")
+
+    optimized_probe = subprocess.run(
+        [
+            sys.executable,
+            "-O",
+            "-c",
+            (
+                "from pathlib import Path; "
+                "from serverware.response_identity import validate_response_signing_key_custody; "
+                f"validate_response_signing_key_custody(Path({str(private_path)!r}),"
+                f"Path({str(public_path)!r}),Path({str(key_id_path)!r}))"
+            ),
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if optimized_probe.returncode == 0:
+        raise AssertionError("optimized Python erased response-key custody validation")
+
+
 def verify_docker_binding_helpers() -> None:
     try:
         run_production_readiness.validate_docker_unix_socket(Path("/var/run/docker.sock"))
@@ -802,6 +978,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp_raw:
         verify_oauth_secret_mounts(Path(tmp_raw))
 
+    with tempfile.TemporaryDirectory() as tmp_raw:
+        verify_response_signing_key_custody(Path(tmp_raw))
+
     verify_docker_binding_helpers()
 
     with tempfile.TemporaryDirectory() as tmp_raw:
@@ -831,7 +1010,21 @@ def main() -> None:
             env_file=paths["env"],
             images=production_images,
         )
-        if set(compose_summary.get("images", {}).values()) != {
+        compose_images = compose_summary.get("images", {})
+        if set(compose_images) != {
+            "serverware",
+            "audit-anchor",
+            "custody-runtime",
+            "decision-gate-rs",
+        }:
+            raise AssertionError(
+                f"production Compose proof did not retain the exact service set: {compose_summary}"
+            )
+        if compose_images["custody-runtime"] != compose_images["decision-gate-rs"]:
+            raise AssertionError(
+                "production custody is not bound to the immutable decision-gate image"
+            )
+        if set(compose_images.values()) != {
             env["SERVERWARE_CONTROL_PLANE_IMAGE"],
             env["SERVERWARE_DECISION_GATE_IMAGE"],
         }:

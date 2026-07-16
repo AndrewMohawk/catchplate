@@ -36,6 +36,7 @@ REQUIRED_MATERIALS = {"broker-kek", "decision-gate-ca"}
 TEST_ONLY_BYPASS_ENV = "SERVERWARE_TEST_ONLY_ALLOW_PREFLIGHT_BYPASS"
 CONTROL_PLANE_RUNTIME_UID = 65532
 MAX_OAUTH_SECRET_BYTES = 4096
+MAX_RESPONSE_SIGNING_KEY_BYTES = 64 * 1024
 ATTESTATION_EXECUTABLE_DIGEST_MANIFEST_ENV = (
     "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST"
 )
@@ -549,6 +550,101 @@ def oauth_secret_mounts_check(
         if not 1 <= file_stat.st_size <= MAX_OAUTH_SECRET_BYTES:
             failures.append(f"{setting} must contain between 1 and {MAX_OAUTH_SECRET_BYTES} bytes")
         status["files"].append(item)
+    status["ok"] = not failures
+    return status, failures
+
+
+def response_signing_key_custody_check(
+    env: dict[str, str],
+    *,
+    skip_host_check: bool,
+    expected_control_plane_uid: int,
+) -> tuple[dict[str, Any], list[str]]:
+    status: dict[str, Any] = {
+        "ok": False,
+        "skipped": skip_host_check,
+        "secret_values_redacted": True,
+    }
+    if skip_host_check:
+        status["ok"] = True
+        return status, []
+
+    failures: list[str] = []
+    private_path = Path(env.get("SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE", ""))
+    public_path = Path(env.get("SERVERWARE_RESPONSE_SIGNING_PUBLIC_KEY", ""))
+    control_public_path = Path(
+        env.get("SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY", "")
+    )
+    expected_key_id = env.get(
+        "SERVERWARE_CONTROL_PLANE_RESPONSE_SIGNING_PUBLIC_KEY_ID", ""
+    )
+    try:
+        if private_path != private_path.resolve(strict=False):
+            raise ValueError("private-key path must be canonical")
+        if public_path != public_path.resolve(strict=False):
+            raise ValueError("public-key path must be canonical")
+        if control_public_path != public_path:
+            raise ValueError(
+                "online and verifier response-signing public-key paths must match"
+            )
+        run_production_readiness.validate_secure_ancestors(
+            private_path, "response-signing private key"
+        )
+        run_production_readiness.validate_secure_ancestors(
+            public_path, "response-signing public key"
+        )
+        private_bytes, private_stat = run_production_readiness.read_regular_file_once(
+            private_path,
+            "response-signing private key",
+            max_bytes=MAX_RESPONSE_SIGNING_KEY_BYTES,
+        )
+        public_bytes, public_stat = run_production_readiness.read_regular_file_once(
+            public_path,
+            "response-signing public key",
+            max_bytes=MAX_RESPONSE_SIGNING_KEY_BYTES,
+        )
+        mode = stat.S_IMODE(private_stat.st_mode)
+        if mode not in {0o400, 0o600}:
+            raise ValueError("private key must use mode 0400 or 0600")
+        if private_stat.st_uid != expected_control_plane_uid:
+            raise ValueError(
+                f"private key must be owned by production control-plane UID {expected_control_plane_uid}"
+            )
+        if stat.S_IMODE(public_stat.st_mode) & 0o022:
+            raise ValueError("public key must not be writable by group or world")
+        private_key = serialization.load_pem_private_key(private_bytes, password=None)
+        public_key = serialization.load_pem_public_key(public_bytes)
+        if not isinstance(private_key, Ed25519PrivateKey):
+            raise ValueError("private key must be unencrypted Ed25519 PKCS8 PEM")
+        if not isinstance(public_key, Ed25519PublicKey):
+            raise ValueError("public key must be Ed25519")
+        private_public_der = private_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        public_der = public_key.public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        actual_key_id = "sha256:" + hashlib.sha256(public_der).hexdigest()
+        if not hmac.compare_digest(private_public_der, public_der):
+            raise ValueError("private key does not match the pinned public key")
+        if not hmac.compare_digest(actual_key_id, expected_key_id):
+            raise ValueError("public key does not match the configured key ID")
+        status.update(
+            {
+                "path": str(private_path),
+                "mode": oct(mode),
+                "owner_uid": private_stat.st_uid,
+                "bytes": private_stat.st_size,
+                "key_id": actual_key_id,
+                "nofollow": True,
+                "single_link": True,
+                "secure_ancestors": True,
+            }
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        failures.append(f"response-signing key custody is invalid: {exc}")
     status["ok"] = not failures
     return status, failures
 
@@ -1728,6 +1824,14 @@ def main() -> None:
         skip_host_check=args.skip_host_check,
     )
     failures.extend(oauth_secret_mount_failures)
+    response_signing_key_custody, response_signing_key_custody_failures = (
+        response_signing_key_custody_check(
+            loaded_env,
+            skip_host_check=args.skip_host_check,
+            expected_control_plane_uid=args.expected_control_plane_uid,
+        )
+    )
+    failures.extend(response_signing_key_custody_failures)
     images_env, images_value, images_failures = production_images_env_check(Path(args.production_images_env))
     failures.extend(images_failures)
     merge_status, merge_failures = env_merge_check(loaded_env, images_value) if loaded_env and images_value else (
@@ -1777,6 +1881,7 @@ def main() -> None:
             "production_env": env,
             "runtime_trust_materials": runtime_trust,
             "oauth_secret_mounts": oauth_secret_mounts,
+            "response_signing_key_custody": response_signing_key_custody,
             "production_images_env": images_env,
             "production_images_env_merge": merge_status,
             "production_compose": compose_status,

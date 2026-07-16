@@ -13,8 +13,13 @@ RUN apt-get update \
 
 RUN groupadd --gid 10001 serverware \
     && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin serverware \
-    && mkdir -p /data /anchors \
-    && chown -R serverware:serverware /data /anchors /home/serverware
+    && mkdir -p /data /anchors /custody-trust /run/serverware/response-signing-private \
+    && chown -R serverware:serverware \
+        /data \
+        /anchors \
+        /custody-trust \
+        /run/serverware/response-signing-private \
+        /home/serverware
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

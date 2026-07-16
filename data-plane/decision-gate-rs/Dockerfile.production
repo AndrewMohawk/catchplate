@@ -32,7 +32,12 @@ RUN --network=none set -eu; \
 COPY data-plane/decision-gate-rs/src ./src
 COPY data-plane/decision-gate-rs/trust ./trust
 COPY schemas /schemas
-RUN --network=none cargo build --release --frozen
+RUN --network=none cargo build --release --frozen \
+    && install -d -m 0710 /runtime-layout/serverware-custody \
+    && install -d -m 0700 /runtime-layout/serverware-custody-state \
+    && install -d -m 0755 /runtime-layout/serverware-custody-trust \
+    && SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/serverware-custody-state \
+        /src/target/release/serverware-custody-runtime --initialize-attempt-ledger
 
 FROM rust:1.88-alpine3.22@sha256:64eba3726734dcfe89e0a62a0485007a3ab7c7372ce5b38c621d8812f70215f0 AS launcher-build
 
@@ -89,7 +94,13 @@ LABEL org.opencontainers.image.title="Serverware decision gate" \
 
 COPY --from=build /src/target/release/serverware-decision-gate /usr/local/bin/serverware-decision-gate
 COPY --from=build /src/target/release/serverware-proof-client /usr/local/bin/serverware-proof-client
+COPY --from=build /src/target/release/serverware-custody-runtime /usr/local/bin/serverware-custody-runtime
 COPY --from=launcher-build /src/target/release/serverware-production-launcher /usr/local/libexec/serverware-production-launcher
+COPY --from=build --chown=65531:65530 --chmod=0710 /runtime-layout/serverware-custody /run/serverware-custody
+COPY --from=build --chown=65531:65530 --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody
+COPY --from=build --chown=65531:65530 --chmod=0600 /runtime-layout/serverware-custody-state/manifest.json /var/lib/serverware-custody/manifest.json
+COPY --from=build --chown=65531:65530 --chmod=0600 /runtime-layout/serverware-custody-state/ledger.lock /var/lib/serverware-custody/ledger.lock
+COPY --from=build --chown=65532:65532 --chmod=0755 /runtime-layout/serverware-custody-trust /run/serverware/custody-trust
 USER nonroot:nonroot
 EXPOSE 9090
 ENTRYPOINT ["/usr/local/bin/serverware-decision-gate"]

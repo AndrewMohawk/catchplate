@@ -21,22 +21,37 @@ use serde::de::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Map, Value};
+use serverware_decision_gate::{
+    canonical_json_bytes as custody_canonical_json_bytes,
+    decode_canonical_json as decode_canonical_custody_json, read_frame as read_custody_frame,
+    write_frame as write_custody_frame, CustodyRequest, HELLO_OPERATION as CUSTODY_HELLO_OPERATION,
+    IO_DEADLINE as CUSTODY_IO_DEADLINE,
+    MAX_CONCURRENT_CONNECTIONS as CUSTODY_MAX_CONCURRENT_CONNECTIONS,
+    MAX_FRAME_BYTES as CUSTODY_MAX_FRAME_BYTES,
+    MAX_REQUESTS_PER_BOOT as CUSTODY_MAX_REQUESTS_PER_BOOT,
+    MAX_STATEMENT_AGE_SECONDS as CUSTODY_MAX_STATEMENT_AGE_SECONDS,
+    PROTOCOL_API_VERSION as CUSTODY_PROTOCOL_API_VERSION,
+    RESPONSE_PROOF_SIGN_OPERATION as CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+};
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::env;
 use std::error::Error;
+use std::ffi::OsString;
 use std::fs;
 use std::fs::OpenOptions;
 use std::io::{self, Cursor, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
-use std::os::fd::RawFd;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, RwLock, RwLockReadGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use time::format_description::well_known::Rfc3339;
@@ -49,8 +64,6 @@ use zeroize::{Zeroize, Zeroizing};
 use std::ffi::CString;
 #[cfg(target_os = "linux")]
 use std::io::{Seek, SeekFrom};
-#[cfg(target_os = "linux")]
-use std::os::fd::{AsRawFd, FromRawFd};
 
 const MAX_CREDENTIAL_LEASE_RESPONSE_BYTES: u64 = 256 * 1024;
 const MAX_CONTROL_PLANE_ATTESTATION_BYTES: u64 = 64 * 1024;
@@ -119,6 +132,15 @@ const STREAM_RESPONSE_PROOF_SHA256_TRAILER: &str = "X-Serverware-Stream-Proof-SH
 const STREAM_RESPONSE_PROOF_TRAILER_DECLARATION: &str =
     "X-Serverware-Stream-Proof-B64, X-Serverware-Stream-Proof-SHA256";
 const MAX_STREAM_RESPONSE_RUNTIME_PROOF_BYTES: usize = 96 * 1024;
+const RESPONSE_PROOF_CUSTODY_SOCKET_ENV: &str = "SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET";
+const RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV: &str =
+    "SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID";
+const RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS_ENV: &str =
+    "SERVERWARE_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS";
+const DEFAULT_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS: u64 = 3_000;
+const MAX_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS: u64 = 30_000;
+const RESPONSE_PROOF_CUSTODY_HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(1);
+const RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS: Duration = Duration::from_secs(6);
 const ENROLLMENT_SESSION_HEADER: &str = "x-serverware-enrollment-session";
 const SUPPORTED_ADAPTER_TYPES: [&str; 4] = ["generic.rest", "gmail.v1", "x.v2", "npm.registry"];
 
@@ -523,7 +545,173 @@ enum RequestStreamingPreflight {
     Reject(Vec<u8>),
 }
 
+struct UpstreamDispatchAuthority {
+    state: Mutex<UpstreamDispatchAuthorityState>,
+    changed: Condvar,
+}
+
+struct UpstreamDispatchAuthorityState {
+    active_sends: u64,
+    waiting_sends: u64,
+    waiting_mutations: u64,
+    mutation_active: bool,
+    next_send_ticket: u64,
+    send_admit_through: u64,
+    send_cohort_remaining: u64,
+    next_mutation_ticket: u64,
+    serving_mutation_ticket: u64,
+}
+
+struct UpstreamDispatchPermit<'a> {
+    authority: &'a UpstreamDispatchAuthority,
+}
+
+impl Drop for UpstreamDispatchPermit<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .authority
+            .state
+            .lock()
+            .expect("upstream dispatch authority lock poisoned");
+        state.active_sends = state
+            .active_sends
+            .checked_sub(1)
+            .expect("upstream active send count underflow");
+        let notify = state.active_sends == 0;
+        drop(state);
+        if notify {
+            self.authority.changed.notify_all();
+        }
+    }
+}
+
+struct UpstreamDispatchMutation<'a> {
+    authority: &'a UpstreamDispatchAuthority,
+}
+
+impl Drop for UpstreamDispatchMutation<'_> {
+    fn drop(&mut self) {
+        let mut state = self
+            .authority
+            .state
+            .lock()
+            .expect("upstream dispatch authority lock poisoned");
+        state.mutation_active = false;
+        state.serving_mutation_ticket = state
+            .serving_mutation_ticket
+            .checked_add(1)
+            .expect("upstream mutation ticket exhausted");
+        if state.waiting_sends != 0 {
+            state.send_admit_through = state
+                .next_send_ticket
+                .checked_sub(1)
+                .expect("upstream send ticket underflow");
+            state.send_cohort_remaining = state.waiting_sends;
+        } else {
+            state.send_cohort_remaining = 0;
+        }
+        drop(state);
+        self.authority.changed.notify_all();
+    }
+}
+
+impl UpstreamDispatchAuthority {
+    fn new() -> Self {
+        Self {
+            state: Mutex::new(UpstreamDispatchAuthorityState {
+                active_sends: 0,
+                waiting_sends: 0,
+                waiting_mutations: 0,
+                mutation_active: false,
+                next_send_ticket: 1,
+                send_admit_through: 0,
+                send_cohort_remaining: 0,
+                next_mutation_ticket: 1,
+                serving_mutation_ticket: 1,
+            }),
+            changed: Condvar::new(),
+        }
+    }
+
+    fn acquire_send(&self) -> UpstreamDispatchPermit<'_> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("upstream dispatch authority lock poisoned");
+        let ticket = state.next_send_ticket;
+        state.next_send_ticket = state
+            .next_send_ticket
+            .checked_add(1)
+            .expect("upstream send ticket exhausted");
+        state.waiting_sends = state
+            .waiting_sends
+            .checked_add(1)
+            .expect("upstream waiting send count exhausted");
+        while state.mutation_active
+            || (state.waiting_mutations != 0
+                && !(state.send_cohort_remaining != 0 && ticket <= state.send_admit_through))
+        {
+            state = self
+                .changed
+                .wait(state)
+                .expect("upstream dispatch authority lock poisoned");
+        }
+        state.waiting_sends = state
+            .waiting_sends
+            .checked_sub(1)
+            .expect("upstream waiting send count underflow");
+        if state.send_cohort_remaining != 0 && ticket <= state.send_admit_through {
+            state.send_cohort_remaining = state
+                .send_cohort_remaining
+                .checked_sub(1)
+                .expect("upstream send cohort count underflow");
+        }
+        state.active_sends = state
+            .active_sends
+            .checked_add(1)
+            .expect("upstream active send count exhausted");
+        drop(state);
+        UpstreamDispatchPermit { authority: self }
+    }
+
+    fn begin_mutation(&self) -> UpstreamDispatchMutation<'_> {
+        let mut state = self
+            .state
+            .lock()
+            .expect("upstream dispatch authority lock poisoned");
+        let ticket = state.next_mutation_ticket;
+        state.next_mutation_ticket = state
+            .next_mutation_ticket
+            .checked_add(1)
+            .expect("upstream mutation ticket exhausted");
+        state.waiting_mutations = state
+            .waiting_mutations
+            .checked_add(1)
+            .expect("upstream waiting mutation count exhausted");
+        while state.active_sends != 0
+            || state.mutation_active
+            || state.send_cohort_remaining != 0
+            || ticket != state.serving_mutation_ticket
+        {
+            state = self
+                .changed
+                .wait(state)
+                .expect("upstream dispatch authority lock poisoned");
+        }
+        state.waiting_mutations = state
+            .waiting_mutations
+            .checked_sub(1)
+            .expect("upstream waiting mutation count underflow");
+        state.mutation_active = true;
+        drop(state);
+        UpstreamDispatchMutation { authority: self }
+    }
+}
+
 struct GateState {
+    upstream_dispatch_authority: UpstreamDispatchAuthority,
+    #[cfg(test)]
+    upstream_send_credential_lock_contentions: AtomicU64,
     snapshot: RwLock<Arc<Snapshot>>,
     policy_path: String,
     policy_trust_root_source: PolicyTrustRootSource,
@@ -588,11 +776,660 @@ struct GateState {
     binary_digest: String,
     release_provenance_path: Option<String>,
     image_signatures_path: Option<String>,
-    response_proof_signing_key: SigningKey,
+    response_proof_signer: ResponseProofSigner,
     response_proof_public_key_pem: String,
     response_proof_signing_key_id: String,
     response_proof_attestation_command: Option<String>,
     server_instance_id: Option<String>,
+}
+
+enum ResponseProofSigner {
+    LocalEphemeral(SigningKey),
+    Custody(CustodyResponseProofSigner),
+}
+
+impl ResponseProofSigner {
+    fn mode(&self) -> &'static str {
+        match self {
+            Self::LocalEphemeral(_) => "local-ephemeral",
+            Self::Custody(_) => "custody-uds",
+        }
+    }
+
+    fn custody_boot_digest(&self) -> Option<&str> {
+        match self {
+            Self::LocalEphemeral(_) => None,
+            Self::Custody(signer) => Some(&signer.boot_digest),
+        }
+    }
+
+    fn hardware_proof(&self) -> bool {
+        false
+    }
+
+    fn custody_control_plane_response_signing_key_id(&self) -> Option<&str> {
+        match self {
+            Self::LocalEphemeral(_) => None,
+            Self::Custody(signer) => Some(&signer.control_plane_response_signing_key_id),
+        }
+    }
+
+    fn custody_status(&self) -> Option<Value> {
+        match self {
+            Self::LocalEphemeral(_) => None,
+            Self::Custody(signer) => Some(signer.status()),
+        }
+    }
+
+    fn custody_health_snapshot(&self) -> (bool, Option<Value>) {
+        match self {
+            Self::LocalEphemeral(_) => (true, None),
+            Self::Custody(signer) => {
+                let status = signer.status();
+                let healthy = status
+                    .get("healthy")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+                (healthy, Some(status))
+            }
+        }
+    }
+
+    fn buffered_dispatch_ready(&self) -> bool {
+        match self {
+            Self::LocalEphemeral(_) => true,
+            Self::Custody(signer) => signer.health.transport_dispatch_ready(),
+        }
+    }
+
+    fn with_buffered_dispatch_permit<T>(&self, operation: impl FnOnce() -> T) -> Result<T, ()> {
+        match self {
+            Self::LocalEphemeral(_) => Ok(operation()),
+            Self::Custody(signer) => signer.health.with_dispatch_permit(operation),
+        }
+    }
+
+    fn probe_custody_once(&self) {
+        let Self::Custody(signer) = self else {
+            return;
+        };
+        let operation = signer.health.begin_probe();
+        match signer.probe() {
+            Ok(()) => signer.health.record_probe_success(operation),
+            Err(error) => signer.health.record_probe_failure(operation, &error),
+        }
+    }
+
+    fn begin_proof_assembly(&self) -> Option<u64> {
+        match self {
+            Self::LocalEphemeral(_) => None,
+            Self::Custody(signer) => Some(signer.health.begin_proof_assembly()),
+        }
+    }
+
+    fn record_proof_assembly_success(&self, operation: Option<u64>) {
+        if let (Self::Custody(signer), Some(operation)) = (self, operation) {
+            signer.health.record_proof_assembly_success(operation);
+        }
+    }
+
+    fn record_proof_assembly_failure(&self, operation: Option<u64>, error: &str) {
+        if let (Self::Custody(signer), Some(operation)) = (self, operation) {
+            signer
+                .health
+                .record_proof_assembly_failure(operation, error);
+        }
+    }
+
+    fn custody_runtime_manifest(&self) -> Value {
+        match self {
+            Self::LocalEphemeral(_) => Value::Null,
+            Self::Custody(signer) => signer.runtime_manifest(),
+        }
+    }
+
+    fn sign_buffered(
+        &self,
+        statement: &Value,
+        authorization_binding: &ReleaseAuthorizationBinding,
+    ) -> Result<String, String> {
+        match self {
+            Self::LocalEphemeral(signing_key) => {
+                let canonical_statement = custody_canonical_json_bytes(statement)
+                    .map_err(|err| format!("canonicalize buffered response proof: {err}"))?;
+                Ok(format!(
+                    "ed25519:{}",
+                    general_purpose::URL_SAFE_NO_PAD
+                        .encode(signing_key.sign(&canonical_statement).to_bytes())
+                ))
+            }
+            Self::Custody(signer) => {
+                let operation = signer.health.begin_sign();
+                let result = signer.sign(statement, authorization_binding);
+                match &result {
+                    Ok(_) => signer.health.record_sign_success(operation),
+                    Err(error) => signer.health.record_sign_failure(operation, error),
+                }
+                result
+            }
+        }
+    }
+
+    fn sign_streaming(&self, canonical_statement: &[u8]) -> Result<String, String> {
+        match self {
+            Self::LocalEphemeral(signing_key) => Ok(format!(
+                "ed25519:{}",
+                general_purpose::URL_SAFE_NO_PAD
+                    .encode(signing_key.sign(canonical_statement).to_bytes())
+            )),
+            Self::Custody(signer) => {
+                let error = "streaming response proof signing is unavailable in custody mode; custody supports buffered responseProof.sign/v2 only"
+                    .to_string();
+                let operation = signer.health.begin_sign();
+                signer.health.record_sign_failure(operation, &error);
+                Err(error)
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CustodyResponseProofSigner {
+    socket_path: PathBuf,
+    expected_uid: libc::uid_t,
+    boot_id: String,
+    boot_digest: String,
+    verifying_key: VerifyingKey,
+    public_key_pem: String,
+    key_id: String,
+    control_plane_response_signing_key_id: String,
+    health: Arc<CustodyPassiveHealth>,
+}
+
+#[derive(Debug)]
+struct CustodyPassiveHealth {
+    state: Mutex<CustodyPassiveHealthState>,
+    dispatch_coordination: Mutex<CustodyDispatchCoordinationState>,
+    dispatch_coordination_changed: Condvar,
+}
+
+#[derive(Debug)]
+struct CustodyDispatchCoordinationState {
+    active_dispatches: u64,
+    waiting_dispatches: u64,
+    waiting_transitions: u64,
+    transition_active: bool,
+}
+
+struct CustodyHealthTransition<'a> {
+    coordination: &'a Mutex<CustodyDispatchCoordinationState>,
+    changed: &'a Condvar,
+}
+
+impl Drop for CustodyHealthTransition<'_> {
+    fn drop(&mut self) {
+        let mut coordination = self
+            .coordination
+            .lock()
+            .expect("custody dispatch coordination mutex poisoned");
+        coordination.transition_active = false;
+        drop(coordination);
+        self.changed.notify_all();
+    }
+}
+
+struct CustodyDispatchPermit<'a> {
+    coordination: &'a Mutex<CustodyDispatchCoordinationState>,
+    changed: &'a Condvar,
+}
+
+impl Drop for CustodyDispatchPermit<'_> {
+    fn drop(&mut self) {
+        let mut coordination = self
+            .coordination
+            .lock()
+            .expect("custody dispatch coordination mutex poisoned");
+        coordination.active_dispatches = coordination
+            .active_dispatches
+            .checked_sub(1)
+            .expect("custody active dispatch count underflow");
+        let notify = coordination.active_dispatches == 0;
+        drop(coordination);
+        if notify {
+            self.changed.notify_all();
+        }
+    }
+}
+
+#[derive(Debug)]
+struct CustodyPassiveHealthState {
+    transport_healthy: bool,
+    signing_healthy: bool,
+    proof_assembly_healthy: bool,
+    last_liveness_success: Instant,
+    last_liveness_success_at_epoch_ms: u128,
+    probe_success_count: u64,
+    probe_failure_count: u64,
+    sign_success_count: u64,
+    sign_failure_count: u64,
+    proof_assembly_success_count: u64,
+    proof_assembly_failure_count: u64,
+    latest_transport_operation: u64,
+    latest_sign_operation: u64,
+    latest_proof_assembly_operation: u64,
+    completed_transport_operation: u64,
+    completed_sign_operation: u64,
+    completed_proof_assembly_operation: u64,
+    last_failure_at_epoch_ms: Option<u128>,
+    last_failure_digest: Option<String>,
+    last_failure_stage: Option<&'static str>,
+}
+
+impl CustodyPassiveHealth {
+    fn startup_verified() -> Self {
+        Self {
+            state: Mutex::new(CustodyPassiveHealthState {
+                transport_healthy: true,
+                signing_healthy: true,
+                proof_assembly_healthy: true,
+                last_liveness_success: Instant::now(),
+                last_liveness_success_at_epoch_ms: now_epoch_ms(),
+                probe_success_count: 0,
+                probe_failure_count: 0,
+                sign_success_count: 0,
+                sign_failure_count: 0,
+                proof_assembly_success_count: 0,
+                proof_assembly_failure_count: 0,
+                latest_transport_operation: 0,
+                latest_sign_operation: 0,
+                latest_proof_assembly_operation: 0,
+                completed_transport_operation: 0,
+                completed_sign_operation: 0,
+                completed_proof_assembly_operation: 0,
+                last_failure_at_epoch_ms: None,
+                last_failure_digest: None,
+                last_failure_stage: None,
+            }),
+            dispatch_coordination: Mutex::new(CustodyDispatchCoordinationState {
+                active_dispatches: 0,
+                waiting_dispatches: 0,
+                waiting_transitions: 0,
+                transition_active: false,
+            }),
+            dispatch_coordination_changed: Condvar::new(),
+        }
+    }
+
+    fn begin_health_transition(&self) -> CustodyHealthTransition<'_> {
+        let mut coordination = self
+            .dispatch_coordination
+            .lock()
+            .expect("custody dispatch coordination mutex poisoned");
+        coordination.waiting_transitions = coordination
+            .waiting_transitions
+            .checked_add(1)
+            .expect("custody waiting health transition count exhausted");
+        while coordination.active_dispatches != 0 || coordination.transition_active {
+            coordination = self
+                .dispatch_coordination_changed
+                .wait(coordination)
+                .expect("custody dispatch coordination mutex poisoned");
+        }
+        coordination.waiting_transitions = coordination
+            .waiting_transitions
+            .checked_sub(1)
+            .expect("custody waiting health transition count underflow");
+        coordination.transition_active = true;
+        drop(coordination);
+        CustodyHealthTransition {
+            coordination: &self.dispatch_coordination,
+            changed: &self.dispatch_coordination_changed,
+        }
+    }
+
+    fn acquire_dispatch_permit(&self) -> CustodyDispatchPermit<'_> {
+        let mut coordination = self
+            .dispatch_coordination
+            .lock()
+            .expect("custody dispatch coordination mutex poisoned");
+        coordination.waiting_dispatches = coordination
+            .waiting_dispatches
+            .checked_add(1)
+            .expect("custody waiting dispatch count exhausted");
+        while coordination.transition_active || coordination.waiting_transitions != 0 {
+            coordination = self
+                .dispatch_coordination_changed
+                .wait(coordination)
+                .expect("custody dispatch coordination mutex poisoned");
+        }
+        coordination.waiting_dispatches = coordination
+            .waiting_dispatches
+            .checked_sub(1)
+            .expect("custody waiting dispatch count underflow");
+        coordination.active_dispatches = coordination
+            .active_dispatches
+            .checked_add(1)
+            .expect("custody active dispatch count exhausted");
+        drop(coordination);
+        CustodyDispatchPermit {
+            coordination: &self.dispatch_coordination,
+            changed: &self.dispatch_coordination_changed,
+        }
+    }
+
+    fn begin_probe(&self) -> u64 {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.latest_transport_operation = state
+            .latest_transport_operation
+            .checked_add(1)
+            .expect("custody transport health operation sequence exhausted");
+        state.latest_transport_operation
+    }
+
+    fn begin_sign(&self) -> (u64, u64) {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.latest_transport_operation = state
+            .latest_transport_operation
+            .checked_add(1)
+            .expect("custody transport health operation sequence exhausted");
+        state.latest_sign_operation = state
+            .latest_sign_operation
+            .checked_add(1)
+            .expect("custody signing health operation sequence exhausted");
+        (
+            state.latest_transport_operation,
+            state.latest_sign_operation,
+        )
+    }
+
+    fn begin_proof_assembly(&self) -> u64 {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.latest_proof_assembly_operation = state
+            .latest_proof_assembly_operation
+            .checked_add(1)
+            .expect("custody proof assembly health operation sequence exhausted");
+        state.latest_proof_assembly_operation
+    }
+
+    fn record_probe_success(&self, operation: u64) {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.probe_success_count = state.probe_success_count.saturating_add(1);
+        if operation <= state.completed_transport_operation {
+            return;
+        }
+        state.completed_transport_operation = operation;
+        state.transport_healthy = true;
+        state.last_liveness_success = Instant::now();
+        state.last_liveness_success_at_epoch_ms = now_epoch_ms();
+    }
+
+    fn record_probe_failure(&self, operation: u64, error: &str) {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.probe_failure_count = state.probe_failure_count.saturating_add(1);
+        if operation <= state.completed_transport_operation {
+            return;
+        }
+        state.completed_transport_operation = operation;
+        state.transport_healthy = false;
+        Self::record_failure(&mut state, "probe", error);
+    }
+
+    fn transport_dispatch_ready(&self) -> bool {
+        let state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.transport_healthy
+            && state.last_liveness_success.elapsed() <= RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS
+    }
+
+    fn with_dispatch_permit<T>(&self, operation: impl FnOnce() -> T) -> Result<T, ()> {
+        let _permit = self.acquire_dispatch_permit();
+        let ready = {
+            let state = self
+                .state
+                .lock()
+                .expect("custody passive health mutex poisoned");
+            state.transport_healthy
+                && state.last_liveness_success.elapsed()
+                    <= RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS
+        };
+        if !ready {
+            return Err(());
+        }
+        Ok(operation())
+    }
+
+    fn record_sign_success(&self, operation: (u64, u64)) {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.sign_success_count = state.sign_success_count.saturating_add(1);
+        if operation.0 > state.completed_transport_operation {
+            state.completed_transport_operation = operation.0;
+            state.transport_healthy = true;
+            state.last_liveness_success = Instant::now();
+            state.last_liveness_success_at_epoch_ms = now_epoch_ms();
+        }
+        if operation.1 > state.completed_sign_operation {
+            state.completed_sign_operation = operation.1;
+            state.signing_healthy = true;
+        }
+    }
+
+    fn record_sign_failure(&self, operation: (u64, u64), error: &str) {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.sign_failure_count = state.sign_failure_count.saturating_add(1);
+        let mut applied = false;
+        if operation.0 > state.completed_transport_operation {
+            state.completed_transport_operation = operation.0;
+            state.transport_healthy = false;
+            applied = true;
+        }
+        if operation.1 > state.completed_sign_operation {
+            state.completed_sign_operation = operation.1;
+            state.signing_healthy = false;
+            applied = true;
+        }
+        if applied {
+            Self::record_failure(&mut state, "sign", error);
+        }
+    }
+
+    fn record_proof_assembly_success(&self, operation: u64) {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.proof_assembly_success_count = state.proof_assembly_success_count.saturating_add(1);
+        if operation <= state.completed_proof_assembly_operation {
+            return;
+        }
+        state.completed_proof_assembly_operation = operation;
+        state.proof_assembly_healthy = true;
+    }
+
+    fn record_proof_assembly_failure(&self, operation: u64, error: &str) {
+        let _transition = self.begin_health_transition();
+        let mut state = self
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        state.proof_assembly_failure_count = state.proof_assembly_failure_count.saturating_add(1);
+        if operation <= state.completed_proof_assembly_operation {
+            return;
+        }
+        state.completed_proof_assembly_operation = operation;
+        state.proof_assembly_healthy = false;
+        Self::record_failure(&mut state, "proof_assembly", error);
+    }
+
+    fn record_failure(state: &mut CustodyPassiveHealthState, stage: &'static str, error: &str) {
+        state.last_failure_at_epoch_ms = Some(now_epoch_ms());
+        state.last_failure_digest = Some(sha256_prefixed(error.as_bytes()));
+        state.last_failure_stage = Some(stage);
+    }
+}
+
+impl CustodyResponseProofSigner {
+    fn status(&self) -> Value {
+        let health = self
+            .health
+            .state
+            .lock()
+            .expect("custody passive health mutex poisoned");
+        let healthy = health.transport_healthy
+            && health.signing_healthy
+            && health.proof_assembly_healthy
+            && health.last_liveness_success.elapsed()
+                <= RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS;
+        json!({
+            "startup_verified":true,
+            "healthy":healthy,
+            "transport_healthy":health.transport_healthy,
+            "signing_healthy":health.signing_healthy,
+            "proof_assembly_healthy":health.proof_assembly_healthy,
+            "last_liveness_success_at_epoch_ms":health.last_liveness_success_at_epoch_ms,
+            "probe_success_count":health.probe_success_count,
+            "probe_failure_count":health.probe_failure_count,
+            "sign_success_count":health.sign_success_count,
+            "sign_failure_count":health.sign_failure_count,
+            "proof_assembly_success_count":health.proof_assembly_success_count,
+            "proof_assembly_failure_count":health.proof_assembly_failure_count,
+            "probe_assurance":"hello-pinned-boot-key-peer-uid",
+            "last_failure_at_epoch_ms":health.last_failure_at_epoch_ms,
+            "last_failure_digest":health.last_failure_digest,
+            "last_failure_stage":health.last_failure_stage,
+            "signer_key_id":self.key_id,
+            "signer_boot_digest":self.boot_digest,
+            "control_plane_response_signing_key_id":self.control_plane_response_signing_key_id,
+        })
+    }
+
+    fn runtime_manifest(&self) -> Value {
+        json!({
+            "protocol_api_version":CUSTODY_PROTOCOL_API_VERSION,
+            "transport":{
+                "kind":"unix-domain-socket",
+                "peer_authentication":"uid",
+                "expected_uid":self.expected_uid,
+            },
+            "health_probe":{
+                "mode":"cached-background",
+                "assurance":"hello-pinned-boot-key-peer-uid",
+                "interval_ms":RESPONSE_PROOF_CUSTODY_HEALTH_PROBE_INTERVAL.as_millis(),
+                "max_staleness_ms":RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS.as_millis(),
+            },
+            "operations":{
+                "startup":CUSTODY_HELLO_OPERATION,
+                "sign":CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+            },
+            "limits":{
+                "max_frame_bytes":CUSTODY_MAX_FRAME_BYTES,
+                "io_deadline_ms":CUSTODY_IO_DEADLINE.as_millis(),
+                "max_concurrent_connections":CUSTODY_MAX_CONCURRENT_CONNECTIONS,
+                "max_requests_per_boot":CUSTODY_MAX_REQUESTS_PER_BOOT,
+                "max_statement_age_seconds":CUSTODY_MAX_STATEMENT_AGE_SECONDS,
+            },
+            "signer_key_id":self.key_id,
+            "signer_boot_digest":self.boot_digest,
+            "control_plane_response_signing_key_id":self.control_plane_response_signing_key_id,
+        })
+    }
+}
+
+struct ResponseProofSigningMaterial {
+    signer: ResponseProofSigner,
+    public_key_pem: String,
+    key_id: String,
+}
+
+#[derive(Debug)]
+struct ResponseProofCustodyConfig {
+    socket_path: PathBuf,
+    expected_uid: libc::uid_t,
+    startup_timeout: Duration,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CustodyProtocolResponse<T> {
+    api_version: String,
+    request_id: String,
+    boot_id: String,
+    operation: String,
+    ok: bool,
+    result: Option<T>,
+    error: Option<CustodyProtocolErrorBody>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CustodyProtocolErrorBody {
+    code: String,
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CustodyHelloResult {
+    public_key_pem: String,
+    key_id: String,
+    control_plane_response_signing_key_id: String,
+    capabilities: Vec<String>,
+    limits: CustodyRuntimeLimits,
+    hardware_proof: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CustodyRuntimeLimits {
+    max_frame_bytes: usize,
+    io_deadline_ms: u64,
+    max_concurrent_connections: usize,
+    max_requests_per_boot: usize,
+    max_statement_age_seconds: u64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct CustodySignResult {
+    statement_digest: String,
+    signature: String,
+    key_id: String,
+}
+
+#[derive(Debug)]
+enum CustodyHelloAttemptError {
+    Retryable(String),
+    Fatal(String),
 }
 
 #[derive(Clone)]
@@ -6641,6 +7478,33 @@ fn initialize_policy_high_water(
     Ok(current)
 }
 
+fn validate_response_proof_signer_policy_binding(
+    snapshot: &Snapshot,
+    signer: &ResponseProofSigner,
+) -> Result<(), String> {
+    let Some(custody_key_id) = signer.custody_control_plane_response_signing_key_id() else {
+        return Ok(());
+    };
+    if snapshot.response_signing_key_id.as_deref() != Some(custody_key_id) {
+        return Err(
+            "custody control-plane response signing key ID does not match the policy snapshot response signing key ID"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn initialize_policy_high_water_after_response_proof_binding(
+    snapshot: &Snapshot,
+    signer: &ResponseProofSigner,
+    path: Option<&Path>,
+    minimum_sequence: u64,
+    minimum_rollback_epoch: u64,
+) -> Result<PolicyHighWater, String> {
+    validate_response_proof_signer_policy_binding(snapshot, signer)?;
+    initialize_policy_high_water(snapshot, path, minimum_sequence, minimum_rollback_epoch)
+}
+
 fn current_snapshot(state: &GateState) -> Arc<Snapshot> {
     state
         .snapshot
@@ -6749,6 +7613,24 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
         &state.binary_digest,
     ) {
         Ok(mut snapshot) => {
+            if let Err(err) = validate_response_proof_signer_policy_binding(
+                &snapshot,
+                &state.response_proof_signer,
+            ) {
+                state.policy_reload_failed.fetch_add(1, Ordering::Relaxed);
+                enqueue_audit(
+                    state,
+                    "data_plane.policy.reload_failed",
+                    json!({
+                        "component":"serverware-decision-gate-rs",
+                        "error":err.clone(),
+                        "candidate_policy_id":snapshot.policy_id,
+                        "candidate_sequence":snapshot.policy_sequence,
+                        "candidate_rollback_epoch":snapshot.rollback_epoch,
+                    }),
+                );
+                return Err(err);
+            }
             if let Err(err) = validate_production_release_authorization_policy(
                 &snapshot,
                 state.is_production,
@@ -6843,6 +7725,7 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                 credential_generation_floors_pruned,
                 grants_cleared,
             ) = {
+                let _dispatch_authority = state.upstream_dispatch_authority.begin_mutation();
                 let mut current = state
                     .snapshot
                     .write()
@@ -7301,7 +8184,7 @@ fn random_request_attempt_id() -> Result<String, String> {
     Ok(attempt_id)
 }
 
-fn response_proof_signing_material() -> Result<(SigningKey, String, String), String> {
+fn local_response_proof_signing_material() -> Result<ResponseProofSigningMaterial, String> {
     let rng = ring_rand::SystemRandom::new();
     let mut seed = [0u8; 32];
     rng.fill(&mut seed)
@@ -7322,7 +8205,856 @@ fn response_proof_signing_material() -> Result<(SigningKey, String, String), Str
     pem.push_str("-----END PUBLIC KEY-----\n");
     let key_id = sha256_prefixed(&spki_der);
     spki_der.zeroize();
-    Ok((signing_key, pem, key_id))
+    Ok(ResponseProofSigningMaterial {
+        signer: ResponseProofSigner::LocalEphemeral(signing_key),
+        public_key_pem: pem,
+        key_id,
+    })
+}
+
+#[cfg(test)]
+fn response_proof_signing_material() -> Result<(SigningKey, String, String), String> {
+    let ResponseProofSigningMaterial {
+        signer,
+        public_key_pem,
+        key_id,
+    } = local_response_proof_signing_material()?;
+    let ResponseProofSigner::LocalEphemeral(signing_key) = signer else {
+        unreachable!("local response proof material must contain a local key");
+    };
+    Ok((signing_key, public_key_pem, key_id))
+}
+
+fn canonical_custody_request_id() -> Result<String, String> {
+    let rng = ring_rand::SystemRandom::new();
+    let mut bytes = [0u8; 32];
+    rng.fill(&mut bytes)
+        .map_err(|_| "generate custody request ID".to_string())?;
+    let request_id = general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    bytes.zeroize();
+    Ok(request_id)
+}
+
+fn decode_canonical_base64url_exact(
+    value: &str,
+    expected_bytes: usize,
+    label: &str,
+) -> Result<Vec<u8>, String> {
+    if value.contains('=') {
+        return Err(format!("{label} must use unpadded base64url"));
+    }
+    let decoded = general_purpose::URL_SAFE_NO_PAD
+        .decode(value.as_bytes())
+        .map_err(|_| format!("{label} must use base64url"))?;
+    if decoded.len() != expected_bytes || general_purpose::URL_SAFE_NO_PAD.encode(&decoded) != value
+    {
+        return Err(format!(
+            "{label} must be canonical base64url containing exactly {expected_bytes} bytes"
+        ));
+    }
+    Ok(decoded)
+}
+
+fn custody_peer_uid(stream: &UnixStream) -> Result<libc::uid_t, String> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut credentials = std::mem::MaybeUninit::<libc::ucred>::uninit();
+        let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: credentials points to writable storage for a libc::ucred and length describes it.
+        let result = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                credentials.as_mut_ptr().cast(),
+                &mut length,
+            )
+        };
+        if result != 0 {
+            return Err(format!(
+                "read custody peer credentials: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        if length as usize != std::mem::size_of::<libc::ucred>() {
+            return Err("read custody peer credentials: unexpected credential size".to_string());
+        }
+        // SAFETY: getsockopt succeeded and returned the complete libc::ucred value.
+        return Ok(unsafe { credentials.assume_init() }.uid);
+    }
+
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        let mut effective_uid: libc::uid_t = 0;
+        let mut effective_gid: libc::gid_t = 0;
+        // SAFETY: both credential outputs point to initialized writable values.
+        let result =
+            unsafe { libc::getpeereid(stream.as_raw_fd(), &mut effective_uid, &mut effective_gid) };
+        if result != 0 {
+            return Err(format!(
+                "read custody peer credentials: {}",
+                io::Error::last_os_error()
+            ));
+        }
+        Ok(effective_uid)
+    }
+
+    #[cfg(not(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    )))]
+    {
+        let _ = stream;
+        Err("custody peer UID verification is unsupported on this platform".to_string())
+    }
+}
+
+fn process_is_member_of_group(group_id: libc::gid_t) -> Result<bool, String> {
+    // SAFETY: getegid has no preconditions.
+    if unsafe { libc::getegid() } == group_id {
+        return Ok(true);
+    }
+    // SAFETY: a zero-sized getgroups call accepts a null destination and returns the count.
+    let group_count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+    if group_count < 0 {
+        return Err(format!(
+            "read custody client groups: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    let mut groups = vec![0 as libc::gid_t; group_count as usize];
+    // SAFETY: groups has capacity for exactly group_count gid_t values.
+    let returned = unsafe { libc::getgroups(group_count, groups.as_mut_ptr()) };
+    if returned < 0 {
+        return Err(format!(
+            "read custody client groups: {}",
+            io::Error::last_os_error()
+        ));
+    }
+    groups.truncate(returned as usize);
+    Ok(groups.contains(&group_id))
+}
+
+fn inspect_custody_socket(
+    path: &Path,
+    expected_uid: libc::uid_t,
+) -> Result<(), CustodyHelloAttemptError> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            return Err(CustodyHelloAttemptError::Retryable(format!(
+                "custody socket {} was not found",
+                path.display()
+            )))
+        }
+        Err(err) => {
+            return Err(CustodyHelloAttemptError::Fatal(format!(
+                "inspect custody socket {}: {err}",
+                path.display()
+            )))
+        }
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(CustodyHelloAttemptError::Fatal(format!(
+            "custody socket {} must not be a symlink",
+            path.display()
+        )));
+    }
+    if !metadata.file_type().is_socket() {
+        return Err(CustodyHelloAttemptError::Fatal(format!(
+            "custody socket {} is not a Unix socket",
+            path.display()
+        )));
+    }
+    if metadata.uid() != expected_uid || metadata.mode() & 0o7777 != 0o660 {
+        return Err(CustodyHelloAttemptError::Fatal(format!(
+            "custody socket {} must be owned by UID {expected_uid} with mode 0660",
+            path.display()
+        )));
+    }
+    let parent = path.parent().ok_or_else(|| {
+        CustodyHelloAttemptError::Fatal(format!(
+            "custody socket {} has no parent directory",
+            path.display()
+        ))
+    })?;
+    let parent_metadata = fs::symlink_metadata(parent).map_err(|err| {
+        CustodyHelloAttemptError::Fatal(format!(
+            "inspect custody socket directory {}: {err}",
+            parent.display()
+        ))
+    })?;
+    if parent_metadata.file_type().is_symlink() || !parent_metadata.is_dir() {
+        return Err(CustodyHelloAttemptError::Fatal(format!(
+            "custody socket directory {} must be a real directory",
+            parent.display()
+        )));
+    }
+    if parent_metadata.uid() != expected_uid || parent_metadata.mode() & 0o7777 != 0o710 {
+        return Err(CustodyHelloAttemptError::Fatal(format!(
+            "custody socket directory {} must be owned by UID {expected_uid} with mode 0710",
+            parent.display()
+        )));
+    }
+    if metadata.gid() != parent_metadata.gid() {
+        return Err(CustodyHelloAttemptError::Fatal(format!(
+            "custody socket {} group must match its parent directory",
+            path.display()
+        )));
+    }
+    if !process_is_member_of_group(metadata.gid()).map_err(CustodyHelloAttemptError::Fatal)? {
+        return Err(CustodyHelloAttemptError::Fatal(format!(
+            "custody client is not a member of socket group {}",
+            metadata.gid()
+        )));
+    }
+    Ok(())
+}
+
+fn custody_deadline_after(timeout: Duration) -> Result<Instant, String> {
+    Instant::now()
+        .checked_add(timeout)
+        .ok_or("custody I/O deadline overflow".to_string())
+}
+
+fn custody_deadline_remaining(deadline: Instant, stage: &str) -> Result<Duration, String> {
+    let remaining = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| format!("custody I/O deadline exceeded during {stage}"))?;
+    Ok(remaining)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+fn set_custody_connect_fd_flags(fd: RawFd) -> io::Result<()> {
+    // SAFETY: fcntl only reads or updates flags for the live socket descriptor.
+    let status_flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if status_flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd is live and status_flags came from F_GETFL for the same descriptor.
+    if unsafe { libc::fcntl(fd, libc::F_SETFL, status_flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fcntl only reads descriptor flags for the live socket descriptor.
+    let descriptor_flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if descriptor_flags < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: fd is live and descriptor_flags came from F_GETFD for the same descriptor.
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, descriptor_flags | libc::FD_CLOEXEC) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn bounded_unix_stream_connect(path: &Path, deadline: Instant) -> io::Result<UnixStream> {
+    if !path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "custody socket path must be absolute",
+        ));
+    }
+    let path_bytes = path.as_os_str().as_bytes();
+    if path_bytes.contains(&0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "custody socket path contains NUL",
+        ));
+    }
+
+    // SAFETY: zero is a valid initial representation for sockaddr_un before its fields are set.
+    let mut address = unsafe { std::mem::zeroed::<libc::sockaddr_un>() };
+    if path_bytes.len() >= address.sun_path.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "custody socket path exceeds sockaddr_un capacity",
+        ));
+    }
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    // SAFETY: the capacity check above proves the source fits; address is writable and zeroed,
+    // leaving the required trailing NUL in sun_path.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            path_bytes.as_ptr(),
+            address.sun_path.as_mut_ptr().cast::<u8>(),
+            path_bytes.len(),
+        );
+    }
+    let address_length = std::mem::offset_of!(libc::sockaddr_un, sun_path)
+        .checked_add(path_bytes.len())
+        .and_then(|length| length.checked_add(1))
+        .and_then(|length| libc::socklen_t::try_from(length).ok())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "custody socket path length"))?;
+    #[cfg(any(
+        target_os = "macos",
+        target_os = "freebsd",
+        target_os = "openbsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    {
+        address.sun_len = u8::try_from(address_length).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "custody socket path length")
+        })?;
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let socket_type = libc::SOCK_STREAM | libc::SOCK_NONBLOCK | libc::SOCK_CLOEXEC;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let socket_type = libc::SOCK_STREAM;
+    // SAFETY: AF_UNIX/SOCK_STREAM with protocol zero is a valid socket request.
+    let raw_fd = unsafe { libc::socket(libc::AF_UNIX, socket_type, 0) };
+    if raw_fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: raw_fd was just returned by socket and ownership is transferred exactly once.
+    let owned_fd = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    set_custody_connect_fd_flags(owned_fd.as_raw_fd())?;
+
+    custody_deadline_remaining(deadline, "connect")
+        .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
+    // SAFETY: address points to an initialized sockaddr_un and address_length covers its path.
+    let connect_result = unsafe {
+        libc::connect(
+            owned_fd.as_raw_fd(),
+            (&raw const address).cast::<libc::sockaddr>(),
+            address_length,
+        )
+    };
+    if connect_result != 0 {
+        let error = io::Error::last_os_error();
+        let raw_error = error.raw_os_error();
+        if raw_error != Some(libc::EINPROGRESS)
+            && raw_error != Some(libc::EAGAIN)
+            && raw_error != Some(libc::EWOULDBLOCK)
+        {
+            return Err(error);
+        }
+        loop {
+            let remaining = custody_deadline_remaining(deadline, "connect")
+                .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
+            let timeout_ms = remaining
+                .as_millis()
+                .saturating_add(u128::from(remaining.subsec_nanos() % 1_000_000 != 0))
+                .min(i32::MAX as u128) as i32;
+            let mut descriptor = libc::pollfd {
+                fd: owned_fd.as_raw_fd(),
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            // SAFETY: descriptor points to one initialized pollfd for the live socket.
+            let poll_result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
+            if poll_result == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "custody connect deadline exceeded",
+                ));
+            }
+            if poll_result < 0 {
+                let error = io::Error::last_os_error();
+                if error.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            if descriptor.revents & libc::POLLNVAL != 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "custody connect descriptor became invalid",
+                ));
+            }
+            let mut socket_error: libc::c_int = 0;
+            let mut socket_error_length = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+            // SAFETY: both output pointers reference initialized writable storage of the declared
+            // size, and the descriptor is a live socket.
+            if unsafe {
+                libc::getsockopt(
+                    owned_fd.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_ERROR,
+                    (&raw mut socket_error).cast(),
+                    &mut socket_error_length,
+                )
+            } != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            if socket_error != 0 {
+                return Err(io::Error::from_raw_os_error(socket_error));
+            }
+            break;
+        }
+    }
+    custody_deadline_remaining(deadline, "connect")
+        .map_err(|error| io::Error::new(io::ErrorKind::TimedOut, error))?;
+    Ok(UnixStream::from(owned_fd))
+}
+
+fn connect_custody_socket(
+    path: &Path,
+    expected_uid: libc::uid_t,
+    deadline: Instant,
+) -> Result<UnixStream, CustodyHelloAttemptError> {
+    inspect_custody_socket(path, expected_uid)?;
+    let stream = bounded_unix_stream_connect(path, deadline).map_err(|err| {
+        if matches!(
+            err.kind(),
+            io::ErrorKind::NotFound
+                | io::ErrorKind::ConnectionRefused
+                | io::ErrorKind::TimedOut
+                | io::ErrorKind::WouldBlock
+        ) {
+            CustodyHelloAttemptError::Retryable(format!(
+                "connect custody socket {}: {err}",
+                path.display()
+            ))
+        } else {
+            CustodyHelloAttemptError::Fatal(format!(
+                "connect custody socket {}: {err}",
+                path.display()
+            ))
+        }
+    })?;
+    if Instant::now() >= deadline {
+        return Err(CustodyHelloAttemptError::Retryable(
+            "custody I/O deadline exceeded during connect".to_string(),
+        ));
+    }
+    let peer_uid = custody_peer_uid(&stream).map_err(CustodyHelloAttemptError::Fatal)?;
+    if Instant::now() >= deadline {
+        return Err(CustodyHelloAttemptError::Retryable(
+            "custody I/O deadline exceeded during peer authentication".to_string(),
+        ));
+    }
+    if peer_uid != expected_uid {
+        return Err(CustodyHelloAttemptError::Fatal(format!(
+            "custody peer UID mismatch: expected {expected_uid}, connected to {peer_uid}"
+        )));
+    }
+    Ok(stream)
+}
+
+fn custody_exchange(
+    stream: &mut UnixStream,
+    request: &CustodyRequest,
+    deadline: Instant,
+) -> Result<Vec<u8>, String> {
+    custody_deadline_remaining(deadline, "request encoding")?;
+    let request_bytes = custody_canonical_json_bytes(request)
+        .map_err(|err| format!("encode canonical custody request: {err}"))?;
+    let write_timeout = custody_deadline_remaining(deadline, "request write")?;
+    write_custody_frame(stream, &request_bytes, write_timeout)
+        .map_err(|err| format!("write custody request: {err}"))?;
+    let read_timeout = custody_deadline_remaining(deadline, "response read")?;
+    let response = read_custody_frame(stream, read_timeout)
+        .map_err(|err| format!("read custody response: {err}"))?;
+    custody_deadline_remaining(deadline, "response read")?;
+    Ok(response)
+}
+
+fn decode_successful_custody_response<T: DeserializeOwned>(
+    response_bytes: &[u8],
+    expected_request_id: &str,
+    expected_operation: &str,
+    expected_boot_id: Option<&str>,
+    deadline: Instant,
+) -> Result<(String, T), String> {
+    custody_deadline_remaining(deadline, "response parsing")?;
+    let response: CustodyProtocolResponse<T> = decode_canonical_custody_json(response_bytes)
+        .map_err(|err| format!("decode canonical custody response: {err}"))?;
+    custody_deadline_remaining(deadline, "response parsing")?;
+    if response.api_version != CUSTODY_PROTOCOL_API_VERSION {
+        return Err("custody response protocol version mismatch".to_string());
+    }
+    if response.request_id != expected_request_id {
+        return Err("custody response request ID mismatch".to_string());
+    }
+    if response.operation != expected_operation {
+        return Err("custody response operation mismatch".to_string());
+    }
+    let _ = decode_canonical_base64url_exact(&response.boot_id, 32, "custody boot ID")?;
+    if expected_boot_id.is_some_and(|expected| response.boot_id != expected) {
+        return Err("custody runtime restarted or substituted during signing".to_string());
+    }
+    if !response.ok {
+        if response.result.is_some() || response.error.is_none() {
+            return Err("custody error response is malformed".to_string());
+        }
+        let error = response.error.expect("checked custody error response");
+        if error.code.is_empty() || error.message.is_empty() {
+            return Err("custody error response contains an empty code or message".to_string());
+        }
+        return Err(format!(
+            "custody {expected_operation} rejected request: {}: {}",
+            error.code, error.message
+        ));
+    }
+    if response.error.is_some() {
+        return Err("successful custody response unexpectedly contains an error".to_string());
+    }
+    let result = response
+        .result
+        .ok_or("successful custody response is missing its result")?;
+    custody_deadline_remaining(deadline, "response validation")?;
+    Ok((response.boot_id, result))
+}
+
+fn validate_custody_hello_response(
+    response_bytes: &[u8],
+    expected_request_id: &str,
+    socket_path: PathBuf,
+    expected_uid: libc::uid_t,
+    deadline: Instant,
+) -> Result<CustodyResponseProofSigner, String> {
+    let (boot_id, result): (String, CustodyHelloResult) = decode_successful_custody_response(
+        response_bytes,
+        expected_request_id,
+        CUSTODY_HELLO_OPERATION,
+        None,
+        deadline,
+    )?;
+    let expected_capabilities = [
+        CUSTODY_HELLO_OPERATION.to_string(),
+        CUSTODY_RESPONSE_PROOF_SIGN_OPERATION.to_string(),
+    ];
+    if result.capabilities != expected_capabilities {
+        return Err("custody hello capabilities mismatch".to_string());
+    }
+    let expected_io_deadline_ms = u64::try_from(CUSTODY_IO_DEADLINE.as_millis())
+        .map_err(|_| "custody I/O deadline does not fit in u64".to_string())?;
+    if result.limits.max_frame_bytes != CUSTODY_MAX_FRAME_BYTES
+        || result.limits.io_deadline_ms != expected_io_deadline_ms
+        || result.limits.max_concurrent_connections != CUSTODY_MAX_CONCURRENT_CONNECTIONS
+        || result.limits.max_requests_per_boot != CUSTODY_MAX_REQUESTS_PER_BOOT
+        || result.limits.max_statement_age_seconds != CUSTODY_MAX_STATEMENT_AGE_SECONDS
+    {
+        return Err("custody hello runtime limits mismatch".to_string());
+    }
+    if result.hardware_proof {
+        return Err("custody UDS runtime must report hardwareProof=false".to_string());
+    }
+    let (verifying_key, derived_key_id) =
+        verifying_key_from_spki_pem_text(&result.public_key_pem, "custody response proof")?;
+    if result.key_id != derived_key_id || !is_sha256_digest(&result.key_id) {
+        return Err("custody hello response signing key ID mismatch".to_string());
+    }
+    if !is_sha256_digest(&result.control_plane_response_signing_key_id) {
+        return Err(
+            "custody hello control-plane response signing key ID must be a canonical SHA-256 digest"
+                .to_string(),
+        );
+    }
+    let boot_bytes = decode_canonical_base64url_exact(&boot_id, 32, "custody boot ID")?;
+    custody_deadline_remaining(deadline, "hello validation")?;
+    Ok(CustodyResponseProofSigner {
+        socket_path,
+        expected_uid,
+        boot_id,
+        boot_digest: sha256_prefixed(&boot_bytes),
+        verifying_key,
+        public_key_pem: result.public_key_pem,
+        key_id: result.key_id,
+        control_plane_response_signing_key_id: result.control_plane_response_signing_key_id,
+        health: Arc::new(CustodyPassiveHealth::startup_verified()),
+    })
+}
+
+fn custody_hello_once(
+    socket_path: &Path,
+    expected_uid: libc::uid_t,
+    deadline: Instant,
+) -> Result<CustodyResponseProofSigner, CustodyHelloAttemptError> {
+    let mut stream = connect_custody_socket(socket_path, expected_uid, deadline)?;
+    let request_id = canonical_custody_request_id().map_err(CustodyHelloAttemptError::Fatal)?;
+    let request = CustodyRequest {
+        api_version: CUSTODY_PROTOCOL_API_VERSION.to_string(),
+        request_id: request_id.clone(),
+        boot_id: None,
+        operation: CUSTODY_HELLO_OPERATION.to_string(),
+        params: json!({}),
+    };
+    let response = custody_exchange(&mut stream, &request, deadline)
+        .map_err(CustodyHelloAttemptError::Fatal)?;
+    validate_custody_hello_response(
+        &response,
+        &request_id,
+        socket_path.to_path_buf(),
+        expected_uid,
+        deadline,
+    )
+    .map_err(CustodyHelloAttemptError::Fatal)
+}
+
+fn initialize_custody_response_proof_signer(
+    socket_path: PathBuf,
+    expected_uid: libc::uid_t,
+    startup_timeout: Duration,
+) -> Result<ResponseProofSigningMaterial, String> {
+    let deadline = custody_deadline_after(startup_timeout)?;
+    let signer = loop {
+        let attempt_deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?.min(deadline);
+        match custody_hello_once(&socket_path, expected_uid, attempt_deadline) {
+            Ok(signer) => break signer,
+            Err(CustodyHelloAttemptError::Fatal(err)) => return Err(err),
+            Err(CustodyHelloAttemptError::Retryable(err)) => {
+                let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+                    return Err(format!(
+                        "custody startup hello timed out after {} ms: {err}",
+                        startup_timeout.as_millis()
+                    ));
+                };
+                if remaining.is_zero() {
+                    return Err(format!(
+                        "custody startup hello timed out after {} ms: {err}",
+                        startup_timeout.as_millis()
+                    ));
+                }
+                thread::sleep(remaining.min(Duration::from_millis(25)));
+            }
+        }
+    };
+    let public_key_pem = signer.public_key_pem.clone();
+    let key_id = signer.key_id.clone();
+    Ok(ResponseProofSigningMaterial {
+        signer: ResponseProofSigner::Custody(signer),
+        public_key_pem,
+        key_id,
+    })
+}
+
+fn response_proof_custody_config_from_values(
+    socket_path: Option<OsString>,
+    expected_uid: Option<OsString>,
+    startup_timeout_ms: Option<OsString>,
+    is_production: bool,
+    gate_effective_uid: libc::uid_t,
+) -> Result<Option<ResponseProofCustodyConfig>, String> {
+    let Some(socket_path) = socket_path else {
+        if expected_uid.is_some() || startup_timeout_ms.is_some() {
+            return Err(format!(
+                "{RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV} and {RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS_ENV} require {RESPONSE_PROOF_CUSTODY_SOCKET_ENV}"
+            ));
+        }
+        return Ok(None);
+    };
+    if socket_path.is_empty() {
+        return Err(format!(
+            "{RESPONSE_PROOF_CUSTODY_SOCKET_ENV} must not be empty"
+        ));
+    }
+    let socket_path = PathBuf::from(socket_path);
+    if !socket_path.is_absolute() {
+        return Err(format!(
+            "{RESPONSE_PROOF_CUSTODY_SOCKET_ENV} must be an absolute path"
+        ));
+    }
+    let expected_uid = expected_uid
+        .ok_or_else(|| {
+            format!(
+                "{RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV} must be explicitly configured when {RESPONSE_PROOF_CUSTODY_SOCKET_ENV} is set"
+            )
+        })?
+        .into_string()
+        .map_err(|_| format!("{RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV} must be valid UTF-8"))?
+        .parse::<libc::uid_t>()
+        .map_err(|err| {
+            format!("{RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV} must be a UID: {err}")
+        })?;
+    if is_production && expected_uid == gate_effective_uid {
+        return Err(format!(
+            "production {RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV} must differ from the decision gate effective UID"
+        ));
+    }
+    let startup_timeout_ms = match startup_timeout_ms {
+        Some(value) => value
+            .into_string()
+            .map_err(|_| {
+                format!("{RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS_ENV} must be valid UTF-8")
+            })?
+            .parse::<u64>()
+            .map_err(|err| {
+                format!(
+                    "{RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS_ENV} must be an integer number of milliseconds: {err}"
+                )
+            })?,
+        None => DEFAULT_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS,
+    };
+    if !(1..=MAX_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS).contains(&startup_timeout_ms) {
+        return Err(format!(
+            "{RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS_ENV} must be between 1 and {MAX_RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS} milliseconds"
+        ));
+    }
+    Ok(Some(ResponseProofCustodyConfig {
+        socket_path,
+        expected_uid,
+        startup_timeout: Duration::from_millis(startup_timeout_ms),
+    }))
+}
+
+fn configured_response_proof_signing_material(
+    is_production: bool,
+    response_proof_configured: bool,
+) -> Result<ResponseProofSigningMaterial, String> {
+    // SAFETY: geteuid has no preconditions and returns the current effective UID.
+    let gate_effective_uid = unsafe { libc::geteuid() };
+    let custody_config = response_proof_custody_config_from_values(
+        env::var_os(RESPONSE_PROOF_CUSTODY_SOCKET_ENV),
+        env::var_os(RESPONSE_PROOF_CUSTODY_EXPECTED_UID_ENV),
+        env::var_os(RESPONSE_PROOF_CUSTODY_STARTUP_TIMEOUT_MS_ENV),
+        is_production,
+        gate_effective_uid,
+    )?;
+    let Some(custody_config) = custody_config else {
+        validate_local_response_proof_mode(is_production, response_proof_configured)?;
+        return local_response_proof_signing_material();
+    };
+    initialize_custody_response_proof_signer(
+        custody_config.socket_path,
+        custody_config.expected_uid,
+        custody_config.startup_timeout,
+    )
+}
+
+fn validate_local_response_proof_mode(
+    is_production: bool,
+    response_proof_configured: bool,
+) -> Result<(), String> {
+    if is_production && response_proof_configured {
+        return Err(format!(
+            "production response proof requires custody mode via {RESPONSE_PROOF_CUSTODY_SOCKET_ENV}; local-ephemeral signing is development-only"
+        ));
+    }
+    Ok(())
+}
+
+impl CustodyResponseProofSigner {
+    fn probe(&self) -> Result<(), String> {
+        let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
+        let observed =
+            custody_hello_once(&self.socket_path, self.expected_uid, deadline).map_err(|err| {
+                match err {
+                    CustodyHelloAttemptError::Retryable(err)
+                    | CustodyHelloAttemptError::Fatal(err) => err,
+                }
+            })?;
+        if observed.boot_id != self.boot_id {
+            return Err(
+                "custody runtime boot identity changed; decision gate restart required".to_string(),
+            );
+        }
+        if observed.key_id != self.key_id
+            || observed.public_key_pem != self.public_key_pem
+            || observed.verifying_key.as_bytes() != self.verifying_key.as_bytes()
+        {
+            return Err(
+                "custody response signing identity changed; decision gate restart required"
+                    .to_string(),
+            );
+        }
+        if observed.control_plane_response_signing_key_id
+            != self.control_plane_response_signing_key_id
+        {
+            return Err(
+                "custody control-plane response signing identity changed; decision gate restart required"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
+
+    fn sign(
+        &self,
+        statement: &Value,
+        authorization_binding: &ReleaseAuthorizationBinding,
+    ) -> Result<String, String> {
+        let deadline = custody_deadline_after(CUSTODY_IO_DEADLINE)?;
+        let mut stream = connect_custody_socket(&self.socket_path, self.expected_uid, deadline)
+            .map_err(|err| match err {
+                CustodyHelloAttemptError::Retryable(err) | CustodyHelloAttemptError::Fatal(err) => {
+                    err
+                }
+            })?;
+        let request_id = canonical_custody_request_id()?;
+        let request = CustodyRequest {
+            api_version: CUSTODY_PROTOCOL_API_VERSION.to_string(),
+            request_id: request_id.clone(),
+            boot_id: Some(self.boot_id.clone()),
+            operation: CUSTODY_RESPONSE_PROOF_SIGN_OPERATION.to_string(),
+            params: json!({
+                "statement":statement,
+                "authorization_binding":authorization_binding,
+            }),
+        };
+        let response = custody_exchange(&mut stream, &request, deadline)?;
+        custody_deadline_remaining(deadline, "statement canonicalization")?;
+        let canonical_statement = custody_canonical_json_bytes(statement)
+            .map_err(|err| format!("canonicalize custody response statement: {err}"))?;
+        custody_deadline_remaining(deadline, "statement canonicalization")?;
+        validate_custody_sign_response(
+            &response,
+            &request_id,
+            &self.boot_id,
+            &self.key_id,
+            &self.verifying_key,
+            &canonical_statement,
+            deadline,
+        )
+    }
+}
+
+fn validate_custody_sign_response(
+    response_bytes: &[u8],
+    expected_request_id: &str,
+    expected_boot_id: &str,
+    expected_key_id: &str,
+    verifying_key: &VerifyingKey,
+    canonical_statement: &[u8],
+    deadline: Instant,
+) -> Result<String, String> {
+    let (_, result): (String, CustodySignResult) = decode_successful_custody_response(
+        response_bytes,
+        expected_request_id,
+        CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+        Some(expected_boot_id),
+        deadline,
+    )?;
+    let expected_statement_digest = sha256_prefixed(canonical_statement);
+    if result.statement_digest != expected_statement_digest {
+        return Err("custody signing response statement digest mismatch".to_string());
+    }
+    if result.key_id != expected_key_id {
+        return Err("custody signing response key substitution".to_string());
+    }
+    let signature_b64 = result
+        .signature
+        .strip_prefix("ed25519:")
+        .ok_or("custody signing response signature must use ed25519")?;
+    let signature_bytes =
+        decode_canonical_base64url_exact(signature_b64, 64, "custody Ed25519 signature")?;
+    let signature_bytes: [u8; 64] = signature_bytes
+        .try_into()
+        .map_err(|_| "custody Ed25519 signature must contain exactly 64 bytes")?;
+    custody_deadline_remaining(deadline, "signature verification")?;
+    verifying_key
+        .verify(
+            canonical_statement,
+            &Signature::from_bytes(&signature_bytes),
+        )
+        .map_err(|_| "custody signing response signature verification failed".to_string())?;
+    custody_deadline_remaining(deadline, "signature verification")?;
+    Ok(result.signature)
 }
 
 fn response_proof_context(
@@ -7399,6 +9131,15 @@ fn streaming_response_proof_context(
     let Some(client_nonce) = lowered.get(STREAM_RESPONSE_PROOF_NONCE_HEADER) else {
         return Ok(None);
     };
+    if matches!(
+        &state.response_proof_signer,
+        ResponseProofSigner::Custody(_)
+    ) {
+        return Err(
+            "streaming response proof signing is unavailable in custody mode; custody supports buffered responseProof.sign/v2 only"
+                .to_string(),
+        );
+    }
     if state.response_proof_attestation_command.is_none() || state.server_instance_id.is_none() {
         return Err("streaming response proof service is not configured".to_string());
     }
@@ -7812,6 +9553,37 @@ fn attach_response_proof(
     expected_client_request_digest: &str,
     response: Vec<u8>,
 ) -> Result<ResponseProofAttachment, String> {
+    let assembly_operation = state.response_proof_signer.begin_proof_assembly();
+    let result = attach_response_proof_inner(
+        state,
+        snapshot,
+        context,
+        authorization_context,
+        upstream_response,
+        expected_client_request_digest,
+        response,
+    );
+    match &result {
+        Ok(ResponseProofAttachment::Attached { .. }) => state
+            .response_proof_signer
+            .record_proof_assembly_success(assembly_operation),
+        Err(error) => state
+            .response_proof_signer
+            .record_proof_assembly_failure(assembly_operation, error),
+        Ok(ResponseProofAttachment::Skipped { .. }) => {}
+    }
+    result
+}
+
+fn attach_response_proof_inner(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    context: &ResponseProofContext,
+    authorization_context: Option<&ResponseProofAuthorizationContext>,
+    upstream_response: Option<&ResponseProofUpstreamResponse>,
+    expected_client_request_digest: &str,
+    response: Vec<u8>,
+) -> Result<ResponseProofAttachment, String> {
     let parsed = parse_buffered_response(&response)?;
     if !(200..300).contains(&parsed.status) {
         return Ok(ResponseProofAttachment::Skipped { response });
@@ -7957,8 +9729,8 @@ fn attach_response_proof(
     let canonical_statement = canonical_json(&statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
     let signature = state
-        .response_proof_signing_key
-        .sign(canonical_statement.as_bytes());
+        .response_proof_signer
+        .sign_buffered(&statement, &authorization_context.authorization_binding)?;
     let attested_claims = json!({
         "server_statement_sha256":statement_digest,
         "server_statement_api_version":"serverware.proxyResponseStatement/v2",
@@ -8016,7 +9788,7 @@ fn attach_response_proof(
             "algorithm":"Ed25519",
             "key_id":state.response_proof_signing_key_id,
             "public_key_pem":state.response_proof_public_key_pem,
-            "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())),
+            "signature":signature,
         },
         "vendor_tee":vendor_tee,
     });
@@ -8124,6 +9896,15 @@ fn build_streaming_response_runtime_proof(
     selected_wire_headers: &BTreeMap<String, String>,
     stats: &StreamingResponseStats,
 ) -> Result<(String, String), String> {
+    if matches!(
+        &state.response_proof_signer,
+        ResponseProofSigner::Custody(_)
+    ) {
+        return Err(
+            "streaming response proof signing is unavailable in custody mode; custody supports buffered responseProof.sign/v2 only"
+                .to_string(),
+        );
+    }
     if !status.is_success() {
         return Err(
             "streaming response proof is unavailable for non-success responses".to_string(),
@@ -8253,8 +10034,8 @@ fn build_streaming_response_runtime_proof(
     let canonical_statement = canonical_json(&statement);
     let statement_digest = sha256_prefixed(canonical_statement.as_bytes());
     let signature = state
-        .response_proof_signing_key
-        .sign(canonical_statement.as_bytes());
+        .response_proof_signer
+        .sign_streaming(canonical_statement.as_bytes())?;
     let raw_headers_digest = digest_json(
         &serde_json::to_value(&upstream_response.selected_raw_policy_headers_b64)
             .map_err(|err| format!("serialize streaming raw response headers: {err}"))?,
@@ -8328,7 +10109,7 @@ fn build_streaming_response_runtime_proof(
             "algorithm":"Ed25519",
             "key_id":state.response_proof_signing_key_id,
             "public_key_pem":state.response_proof_public_key_pem,
-            "signature":format!("ed25519:{}", general_purpose::URL_SAFE_NO_PAD.encode(signature.to_bytes())),
+            "signature":signature,
         },
         "vendor_tee":vendor_tee,
     });
@@ -9099,22 +10880,18 @@ fn cached_credential_lease_info(
     scope: &CredentialLeaseScope,
 ) -> Option<CredentialLeaseInfo> {
     let now = Instant::now();
-    let mut leases = state
+    let leases = state
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
-    let info = leases.get(scope).filter(|lease| {
-        lease.scope == *scope
-            && lease.expires_at_monotonic > now
-            && lease.policy_hash == snapshot.hash
-    });
-    match info {
-        Some(lease) => Some(lease_info(lease)),
-        None => {
-            leases.remove(scope);
-            None
-        }
-    }
+    leases
+        .get(scope)
+        .filter(|lease| {
+            lease.scope == *scope
+                && lease.expires_at_monotonic > now
+                && lease.policy_hash == snapshot.hash
+        })
+        .map(lease_info)
 }
 
 fn mark_credential_lease_activity(state: &GateState, scope: &CredentialLeaseScope) {
@@ -9151,6 +10928,7 @@ fn cache_scoped_credential_lease(
     lease: SecretLease,
 ) -> Result<(), String> {
     let secret_fingerprint = credential_secret_fingerprint(lease.secret.as_str());
+    let _dispatch_authority = state.upstream_dispatch_authority.begin_mutation();
     let active = state
         .snapshot
         .read()
@@ -9359,7 +11137,7 @@ fn credential_lease_for_release(
     let scope = CredentialLeaseScope::new(principal_id, route_id, credential_ref);
     validate_credential_lease_scope(snapshot, &scope).map_err(|_| "credential_scope_mismatch")?;
     let now = Instant::now();
-    let mut leases = state
+    let leases = state
         .credential_leases
         .lock()
         .expect("credential lease mutex poisoned");
@@ -9370,7 +11148,6 @@ fn credential_lease_for_release(
         || lease.expires_at_monotonic <= now
         || lease.policy_hash != snapshot.hash
     {
-        leases.remove(&scope);
         return Err("credential_lease_missing");
     }
     if lease.version != credential_version {
@@ -9409,22 +11186,62 @@ fn credential_lease_still_releasable(
         })
 }
 
-fn credential_lease_upstream_send_timeout(
-    state: &GateState,
-    snapshot: &Arc<Snapshot>,
-    binding: Option<&CredentialLeaseReleaseBinding>,
+struct UpstreamSendAuthority<'a> {
+    _dispatch: UpstreamDispatchPermit<'a>,
+    _snapshot: RwLockReadGuard<'a, Arc<Snapshot>>,
+    lease_deadline: Option<Instant>,
+}
+
+fn credential_lease_send_timeout(
+    lease_deadline: Option<Instant>,
 ) -> Result<Option<Duration>, &'static str> {
-    let Some(binding) = binding else {
+    let Some(lease_deadline) = lease_deadline else {
         return Ok(None);
     };
+    let remaining = lease_deadline
+        .checked_duration_since(Instant::now())
+        .ok_or("credential_lease_expired_before_upstream_send")?;
+    if remaining < MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW {
+        return Err("credential_lease_lifetime_insufficient_for_upstream_send");
+    }
+    Ok(Some(remaining))
+}
+
+fn acquire_upstream_send_authority<'a>(
+    state: &'a GateState,
+    snapshot: &Arc<Snapshot>,
+    binding: Option<&CredentialLeaseReleaseBinding>,
+) -> Result<UpstreamSendAuthority<'a>, &'static str> {
+    let dispatch = state.upstream_dispatch_authority.acquire_send();
     let active = state
         .snapshot
         .read()
         .expect("policy snapshot lock poisoned");
+    if !policy_trust_is_fresh(state) {
+        return Err("policy_trust_stale_before_upstream_send");
+    }
     if active.epoch != snapshot.epoch || !Arc::ptr_eq(&active, snapshot) {
         return Err("policy_snapshot_revoked_before_upstream_send");
     }
-    let now = Instant::now();
+    let Some(binding) = binding else {
+        return Ok(UpstreamSendAuthority {
+            _dispatch: dispatch,
+            _snapshot: active,
+            lease_deadline: None,
+        });
+    };
+    #[cfg(test)]
+    match state.credential_leases.try_lock() {
+        Ok(leases) => drop(leases),
+        Err(std::sync::TryLockError::WouldBlock) => {
+            state
+                .upstream_send_credential_lock_contentions
+                .fetch_add(1, Ordering::SeqCst);
+        }
+        Err(std::sync::TryLockError::Poisoned(_)) => {
+            panic!("credential lease mutex poisoned");
+        }
+    }
     let leases = state
         .credential_leases
         .lock()
@@ -9433,6 +11250,9 @@ fn credential_lease_upstream_send_timeout(
         .credential_generations
         .lock()
         .expect("credential generation mutex poisoned");
+    if !policy_trust_is_fresh(state) {
+        return Err("policy_trust_stale_before_upstream_send");
+    }
     let lease = leases
         .get(&binding.scope)
         .filter(|lease| {
@@ -9453,13 +11273,23 @@ fn credential_lease_upstream_send_timeout(
         return Err("credential_generation_changed_before_upstream_send");
     }
     let effective_expiry = binding.expires_at_monotonic.min(lease.expires_at_monotonic);
-    let remaining = effective_expiry
-        .checked_duration_since(now)
-        .ok_or("credential_lease_expired_before_upstream_send")?;
-    if remaining < MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW {
-        return Err("credential_lease_lifetime_insufficient_for_upstream_send");
-    }
-    Ok(Some(remaining))
+    credential_lease_send_timeout(Some(effective_expiry))?;
+    Ok(UpstreamSendAuthority {
+        _dispatch: dispatch,
+        _snapshot: active,
+        lease_deadline: Some(effective_expiry),
+    })
+}
+
+fn credential_lease_upstream_send_timeout(
+    state: &GateState,
+    snapshot: &Arc<Snapshot>,
+    binding: Option<&CredentialLeaseReleaseBinding>,
+) -> Result<Option<Duration>, &'static str> {
+    let authority = acquire_upstream_send_authority(state, snapshot, binding)?;
+    let timeout = credential_lease_send_timeout(authority.lease_deadline);
+    drop(authority);
+    timeout
 }
 
 #[derive(Debug)]
@@ -9473,8 +11303,16 @@ fn send_upstream_request_with_current_lease(
     snapshot: &Arc<Snapshot>,
     binding: Option<&CredentialLeaseReleaseBinding>,
     builder: reqwest::blocking::RequestBuilder,
+    require_buffered_response_proof: bool,
 ) -> Result<reqwest::blocking::Response, UpstreamSendError> {
-    send_upstream_request_with_current_lease_and_timeout(state, snapshot, binding, builder, None)
+    send_upstream_request_with_current_lease_and_timeout(
+        state,
+        snapshot,
+        binding,
+        builder,
+        None,
+        require_buffered_response_proof,
+    )
 }
 
 fn send_upstream_request_with_current_lease_and_timeout(
@@ -9483,23 +11321,46 @@ fn send_upstream_request_with_current_lease_and_timeout(
     binding: Option<&CredentialLeaseReleaseBinding>,
     builder: reqwest::blocking::RequestBuilder,
     maximum_timeout: Option<Duration>,
+    require_buffered_response_proof: bool,
 ) -> Result<reqwest::blocking::Response, UpstreamSendError> {
-    let send_timeout = credential_lease_upstream_send_timeout(state, snapshot, binding)
-        .map_err(UpstreamSendError::CredentialAuthority)?;
-    let send_timeout = match (send_timeout, maximum_timeout) {
-        (Some(lease), Some(maximum)) => Some(lease.min(maximum)),
-        (Some(lease), None) => Some(lease),
-        (None, Some(maximum)) => Some(maximum),
-        (None, None) => None,
+    let send = || {
+        let (client, request) = builder.build_split();
+        let mut request = request
+            .map_err(redacted_reqwest_error)
+            .map_err(UpstreamSendError::Request)?;
+        let authority = acquire_upstream_send_authority(state, snapshot, binding)
+            .map_err(UpstreamSendError::CredentialAuthority)?;
+        if !policy_trust_is_fresh(state) {
+            return Err(UpstreamSendError::CredentialAuthority(
+                "policy_trust_stale_before_upstream_send",
+            ));
+        }
+        let send_timeout = credential_lease_send_timeout(authority.lease_deadline)
+            .map_err(UpstreamSendError::CredentialAuthority)?;
+        let send_timeout = match (send_timeout, maximum_timeout) {
+            (Some(lease), Some(maximum)) => Some(lease.min(maximum)),
+            (Some(lease), None) => Some(lease),
+            (None, Some(maximum)) => Some(maximum),
+            (None, None) => None,
+        };
+        if let Some(timeout) = send_timeout {
+            *request.timeout_mut() = Some(timeout);
+        }
+        let result = client
+            .execute(request)
+            .map_err(redacted_reqwest_error)
+            .map_err(UpstreamSendError::Request);
+        drop(authority);
+        result
     };
-    let builder = match send_timeout {
-        Some(timeout) => builder.timeout(timeout),
-        None => builder,
-    };
-    builder
-        .send()
-        .map_err(redacted_reqwest_error)
-        .map_err(UpstreamSendError::Request)
+    if require_buffered_response_proof {
+        state
+            .response_proof_signer
+            .with_buffered_dispatch_permit(send)
+            .map_err(|()| UpstreamSendError::CredentialAuthority("response_proof_unavailable"))?
+    } else {
+        send()
+    }
 }
 
 fn earliest_credential_lease_expiry_epoch_ms(state: &GateState) -> Option<u128> {
@@ -10160,8 +12021,7 @@ fn post_audit_batch(state: &GateState, batch: &[AuditEvent]) -> Result<(), Audit
     .map_err(AuditPostError::other)?;
     if status == StatusCode::PAYLOAD_TOO_LARGE {
         return Err(AuditPostError::request_too_large(format!(
-            "audit ingest rejected {} serialized bytes as too large",
-            body_len
+            "audit ingest rejected {body_len} serialized bytes as too large"
         )));
     }
     if !status.is_success() {
@@ -18564,6 +20424,7 @@ fn fetch_gmail_metadata_child(
         Some(&child_binding),
         builder,
         Some(timeout),
+        false,
     ) {
         Ok(response) => response,
         Err(UpstreamSendError::CredentialAuthority(_)) => {
@@ -22667,39 +24528,35 @@ fn validate_forward_response(
             if let Err(payload) = validate_gmail_internal_date(&payload, days) {
                 return block_forward_response(state, decision, method, url, status, payload);
             }
-        } else {
-            if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
-                let original_messages = std::mem::take(messages);
-                let mut released_messages = Vec::with_capacity(original_messages.len());
-                for mut item in original_messages {
-                    let Some(object) = item.as_object_mut() else {
-                        continue;
-                    };
-                    if object
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .filter(|id| !id.is_empty() && id.len() <= 512)
-                        .is_none()
-                    {
-                        continue;
-                    }
-                    if let Err(payload) = validate_gmail_internal_date_value_at_cutoff(
-                        object.get("internalDate"),
-                        days,
-                        cutoff_ms,
-                    ) {
-                        return block_forward_response(
-                            state, decision, method, url, status, payload,
-                        );
-                    }
-                    object.insert(
-                        "serverwareAgeProof".to_string(),
-                        Value::String("validated".to_string()),
-                    );
-                    released_messages.push(item);
+        } else if let Some(messages) = payload.get_mut("messages").and_then(Value::as_array_mut) {
+            let original_messages = std::mem::take(messages);
+            let mut released_messages = Vec::with_capacity(original_messages.len());
+            for mut item in original_messages {
+                let Some(object) = item.as_object_mut() else {
+                    continue;
+                };
+                if object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .filter(|id| !id.is_empty() && id.len() <= 512)
+                    .is_none()
+                {
+                    continue;
                 }
-                *messages = released_messages;
+                if let Err(payload) = validate_gmail_internal_date_value_at_cutoff(
+                    object.get("internalDate"),
+                    days,
+                    cutoff_ms,
+                ) {
+                    return block_forward_response(state, decision, method, url, status, payload);
+                }
+                object.insert(
+                    "serverwareAgeProof".to_string(),
+                    Value::String("validated".to_string()),
+                );
+                released_messages.push(item);
             }
+            *messages = released_messages;
         }
     }
     let constraint_body = match serde_json::to_vec(&payload) {
@@ -23531,6 +25388,7 @@ fn forward_absolute_request_inner<'a>(
         snapshot,
         credential_release_binding.as_ref(),
         builder,
+        response_proof_requested,
     ) {
         Ok(response) => response,
         Err(UpstreamSendError::CredentialAuthority(error)) => {
@@ -23908,6 +25766,7 @@ fn forward_absolute_streaming_request_to(
         snapshot,
         credential_release_binding.as_ref(),
         builder,
+        false,
     ) {
         Ok(response) => response,
         Err(UpstreamSendError::CredentialAuthority(error)) => {
@@ -24313,6 +26172,7 @@ fn forward_intercepted_streaming_request_to<R: Read + Write + TerminalDeadlineWr
             &send_snapshot,
             send_credential_release_binding.as_ref(),
             builder,
+            false,
         )
         .map_err(|error| match error {
             UpstreamSendError::CredentialAuthority(error) => error.to_string(),
@@ -25163,7 +27023,7 @@ fn build_runtime_manifest(
         .lock()
         .expect("policy high-water mutex poisoned")
         .clone();
-    json!({
+    let mut manifest = json!({
         "component":"serverware-decision-gate-rs",
         "version":env!("CARGO_PKG_VERSION"),
         "binary_digest":state.binary_digest,
@@ -25216,7 +27076,30 @@ fn build_runtime_manifest(
             "sqlite_calls":0,
             "filesystem_calls":0,
         },
-    })
+    });
+    let manifest_object = manifest
+        .as_object_mut()
+        .expect("runtime manifest must be a JSON object");
+    manifest_object.insert(
+        "response_proof_signer_mode".to_string(),
+        Value::String(state.response_proof_signer.mode().to_string()),
+    );
+    manifest_object.insert(
+        "response_proof_signer_boot_digest".to_string(),
+        state
+            .response_proof_signer
+            .custody_boot_digest()
+            .map_or(Value::Null, |digest| Value::String(digest.to_string())),
+    );
+    manifest_object.insert(
+        "response_proof_signer_hardware_proof".to_string(),
+        Value::Bool(state.response_proof_signer.hardware_proof()),
+    );
+    manifest_object.insert(
+        "response_proof_custody".to_string(),
+        state.response_proof_signer.custody_runtime_manifest(),
+    );
+    manifest
 }
 
 fn attestation(state: &GateState, nonce: Option<String>) -> Value {
@@ -25255,6 +27138,10 @@ fn attestation(state: &GateState, nonce: Option<String>) -> Value {
         "source_tree_digest":source_digest,
         "response_proof_signing_key_id":state.response_proof_signing_key_id,
         "response_proof_signing_public_key_pem":state.response_proof_public_key_pem,
+        "response_proof_signer_mode":state.response_proof_signer.mode(),
+        "response_proof_signer_boot_digest":state.response_proof_signer.custody_boot_digest(),
+        "response_proof_signer_hardware_proof":state.response_proof_signer.hardware_proof(),
+        "response_proof_custody_status":state.response_proof_signer.custody_status(),
         "server_instance_id":state.server_instance_id,
         "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
         "credential_lease_earliest_expiry_epoch_ms":earliest_credential_lease_expiry_epoch_ms(state),
@@ -25555,6 +27442,28 @@ fn handle_connect_request(
             let _ = tls.flush();
             break;
         }
+        if proof_kind == Some(ResponseProofKind::Buffered)
+            && !state.response_proof_signer.buffered_dispatch_ready()
+        {
+            enqueue_audit(
+                &state,
+                "data_plane.response_proof.denied",
+                json!({
+                    "component":"serverware-decision-gate-rs",
+                    "outcome":"denied",
+                    "error":"response_proof_unavailable",
+                    "stage":"pre_upstream",
+                    "client_ip":client_ip,
+                }),
+            );
+            let response = json_status_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error":"response_proof_unavailable"}),
+            );
+            let _ = tls.write_all(&response);
+            let _ = tls.flush();
+            break;
+        }
         tls.sock.reset_read_deadline(state.request_body_deadline);
         let forwarded = match connect_inner_absolute_target(&authority, &head.target, &host, port) {
             Ok(target) => {
@@ -25676,6 +27585,71 @@ fn handle_connect_request(
             .unwrap_or_else(|| json!({"intercepted_request_count":handled_requests})),
         );
     }
+}
+
+fn health_response(state: &GateState) -> Vec<u8> {
+    let snapshot = current_snapshot(state);
+    let (custody_healthy, custody_status) = state.response_proof_signer.custody_health_snapshot();
+    http_response(
+        if custody_healthy {
+            "200 OK"
+        } else {
+            "503 Service Unavailable"
+        },
+        json!({
+            "ok":custody_healthy,
+            "policy_hash":snapshot.hash,
+            "policy_signing_key_id":snapshot.policy_signing_key_id,
+            "policy_trust_root_source":state.policy_trust_root_source.label(),
+            "attested_response_context":snapshot.attested_response_context,
+            "data_plane_binary_digest":state.binary_digest,
+            "routes":snapshot.routes.len(),
+            "grants":state.grants.lock().expect("grant cache mutex poisoned").len(),
+            "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
+            "credential_generations":state.credential_generations.lock().expect("credential generation mutex poisoned").len(),
+            "credential_generations_ready":credential_generations_ready(state, &snapshot),
+            "credential_lease_earliest_expiry_epoch_ms":earliest_credential_lease_expiry_epoch_ms(state),
+            "credential_lease_protocol":"scoped-recipient-bound-pull/v2",
+            "credential_lease_renewal":{
+                "mode":"background-bounded",
+                "poll_interval_ms":state.credential_lease_renewal_poll_interval_ms,
+                "renew_before_ms":CREDENTIAL_LEASE_RENEW_BEFORE.as_millis(),
+                "workers":state.credential_lease_renewal_workers,
+                "queue_capacity":state.credential_lease_renewal_queue_capacity,
+                "cache_capacity":state.credential_lease_cache_max,
+            },
+            "credential_lease_refresh":{
+                "success":state.credential_lease_refresh_success.load(Ordering::Relaxed),
+                "failed":state.credential_lease_refresh_failed.load(Ordering::Relaxed),
+                "queued":state.credential_lease_renewal_queued.load(Ordering::Relaxed),
+                "queue_full":state.credential_lease_renewal_queue_full.load(Ordering::Relaxed),
+            },
+            "jit_grant_store":if state.atomic_release_authorization_enabled {"atomic_release_authorization"} else if state.grant_consume_url.is_some() {"shared"} else {"local"},
+            "shared_rate_limit_store":state.atomic_release_authorization_enabled || state.rate_limit_consume_url.is_some(),
+            "release_authorization":{
+                "enabled":state.atomic_release_authorization_enabled,
+                "mode":if state.atomic_release_authorization_enabled {"reserve_dispatch_complete"} else {"legacy"},
+            },
+            "leaf_config_cache":state.leaf_configs.lock().expect("leaf config cache mutex poisoned").len(),
+            "connect_preflight":true,
+            "connect_mitm_interceptor":state.mitm_authority.is_some(),
+            "absolute_form_forwarder":true,
+            "absolute_form_request_body_streaming":true,
+            "connect_request_body_streaming":true,
+            "jsonl_streaming_request_response_redaction":true,
+            "json_array_streaming_request_response_redaction":true,
+            "json_sse_streaming_request_response_redaction":true,
+            "json_nested_streaming_request_response_redaction":true,
+            "form_urlencoded_streaming_request_response_redaction":true,
+            "csv_streaming_request_response_redaction":true,
+            "audit":audit_status(state),
+            "policy_reload":{
+                "success":state.policy_reload_success.load(Ordering::Relaxed),
+                "failed":state.policy_reload_failed.load(Ordering::Relaxed),
+            },
+            "response_proof_custody_status":custody_status,
+        }),
+    )
 }
 
 fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listener: bool) {
@@ -25851,64 +27825,7 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
     let response = if request.method == "GET" {
         let (path, query) = request_target_parts(&request.target);
         match path.as_str() {
-            "/healthz" => {
-                let snapshot = current_snapshot(&state);
-                http_response(
-                    "200 OK",
-                    json!({
-                        "ok":true,
-                        "policy_hash":snapshot.hash,
-                        "policy_signing_key_id":snapshot.policy_signing_key_id,
-                        "policy_trust_root_source":state.policy_trust_root_source.label(),
-                        "attested_response_context":snapshot.attested_response_context,
-                        "data_plane_binary_digest":state.binary_digest,
-                        "routes":snapshot.routes.len(),
-                        "grants":state.grants.lock().expect("grant cache mutex poisoned").len(),
-                        "credential_leases":state.credential_leases.lock().expect("credential lease mutex poisoned").len(),
-                        "credential_generations":state.credential_generations.lock().expect("credential generation mutex poisoned").len(),
-                        "credential_generations_ready":credential_generations_ready(&state, &snapshot),
-                        "credential_lease_earliest_expiry_epoch_ms":earliest_credential_lease_expiry_epoch_ms(&state),
-                        "credential_lease_protocol":"scoped-recipient-bound-pull/v2",
-                        "credential_lease_renewal":{
-                            "mode":"background-bounded",
-                            "poll_interval_ms":state.credential_lease_renewal_poll_interval_ms,
-                            "renew_before_ms":CREDENTIAL_LEASE_RENEW_BEFORE.as_millis(),
-                            "workers":state.credential_lease_renewal_workers,
-                            "queue_capacity":state.credential_lease_renewal_queue_capacity,
-                            "cache_capacity":state.credential_lease_cache_max,
-                        },
-                        "credential_lease_refresh":{
-                            "success":state.credential_lease_refresh_success.load(Ordering::Relaxed),
-                            "failed":state.credential_lease_refresh_failed.load(Ordering::Relaxed),
-                            "queued":state.credential_lease_renewal_queued.load(Ordering::Relaxed),
-                            "queue_full":state.credential_lease_renewal_queue_full.load(Ordering::Relaxed),
-                        },
-                        "jit_grant_store": if state.atomic_release_authorization_enabled {"atomic_release_authorization"} else if state.grant_consume_url.is_some() {"shared"} else {"local"},
-                        "shared_rate_limit_store":state.atomic_release_authorization_enabled || state.rate_limit_consume_url.is_some(),
-                        "release_authorization":{
-                            "enabled":state.atomic_release_authorization_enabled,
-                            "mode":if state.atomic_release_authorization_enabled {"reserve_dispatch_complete"} else {"legacy"},
-                        },
-                        "leaf_config_cache":state.leaf_configs.lock().expect("leaf config cache mutex poisoned").len(),
-                            "connect_preflight":true,
-                            "connect_mitm_interceptor":state.mitm_authority.is_some(),
-                            "absolute_form_forwarder":true,
-                            "absolute_form_request_body_streaming":true,
-                            "connect_request_body_streaming":true,
-                            "jsonl_streaming_request_response_redaction":true,
-                            "json_array_streaming_request_response_redaction":true,
-                            "json_sse_streaming_request_response_redaction":true,
-                            "json_nested_streaming_request_response_redaction":true,
-                            "form_urlencoded_streaming_request_response_redaction":true,
-                            "csv_streaming_request_response_redaction":true,
-                            "audit":audit_status(&state),
-                        "policy_reload":{
-                            "success":state.policy_reload_success.load(Ordering::Relaxed),
-                            "failed":state.policy_reload_failed.load(Ordering::Relaxed),
-                        },
-                    }),
-                )
-            }
+            "/healthz" => health_response(&state),
             "/attestation" => {
                 http_response("200 OK", attestation(&state, query.get("nonce").cloned()))
             }
@@ -26360,6 +28277,23 @@ fn serve_listener(
         }
     }
     Err(format!("{listener_name} listener stopped"))
+}
+
+fn start_response_proof_custody_health_probe(state: Arc<GateState>) -> Result<(), String> {
+    if !matches!(
+        &state.response_proof_signer,
+        ResponseProofSigner::Custody(_)
+    ) {
+        return Ok(());
+    }
+    thread::Builder::new()
+        .name("custody-health-probe".to_string())
+        .spawn(move || loop {
+            state.response_proof_signer.probe_custody_once();
+            thread::sleep(RESPONSE_PROOF_CUSTODY_HEALTH_PROBE_INTERVAL);
+        })
+        .map(|_| ())
+        .map_err(|err| format!("spawn response proof custody health probe: {err}"))
 }
 
 fn main() -> Result<(), String> {
@@ -26853,21 +28787,30 @@ fn main() -> Result<(), String> {
         is_production,
         atomic_release_authorization_enabled,
     )?;
-    let policy_high_water = initialize_policy_high_water(
+    let response_proof_configured = response_proof_attestation_command.is_some()
+        || initial_snapshot.response_signing_key_id.is_some();
+    let ResponseProofSigningMaterial {
+        signer: response_proof_signer,
+        public_key_pem: response_proof_public_key_pem,
+        key_id: response_proof_signing_key_id,
+    } = configured_response_proof_signing_material(is_production, response_proof_configured)?;
+    let policy_high_water = initialize_policy_high_water_after_response_proof_binding(
         &initial_snapshot,
+        &response_proof_signer,
         policy_high_water_path.as_deref(),
         policy_minimum_sequence,
         policy_minimum_rollback_epoch,
     )?;
     let snapshot = Arc::new(initial_snapshot);
-    let (response_proof_signing_key, response_proof_public_key_pem, response_proof_signing_key_id) =
-        response_proof_signing_material()?;
     let upstream_client = build_upstream_client(true)?;
     let one_shot_upstream_client = build_upstream_client(false)?;
     let audit_client = build_audit_client()?;
     let credential_lease_client = build_control_plane_client(Duration::from_secs(3))?;
     let mitm_authority = build_mitm_authority()?;
     let state = Arc::new(GateState {
+        upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
+        #[cfg(test)]
+        upstream_send_credential_lock_contentions: AtomicU64::new(0),
         snapshot: RwLock::new(snapshot),
         policy_path,
         policy_trust_root_source,
@@ -26934,12 +28877,13 @@ fn main() -> Result<(), String> {
         binary_digest,
         release_provenance_path,
         image_signatures_path,
-        response_proof_signing_key,
+        response_proof_signer,
         response_proof_public_key_pem,
         response_proof_signing_key_id,
         response_proof_attestation_command,
         server_instance_id,
     });
+    start_response_proof_custody_health_probe(Arc::clone(&state))?;
     let policy_state = Arc::clone(&state);
     thread::spawn(move || {
         policy_worker(
@@ -27021,6 +28965,545 @@ mod tests {
             std::process::id(),
             NEXT_PATH.fetch_add(1, Ordering::Relaxed)
         ))
+    }
+
+    fn test_custody_socket_path(label: &str) -> PathBuf {
+        static NEXT_SOCKET_PATH: AtomicU64 = AtomicU64::new(0);
+        let directory = env::temp_dir().join(format!(
+            "swc-{}-{label}-{}",
+            std::process::id(),
+            NEXT_SOCKET_PATH.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::create_dir(&directory).expect("create custody socket fixture directory");
+        fs::set_permissions(&directory, fs::Permissions::from_mode(0o710))
+            .expect("secure custody socket fixture directory");
+        directory.join("custody.sock")
+    }
+
+    fn remove_test_custody_socket_path(path: &Path) {
+        if path.exists() {
+            fs::remove_file(path).expect("remove custody socket fixture");
+        }
+        fs::remove_dir(path.parent().expect("custody socket fixture parent"))
+            .expect("remove custody socket fixture directory");
+    }
+
+    fn test_custody_boot_id(byte: u8) -> String {
+        general_purpose::URL_SAFE_NO_PAD.encode([byte; 32])
+    }
+
+    fn test_custody_deadline() -> Instant {
+        Instant::now() + Duration::from_secs(2)
+    }
+
+    fn test_ed25519_spki_key_id(verifying_key: &VerifyingKey) -> String {
+        let mut spki_der = vec![
+            0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
+        ];
+        spki_der.extend_from_slice(verifying_key.as_bytes());
+        sha256_prefixed(&spki_der)
+    }
+
+    fn test_custody_response_proof_signer(
+        control_plane_response_signing_key_id: String,
+    ) -> ResponseProofSigner {
+        let (signing_key, public_key_pem, key_id) =
+            response_proof_signing_material().expect("test custody signer material");
+        ResponseProofSigner::Custody(CustodyResponseProofSigner {
+            socket_path: PathBuf::from("/unused/custody.sock"),
+            expected_uid: 123,
+            boot_id: test_custody_boot_id(42),
+            boot_digest: sha256_prefixed(&[42u8; 32]),
+            verifying_key: signing_key.verifying_key(),
+            public_key_pem,
+            key_id,
+            control_plane_response_signing_key_id,
+            health: Arc::new(CustodyPassiveHealth::startup_verified()),
+        })
+    }
+
+    fn test_custody_hello_response(
+        request_id: &str,
+        boot_id: &str,
+        public_key_pem: &str,
+        key_id: &str,
+        control_plane_response_signing_key_id: &str,
+    ) -> Value {
+        json!({
+            "apiVersion":CUSTODY_PROTOCOL_API_VERSION,
+            "requestId":request_id,
+            "bootId":boot_id,
+            "operation":CUSTODY_HELLO_OPERATION,
+            "ok":true,
+            "result":{
+                "publicKeyPem":public_key_pem,
+                "keyId":key_id,
+                "controlPlaneResponseSigningKeyId":control_plane_response_signing_key_id,
+                "capabilities":[
+                    CUSTODY_HELLO_OPERATION,
+                    CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+                ],
+                "limits":{
+                    "maxFrameBytes":CUSTODY_MAX_FRAME_BYTES,
+                    "ioDeadlineMs":CUSTODY_IO_DEADLINE.as_millis(),
+                    "maxConcurrentConnections":CUSTODY_MAX_CONCURRENT_CONNECTIONS,
+                    "maxRequestsPerBoot":CUSTODY_MAX_REQUESTS_PER_BOOT,
+                    "maxStatementAgeSeconds":CUSTODY_MAX_STATEMENT_AGE_SECONDS,
+                },
+                "hardwareProof":false,
+            },
+        })
+    }
+
+    fn test_custody_sign_response(
+        request_id: &str,
+        boot_id: &str,
+        key_id: &str,
+        signing_key: &SigningKey,
+        canonical_statement: &[u8],
+    ) -> Value {
+        json!({
+            "apiVersion":CUSTODY_PROTOCOL_API_VERSION,
+            "requestId":request_id,
+            "bootId":boot_id,
+            "operation":CUSTODY_RESPONSE_PROOF_SIGN_OPERATION,
+            "ok":true,
+            "result":{
+                "statementDigest":sha256_prefixed(canonical_statement),
+                "signature":format!(
+                    "ed25519:{}",
+                    general_purpose::URL_SAFE_NO_PAD.encode(
+                        signing_key.sign(canonical_statement).to_bytes()
+                    )
+                ),
+                "keyId":key_id,
+            },
+        })
+    }
+
+    fn canonical_test_custody_response(value: &Value) -> Vec<u8> {
+        custody_canonical_json_bytes(value).expect("canonical custody response")
+    }
+
+    #[test]
+    fn custody_hello_strictly_pins_protocol_identity_capabilities_and_limits() {
+        let (_, public_key_pem, key_id) =
+            response_proof_signing_material().expect("custody test identity");
+        let request_id = general_purpose::URL_SAFE_NO_PAD.encode([7u8; 32]);
+        let boot_id = test_custody_boot_id(8);
+        let control_plane_key_id = sha256_prefixed(b"control-plane-response-spki");
+        let response = test_custody_hello_response(
+            &request_id,
+            &boot_id,
+            &public_key_pem,
+            &key_id,
+            &control_plane_key_id,
+        );
+        let signer = validate_custody_hello_response(
+            &canonical_test_custody_response(&response),
+            &request_id,
+            PathBuf::from("/unused/custody.sock"),
+            123,
+            test_custody_deadline(),
+        )
+        .expect("valid custody hello");
+        assert_eq!(signer.boot_id, boot_id);
+        assert_eq!(signer.boot_digest, sha256_prefixed(&[8u8; 32]));
+        assert_eq!(signer.key_id, key_id);
+        assert_eq!(
+            signer.control_plane_response_signing_key_id,
+            control_plane_key_id
+        );
+        assert_eq!(signer.expected_uid, 123);
+
+        let mut wrong_capability = response.clone();
+        wrong_capability["result"]["capabilities"] = json!([CUSTODY_HELLO_OPERATION]);
+        assert!(validate_custody_hello_response(
+            &canonical_test_custody_response(&wrong_capability),
+            &request_id,
+            PathBuf::new(),
+            123,
+            test_custody_deadline(),
+        )
+        .expect_err("capability substitution")
+        .contains("capabilities mismatch"));
+
+        let mut wrong_limit = response.clone();
+        wrong_limit["result"]["limits"]["maxFrameBytes"] = json!(CUSTODY_MAX_FRAME_BYTES - 1);
+        assert!(validate_custody_hello_response(
+            &canonical_test_custody_response(&wrong_limit),
+            &request_id,
+            PathBuf::new(),
+            123,
+            test_custody_deadline(),
+        )
+        .expect_err("limit substitution")
+        .contains("runtime limits mismatch"));
+
+        let mut hardware_claim = response.clone();
+        hardware_claim["result"]["hardwareProof"] = json!(true);
+        assert!(validate_custody_hello_response(
+            &canonical_test_custody_response(&hardware_claim),
+            &request_id,
+            PathBuf::new(),
+            123,
+            test_custody_deadline(),
+        )
+        .expect_err("false hardware claim required")
+        .contains("hardwareProof=false"));
+
+        let mut substituted_key = response.clone();
+        substituted_key["result"]["keyId"] = json!(sha256_prefixed(b"substituted"));
+        assert!(validate_custody_hello_response(
+            &canonical_test_custody_response(&substituted_key),
+            &request_id,
+            PathBuf::new(),
+            123,
+            test_custody_deadline(),
+        )
+        .expect_err("key substitution")
+        .contains("key ID mismatch"));
+
+        let mut substituted_control_plane_key = response.clone();
+        substituted_control_plane_key["result"]["controlPlaneResponseSigningKeyId"] =
+            json!("sha256:not-a-canonical-digest");
+        assert!(validate_custody_hello_response(
+            &canonical_test_custody_response(&substituted_control_plane_key),
+            &request_id,
+            PathBuf::new(),
+            123,
+            test_custody_deadline(),
+        )
+        .expect_err("invalid control-plane key ID")
+        .contains("control-plane response signing key ID"));
+
+        let mut unknown_field = response;
+        unknown_field["result"]["unexpected"] = json!(true);
+        assert!(validate_custody_hello_response(
+            &canonical_test_custody_response(&unknown_field),
+            &request_id,
+            PathBuf::new(),
+            123,
+            test_custody_deadline(),
+        )
+        .expect_err("unknown hello field")
+        .contains("decode canonical custody response"));
+    }
+
+    #[test]
+    fn custody_sign_response_rejects_restart_substitution_and_malformed_signature() {
+        let (signing_key, _, key_id) =
+            response_proof_signing_material().expect("custody test identity");
+        let verifying_key = signing_key.verifying_key();
+        let request_id = general_purpose::URL_SAFE_NO_PAD.encode([9u8; 32]);
+        let boot_id = test_custody_boot_id(10);
+        let canonical_statement =
+            custody_canonical_json_bytes(&json!({"apiVersion":"test/v1","value":1}))
+                .expect("canonical test statement");
+        let response = test_custody_sign_response(
+            &request_id,
+            &boot_id,
+            &key_id,
+            &signing_key,
+            &canonical_statement,
+        );
+        validate_custody_sign_response(
+            &canonical_test_custody_response(&response),
+            &request_id,
+            &boot_id,
+            &key_id,
+            &verifying_key,
+            &canonical_statement,
+            test_custody_deadline(),
+        )
+        .expect("valid custody signature");
+
+        for (label, mut substituted, expected_error) in [
+            (
+                "boot",
+                {
+                    let mut value = response.clone();
+                    value["bootId"] = json!(test_custody_boot_id(11));
+                    value
+                },
+                "restarted or substituted",
+            ),
+            (
+                "request",
+                {
+                    let mut value = response.clone();
+                    value["requestId"] = json!(general_purpose::URL_SAFE_NO_PAD.encode([12u8; 32]));
+                    value
+                },
+                "request ID mismatch",
+            ),
+            (
+                "operation",
+                {
+                    let mut value = response.clone();
+                    value["operation"] = json!(CUSTODY_HELLO_OPERATION);
+                    value
+                },
+                "operation mismatch",
+            ),
+            (
+                "digest",
+                {
+                    let mut value = response.clone();
+                    value["result"]["statementDigest"] = json!(sha256_prefixed(b"wrong"));
+                    value
+                },
+                "statement digest mismatch",
+            ),
+            (
+                "key",
+                {
+                    let mut value = response.clone();
+                    value["result"]["keyId"] = json!(sha256_prefixed(b"wrong"));
+                    value
+                },
+                "key substitution",
+            ),
+            (
+                "signature",
+                {
+                    let mut value = response.clone();
+                    value["result"]["signature"] = format!(
+                        "ed25519:{}",
+                        general_purpose::URL_SAFE_NO_PAD.encode([0u8; 64])
+                    )
+                    .into();
+                    value
+                },
+                "signature verification failed",
+            ),
+        ] {
+            let error = validate_custody_sign_response(
+                &canonical_test_custody_response(&substituted),
+                &request_id,
+                &boot_id,
+                &key_id,
+                &verifying_key,
+                &canonical_statement,
+                test_custody_deadline(),
+            )
+            .expect_err(label);
+            assert!(error.contains(expected_error), "{label}: {error}");
+            substituted["result"]["unexpected"] = json!(true);
+            assert!(validate_custody_sign_response(
+                &canonical_test_custody_response(&substituted),
+                &request_id,
+                &boot_id,
+                &key_id,
+                &verifying_key,
+                &canonical_statement,
+                test_custody_deadline(),
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn custody_signer_rejects_streaming_without_local_fallback() {
+        let (signing_key, public_key_pem, key_id) =
+            response_proof_signing_material().expect("custody streaming identity");
+        let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
+            socket_path: PathBuf::from("/unused/custody.sock"),
+            expected_uid: 123,
+            boot_id: test_custody_boot_id(15),
+            boot_digest: sha256_prefixed(&[15u8; 32]),
+            verifying_key: signing_key.verifying_key(),
+            public_key_pem,
+            key_id,
+            control_plane_response_signing_key_id: sha256_prefixed(b"control-plane-response-spki"),
+            health: Arc::new(CustodyPassiveHealth::startup_verified()),
+        });
+        let error = signer
+            .sign_streaming(br#"{"streaming":"statement"}"#)
+            .expect_err("custody streaming proof must be unsupported");
+        assert!(error.contains("buffered responseProof.sign/v2 only"));
+    }
+
+    #[test]
+    fn custody_socket_checks_metadata_and_peer_uid() {
+        let regular_path = test_temp_path("custody-regular");
+        fs::write(&regular_path, b"not a socket").expect("write regular fixture");
+        // SAFETY: geteuid has no preconditions.
+        let effective_uid = unsafe { libc::geteuid() };
+        assert!(matches!(
+            inspect_custody_socket(&regular_path, effective_uid),
+            Err(CustodyHelloAttemptError::Fatal(error)) if error.contains("not a Unix socket")
+        ));
+        fs::remove_file(&regular_path).expect("remove regular fixture");
+
+        let socket_path = test_custody_socket_path("custody-peer");
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+            .expect("bind custody peer fixture");
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o660))
+            .expect("secure custody peer fixture");
+        let acceptor = thread::spawn(move || {
+            let _ = listener.accept().expect("accept custody peer fixture");
+        });
+        connect_custody_socket(&socket_path, effective_uid, test_custody_deadline())
+            .expect("matching custody peer UID");
+        assert!(matches!(
+            connect_custody_socket(
+                &socket_path,
+                effective_uid.wrapping_add(1),
+                test_custody_deadline(),
+            ),
+            Err(CustodyHelloAttemptError::Fatal(error)) if error.contains("owned by UID")
+        ));
+        acceptor.join().expect("join custody peer fixture");
+
+        let writable_path = test_custody_socket_path("custody-writable");
+        let writable_listener = std::os::unix::net::UnixListener::bind(&writable_path)
+            .expect("bind writable socket fixture");
+        fs::set_permissions(&writable_path, fs::Permissions::from_mode(0o622))
+            .expect("make writable socket fixture");
+        assert!(matches!(
+            inspect_custody_socket(&writable_path, effective_uid),
+            Err(CustodyHelloAttemptError::Fatal(error)) if error.contains("mode 0660")
+        ));
+
+        let symlink_path = test_temp_path("custody-symlink");
+        std::os::unix::fs::symlink(&writable_path, &symlink_path)
+            .expect("create custody socket symlink");
+        assert!(matches!(
+            inspect_custody_socket(&symlink_path, effective_uid),
+            Err(CustodyHelloAttemptError::Fatal(error)) if error.contains("must not be a symlink")
+        ));
+
+        drop(writable_listener);
+        fs::remove_file(symlink_path).expect("remove socket symlink fixture");
+        remove_test_custody_socket_path(&writable_path);
+        remove_test_custody_socket_path(&socket_path);
+    }
+
+    #[test]
+    fn custody_startup_retries_missing_socket_and_sign_sends_exact_params() {
+        let startup_path = test_custody_socket_path("custody-startup");
+        let (_, public_key_pem, key_id) =
+            response_proof_signing_material().expect("startup custody identity");
+        let boot_id = test_custody_boot_id(13);
+        let control_plane_key_id = sha256_prefixed(b"control-plane-response-spki");
+        let startup_server_path = startup_path.clone();
+        let startup_boot_id = boot_id.clone();
+        let startup_control_plane_key_id = control_plane_key_id.clone();
+        let startup_server = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(75));
+            let listener = std::os::unix::net::UnixListener::bind(&startup_server_path)
+                .expect("bind delayed custody fixture");
+            fs::set_permissions(&startup_server_path, fs::Permissions::from_mode(0o660))
+                .expect("secure delayed custody fixture");
+            let (mut stream, _) = listener.accept().expect("accept delayed custody hello");
+            let request_bytes = read_custody_frame(&mut stream, CUSTODY_IO_DEADLINE)
+                .expect("read delayed custody hello");
+            let request: CustodyRequest = decode_canonical_custody_json(&request_bytes)
+                .expect("decode delayed custody hello");
+            assert_eq!(request.operation, CUSTODY_HELLO_OPERATION);
+            assert!(request.boot_id.is_none());
+            let response = test_custody_hello_response(
+                &request.request_id,
+                &startup_boot_id,
+                &public_key_pem,
+                &key_id,
+                &startup_control_plane_key_id,
+            );
+            write_custody_frame(
+                &mut stream,
+                &canonical_test_custody_response(&response),
+                CUSTODY_IO_DEADLINE,
+            )
+            .expect("write delayed custody hello");
+        });
+        // SAFETY: geteuid has no preconditions.
+        let effective_uid = unsafe { libc::geteuid() };
+        let material = initialize_custody_response_proof_signer(
+            startup_path.clone(),
+            effective_uid,
+            Duration::from_secs(2),
+        )
+        .expect("custody startup retry");
+        assert!(matches!(material.signer, ResponseProofSigner::Custody(_)));
+        startup_server.join().expect("join delayed custody fixture");
+        remove_test_custody_socket_path(&startup_path);
+
+        let sign_path = test_custody_socket_path("custody-sign");
+        let (signing_key, public_key_pem, key_id) =
+            response_proof_signing_material().expect("sign custody identity");
+        let verifying_key = signing_key.verifying_key();
+        let boot_id = test_custody_boot_id(14);
+        let statement = json!({"apiVersion":"test.statement/v1","exact":"statement"});
+        let binding = ReleaseAuthorizationBinding {
+            attempt_id: sha256_prefixed(b"attempt"),
+            flow_id: sha256_prefixed(b"attempt"),
+            principal_id: "agent:test".to_string(),
+            route_id: "route:test".to_string(),
+            credential_id: "credential:test".to_string(),
+            credential_version: 1,
+            policy_hash: sha256_prefixed(b"policy"),
+            request_digest: sha256_prefixed(b"request"),
+            operation_digest: Some(sha256_prefixed(b"operation")),
+            operation_context: json!({"operation":"test"}),
+            require_jit_grant: false,
+            shared_quotas: Vec::new(),
+        };
+        let expected_statement = statement.clone();
+        let expected_binding = serde_json::to_value(&binding).expect("serialize test binding");
+        let sign_server_path = sign_path.clone();
+        let sign_boot_id = boot_id.clone();
+        let sign_key_id = key_id.clone();
+        let listener = std::os::unix::net::UnixListener::bind(&sign_server_path)
+            .expect("bind custody sign fixture");
+        fs::set_permissions(&sign_server_path, fs::Permissions::from_mode(0o660))
+            .expect("secure custody sign fixture");
+        let sign_server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept custody sign request");
+            let request_bytes = read_custody_frame(&mut stream, CUSTODY_IO_DEADLINE)
+                .expect("read custody sign request");
+            let request: CustodyRequest =
+                decode_canonical_custody_json(&request_bytes).expect("decode custody sign request");
+            assert_eq!(request.operation, CUSTODY_RESPONSE_PROOF_SIGN_OPERATION);
+            assert_eq!(request.boot_id.as_deref(), Some(sign_boot_id.as_str()));
+            assert_eq!(request.params["statement"], expected_statement);
+            assert_eq!(request.params["authorization_binding"], expected_binding);
+            let canonical_statement = custody_canonical_json_bytes(&request.params["statement"])
+                .expect("canonical requested statement");
+            let response = test_custody_sign_response(
+                &request.request_id,
+                &sign_boot_id,
+                &sign_key_id,
+                &signing_key,
+                &canonical_statement,
+            );
+            write_custody_frame(
+                &mut stream,
+                &canonical_test_custody_response(&response),
+                CUSTODY_IO_DEADLINE,
+            )
+            .expect("write custody sign response");
+        });
+        let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
+            socket_path: sign_path.clone(),
+            expected_uid: effective_uid,
+            boot_id,
+            boot_digest: sha256_prefixed(&[14u8; 32]),
+            verifying_key,
+            public_key_pem,
+            key_id,
+            control_plane_response_signing_key_id: control_plane_key_id,
+            health: Arc::new(CustodyPassiveHealth::startup_verified()),
+        });
+        signer
+            .sign_buffered(&statement, &binding)
+            .expect("exact custody sign exchange");
+        let status = signer.custody_status().expect("custody status");
+        assert_eq!(status["healthy"], true);
+        assert_eq!(status["sign_success_count"], 1);
+        assert_eq!(status["sign_failure_count"], 0);
+        sign_server.join().expect("join custody sign fixture");
+        remove_test_custody_socket_path(&sign_path);
     }
 
     fn write_test_executable(label: &str, contents: &[u8]) -> PathBuf {
@@ -27203,12 +29686,14 @@ mod tests {
             .build()
             .expect("test client");
         let policy_high_water = policy_high_water_for(&snapshot);
-        let (
-            response_proof_signing_key,
-            response_proof_public_key_pem,
-            response_proof_signing_key_id,
-        ) = response_proof_signing_material().expect("test response proof key");
+        let ResponseProofSigningMaterial {
+            signer: response_proof_signer,
+            public_key_pem: response_proof_public_key_pem,
+            key_id: response_proof_signing_key_id,
+        } = local_response_proof_signing_material().expect("test response proof key");
         GateState {
+            upstream_dispatch_authority: UpstreamDispatchAuthority::new(),
+            upstream_send_credential_lock_contentions: AtomicU64::new(0),
             snapshot: RwLock::new(snapshot),
             policy_path: "/unused/test-policy.json".to_string(),
             policy_trust_root_source: PolicyTrustRootSource::File(
@@ -27274,12 +29759,740 @@ mod tests {
             binary_digest: "sha256:test-binary".to_string(),
             release_provenance_path: None,
             image_signatures_path: None,
-            response_proof_signing_key,
+            response_proof_signer,
             response_proof_public_key_pem,
             response_proof_signing_key_id,
             response_proof_attestation_command: None,
             server_instance_id: None,
         }
+    }
+
+    #[test]
+    fn custody_configuration_is_complete_absolute_and_production_closed() {
+        for dangling in [
+            response_proof_custody_config_from_values(
+                None,
+                Some(OsString::from("123")),
+                None,
+                false,
+                1000,
+            ),
+            response_proof_custody_config_from_values(
+                None,
+                None,
+                Some(OsString::from("1000")),
+                false,
+                1000,
+            ),
+        ] {
+            assert!(dangling
+                .expect_err("custody option without socket must fail")
+                .contains(RESPONSE_PROOF_CUSTODY_SOCKET_ENV));
+        }
+        assert!(response_proof_custody_config_from_values(
+            Some(OsString::from("relative/custody.sock")),
+            None,
+            None,
+            false,
+            1000,
+        )
+        .expect_err("relative custody socket must fail")
+        .contains("absolute"));
+        assert!(response_proof_custody_config_from_values(
+            Some(OsString::from("/run/serverware/custody.sock")),
+            None,
+            None,
+            false,
+            1000,
+        )
+        .expect_err("custody peer UID must never be implicit")
+        .contains("explicitly configured"));
+        assert!(response_proof_custody_config_from_values(
+            Some(OsString::from("/run/serverware/custody.sock")),
+            Some(OsString::from("1000")),
+            None,
+            true,
+            1000,
+        )
+        .expect_err("production custody peer must use a distinct UID")
+        .contains("must differ"));
+        let configured = response_proof_custody_config_from_values(
+            Some(OsString::from("/run/serverware/custody.sock")),
+            Some(OsString::from("123")),
+            Some(OsString::from("2500")),
+            true,
+            1000,
+        )
+        .expect("complete custody configuration")
+        .expect("custody enabled");
+        assert_eq!(
+            configured.socket_path,
+            PathBuf::from("/run/serverware/custody.sock")
+        );
+        assert_eq!(configured.expected_uid, 123);
+        assert_eq!(configured.startup_timeout, Duration::from_millis(2500));
+        validate_local_response_proof_mode(false, true)
+            .expect("local response proof remains explicit development behavior");
+        assert!(validate_local_response_proof_mode(true, true)
+            .expect_err("production response proof must require custody")
+            .contains("development-only"));
+    }
+
+    #[test]
+    fn custody_startup_binding_precedes_policy_high_water_persistence() {
+        let expected_key_id = sha256_prefixed(b"expected-control-plane-response-spki");
+        let signer = test_custody_response_proof_signer(expected_key_id.clone());
+        let mut snapshot = (*test_snapshot(1)).clone();
+        snapshot.response_signing_key_id = Some(sha256_prefixed(b"substituted-response-spki"));
+        let path = test_temp_path("custody-startup-high-water");
+        let error = initialize_policy_high_water_after_response_proof_binding(
+            &snapshot,
+            &signer,
+            Some(&path),
+            1,
+            1,
+        )
+        .expect_err("startup response-key mismatch must fail closed");
+        assert!(error.contains("does not match"));
+        assert!(
+            !path.exists(),
+            "high-water must not be created before binding"
+        );
+
+        snapshot.response_signing_key_id = Some(expected_key_id);
+        initialize_policy_high_water_after_response_proof_binding(
+            &snapshot,
+            &signer,
+            Some(&path),
+            1,
+            1,
+        )
+        .expect("matching startup binding may persist high-water");
+        assert!(path.exists());
+        fs::remove_file(path).expect("remove startup high-water fixture");
+    }
+
+    #[test]
+    fn custody_refresh_key_substitution_cannot_mutate_policy_high_water() {
+        let policy_path = test_temp_path("custody-refresh-policy");
+        let trust_path = test_temp_path("custody-refresh-trust");
+        let high_water_path = test_temp_path("custody-refresh-high-water");
+        let (policy_signing_key, policy_public_key_pem, policy_signing_key_id) =
+            response_proof_signing_material().expect("policy signing material");
+        fs::write(&trust_path, policy_public_key_pem).expect("write policy trust fixture");
+        let candidate = sign_test_policy(
+            policy_with_route(generic_policy_route("none", json!(1024))),
+            &policy_signing_key,
+            &policy_signing_key_id,
+            2,
+        );
+        fs::write(
+            &policy_path,
+            serde_json::to_vec(&candidate).expect("serialize candidate policy"),
+        )
+        .expect("write candidate policy");
+
+        let expected_key_id = sha256_prefixed(b"expected-control-plane-response-spki");
+        let mut previous = (*test_snapshot(1)).clone();
+        previous.policy_signing_key_id = policy_signing_key_id;
+        previous.response_signing_key_id = Some(expected_key_id.clone());
+        let previous = Arc::new(previous);
+        let mut state = test_gate_state(Arc::clone(&previous));
+        state.policy_path = policy_path.to_string_lossy().into_owned();
+        state.policy_trust_root_source =
+            PolicyTrustRootSource::File(trust_path.to_string_lossy().into_owned());
+        state.response_proof_signer = test_custody_response_proof_signer(expected_key_id);
+        state.policy_high_water_path = Some(high_water_path.clone());
+        let before = policy_high_water_for(&previous);
+        persist_policy_high_water(&high_water_path, &before).expect("persist initial high-water");
+        let before_file = fs::read(&high_water_path).expect("read initial high-water");
+
+        let error = refresh_policy_snapshot(&state, true)
+            .expect_err("candidate without the custody-pinned response key must fail");
+        assert!(error.contains("does not match"));
+        assert_eq!(
+            serde_json::to_value(
+                state
+                    .policy_high_water
+                    .lock()
+                    .expect("policy high-water")
+                    .clone()
+            )
+            .expect("serialize in-memory high-water"),
+            serde_json::to_value(before).expect("serialize expected high-water")
+        );
+        assert_eq!(
+            fs::read(&high_water_path).expect("read final high-water"),
+            before_file
+        );
+        assert!(Arc::ptr_eq(&current_snapshot(&state), &previous));
+
+        fs::remove_file(policy_path).expect("remove candidate policy");
+        fs::remove_file(trust_path).expect("remove policy trust");
+        fs::remove_file(high_water_path).expect("remove policy high-water");
+    }
+
+    #[test]
+    fn custody_health_rejects_stale_success_after_newer_failure() {
+        let health = CustodyPassiveHealth::startup_verified();
+        let older_probe = health.begin_probe();
+        let newer_pending_probe = health.begin_probe();
+        health.record_probe_failure(older_probe, "older probe failure");
+        assert!(
+            !health.transport_dispatch_ready(),
+            "a newer unresolved probe must not suppress a completed older failure"
+        );
+        health.record_probe_success(newer_pending_probe);
+        assert!(health.transport_dispatch_ready());
+
+        let stale_probe = health.begin_probe();
+        let newer_sign = health.begin_sign();
+        health.record_sign_failure(newer_sign, "newer signing failure");
+        health.record_probe_success(stale_probe);
+        assert!(!health.transport_dispatch_ready());
+
+        let recovery_probe = health.begin_probe();
+        health.record_probe_success(recovery_probe);
+        assert!(health.transport_dispatch_ready());
+
+        let stale_sign = health.begin_sign();
+        let newer_sign = health.begin_sign();
+        health.record_sign_failure(newer_sign, "newest signing failure");
+        health.record_sign_success(stale_sign);
+        let state = health.state.lock().expect("custody passive health mutex");
+        assert!(!state.transport_healthy);
+        assert!(!state.signing_healthy);
+    }
+
+    #[test]
+    fn custody_dispatch_permit_excludes_health_transitions_across_send() {
+        let health = Arc::new(CustodyPassiveHealth::startup_verified());
+        let worker_health = Arc::clone(&health);
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let worker = thread::spawn(move || {
+            worker_health
+                .with_dispatch_permit(|| {
+                    entered_tx.send(()).expect("signal entered dispatch");
+                    release_rx.recv().expect("release dispatch permit");
+                    7
+                })
+                .expect("healthy dispatch permit")
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("dispatch permit entered");
+        let transition_health = Arc::clone(&health);
+        let (transition_tx, transition_rx) = mpsc::sync_channel(0);
+        let transition_worker = thread::spawn(move || {
+            let operation = transition_health.begin_probe();
+            transition_tx
+                .send(operation)
+                .expect("publish completed health transition");
+        });
+        let mut transition_waiting = false;
+        for _ in 0..100 {
+            let coordination = health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination");
+            transition_waiting =
+                coordination.transition_active || coordination.waiting_transitions != 0;
+            drop(coordination);
+            if transition_waiting {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(
+            transition_waiting,
+            "a health transition must announce itself while active dispatch drains"
+        );
+        assert!(matches!(
+            transition_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        release_tx.send(()).expect("release dispatch");
+        assert_eq!(worker.join().expect("dispatch worker"), 7);
+        let pending_probe = transition_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("health transition completes after dispatch");
+        transition_worker.join().expect("health transition worker");
+        health.record_probe_success(pending_probe);
+        assert!(health.transport_dispatch_ready());
+    }
+
+    #[test]
+    fn custody_dispatch_coordination_counts_all_queued_health_transitions() {
+        let health = Arc::new(CustodyPassiveHealth::startup_verified());
+        let blocking_permit = health.acquire_dispatch_permit();
+        let (completed_tx, completed_rx) = mpsc::channel();
+        let workers = (0..2)
+            .map(|_| {
+                let health = Arc::clone(&health);
+                let completed_tx = completed_tx.clone();
+                thread::spawn(move || {
+                    completed_tx
+                        .send(health.begin_probe())
+                        .expect("publish queued health transition");
+                })
+            })
+            .collect::<Vec<_>>();
+        drop(completed_tx);
+        let mut queued = false;
+        for _ in 0..100 {
+            queued = health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_transitions
+                == 2;
+            if queued {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(queued, "every queued health transition must be counted");
+        drop(blocking_permit);
+        let operations = completed_rx.iter().collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().expect("queued health transition worker");
+        }
+        assert_eq!(operations.len(), 2);
+        for operation in operations {
+            health.record_probe_success(operation);
+        }
+        let coordination = health
+            .dispatch_coordination
+            .lock()
+            .expect("custody dispatch coordination");
+        assert_eq!(coordination.waiting_transitions, 0);
+        assert!(!coordination.transition_active);
+    }
+
+    #[test]
+    fn queued_health_transition_remains_ahead_of_dispatch_waiters() {
+        let health = Arc::new(CustodyPassiveHealth::startup_verified());
+        let first_transition = health.begin_health_transition();
+        let second_health = Arc::clone(&health);
+        let (second_entered_tx, second_entered_rx) = mpsc::sync_channel(0);
+        let (second_release_tx, second_release_rx) = mpsc::sync_channel(0);
+        let second_transition = thread::spawn(move || {
+            let _transition = second_health.begin_health_transition();
+            second_entered_tx
+                .send(())
+                .expect("announce second health transition");
+            second_release_rx
+                .recv()
+                .expect("release second health transition");
+        });
+        for _ in 0..100 {
+            if health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_transitions
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_transitions,
+            1,
+            "the second transition must register while the first is active"
+        );
+
+        let dispatch_health = Arc::clone(&health);
+        let (dispatch_entered_tx, dispatch_entered_rx) = mpsc::sync_channel(0);
+        let dispatch = thread::spawn(move || {
+            dispatch_health
+                .with_dispatch_permit(|| {
+                    dispatch_entered_tx
+                        .send(())
+                        .expect("announce dispatch permit");
+                })
+                .expect("dispatch after health transitions");
+        });
+        for _ in 0..100 {
+            if health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches,
+            1,
+            "the dispatch must be waiting behind both health transitions"
+        );
+
+        drop(first_transition);
+        second_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("queued health transition must enter next");
+        assert!(matches!(
+            dispatch_entered_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        second_release_tx
+            .send(())
+            .expect("release second health transition");
+        second_transition
+            .join()
+            .expect("second health transition worker");
+        dispatch_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("dispatch enters after queued health transition");
+        dispatch.join().expect("dispatch worker");
+    }
+
+    #[test]
+    fn custody_dispatch_permits_preserve_parallel_upstream_sends() {
+        let health = Arc::new(CustodyPassiveHealth::startup_verified());
+        let entered = Arc::new(std::sync::Barrier::new(3));
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_rx = Arc::new(Mutex::new(release_rx));
+        let workers = (0..2)
+            .map(|_| {
+                let health = Arc::clone(&health);
+                let entered = Arc::clone(&entered);
+                let release_rx = Arc::clone(&release_rx);
+                thread::spawn(move || {
+                    health
+                        .with_dispatch_permit(|| {
+                            entered.wait();
+                            release_rx
+                                .lock()
+                                .expect("release receiver")
+                                .recv()
+                                .expect("release concurrent dispatch");
+                        })
+                        .expect("healthy concurrent dispatch permit");
+                })
+            })
+            .collect::<Vec<_>>();
+        entered.wait();
+        assert_eq!(
+            health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .active_dispatches,
+            2,
+            "buffered upstream sends must retain parallel dispatch permits"
+        );
+        release_tx.send(()).expect("release first dispatch");
+        release_tx.send(()).expect("release second dispatch");
+        for worker in workers {
+            worker.join().expect("concurrent dispatch worker");
+        }
+    }
+
+    #[test]
+    fn skipped_proof_assembly_does_not_suppress_an_older_failure() {
+        let health = CustodyPassiveHealth::startup_verified();
+        let older_failure = health.begin_proof_assembly();
+        let _newer_skipped = health.begin_proof_assembly();
+        health.record_proof_assembly_failure(older_failure, "assembly failure");
+        assert!(
+            !health
+                .state
+                .lock()
+                .expect("custody health")
+                .proof_assembly_healthy,
+            "beginning a later skipped assembly must not suppress an older completed failure"
+        );
+        let recovery = health.begin_proof_assembly();
+        health.record_proof_assembly_success(recovery);
+        assert!(
+            health
+                .state
+                .lock()
+                .expect("custody health")
+                .proof_assembly_healthy
+        );
+    }
+
+    #[test]
+    fn custody_health_is_cached_redacted_and_requires_complete_proof_recovery() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.response_proof_signer =
+            test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
+        let manifest_before =
+            build_runtime_manifest(&state, &snapshot, &Value::Null, &Value::Null, &Value::Null);
+        assert!(String::from_utf8(health_response(&state))
+            .expect("healthy response")
+            .starts_with("HTTP/1.1 200 OK"));
+
+        let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
+            panic!("custody signer");
+        };
+        signer
+            .health
+            .state
+            .lock()
+            .expect("custody health state")
+            .last_liveness_success = Instant::now()
+            .checked_sub(RESPONSE_PROOF_CUSTODY_HEALTH_MAX_STALENESS + Duration::from_millis(1))
+            .expect("stale custody health instant");
+        assert!(!state.response_proof_signer.buffered_dispatch_ready());
+        assert!(String::from_utf8(health_response(&state))
+            .expect("stale health response")
+            .starts_with("HTTP/1.1 503 Service Unavailable"));
+        let operation = signer.health.begin_probe();
+        signer.health.record_probe_success(operation);
+        assert!(state.response_proof_signer.buffered_dispatch_ready());
+        assert!(String::from_utf8(health_response(&state))
+            .expect("fresh health response")
+            .starts_with("HTTP/1.1 200 OK"));
+
+        let raw_error = "sensitive custody transport detail";
+        let operation = signer.health.begin_probe();
+        signer.health.record_probe_failure(operation, raw_error);
+        let failed = String::from_utf8(health_response(&state)).expect("failed health response");
+        assert!(failed.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(!failed.contains(raw_error));
+        assert!(failed.contains(&sha256_prefixed(raw_error.as_bytes())));
+        assert_eq!(
+            build_runtime_manifest(&state, &snapshot, &Value::Null, &Value::Null, &Value::Null,),
+            manifest_before,
+            "mutable custody health must not enter the runtime manifest"
+        );
+        assert_eq!(
+            attestation(&state, None)["response_proof_custody_status"]["healthy"],
+            false
+        );
+
+        let operation = signer.health.begin_probe();
+        signer.health.record_probe_success(operation);
+        assert!(String::from_utf8(health_response(&state))
+            .expect("same-boot transport recovery")
+            .starts_with("HTTP/1.1 200 OK"));
+
+        let assembly_error = "sensitive response attestation command detail";
+        let operation = signer.health.begin_proof_assembly();
+        signer
+            .health
+            .record_proof_assembly_failure(operation, assembly_error);
+        assert!(state.response_proof_signer.buffered_dispatch_ready());
+        let assembly_failed =
+            String::from_utf8(health_response(&state)).expect("assembly failure response");
+        assert!(assembly_failed.starts_with("HTTP/1.1 503 Service Unavailable"));
+        assert!(!assembly_failed.contains(assembly_error));
+        assert!(assembly_failed.contains(&sha256_prefixed(assembly_error.as_bytes())));
+
+        let probe_operation = signer.health.begin_probe();
+        signer.health.record_probe_success(probe_operation);
+        let sign_operation = signer.health.begin_sign();
+        signer.health.record_sign_success(sign_operation);
+        assert!(String::from_utf8(health_response(&state))
+            .expect("incomplete recovery response")
+            .starts_with("HTTP/1.1 503 Service Unavailable"));
+
+        let operation = signer.health.begin_proof_assembly();
+        signer.health.record_proof_assembly_success(operation);
+        let recovered =
+            String::from_utf8(health_response(&state)).expect("complete recovery response");
+        assert!(recovered.starts_with("HTTP/1.1 200 OK"));
+
+        let sign_operation = signer.health.begin_sign();
+        signer
+            .health
+            .record_sign_failure(sign_operation, "custody runtime restarted during signing");
+        let probe_operation = signer.health.begin_probe();
+        signer.health.record_probe_success(probe_operation);
+        assert!(state.response_proof_signer.buffered_dispatch_ready());
+        assert!(String::from_utf8(health_response(&state))
+            .expect("identity failure remains unhealthy")
+            .starts_with("HTTP/1.1 503 Service Unavailable"));
+        let sign_operation = signer.health.begin_sign();
+        signer.health.record_sign_success(sign_operation);
+        assert!(String::from_utf8(health_response(&state))
+            .expect("same-boot signing recovery")
+            .starts_with("HTTP/1.1 200 OK"));
+
+        let status = state
+            .response_proof_signer
+            .custody_status()
+            .expect("custody status");
+        assert_eq!(status["sign_success_count"], 2);
+        assert_eq!(status["sign_failure_count"], 1);
+        assert_eq!(status["probe_success_count"], 4);
+        assert_eq!(status["probe_failure_count"], 1);
+        assert_eq!(status["proof_assembly_success_count"], 1);
+        assert_eq!(status["proof_assembly_failure_count"], 1);
+        assert_eq!(status["last_failure_stage"], "sign");
+    }
+
+    #[test]
+    fn custody_probe_detects_pre_use_outage_and_pins_the_hello_identity() {
+        let socket_path = test_custody_socket_path("custody-health");
+        let (signing_key, public_key_pem, key_id) =
+            response_proof_signing_material().expect("custody health identity");
+        let boot_id = test_custody_boot_id(71);
+        let control_plane_key_id = sha256_prefixed(b"control-plane-health-spki");
+        // SAFETY: geteuid has no preconditions.
+        let effective_uid = unsafe { libc::geteuid() };
+        let signer = ResponseProofSigner::Custody(CustodyResponseProofSigner {
+            socket_path: socket_path.clone(),
+            expected_uid: effective_uid,
+            boot_id: boot_id.clone(),
+            boot_digest: sha256_prefixed(&[71u8; 32]),
+            verifying_key: signing_key.verifying_key(),
+            public_key_pem: public_key_pem.clone(),
+            key_id: key_id.clone(),
+            control_plane_response_signing_key_id: control_plane_key_id.clone(),
+            health: Arc::new(CustodyPassiveHealth::startup_verified()),
+        });
+
+        signer.probe_custody_once();
+        let unavailable = signer.custody_status().expect("unavailable custody status");
+        assert_eq!(unavailable["healthy"], false);
+        assert_eq!(unavailable["probe_failure_count"], 1);
+        assert_eq!(unavailable["sign_success_count"], 0);
+        assert_eq!(unavailable["sign_failure_count"], 0);
+        assert_eq!(
+            unavailable["probe_assurance"],
+            "hello-pinned-boot-key-peer-uid"
+        );
+
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+            .expect("bind same-boot custody health fixture");
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o660))
+            .expect("secure same-boot custody health fixture");
+        let same_boot_id = boot_id.clone();
+        let same_public_key_pem = public_key_pem.clone();
+        let same_key_id = key_id.clone();
+        let same_control_plane_key_id = control_plane_key_id.clone();
+        let same_boot_server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept same-boot health probe");
+            let request_bytes = read_custody_frame(&mut stream, CUSTODY_IO_DEADLINE)
+                .expect("read same-boot health probe");
+            let request: CustodyRequest = decode_canonical_custody_json(&request_bytes)
+                .expect("decode same-boot health probe");
+            assert_eq!(request.operation, CUSTODY_HELLO_OPERATION);
+            let response = test_custody_hello_response(
+                &request.request_id,
+                &same_boot_id,
+                &same_public_key_pem,
+                &same_key_id,
+                &same_control_plane_key_id,
+            );
+            write_custody_frame(
+                &mut stream,
+                &canonical_test_custody_response(&response),
+                CUSTODY_IO_DEADLINE,
+            )
+            .expect("write same-boot health response");
+        });
+        signer.probe_custody_once();
+        same_boot_server
+            .join()
+            .expect("join same-boot health server");
+        let recovered = signer.custody_status().expect("recovered custody status");
+        assert_eq!(recovered["healthy"], true);
+        assert_eq!(recovered["probe_success_count"], 1);
+
+        fs::remove_file(&socket_path).expect("remove same-boot custody socket");
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+            .expect("bind changed-boot custody health fixture");
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o660))
+            .expect("secure changed-boot custody health fixture");
+        let changed_boot_server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept changed-boot health probe");
+            let request_bytes = read_custody_frame(&mut stream, CUSTODY_IO_DEADLINE)
+                .expect("read changed-boot health probe");
+            let request: CustodyRequest = decode_canonical_custody_json(&request_bytes)
+                .expect("decode changed-boot health probe");
+            let response = test_custody_hello_response(
+                &request.request_id,
+                &test_custody_boot_id(72),
+                &public_key_pem,
+                &key_id,
+                &control_plane_key_id,
+            );
+            write_custody_frame(
+                &mut stream,
+                &canonical_test_custody_response(&response),
+                CUSTODY_IO_DEADLINE,
+            )
+            .expect("write changed-boot health response");
+        });
+        signer.probe_custody_once();
+        changed_boot_server
+            .join()
+            .expect("join changed-boot health server");
+        let changed = signer
+            .custody_status()
+            .expect("changed-boot custody status");
+        assert_eq!(changed["healthy"], false);
+        assert_eq!(changed["probe_failure_count"], 2);
+        assert_eq!(changed["last_failure_stage"], "probe");
+
+        remove_test_custody_socket_path(&socket_path);
+    }
+
+    #[test]
+    fn custody_deadline_covers_connect_parsing_and_signature_verification() {
+        let socket_path = test_custody_socket_path("cxdl");
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path)
+            .expect("bind expired connect fixture");
+        fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o660))
+            .expect("secure expired connect fixture");
+        // SAFETY: geteuid has no preconditions.
+        let effective_uid = unsafe { libc::geteuid() };
+        let expired = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .expect("past instant");
+        assert!(matches!(
+            connect_custody_socket(&socket_path, effective_uid, expired),
+            Err(CustodyHelloAttemptError::Retryable(error)) if error.contains("deadline")
+        ));
+        drop(listener);
+        remove_test_custody_socket_path(&socket_path);
+
+        let (signing_key, _, key_id) =
+            response_proof_signing_material().expect("deadline signing material");
+        let request_id = general_purpose::URL_SAFE_NO_PAD.encode([51u8; 32]);
+        let boot_id = test_custody_boot_id(52);
+        let canonical_statement = custody_canonical_json_bytes(&json!({"value":1}))
+            .expect("canonical deadline statement");
+        let response = canonical_test_custody_response(&test_custody_sign_response(
+            &request_id,
+            &boot_id,
+            &key_id,
+            &signing_key,
+            &canonical_statement,
+        ));
+        let error = validate_custody_sign_response(
+            &response,
+            &request_id,
+            &boot_id,
+            &key_id,
+            &signing_key.verifying_key(),
+            &canonical_statement,
+            Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .expect("past validation instant"),
+        )
+        .expect_err("elapsed parse/verification deadline must reject valid response");
+        assert!(error.contains("deadline exceeded"));
     }
 
     #[test]
@@ -28763,7 +31976,7 @@ mod tests {
     ) -> Arc<Snapshot> {
         let mut snapshot = (*test_snapshot(epoch)).clone();
         snapshot.response_signing_key_id =
-            Some(sha256_prefixed(signing_key.verifying_key().as_bytes()));
+            Some(test_ed25519_spki_key_id(&signing_key.verifying_key()));
         snapshot.response_verifying_key = Some(signing_key.verifying_key());
         snapshot.attested_response_context = Some(AttestedResponseContext {
             runtime_manifest_digest: sha256_prefixed(b"test-runtime-manifest"),
@@ -29275,8 +32488,8 @@ mod tests {
         let reservation_expires_at = now_ms + 30_000;
         let response_signing_key = SigningKey::from_bytes(&[91u8; 32]);
         let mut snapshot = (*test_snapshot(1)).clone();
-        snapshot.response_signing_key_id = Some(sha256_prefixed(
-            response_signing_key.verifying_key().as_bytes(),
+        snapshot.response_signing_key_id = Some(test_ed25519_spki_key_id(
+            &response_signing_key.verifying_key(),
         ));
         snapshot.response_verifying_key = Some(response_signing_key.verifying_key());
         snapshot.attested_response_context = Some(AttestedResponseContext {
@@ -34037,8 +37250,8 @@ mod tests {
             "maxLineBytes":1024,
             "allowedFields":["safe"]
         });
-        snapshot_value.response_signing_key_id = Some(sha256_prefixed(
-            response_signing_key.verifying_key().as_bytes(),
+        snapshot_value.response_signing_key_id = Some(test_ed25519_spki_key_id(
+            &response_signing_key.verifying_key(),
         ));
         snapshot_value.response_verifying_key = Some(response_signing_key.verifying_key());
         snapshot_value.attested_response_context = Some(AttestedResponseContext {
@@ -34963,7 +38176,9 @@ mod tests {
     #[test]
     fn response_proof_rejects_cross_wired_client_request_digest() {
         let snapshot = test_snapshot(1);
-        let state = test_gate_state(Arc::clone(&snapshot));
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.response_proof_signer =
+            test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
         let context = ResponseProofContext {
             client_nonce: "test-nonce".to_string(),
             client_nonce_bytes: vec![7; 32],
@@ -35044,6 +38259,13 @@ mod tests {
         .err()
         .expect("cross-wired client request digest must fail before signing");
         assert!(error.contains("client request digest mismatch"));
+        let status = state
+            .response_proof_signer
+            .custody_status()
+            .expect("custody status after assembly failure");
+        assert_eq!(status["proof_assembly_healthy"], false);
+        assert_eq!(status["proof_assembly_failure_count"], 1);
+        assert_eq!(status["sign_success_count"], 0);
     }
 
     #[test]
@@ -38129,9 +41351,14 @@ mod tests {
             .body(br#"{"safe":true}"#.to_vec());
 
         thread::sleep(Duration::from_millis(80));
-        let error =
-            send_upstream_request_with_current_lease(&state, &snapshot, Some(&binding), builder)
-                .expect_err("lease expiring during dispatch must block buffered send");
+        let error = send_upstream_request_with_current_lease(
+            &state,
+            &snapshot,
+            Some(&binding),
+            builder,
+            false,
+        )
+        .expect_err("lease expiring during dispatch must block buffered send");
         assert!(matches!(
             error,
             UpstreamSendError::CredentialAuthority("credential_lease_expired_before_upstream_send")
@@ -38140,6 +41367,306 @@ mod tests {
             listener
                 .accept()
                 .expect_err("expired buffered lease must not contact upstream")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn buffered_proof_rechecks_custody_health_at_the_upstream_send_boundary() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.response_proof_signer =
+            test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
+        let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
+            panic!("custody signer");
+        };
+        let operation = signer.health.begin_probe();
+        signer
+            .health
+            .record_probe_failure(operation, "custody became unavailable");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("proof upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking proof upstream listener");
+        let address = listener.local_addr().expect("proof upstream address");
+        let builder = state
+            .one_shot_upstream_client
+            .get(format!("http://{address}/resource"));
+        let error =
+            send_upstream_request_with_current_lease(&state, &snapshot, None, builder, true)
+                .expect_err("unhealthy custody must block the final upstream send");
+        assert!(matches!(
+            error,
+            UpstreamSendError::CredentialAuthority("response_proof_unavailable")
+        ));
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("unhealthy custody must not contact upstream")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn buffered_proof_revalidates_lease_after_waiting_for_dispatch_permit() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.response_proof_signer =
+            test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
+        let state = Arc::new(state);
+        let binding =
+            cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_secs(5));
+        let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
+            panic!("custody signer");
+        };
+        let blocking_permit = signer.health.acquire_dispatch_permit();
+        let transition_health = Arc::clone(&signer.health);
+        let transition = thread::spawn(move || {
+            let operation = transition_health.begin_probe();
+            transition_health.record_probe_success(operation);
+        });
+        for _ in 0..100 {
+            if signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_transitions
+                != 0
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_ne!(
+            signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_transitions,
+            0
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("proof upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking proof upstream listener");
+        let address = listener.local_addr().expect("proof upstream address");
+        let worker_state = Arc::clone(&state);
+        let worker_snapshot = Arc::clone(&snapshot);
+        let worker_binding = binding.clone();
+        let send = thread::spawn(move || {
+            let builder = worker_state
+                .one_shot_upstream_client
+                .get(format!("http://{address}/resource"));
+            send_upstream_request_with_current_lease(
+                &worker_state,
+                &worker_snapshot,
+                Some(&worker_binding),
+                builder,
+                true,
+            )
+        });
+        for _ in 0..100 {
+            if signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches,
+            1,
+            "the sender must reach the blocked dispatch-permit acquisition"
+        );
+        state
+            .credential_leases
+            .lock()
+            .expect("credential lease cache")
+            .remove(&binding.scope);
+        drop(blocking_permit);
+        transition.join().expect("custody health transition");
+        let error = send
+            .join()
+            .expect("buffered proof send worker")
+            .expect_err("revoked lease must be rechecked after dispatch-permit wait");
+        assert!(matches!(
+            error,
+            UpstreamSendError::CredentialAuthority("credential_lease_changed_before_upstream_send")
+        ));
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("revoked lease must not contact upstream")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn buffered_credentialless_send_revalidates_snapshot_after_dispatch_wait() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.response_proof_signer =
+            test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
+        let state = Arc::new(state);
+        let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
+            panic!("custody signer");
+        };
+        let blocking_transition = signer.health.begin_health_transition();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("proof upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking proof upstream listener");
+        let address = listener.local_addr().expect("proof upstream address");
+        let worker_state = Arc::clone(&state);
+        let worker_snapshot = Arc::clone(&snapshot);
+        let send = thread::spawn(move || {
+            let builder = worker_state
+                .one_shot_upstream_client
+                .get(format!("http://{address}/resource"));
+            send_upstream_request_with_current_lease(
+                &worker_state,
+                &worker_snapshot,
+                None,
+                builder,
+                true,
+            )
+        });
+        for _ in 0..100 {
+            if signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches,
+            1,
+            "credentialless sender must wait for the dispatch permit"
+        );
+        *state.snapshot.write().expect("policy snapshot lock") = test_snapshot(2);
+        drop(blocking_transition);
+        let error = send
+            .join()
+            .expect("credentialless proof send worker")
+            .expect_err("revoked snapshot must be rechecked after dispatch-permit wait");
+        assert!(matches!(
+            error,
+            UpstreamSendError::CredentialAuthority("policy_snapshot_revoked_before_upstream_send")
+        ));
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("revoked snapshot must not contact upstream")
+                .kind(),
+            io::ErrorKind::WouldBlock
+        );
+    }
+
+    #[test]
+    fn buffered_send_revalidates_attested_trust_after_dispatch_wait() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.policy_trust_root_source = PolicyTrustRootSource::AttestedControlPlane {
+            url: "https://control.invalid/trust-root".to_string(),
+            expected_quote_key_id: Some("sha256:quote".to_string()),
+            verifier: None,
+        };
+        state.response_proof_signer =
+            test_custody_response_proof_signer(sha256_prefixed(b"control-plane-response-spki"));
+        let state = Arc::new(state);
+        let ResponseProofSigner::Custody(signer) = &state.response_proof_signer else {
+            panic!("custody signer");
+        };
+        let blocking_transition = signer.health.begin_health_transition();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("proof upstream listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking proof upstream listener");
+        let address = listener.local_addr().expect("proof upstream address");
+        let worker_state = Arc::clone(&state);
+        let worker_snapshot = Arc::clone(&snapshot);
+        let send = thread::spawn(move || {
+            let builder = worker_state
+                .one_shot_upstream_client
+                .get(format!("http://{address}/resource"));
+            send_upstream_request_with_current_lease(
+                &worker_state,
+                &worker_snapshot,
+                None,
+                builder,
+                true,
+            )
+        });
+        for _ in 0..100 {
+            if signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            signer
+                .health
+                .dispatch_coordination
+                .lock()
+                .expect("custody dispatch coordination")
+                .waiting_dispatches,
+            1,
+            "sender must wait before attested trust becomes stale"
+        );
+        *state
+            .policy_trust_last_success
+            .lock()
+            .expect("policy trust timestamp") = Instant::now()
+            .checked_sub(POLICY_TRUST_MAX_AGE + Duration::from_millis(1))
+            .expect("stale trust timestamp");
+        drop(blocking_transition);
+        let error = send
+            .join()
+            .expect("credentialless proof send worker")
+            .expect_err("stale attested trust must be rechecked after dispatch wait");
+        assert!(matches!(
+            error,
+            UpstreamSendError::CredentialAuthority("policy_trust_stale_before_upstream_send")
+        ));
+        assert_eq!(
+            listener
+                .accept()
+                .expect_err("stale attested trust must not contact upstream")
                 .kind(),
             io::ErrorKind::WouldBlock
         );
@@ -38172,9 +41699,14 @@ mod tests {
             .lock()
             .expect("credential generation cache")
             .remove(&binding.scope);
-        let error =
-            send_upstream_request_with_current_lease(&state, &snapshot, Some(&binding), builder)
-                .expect_err("lease revoked during dispatch must block streaming send");
+        let error = send_upstream_request_with_current_lease(
+            &state,
+            &snapshot,
+            Some(&binding),
+            builder,
+            false,
+        )
+        .expect_err("lease revoked during dispatch must block streaming send");
         assert!(matches!(
             error,
             UpstreamSendError::CredentialAuthority("credential_lease_changed_before_upstream_send")
@@ -38211,6 +41743,485 @@ mod tests {
             .expect("credential-bound send timeout");
         assert!(timeout >= MIN_CREDENTIAL_LEASE_UPSTREAM_SEND_WINDOW);
         assert!(timeout < Duration::from_millis(800));
+    }
+
+    #[test]
+    fn upstream_send_expiry_is_sampled_after_credential_lock_contention() {
+        let snapshot = test_snapshot(1);
+        let state = Arc::new(test_gate_state(Arc::clone(&snapshot)));
+        let binding =
+            cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_millis(600));
+        let leases = state
+            .credential_leases
+            .lock()
+            .expect("credential lease cache");
+        let worker_state = Arc::clone(&state);
+        let worker_snapshot = Arc::clone(&snapshot);
+        let worker = thread::spawn(move || {
+            credential_lease_upstream_send_timeout(&worker_state, &worker_snapshot, Some(&binding))
+        });
+        for _ in 0..100 {
+            if state
+                .upstream_send_credential_lock_contentions
+                .load(Ordering::SeqCst)
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            state
+                .upstream_send_credential_lock_contentions
+                .load(Ordering::SeqCst),
+            1,
+            "the validator must reach credential-lock acquisition while the cache is held"
+        );
+        thread::sleep(Duration::from_millis(700));
+        drop(leases);
+        assert_eq!(
+            worker.join().expect("timeout validator"),
+            Err("credential_lease_expired_before_upstream_send")
+        );
+    }
+
+    #[test]
+    fn upstream_send_rechecks_attested_trust_after_credential_lock_contention() {
+        let snapshot = test_snapshot(1);
+        let mut state = test_gate_state(Arc::clone(&snapshot));
+        state.policy_trust_root_source = PolicyTrustRootSource::AttestedControlPlane {
+            url: "https://control.invalid/trust-root".to_string(),
+            expected_quote_key_id: Some("sha256:quote".to_string()),
+            verifier: None,
+        };
+        let state = Arc::new(state);
+        let binding =
+            cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_secs(5));
+        let leases = state
+            .credential_leases
+            .lock()
+            .expect("credential lease cache");
+        let worker_state = Arc::clone(&state);
+        let worker_snapshot = Arc::clone(&snapshot);
+        let worker = thread::spawn(move || {
+            credential_lease_upstream_send_timeout(&worker_state, &worker_snapshot, Some(&binding))
+        });
+        for _ in 0..100 {
+            if state
+                .upstream_send_credential_lock_contentions
+                .load(Ordering::SeqCst)
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            state
+                .upstream_send_credential_lock_contentions
+                .load(Ordering::SeqCst),
+            1,
+            "the validator must pass the initial trust check and reach the held lease cache"
+        );
+        *state
+            .policy_trust_last_success
+            .lock()
+            .expect("policy trust timestamp") = Instant::now()
+            .checked_sub(POLICY_TRUST_MAX_AGE + Duration::from_millis(1))
+            .expect("stale trust timestamp");
+        drop(leases);
+        assert_eq!(
+            worker.join().expect("trust validator"),
+            Err("policy_trust_stale_before_upstream_send")
+        );
+    }
+
+    #[test]
+    fn upstream_dispatch_authority_prioritizes_queued_mutation() {
+        let authority = Arc::new(UpstreamDispatchAuthority::new());
+        let first_send = authority.acquire_send();
+        let mutation_authority = Arc::clone(&authority);
+        let (mutation_entered_tx, mutation_entered_rx) = mpsc::sync_channel(0);
+        let (mutation_release_tx, mutation_release_rx) = mpsc::sync_channel(0);
+        let mutation = thread::spawn(move || {
+            let _mutation = mutation_authority.begin_mutation();
+            mutation_entered_tx
+                .send(())
+                .expect("announce upstream authority mutation");
+            mutation_release_rx
+                .recv()
+                .expect("release upstream authority mutation");
+        });
+        for _ in 0..100 {
+            if authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_mutations
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_mutations,
+            1,
+            "the mutation must register while the first send drains"
+        );
+
+        let send_authority = Arc::clone(&authority);
+        let (send_entered_tx, send_entered_rx) = mpsc::sync_channel(0);
+        let send = thread::spawn(move || {
+            let _send = send_authority.acquire_send();
+            send_entered_tx
+                .send(())
+                .expect("announce second upstream send");
+        });
+        drop(first_send);
+        mutation_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("queued mutation enters before new send");
+        assert!(matches!(
+            send_entered_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        mutation_release_tx
+            .send(())
+            .expect("release upstream authority mutation");
+        mutation.join().expect("upstream mutation worker");
+        send_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second send enters after mutation");
+        send.join().expect("second upstream send worker");
+    }
+
+    #[test]
+    fn upstream_dispatch_authority_serves_mutations_in_ticket_order() {
+        let authority = Arc::new(UpstreamDispatchAuthority::new());
+        let active_send = authority.acquire_send();
+        let first_authority = Arc::clone(&authority);
+        let (first_entered_tx, first_entered_rx) = mpsc::sync_channel(0);
+        let (first_release_tx, first_release_rx) = mpsc::sync_channel(0);
+        let first = thread::spawn(move || {
+            let _mutation = first_authority.begin_mutation();
+            first_entered_tx.send(()).expect("announce first mutation");
+            first_release_rx.recv().expect("release first mutation");
+        });
+        for _ in 0..100 {
+            if authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_mutations
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        let second_authority = Arc::clone(&authority);
+        let (second_entered_tx, second_entered_rx) = mpsc::sync_channel(0);
+        let (second_release_tx, second_release_rx) = mpsc::sync_channel(0);
+        let second = thread::spawn(move || {
+            let _mutation = second_authority.begin_mutation();
+            second_entered_tx
+                .send(())
+                .expect("announce second mutation");
+            second_release_rx.recv().expect("release second mutation");
+        });
+        for _ in 0..100 {
+            if authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_mutations
+                == 2
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_mutations,
+            2
+        );
+
+        drop(active_send);
+        first_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("oldest mutation enters first");
+        assert!(matches!(
+            second_entered_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        first_release_tx.send(()).expect("release first mutation");
+        first.join().expect("first mutation worker");
+        second_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second mutation enters next");
+        second_release_tx.send(()).expect("release second mutation");
+        second.join().expect("second mutation worker");
+    }
+
+    #[test]
+    fn upstream_dispatch_authority_gives_queued_sends_a_turn_between_mutations() {
+        let authority = Arc::new(UpstreamDispatchAuthority::new());
+        let first_mutation = authority.begin_mutation();
+        let second_authority = Arc::clone(&authority);
+        let (second_entered_tx, second_entered_rx) = mpsc::sync_channel(0);
+        let (second_release_tx, second_release_rx) = mpsc::sync_channel(0);
+        let second_mutation = thread::spawn(move || {
+            let _mutation = second_authority.begin_mutation();
+            second_entered_tx
+                .send(())
+                .expect("announce second mutation");
+            second_release_rx.recv().expect("release second mutation");
+        });
+        for _ in 0..100 {
+            if authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_mutations
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        let send_authority = Arc::clone(&authority);
+        let (send_entered_tx, send_entered_rx) = mpsc::sync_channel(0);
+        let (send_release_tx, send_release_rx) = mpsc::sync_channel(0);
+        let send = thread::spawn(move || {
+            let _send = send_authority.acquire_send();
+            send_entered_tx.send(()).expect("announce queued send");
+            send_release_rx.recv().expect("release queued send");
+        });
+        for _ in 0..100 {
+            if authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_sends
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_sends,
+            1,
+            "the send must queue behind the active mutation"
+        );
+
+        drop(first_mutation);
+        send_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("queued send enters before the second mutation");
+        assert!(matches!(
+            second_entered_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        let late_send_authority = Arc::clone(&authority);
+        let (late_send_entered_tx, late_send_entered_rx) = mpsc::sync_channel(0);
+        let late_send = thread::spawn(move || {
+            let _send = late_send_authority.acquire_send();
+            late_send_entered_tx.send(()).expect("announce late send");
+        });
+        for _ in 0..100 {
+            if authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_sends
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_sends,
+            1,
+            "a send arriving after cohort handoff must wait for the next phase"
+        );
+        send_release_tx.send(()).expect("release queued send");
+        send.join().expect("queued send worker");
+        second_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("second mutation enters after the send phase");
+        assert!(matches!(
+            late_send_entered_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+        second_release_tx.send(()).expect("release second mutation");
+        second_mutation.join().expect("second mutation worker");
+        late_send_entered_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("late send enters after the second mutation");
+        late_send.join().expect("late send worker");
+    }
+
+    #[test]
+    fn credential_rotation_waits_for_in_flight_upstream_send() {
+        let snapshot = test_snapshot(1);
+        let state = Arc::new(test_gate_state(Arc::clone(&snapshot)));
+        let binding =
+            cache_test_credential_lease_for_send(&state, &snapshot, Duration::from_secs(5));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("upstream listener");
+        let address = listener.local_addr().expect("upstream address");
+        let (accepted_tx, accepted_rx) = mpsc::sync_channel(0);
+        let (respond_tx, respond_rx) = mpsc::sync_channel(0);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept upstream request");
+            accepted_tx.send(()).expect("announce upstream connection");
+            respond_rx.recv().expect("release upstream response");
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+                .expect("write upstream response");
+        });
+        let send_state = Arc::clone(&state);
+        let send_snapshot = Arc::clone(&snapshot);
+        let send_binding = binding.clone();
+        let send = thread::spawn(move || {
+            let builder = send_state
+                .one_shot_upstream_client
+                .get(format!("http://{address}/resource"));
+            send_upstream_request_with_current_lease(
+                &send_state,
+                &send_snapshot,
+                Some(&send_binding),
+                builder,
+                false,
+            )
+        });
+        accepted_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("upstream send reaches server");
+
+        let rotation_state = Arc::clone(&state);
+        let rotation_snapshot = Arc::clone(&snapshot);
+        let rotation_scope = binding.scope.clone();
+        let rotation_version = binding.version + 1;
+        let (rotation_done_tx, rotation_done_rx) = mpsc::sync_channel(0);
+        let rotation = thread::spawn(move || {
+            let lease = SecretLease {
+                scope: rotation_scope.clone(),
+                version: rotation_version,
+                secret: Zeroizing::new("rotated-upstream-secret".to_string()),
+                metadata: BTreeMap::new(),
+                policy_hash: rotation_snapshot.hash.clone(),
+                expires_at_epoch_ms: now_epoch_ms() + 5_000,
+                expires_at_monotonic: Instant::now() + Duration::from_secs(5),
+            };
+            cache_scoped_credential_lease(
+                &rotation_state,
+                &rotation_snapshot,
+                &rotation_scope,
+                lease,
+            )
+            .expect("rotate credential after send");
+            rotation_done_tx.send(()).expect("announce rotation");
+        });
+        for _ in 0..100 {
+            if state
+                .upstream_dispatch_authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_mutations
+                == 1
+            {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(
+            state
+                .upstream_dispatch_authority
+                .state
+                .lock()
+                .expect("upstream dispatch authority")
+                .waiting_mutations,
+            1,
+            "credential rotation must queue behind the active upstream send"
+        );
+        assert!(matches!(
+            rotation_done_rx.try_recv(),
+            Err(mpsc::TryRecvError::Empty)
+        ));
+
+        respond_tx.send(()).expect("release upstream response");
+        assert_eq!(
+            send.join()
+                .expect("upstream send worker")
+                .expect("upstream send")
+                .status(),
+            StatusCode::OK
+        );
+        server.join().expect("upstream server");
+        rotation_done_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("credential rotation completes after send");
+        rotation.join().expect("credential rotation worker");
+        assert_eq!(
+            state
+                .credential_leases
+                .lock()
+                .expect("credential lease cache")
+                .get(&binding.scope)
+                .expect("rotated credential lease")
+                .version,
+            rotation_version
+        );
+    }
+
+    #[test]
+    fn stale_snapshot_lookup_preserves_the_current_credential_lease() {
+        let stale = test_snapshot(1);
+        let current = test_snapshot(2);
+        let state = test_gate_state(Arc::clone(&current));
+        let scope = CredentialLeaseScope::new("agent:test", "route:test", "credential:test");
+        let lease = SecretLease {
+            scope: scope.clone(),
+            version: 9,
+            secret: Zeroizing::new("current-secret".to_string()),
+            metadata: BTreeMap::new(),
+            policy_hash: current.hash.clone(),
+            expires_at_epoch_ms: now_epoch_ms() + 5_000,
+            expires_at_monotonic: Instant::now() + Duration::from_secs(5),
+        };
+        cache_scoped_credential_lease(&state, &current, &scope, lease)
+            .expect("cache current credential lease");
+
+        assert!(cached_credential_lease_info(&state, &stale, &scope).is_none());
+        let leases = state
+            .credential_leases
+            .lock()
+            .expect("credential lease cache");
+        let preserved = leases.get(&scope).expect("current lease is preserved");
+        assert_eq!(preserved.version, 9);
+        assert_eq!(preserved.policy_hash, current.hash);
     }
 
     #[test]

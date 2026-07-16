@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import copy
 import json
 import hashlib
 import os
@@ -85,6 +86,19 @@ def assert_dockerignore() -> None:
         raise AssertionError(f".dockerignore does not exclude local build/secrets material: {missing}")
 
 
+def services_mounting_source(model: dict[str, object], source: str) -> set[str]:
+    services = model.get("services") or {}
+    return {
+        str(service)
+        for service, raw_config in services.items()
+        if isinstance(raw_config, dict)
+        and any(
+            isinstance(mount, dict) and mount.get("source") == source
+            for mount in (raw_config.get("volumes") or [])
+        )
+    }
+
+
 def assert_production_dependencies() -> None:
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8").lower()
     if "mitmproxy" in requirements:
@@ -116,6 +130,92 @@ def assert_production_dependencies() -> None:
         raise AssertionError("default docker-compose.yml must not enable the mitmproxy prototype")
     if '"127.0.0.1:8080:9090"' not in compose:
         raise AssertionError("default docker-compose.yml must expose the Rust decision gate on a loopback-only agent proxy port")
+    dev_result = subprocess.run(
+        ["docker", "compose", "--profile", "custody", "config", "--format", "json"],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if dev_result.returncode != 0:
+        raise AssertionError(
+            f"development Compose model did not parse: {dev_result.stderr.decode(errors='replace')}"
+        )
+    dev_model = json.loads(dev_result.stdout)
+    try:
+        generate_release_provenance.development_compose_services(
+            dev_model, ["docker-compose.yml"], ["custody"]
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(
+            "custody provenance accepted the profile without the required override"
+        )
+    custody_result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--profile",
+            "custody",
+            "-f",
+            "docker-compose.yml",
+            "-f",
+            "docker-compose.custody.yml",
+            "config",
+            "--format",
+            "json",
+        ],
+        cwd=ROOT,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if custody_result.returncode != 0:
+        raise AssertionError(
+            f"custody Compose model did not parse: {custody_result.stderr.decode(errors='replace')}"
+        )
+    custody_model = json.loads(custody_result.stdout)
+    if (
+        generate_release_provenance.development_compose_services(
+            custody_model,
+            ["docker-compose.yml", "docker-compose.custody.yml"],
+            ["custody"],
+        )
+        != generate_release_provenance.CUSTODY_DEV_SERVICES
+    ):
+        raise AssertionError("merged custody Compose topology was not classified exactly")
+    wrong_client_uid = copy.deepcopy(custody_model)
+    wrong_client_uid["services"]["custody-runtime"]["environment"][
+        "SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID"
+    ] = "0"
+    try:
+        generate_release_provenance.development_compose_services(
+            wrong_client_uid,
+            ["docker-compose.yml", "docker-compose.custody.yml"],
+            ["custody"],
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("custody provenance accepted the wrong authenticated client UID")
+    if services_mounting_source(dev_model, "serverware-response-signing-private") != {"serverware"}:
+        raise AssertionError("development response-signing private volume must be mounted only by the control plane")
+    if services_mounting_source(dev_model, "serverware-custody-state") != {"custody-runtime"}:
+        raise AssertionError("development custody state volume must be mounted only by custody")
+    if (
+        (dev_model["services"]["custody-runtime"].get("environment") or {}).get(
+            "SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY"
+        )
+        != "/var/lib/serverware-custody"
+    ):
+        raise AssertionError("development custody must use its private persistent attempt ledger")
+    dev_serverware_env = dev_model["services"]["serverware"].get("environment") or {}
+    if (
+        dev_serverware_env.get("SERVERWARE_RESPONSE_SIGNING_KEY")
+        != "/run/serverware/response-signing-private/response-signing-ed25519.pem"
+    ):
+        raise AssertionError("development response-signing key must use the control-plane-only volume")
     production_compose_path = ROOT / "docker-compose.production.yml"
     production_compose = production_compose_path.read_text(encoding="utf-8")
     if "SERVERWARE_DECISION_GATE_BASE" in production_compose:
@@ -152,6 +252,8 @@ def assert_production_dependencies() -> None:
         "SERVERWARE_AUDIT_ANCHOR_TLS_DIR": "/tmp/serverware-compose-test-anchor-tls",
     }
     compose_env.update(bind_mount_fixtures)
+    compose_env["SERVERWARE_CONTROL_PLANE_IMAGE"] = "registry.test/serverware-control@sha256:" + "1" * 64
+    compose_env["SERVERWARE_DECISION_GATE_IMAGE"] = "registry.test/serverware-gate@sha256:" + "2" * 64
     result = subprocess.run(
         ["docker", "compose", "-f", str(production_compose_path), "config", "--format", "json"],
         cwd=ROOT,
@@ -163,6 +265,160 @@ def assert_production_dependencies() -> None:
     if result.returncode != 0:
         raise AssertionError(f"production Compose model did not parse: {result.stderr.decode(errors='replace')}")
     model = json.loads(result.stdout)
+    generate_release_provenance.validate_production_custody_topology(model, compose_env)
+
+    def expect_custody_topology_rejection(label: str, mutate: object) -> None:
+        candidate = copy.deepcopy(model)
+        mutate(candidate)
+        try:
+            generate_release_provenance.validate_production_custody_topology(
+                candidate, compose_env
+            )
+        except ValueError:
+            return
+        raise AssertionError(f"production custody validator accepted {label}")
+
+    def set_service_value(service: str, key: str, value: object):
+        return lambda candidate: candidate["services"][service].__setitem__(key, value)
+
+    def set_service_env(service: str, key: str, value: str):
+        return lambda candidate: candidate["services"][service]["environment"].__setitem__(key, value)
+
+    def make_mount_writable(service: str, target: str):
+        def mutate(candidate: dict[str, object]) -> None:
+            for mount in candidate["services"][service]["volumes"]:
+                if mount.get("target") == target:
+                    mount["read_only"] = False
+                    return
+            raise AssertionError(f"fixture mount missing: {service} {target}")
+
+        return mutate
+
+    def leak_private_key(candidate: dict[str, object]) -> None:
+        private_mount = next(
+            mount
+            for mount in candidate["services"]["serverware"]["volumes"]
+            if mount.get("source")
+            == bind_mount_fixtures["SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"]
+        )
+        candidate["services"]["decision-gate-rs"]["volumes"].append(
+            copy.deepcopy(private_mount)
+        )
+
+    def leak_private_key_parent(candidate: dict[str, object]) -> None:
+        candidate["services"]["decision-gate-rs"]["volumes"].append(
+            {
+                "type": "bind",
+                "source": str(
+                    Path(
+                        bind_mount_fixtures[
+                            "SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"
+                        ]
+                    ).parent
+                ),
+                "target": "/run/serverware/leaked-host-parent",
+                "read_only": True,
+            }
+        )
+
+    def leak_custody_state(candidate: dict[str, object]) -> None:
+        state_mount = next(
+            mount
+            for mount in candidate["services"]["custody-runtime"]["volumes"]
+            if mount.get("source") == "serverware-custody-state"
+        )
+        candidate["services"]["serverware"]["volumes"].append(copy.deepcopy(state_mount))
+
+    def alter_pinned_healthcheck(candidate: dict[str, object]) -> None:
+        candidate["services"]["serverware"]["healthcheck"]["test"][3] += "; pass"
+
+    for label, mutate in (
+        ("custody network access", set_service_value("custody-runtime", "network_mode", None)),
+        ("custody sharing the gate UID", set_service_value("custody-runtime", "user", "65532:65530")),
+        ("wrong custody client UID", set_service_env("custody-runtime", "SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID", "65531")),
+        ("wrong gate custody UID", set_service_env("decision-gate-rs", "SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID", "65532")),
+        ("missing gate socket GID", set_service_value("decision-gate-rs", "group_add", [])),
+        ("writable custody trust mount", make_mount_writable("custody-runtime", "/run/serverware/custody-trust")),
+        ("writable gate socket mount", make_mount_writable("decision-gate-rs", "/run/serverware-custody")),
+        ("private key leaked to the gate", leak_private_key),
+        ("private key parent leaked to the gate", leak_private_key_parent),
+        ("custody state leaked to the control plane", leak_custody_state),
+        (
+            "control-plane readiness without active key and HTTPS checks",
+            set_service_value("serverware", "healthcheck", {"test": ["CMD", "true"]}),
+        ),
+        ("altered marker-preserving control-plane readiness", alter_pinned_healthcheck),
+        ("custody racing trust publication", lambda candidate: candidate["services"]["custody-runtime"]["depends_on"]["serverware"].__setitem__("condition", "service_started")),
+    ):
+        expect_custody_topology_rejection(label, mutate)
+
+    if set(model["services"]) != {
+        "serverware",
+        "audit-anchor",
+        "custody-runtime",
+        "decision-gate-rs",
+    }:
+        raise AssertionError(f"production Compose service set is not closed and complete: {sorted(model['services'])}")
+    custody = model["services"]["custody-runtime"]
+    gate = model["services"]["decision-gate-rs"]
+    healthcheck_command = model["services"]["serverware"]["healthcheck"]["test"][3]
+    if (
+        "validate_response_signing_key_custody" not in healthcheck_command
+        or "sys.exit(1)" not in healthcheck_command
+        or "assert " in healthcheck_command
+        or "__debug__" in healthcheck_command
+    ):
+        raise AssertionError(
+            "production control-plane readiness is not explicit under optimized Python"
+        )
+    if custody.get("image") != gate.get("image") or custody.get("build"):
+        raise AssertionError("production custody must use the immutable decision-gate image without a build override")
+    if custody.get("user") != "65531:65530" or gate.get("user") != "65532:65532":
+        raise AssertionError("production custody and gate must use explicit distinct UIDs")
+    if custody.get("network_mode") != "none":
+        raise AssertionError("production custody must have no network namespace access")
+    if custody.get("entrypoint") != ["/usr/local/bin/serverware-custody-runtime"]:
+        raise AssertionError("production custody must override the gate entrypoint with the embedded custody runtime")
+    if services_mounting_source(model, bind_mount_fixtures["SERVERWARE_RESPONSE_SIGNING_PRIVATE_KEY_FILE"]) != {"serverware"}:
+        raise AssertionError("production control-plane response-signing private key must not be mounted by gate or custody")
+    gate_ca_mounts = [
+        mount
+        for mount in gate.get("volumes") or []
+        if mount.get("target") == "/run/serverware/tls/ca.pem"
+    ]
+    if (
+        len(gate_ca_mounts) != 1
+        or gate_ca_mounts[0].get("source")
+        != bind_mount_fixtures["SERVERWARE_CONTROL_PLANE_TLS_DIR"] + "/ca.pem"
+        or gate_ca_mounts[0].get("read_only") is not True
+    ):
+        raise AssertionError(
+            "production decision gate must mount only the control-plane CA file"
+        )
+    if services_mounting_source(model, "serverware-custody-state") != {"custody-runtime"}:
+        raise AssertionError("production custody state volume must be mounted only by custody")
+    if services_mounting_source(model, "serverware-custody-trust") != {"serverware", "custody-runtime"}:
+        raise AssertionError("production custody trust volume must be shared only by control plane and custody")
+    if services_mounting_source(model, "serverware-custody-socket") != {"custody-runtime", "decision-gate-rs"}:
+        raise AssertionError("production custody socket volume must be shared only by custody and decision gate")
+    custody_env = custody.get("environment") or {}
+    if custody_env.get("SERVERWARE_CUSTODY_EXPECTED_CLIENT_UID") != "65532":
+        raise AssertionError("production custody must authenticate the explicit decision-gate UID")
+    if (
+        custody_env.get("SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY")
+        != "/var/lib/serverware-custody"
+    ):
+        raise AssertionError("production custody must use its private persistent attempt ledger")
+    gate_environment = gate.get("environment") or {}
+    if (
+        gate_environment.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_SOCKET")
+        != "/run/serverware-custody/custody.sock"
+        or gate_environment.get("SERVERWARE_RESPONSE_PROOF_CUSTODY_EXPECTED_UID") != "65531"
+    ):
+        raise AssertionError("production decision gate must pin the custody socket and distinct custody UID")
+    gate_dockerfile = (ROOT / "data-plane" / "decision-gate-rs" / "Dockerfile.production").read_text(encoding="utf-8")
+    if "serverware-custody-runtime /usr/local/bin/serverware-custody-runtime" not in gate_dockerfile:
+        raise AssertionError("production decision-gate image must contain the custody runtime binary")
     control_ports = model["services"]["serverware"].get("ports") or []
     if len(control_ports) != 1 or control_ports[0].get("host_ip") != "127.0.0.1":
         raise AssertionError(f"production control plane must be loopback-bound behind the deployment ingress: {control_ports}")
@@ -176,7 +432,6 @@ def assert_production_dependencies() -> None:
     gate_targets = {str(mount.get("target")) for mount in gate_mounts}
     if "/data" in gate_targets or "/run/serverware/gate" not in gate_targets:
         raise AssertionError(f"production decision gate has an unsafe private-state mount: {gate_mounts}")
-    gate_environment = model["services"]["decision-gate-rs"].get("environment") or {}
     for name in (
         "SERVERWARE_ATTESTATION_EXECUTABLE_SHA256_MANIFEST",
         "SERVERWARE_POLICY_HIGH_WATER_FILE",
@@ -203,6 +458,26 @@ def assert_reproducible_rust_binary_config() -> None:
     cargo = (ROOT / "data-plane" / "decision-gate-rs" / "Cargo.toml").read_text(encoding="utf-8")
     if "[profile.release]" not in cargo or 'strip = "symbols"' not in cargo:
         raise AssertionError("Rust release binaries must strip nondeterministic symbol tables")
+
+
+def assert_custody_ledger_image_seed() -> None:
+    for relative, ownership in (
+        ("data-plane/decision-gate-rs/Dockerfile", "10002:10003"),
+        ("data-plane/decision-gate-rs/Dockerfile.production", "65531:65530"),
+    ):
+        dockerfile = (ROOT / relative).read_text(encoding="utf-8")
+        required = (
+            "SERVERWARE_CUSTODY_ATTEMPT_LEDGER_DIRECTORY=/runtime-layout/serverware-custody-state",
+            "/src/target/release/serverware-custody-runtime --initialize-attempt-ledger",
+            f"COPY --from=build --chown={ownership} --chmod=0700 /runtime-layout/serverware-custody-state /var/lib/serverware-custody",
+            f"COPY --from=build --chown={ownership} --chmod=0600 /runtime-layout/serverware-custody-state/manifest.json /var/lib/serverware-custody/manifest.json",
+            f"COPY --from=build --chown={ownership} --chmod=0600 /runtime-layout/serverware-custody-state/ledger.lock /var/lib/serverware-custody/ledger.lock",
+        )
+        missing = [value for value in required if value not in dockerfile]
+        if missing:
+            raise AssertionError(
+                f"{relative} does not seed a fresh custody ledger in the image: {missing}"
+            )
 
 
 def assert_gate_response_context_publish_wait() -> None:
@@ -835,6 +1110,7 @@ def main() -> None:
     assert_dockerignore()
     assert_production_dependencies()
     assert_reproducible_rust_binary_config()
+    assert_custody_ledger_image_seed()
     assert_gate_response_context_publish_wait()
     assert_static_launcher_artifact_embedded()
     assert_launcher_digest_measurement_contract()

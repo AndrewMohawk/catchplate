@@ -18,3 +18,7 @@ services:
   decision-gate-rs:
     security_opt:
       - apparmor=serverware-docker
+
+  custody-runtime:
+    security_opt:
+      - apparmor=serverware-docker

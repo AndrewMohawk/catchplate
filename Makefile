@@ -2,6 +2,7 @@
 
 PRODUCTION_READINESS_CLAIMS_FILE ?= .tmp/production-readiness-claims.json
 PLAYWRIGHT_RUN ?= uv run --isolated --python 3.11 --with-requirements requirements.lock --with playwright==1.61.0
+TEST_PYTHON_RUN ?= uv run --isolated --python 3.11 --with-requirements requirements.lock python
 MITMPROXY_TEST_RUN ?= uv run --isolated --python 3.11 --with mitmproxy==11.0.2 --with fastapi==0.136.1 --with cbor2==5.9.0 --with jsonschema==4.23.0 --with 'psycopg[binary]==3.2.3' --with python-multipart==0.0.31 --with 'uvicorn[standard]==0.34.0'
 PRODUCTION_READINESS_CLAIMS_ARGS ?=
 PRODUCTION_READINESS_OUT ?= .tmp/production-readiness.json
@@ -136,12 +137,12 @@ bench-gate-rs:
 			./scripts/test_decision_gate_form_urlencoded_streaming.sh
 			./scripts/test_decision_gate_csv_streaming.sh
 				./scripts/test_decision_gate_response.sh
-	./scripts/generate_release_provenance.py > .tmp/release-provenance-summary.json
+	$(TEST_PYTHON_RUN) scripts/generate_release_provenance.py > .tmp/release-provenance-summary.json
 	cat .tmp/release-provenance-summary.json
 				./scripts/test_response_proof_capture.sh
 	docker compose exec -T serverware python scripts/test_webauthn_attestation.py
-	python3 scripts/verify_decision_gate_attestation.py
-	./scripts/test_key_release_gate.py
+	$(TEST_PYTHON_RUN) scripts/verify_decision_gate_attestation.py
+	$(TEST_PYTHON_RUN) scripts/test_key_release_gate.py
 	docker compose exec -T -e SERVERWARE_TEE_QUOTE_PROVIDER=external-command -e SERVERWARE_TEE_PLATFORM=fixture-tee -e "SERVERWARE_TEE_QUOTE_COMMAND=python scripts/external_tee_provider.py quote" -e "SERVERWARE_TEE_QUOTE_VERIFY_COMMAND=python scripts/external_tee_provider.py verify" -e "SERVERWARE_KEY_RELEASE_COMMAND=python scripts/external_tee_provider.py release" serverware python scripts/test_external_tee_provider.py
 	docker compose exec -T serverware python scripts/test_nitro_tee_provider.py
 		./scripts/test_decision_gate_approval_publish.sh
@@ -151,8 +152,8 @@ bench-gate-rs:
 		docker compose exec -T serverware python scripts/test_ca_install_sessions.py
 		docker compose exec -T serverware python scripts/test_control_plane_csrf.py
 			docker compose exec -T serverware python scripts/test_control_plane_oidc.py
-			python3 scripts/test_http_client.py
-			python3 scripts/test_oauth_credentials.py --compose-contract-only
+			$(TEST_PYTHON_RUN) scripts/test_http_client.py
+			$(TEST_PYTHON_RUN) scripts/test_oauth_credentials.py --compose-contract-only
 			docker compose exec -T serverware python scripts/test_oauth_credentials.py
 			docker compose exec -T serverware python scripts/test_oauth_http_flow.py
 			$(MAKE) verify-portal-browser-oauth
@@ -168,14 +169,14 @@ bench-gate-rs:
 		docker compose exec -T serverware python scripts/test_policy_canary_workflow.py
 		docker compose exec -T serverware python scripts/test_audit_search.py
 		docker compose exec -T serverware python scripts/test_audit_export.py
-		python3 scripts/test_agent_enrollment.py
-		python3 scripts/test_transparency_checkpoint.py
-		python3 scripts/test_nitro_nsm_attest.py
+		$(TEST_PYTHON_RUN) scripts/test_agent_enrollment.py
+		$(TEST_PYTHON_RUN) scripts/test_transparency_checkpoint.py
+		$(TEST_PYTHON_RUN) scripts/test_nitro_nsm_attest.py
 		docker compose exec -T serverware python scripts/test_aws_kms_recipient_release.py
 		docker compose exec -T serverware python scripts/test_aws_nitro_kms_unseal.py
 		docker compose exec -T serverware python scripts/test_prepare_aws_kms_materials.py
-		python3 scripts/test_production_readiness_claims.py
-		python3 scripts/test_production_readiness.py
+		$(TEST_PYTHON_RUN) scripts/test_production_readiness_claims.py
+		$(TEST_PYTHON_RUN) scripts/test_production_readiness.py
 		$(MAKE) verify-production-readiness-runner
 		$(MAKE) verify-release-completion
 		docker compose exec -T serverware python scripts/test_portal_agent_enrollment_ui.py
@@ -220,7 +221,7 @@ bench-gate-rs:
 		SERVERWARE_COSIGN_YES=1 \
 		SERVERWARE_RELEASE_ANCHOR_CA_BUNDLE= \
 		SERVERWARE_REQUIRE_SIGSTORE_TRANSPARENCY=1 \
-		python3 scripts/sign_release_images.py \
+		$(TEST_PYTHON_RUN) scripts/sign_release_images.py \
 			--base http://localhost:3000 \
 			--gate http://localhost:9090 \
 			--anchor http://localhost:9100 \
@@ -683,7 +684,7 @@ verify-production-readiness-claims:
 	python3 scripts/test_production_readiness_claims.py
 
 verify-production-readiness-runner:
-	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_run_production_readiness.py
+	$(TEST_PYTHON_RUN) scripts/test_run_production_readiness.py
 
 verify-release-completion:
 	uvx --with jsonschema==4.23.0 --with cryptography==48.0.1 python scripts/test_release_completion.py

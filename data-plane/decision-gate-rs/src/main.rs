@@ -497,6 +497,7 @@ struct GateState {
     policy_path: String,
     policy_trust_root_source: PolicyTrustRootSource,
     policy_mtime: Mutex<Option<SystemTime>>,
+    release_evidence_mtimes: Mutex<(Option<SystemTime>, Option<SystemTime>)>,
     policy_trust_refresh_due: Mutex<Instant>,
     policy_trust_last_success: Mutex<Instant>,
     policy_reload_success: AtomicU64,
@@ -1008,7 +1009,7 @@ impl PolicyTrustRootSource {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 struct AttestedResponseContext {
     runtime_manifest_digest: String,
     policy_bundle_digest: String,
@@ -5949,8 +5950,30 @@ fn file_mtime(path: &str) -> Option<SystemTime> {
         .ok()
 }
 
+fn release_evidence_mtimes(
+    provenance_path: Option<&str>,
+    image_signatures_path: Option<&str>,
+) -> (Option<SystemTime>, Option<SystemTime>) {
+    (
+        provenance_path.and_then(file_mtime),
+        image_signatures_path.and_then(file_mtime),
+    )
+}
+
 fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, String> {
     let mtime = file_mtime(&state.policy_path);
+    let evidence_mtimes = release_evidence_mtimes(
+        state.release_provenance_path.as_deref(),
+        state.image_signatures_path.as_deref(),
+    );
+    let evidence_changed = matches!(
+        state.policy_trust_root_source,
+        PolicyTrustRootSource::AttestedControlPlane { .. }
+    ) && *state
+        .release_evidence_mtimes
+        .lock()
+        .expect("release evidence mtime mutex poisoned")
+        != evidence_mtimes;
     let trust_refresh_due = matches!(
         state.policy_trust_root_source,
         PolicyTrustRootSource::AttestedControlPlane { .. }
@@ -5959,7 +5982,7 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
             .policy_trust_refresh_due
             .lock()
             .expect("policy trust refresh mutex poisoned");
-    if !force && !trust_refresh_due {
+    if !force && !trust_refresh_due && !evidence_changed {
         let seen = state
             .policy_mtime
             .lock()
@@ -6026,6 +6049,10 @@ fn refresh_policy_snapshot(state: &GateState, force: bool) -> Result<bool, Strin
                     .expect("policy mtime mutex poisoned");
                 *seen = mtime;
             }
+            *state
+                .release_evidence_mtimes
+                .lock()
+                .expect("release evidence mtime mutex poisoned") = evidence_mtimes;
             {
                 let mut due = state
                     .policy_trust_refresh_due
@@ -22953,6 +22980,7 @@ fn handle_connection(stream: TcpStream, state: Arc<GateState>, management_listen
                         "policy_hash":snapshot.hash,
                         "policy_signing_key_id":snapshot.policy_signing_key_id,
                         "policy_trust_root_source":state.policy_trust_root_source.label(),
+                        "attested_response_context":snapshot.attested_response_context,
                         "data_plane_binary_digest":state.binary_digest,
                         "routes":snapshot.routes.len(),
                         "grants":state.grants.lock().expect("grant cache mutex poisoned").len(),
@@ -23618,6 +23646,10 @@ fn main() -> Result<(), String> {
     let release_provenance_path = env::var("SERVERWARE_RELEASE_PROVENANCE").ok();
     let image_signatures_path = env::var("SERVERWARE_IMAGE_SIGNATURES").ok();
     let initial_policy_mtime = file_mtime(&policy_path);
+    let initial_release_evidence_mtimes = release_evidence_mtimes(
+        release_provenance_path.as_deref(),
+        image_signatures_path.as_deref(),
+    );
     let binary_digest = current_binary_digest()?;
     let mut initial_snapshot =
         load_snapshot(&policy_path, &policy_trust_root_source, &binary_digest)?;
@@ -23642,6 +23674,7 @@ fn main() -> Result<(), String> {
         policy_path,
         policy_trust_root_source,
         policy_mtime: Mutex::new(initial_policy_mtime),
+        release_evidence_mtimes: Mutex::new(initial_release_evidence_mtimes),
         policy_trust_refresh_due: Mutex::new(Instant::now() + POLICY_TRUST_REFRESH_INTERVAL),
         policy_trust_last_success: Mutex::new(Instant::now()),
         policy_reload_success: AtomicU64::new(0),
@@ -23891,6 +23924,7 @@ mod tests {
                 "/unused/test-policy-key.pem".to_string(),
             ),
             policy_mtime: Mutex::new(None),
+            release_evidence_mtimes: Mutex::new((None, None)),
             policy_trust_refresh_due: Mutex::new(Instant::now()),
             policy_trust_last_success: Mutex::new(Instant::now()),
             policy_reload_success: AtomicU64::new(0),
@@ -23953,6 +23987,34 @@ mod tests {
             response_proof_attestation_command: None,
             server_instance_id: None,
         }
+    }
+
+    #[test]
+    fn release_evidence_mtimes_detect_published_artifacts() {
+        let suffix = format!("{}-{}", std::process::id(), now_epoch_ms());
+        let provenance = env::temp_dir().join(format!("serverware-provenance-{suffix}.json"));
+        let signatures = env::temp_dir().join(format!("serverware-image-signatures-{suffix}.json"));
+        let provenance_path = provenance.to_string_lossy().into_owned();
+        let signatures_path = signatures.to_string_lossy().into_owned();
+
+        assert_eq!(
+            release_evidence_mtimes(Some(&provenance_path), Some(&signatures_path)),
+            (None, None)
+        );
+        fs::write(&provenance, b"{}\n").expect("publish provenance fixture");
+        let after_provenance =
+            release_evidence_mtimes(Some(&provenance_path), Some(&signatures_path));
+        assert!(after_provenance.0.is_some());
+        assert!(after_provenance.1.is_none());
+
+        fs::write(&signatures, b"{}\n").expect("publish image signatures fixture");
+        let after_signatures =
+            release_evidence_mtimes(Some(&provenance_path), Some(&signatures_path));
+        assert!(after_signatures.0.is_some());
+        assert!(after_signatures.1.is_some());
+
+        fs::remove_file(provenance).expect("remove provenance fixture");
+        fs::remove_file(signatures).expect("remove image signatures fixture");
     }
 
     fn parse_head(raw: &[u8]) -> Result<RequestHead, String> {

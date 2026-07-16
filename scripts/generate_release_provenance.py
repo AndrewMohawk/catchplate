@@ -1178,6 +1178,30 @@ def write_container_file(service: str, path: str, data: bytes) -> None:
     )
 
 
+def wait_for_gate_response_context(
+    gate_base: str,
+    field: str,
+    expected_digest: str,
+    *,
+    timeout: float = 10,
+) -> dict[str, Any]:
+    deadline = time.time() + timeout
+    last: dict[str, Any] = {}
+    while time.time() < deadline:
+        try:
+            last = request_json(f"{gate_base.rstrip('/')}/healthz")
+        except Exception:
+            time.sleep(0.25)
+            continue
+        context = last.get("attested_response_context") or {}
+        if context.get(field) == expected_digest:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(
+        f"decision-gate signed response context did not adopt {field}={expected_digest}: {last}"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate signed Serverware release provenance and anchor it."
@@ -1453,6 +1477,11 @@ def main() -> None:
     if not args.production:
         atomic_write_json(out_path, document)
         write_container_file("serverware", args.container_out, out_path.read_bytes())
+        wait_for_gate_response_context(
+            args.gate,
+            "provenance_digest",
+            provenance_digest,
+        )
         published_control = request_json(
             f"{args.base.rstrip('/')}/attestation?nonce={nonce}-published-control"
         )

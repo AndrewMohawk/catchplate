@@ -737,17 +737,27 @@ def main() -> None:
     if not production_refs:
         write_container_file("serverware", args.container_out, out_path.read_bytes())
         deadline = time.time() + 10
-        control = gate = {}
+        control = gate = gate_health = {}
         while time.time() < deadline:
             control = request_json(f"{args.base.rstrip('/')}/attestation?nonce=image-signatures-control")
             gate = request_json(f"{args.gate.rstrip('/')}/attestation?nonce=image-signatures-gate")
-            if control.get("image_signatures_digest") == bundle_digest and gate.get("image_signatures_digest") == bundle_digest:
+            gate_health = request_json(f"{args.gate.rstrip('/')}/healthz")
+            gate_context = gate_health.get("attested_response_context") or {}
+            if (
+                control.get("image_signatures_digest") == bundle_digest
+                and gate.get("image_signatures_digest") == bundle_digest
+                and gate_context.get("image_signatures_digest") == bundle_digest
+            ):
                 break
             time.sleep(0.25)
         if control.get("image_signatures_digest") != bundle_digest:
             raise RuntimeError(f"control-plane attestation did not bind image signatures digest: {control}")
         if gate.get("image_signatures_digest") != bundle_digest:
             raise RuntimeError(f"decision-gate attestation did not bind image signatures digest: {gate}")
+        if (gate_health.get("attested_response_context") or {}).get("image_signatures_digest") != bundle_digest:
+            raise RuntimeError(
+                f"decision-gate signed response context did not bind image signatures digest: {gate_health}"
+            )
         if (control.get("quote") or {}).get("claims", {}).get("image_signatures_digest") != bundle_digest:
             raise RuntimeError(f"control-plane quote did not bind image signatures digest: {control}")
 

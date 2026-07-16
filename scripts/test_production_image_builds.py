@@ -202,6 +202,25 @@ def assert_reproducible_rust_binary_config() -> None:
     cargo = (ROOT / "data-plane" / "decision-gate-rs" / "Cargo.toml").read_text(encoding="utf-8")
     if "[profile.release]" not in cargo or 'strip = "symbols"' not in cargo:
         raise AssertionError("Rust release binaries must strip nondeterministic symbol tables")
+
+
+def assert_gate_response_context_publish_wait() -> None:
+    expected = "sha256:" + "a" * 64
+    with mock.patch.object(
+        generate_release_provenance,
+        "request_json",
+        side_effect=[
+            {"attested_response_context": {"provenance_digest": None}},
+            {"attested_response_context": {"provenance_digest": expected}},
+        ],
+    ), mock.patch.object(generate_release_provenance.time, "sleep"):
+        observed = generate_release_provenance.wait_for_gate_response_context(
+            "http://gate.test:9091",
+            "provenance_digest",
+            expected,
+        )
+    if (observed.get("attested_response_context") or {}).get("provenance_digest") != expected:
+        raise AssertionError("release publisher returned before the gate adopted its response context")
     for relative in (
         "data-plane/decision-gate-rs/Dockerfile",
         "data-plane/decision-gate-rs/Dockerfile.production",
@@ -813,6 +832,7 @@ def main() -> None:
     assert_dockerignore()
     assert_production_dependencies()
     assert_reproducible_rust_binary_config()
+    assert_gate_response_context_publish_wait()
     assert_static_launcher_artifact_embedded()
     assert_launcher_digest_measurement_contract()
     assert_release_python_dependency_inventory()

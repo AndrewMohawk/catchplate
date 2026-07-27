@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime as dt
 import hashlib
 import json
 import os
 import re
+import signal
 import socket
+import ssl
+import subprocess
 import sys
 import tempfile
 import threading
@@ -15,10 +19,13 @@ import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
+from urllib.request import Request, urlopen
 
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -28,10 +35,15 @@ from scripts.oauth_provider_simulator import OAuthProviderSimulator  # noqa: E40
 
 
 ADMIN_TOKEN = "browser-oauth-admin-token"
-DATA_PLANE_TOKEN = "browser-oauth-credential-lease-token"
-DATA_PLANE_DIGEST = "sha256:" + "d" * 64
+CREDENTIAL_LEASE_TOKEN = "browser-oauth-credential-lease-token"
+AUDIT_TOKEN = "browser-oauth-audit-ingest-token"
+GRANT_CONSUME_TOKEN = "browser-oauth-grant-consume-token"
+RATE_LIMIT_CONSUME_TOKEN = "browser-oauth-rate-limit-consume-token"
+RELEASE_AUTHORIZATION_TOKEN = "browser-oauth-release-authorization-token"
+MANAGEMENT_TOKEN = "browser-oauth-management-token"
 GOOGLE_NAME = "Browser Gmail OAuth"
 X_NAME = "Browser X OAuth"
+X_JIT_ROUTE_ID = "browser.x.post.one-per-day.jit"
 GOOGLE_SCOPES = [
     "openid",
     "email",
@@ -57,9 +69,92 @@ def _reserve_https_socket() -> socket.socket:
     return listener
 
 
+def _reserve_loopback_port() -> int:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+    finally:
+        listener.close()
+
+
+def _sha256_path(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def _write_mitm_ca(work_dir: Path) -> tuple[Path, Path]:
+    work_dir.mkdir(parents=True, exist_ok=True)
+    key = ec.generate_private_key(ec.SECP256R1())
+    subject = x509.Name(
+        [x509.NameAttribute(NameOID.COMMON_NAME, "Serverware browser Rust gate CA")]
+    )
+    now = dt.datetime.now(dt.timezone.utc)
+    certificate = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - dt.timedelta(minutes=5))
+        .not_valid_after(now + dt.timedelta(days=1))
+        .add_extension(
+            x509.BasicConstraints(ca=True, path_length=0),
+            critical=True,
+        )
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=None,
+                decipher_only=None,
+            ),
+            critical=True,
+        )
+        .add_extension(
+            x509.SubjectKeyIdentifier.from_public_key(key.public_key()),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = work_dir / "decision-gate-mitm-ca.pem"
+    key_path = work_dir / "decision-gate-mitm-ca-key.pem"
+    cert_path.write_bytes(certificate.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+    cert_path.chmod(0o644)
+    key_path.chmod(0o600)
+    return cert_path, key_path
+
+
 def _configure_environment(
-    data_dir: Path, public_url: str, simulator: OAuthProviderSimulator
+    data_dir: Path,
+    public_url: str,
+    simulator: OAuthProviderSimulator,
+    data_plane_digest: str,
 ) -> None:
+    service_tokens = {
+        CREDENTIAL_LEASE_TOKEN,
+        AUDIT_TOKEN,
+        GRANT_CONSUME_TOKEN,
+        RATE_LIMIT_CONSUME_TOKEN,
+        RELEASE_AUTHORIZATION_TOKEN,
+        MANAGEMENT_TOKEN,
+    }
+    _require(len(service_tokens) == 6, "data-plane service tokens must be distinct")
     values = {
         "SERVERWARE_DATA_DIR": str(data_dir),
         "SERVERWARE_RELEASE_CHANNEL": "dev",
@@ -99,8 +194,18 @@ def _configure_environment(
         "SERVERWARE_DATA_PLANE_INSTANCE_ID": (
             "spiffe://test.serverware/decision-gate/browser-oauth"
         ),
-        "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": DATA_PLANE_TOKEN,
-        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": DATA_PLANE_DIGEST,
+        "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": CREDENTIAL_LEASE_TOKEN,
+        "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": AUDIT_TOKEN,
+        "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": GRANT_CONSUME_TOKEN,
+        "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": RATE_LIMIT_CONSUME_TOKEN,
+        "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": (
+            RELEASE_AUTHORIZATION_TOKEN
+        ),
+        "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": MANAGEMENT_TOKEN,
+        "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
+        "SERVERWARE_RELEASE_AUTHORIZATION_RESERVATION_TTL_SECONDS": "30",
+        "SERVERWARE_RELEASE_AUTHORIZATION_DISPATCH_TTL_SECONDS": "30",
+        "SERVERWARE_EXPECTED_DATA_PLANE_BINARY_DIGEST": data_plane_digest,
         "SERVERWARE_DATA_PLANE_LEASE_RECIPIENT_ATTESTATION_REQUIRED": "0",
         "SERVERWARE_AUDIT_ANCHOR_URL": "",
         "SERVERWARE_DECISION_GATE_BASE": "",
@@ -120,6 +225,205 @@ def _configure_environment(
     ):
         os.environ.pop(name, None)
     os.environ.update(values)
+
+
+class _DecisionGateProcess:
+    def __init__(
+        self,
+        *,
+        binary: Path,
+        response_proof_fixture: Path,
+        data_dir: Path,
+        portal_url: str,
+        simulator: OAuthProviderSimulator,
+    ) -> None:
+        self.binary = binary
+        self.response_proof_fixture = response_proof_fixture
+        self.data_dir = data_dir
+        self.portal_url = portal_url.replace("serverware.test", "127.0.0.1")
+        self.simulator = simulator
+        self.proxy_port = _reserve_loopback_port()
+        self.management_port = _reserve_loopback_port()
+        self.ca_cert_path, self.ca_key_path = _write_mitm_ca(
+            data_dir / "browser-rust-gate"
+        )
+        self.log_path = data_dir / "browser-rust-gate.log"
+        self._log_handle: Any = None
+        self._process: subprocess.Popen[bytes] | None = None
+
+    @property
+    def health_url(self) -> str:
+        return f"http://127.0.0.1:{self.management_port}/healthz"
+
+    def start(self) -> None:
+        _require(self.binary.is_file(), f"decision gate binary is missing: {self.binary}")
+        _require(
+            os.access(self.binary, os.X_OK),
+            f"decision gate binary is not executable: {self.binary}",
+        )
+        _require(
+            self.response_proof_fixture.is_file(),
+            f"response proof fixture is missing: {self.response_proof_fixture}",
+        )
+        _require(
+            os.access(self.response_proof_fixture, os.X_OK),
+            f"response proof fixture is not executable: {self.response_proof_fixture}",
+        )
+        env = os.environ.copy()
+        env.update(
+            {
+                "SERVERWARE_POLICY_BUNDLE": str(self.data_dir / "policy-bundle.json"),
+                "SERVERWARE_POLICY_TRUST_ROOT_ATTESTATION_URL": (
+                    f"{self.portal_url}/attestation"
+                ),
+                "SERVERWARE_CONTROL_PLANE_CA_BUNDLE": str(
+                    self.simulator.ca_cert_path
+                ),
+                "SERVERWARE_CONTROL_PLANE_CREDENTIAL_LEASE_URL": (
+                    f"{self.portal_url}/api/data-plane/credential-leases"
+                ),
+                "SERVERWARE_CONTROL_PLANE_AUDIT_URL": (
+                    f"{self.portal_url}/api/data-plane/audit"
+                ),
+                "SERVERWARE_CONTROL_PLANE_RELEASE_AUTHORIZATION_BASE_URL": (
+                    f"{self.portal_url}/api/data-plane/release-authorizations"
+                ),
+                "SERVERWARE_ALLOW_INSECURE_DEV_CREDENTIAL_LEASES": "1",
+                "SERVERWARE_RELEASE_CHANNEL": "dev",
+                "SERVERWARE_ATOMIC_RELEASE_AUTHORIZATION_ENABLED": "1",
+                "SERVERWARE_DATA_PLANE_CREDENTIAL_LEASE_TOKEN": (
+                    CREDENTIAL_LEASE_TOKEN
+                ),
+                "SERVERWARE_DATA_PLANE_AUDIT_TOKEN": AUDIT_TOKEN,
+                "SERVERWARE_DATA_PLANE_GRANT_CONSUME_TOKEN": GRANT_CONSUME_TOKEN,
+                "SERVERWARE_DATA_PLANE_RATE_LIMIT_CONSUME_TOKEN": (
+                    RATE_LIMIT_CONSUME_TOKEN
+                ),
+                "SERVERWARE_DATA_PLANE_RELEASE_AUTHORIZATION_TOKEN": (
+                    RELEASE_AUTHORIZATION_TOKEN
+                ),
+                "SERVERWARE_DATA_PLANE_MANAGEMENT_TOKEN": MANAGEMENT_TOKEN,
+                "SERVERWARE_DATA_PLANE_INSTANCE_ID": (
+                    "spiffe://test.serverware/decision-gate/browser-oauth"
+                ),
+                "SERVERWARE_DATA_PLANE_RESPONSE_PROOF_ATTESTATION_COMMAND": str(
+                    self.response_proof_fixture
+                ),
+                "SERVERWARE_MITM_CA_CERT": str(self.ca_cert_path),
+                "SERVERWARE_MITM_CA_KEY": str(self.ca_key_path),
+                "SERVERWARE_UPSTREAM_CA_BUNDLE": str(self.simulator.ca_cert_path),
+                "SERVERWARE_POLICY_POLL_SECONDS": "0.05",
+                "SERVERWARE_CREDENTIAL_LEASE_POLL_SECONDS": "0.05",
+                "SERVERWARE_DECISION_GATE_HOST": "127.0.0.1",
+                "SERVERWARE_DECISION_GATE_PORT": str(self.proxy_port),
+                "SERVERWARE_DECISION_GATE_MANAGEMENT_HOST": "127.0.0.1",
+                "SERVERWARE_DECISION_GATE_MANAGEMENT_PORT": str(
+                    self.management_port
+                ),
+                "SSL_CERT_FILE": str(self.simulator.ca_cert_path),
+                "NO_PROXY": "serverware.test,127.0.0.1,localhost",
+                "no_proxy": "serverware.test,127.0.0.1,localhost",
+            }
+        )
+        self._log_handle = self.log_path.open("wb")
+        self._process = subprocess.Popen(
+            [str(self.binary)],
+            cwd=ROOT,
+            env=env,
+            stdin=subprocess.DEVNULL,
+            stdout=self._log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    def _failure_detail(self) -> str:
+        if self._log_handle is not None:
+            self._log_handle.flush()
+        if not self.log_path.exists():
+            return ""
+        return self.log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
+
+    def wait_ready(
+        self,
+        *,
+        policy_hash: str,
+        binary_digest: str,
+        require_hot_generation: bool = False,
+        timeout_seconds: float = 30,
+    ) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout_seconds
+        last: Any = None
+        while time.monotonic() < deadline:
+            if self._process is None:
+                raise AssertionError("decision gate was not started")
+            if self._process.poll() is not None:
+                raise AssertionError(
+                    "decision gate exited before readiness: " + self._failure_detail()
+                )
+            try:
+                request = Request(self.health_url, headers={"Cache-Control": "no-store"})
+                with urlopen(request, timeout=2) as response:
+                    last = json.loads(response.read(1024 * 1024))
+            except Exception as exc:
+                last = {"health_error": str(exc)}
+                time.sleep(0.1)
+                continue
+            release = last.get("release_authorization") or {}
+            audit = last.get("audit") or {}
+            base_ready = (
+                last.get("ok") is True
+                and last.get("policy_hash") == policy_hash
+                and last.get("data_plane_binary_digest") == binary_digest
+                and last.get("policy_trust_root_source") == "attested-control-plane"
+                and last.get("jit_grant_store") == "atomic_release_authorization"
+                and last.get("shared_rate_limit_store") is True
+                and release.get("enabled") is True
+                and release.get("mode") == "reserve_dispatch_complete"
+                and last.get("connect_preflight") is True
+                and last.get("connect_mitm_interceptor") is True
+                and audit.get("enabled") is True
+                and audit.get("dropped") == 0
+                and audit.get("required_failed") == 0
+                and (last.get("policy_reload") or {}).get("failed") == 0
+            )
+            generation_ready = (
+                last.get("credential_generations_ready") is True
+                and (
+                    not require_hot_generation
+                    or (
+                        int(last.get("credential_generation_hot_scopes") or 0) >= 1
+                        and int(last.get("credential_generations") or 0) >= 1
+                    )
+                )
+            )
+            if base_ready and generation_ready:
+                return last
+            time.sleep(0.1)
+        raise AssertionError(
+            f"decision gate did not reach exact readiness: {last!r}; "
+            f"log={self._failure_detail()}"
+        )
+
+    def close(self) -> None:
+        process = self._process
+        self._process = None
+        try:
+            if process is not None and process.poll() is None:
+                os.killpg(process.pid, signal.SIGTERM)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    os.killpg(process.pid, signal.SIGKILL)
+                    process.wait(timeout=5)
+            if process is not None:
+                _require(
+                    process.poll() is not None,
+                    "decision gate process remained alive after cleanup",
+                )
+        finally:
+            if self._log_handle is not None:
+                self._log_handle.close()
+                self._log_handle = None
 
 
 def _certificate_spki_sha256(cert_path: Path) -> str:
@@ -247,16 +551,25 @@ class _UvicornThread:
             raise RuntimeError("HTTPS portal failed") from self._error
 
 
-def _api_json(page: Any, path: str) -> Any:
-    result = page.evaluate(
+def _api_result(
+    page: Any,
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return page.evaluate(
         """
-        async (path) => {
+        async ({path, method, payload}) => {
           const token = document.querySelector('#admin-token')?.value || '';
           const response = await fetch(path, {
+            method,
             headers: {
+              'Content-Type': 'application/json',
               'X-Serverware-Admin-Token': token,
               'Authorization': `Bearer ${token}`
             },
+            body: method === 'GET' ? undefined : JSON.stringify(payload || {}),
             credentials: 'same-origin',
             cache: 'no-store'
           });
@@ -264,8 +577,12 @@ def _api_json(page: Any, path: str) -> Any:
           return {status: response.status, text};
         }
         """,
-        path,
+        {"path": path, "method": method, "payload": payload or {}},
     )
+
+
+def _api_json(page: Any, path: str) -> Any:
+    result = _api_result(page, path)
     if result["status"] != 200:
         raise AssertionError(
             f"GET {path} returned HTTP {result['status']}: {result['text'][:500]}"
@@ -274,27 +591,7 @@ def _api_json(page: Any, path: str) -> Any:
 
 
 def _api_post_json(page: Any, path: str, payload: dict[str, Any] | None = None) -> Any:
-    result = page.evaluate(
-        """
-        async ({path, payload}) => {
-          const token = document.querySelector('#admin-token')?.value || '';
-          const response = await fetch(path, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Serverware-Admin-Token': token,
-              'Authorization': `Bearer ${token}`
-            },
-            body: JSON.stringify(payload || {}),
-            credentials: 'same-origin',
-            cache: 'no-store'
-          });
-          const text = await response.text();
-          return {status: response.status, text};
-        }
-        """,
-        {"path": path, "payload": payload or {}},
-    )
+    result = _api_result(page, path, method="POST", payload=payload)
     if result["status"] != 200:
         raise AssertionError(
             f"POST {path} returned HTTP {result['status']}: {result['text'][:500]}"
@@ -615,6 +912,8 @@ def _assert_single_approval_decision(
     decision: str,
     *,
     reason: str | None = None,
+    expected_request_count: int = 1,
+    expected_denied_count: int = 0,
 ) -> dict[str, Any]:
     expected_status = "approved" if decision == "approve" else "denied"
     endpoint = f"/api/approvals/{approval_id}/{decision}"
@@ -624,6 +923,11 @@ def _assert_single_approval_decision(
         if item.get("type") == "request"
         and item.get("method") == "POST"
         and endpoint in item.get("url", "")
+    ]
+    decision_responses = [
+        item
+        for item in browser_observations
+        if item.get("type") == "response" and endpoint in item.get("url", "")
     ]
     approvals = _api_json(page, "/api/approvals")
     matches = [item for item in approvals if item.get("id") == approval_id]
@@ -637,13 +941,20 @@ def _assert_single_approval_decision(
     ]
     diagnostics = {
         "decisionRequests": decision_requests,
+        "decisionResponses": decision_responses,
         "approvalRecords": matches,
         "auditEvents": audit_events,
         "review": _approval_diagnostics(page, approval_id),
     }
     _require(
-        len(decision_requests) == 1,
-        f"{decision} from review did not issue exactly one decision request: {diagnostics}",
+        len(decision_requests) == expected_request_count,
+        f"{decision} issued an unexpected number of decision requests: {diagnostics}",
+    )
+    _require(
+        sum(item.get("status") == 200 for item in decision_responses) == 1
+        and sum(item.get("status") == 403 for item in decision_responses)
+        == expected_denied_count,
+        f"{decision} response statuses did not preserve fail-closed review: {diagnostics}",
     )
     _require(
         len(matches) == 1 and matches[0].get("status") == expected_status,
@@ -1064,17 +1375,31 @@ def _preview_stage_activate_policy(
     template: str,
     route_id: str,
     credential_id: str,
+    custom_route: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     active_before = _api_json(page, "/api/policy")
     _require(
         active_before.get("ready") is True, "demo seed did not install an active policy"
     )
     old_hash = active_before.get("policy_hash")
+    page.wait_for_function(
+        "() => !refreshInFlight",
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    page.evaluate(
+        "(activePolicy) => { state.activePolicy = activePolicy; }",
+        active_before,
+    )
 
     page.locator("#policy-template").select_option(template)
     page.locator("#policy-route-id").fill(route_id)
     page.locator("#policy-principal").select_option("agent:demo")
     page.locator("#policy-credential").select_option(credential_id)
+    if custom_route is not None:
+        _require(template == "custom_json", "custom route requires custom_json template")
+        page.locator("#policy-custom-route").fill(
+            json.dumps(custom_route, indent=2, sort_keys=True)
+        )
     page.locator("#policy-route-form button[type='submit']").click()
     try:
         page.wait_for_function(
@@ -1225,8 +1550,13 @@ def _assert_policy_evidence(
     routes = {item["id"]: item for item in bundle.get("routes", [])}
     gmail = routes["browser.gmail.last-30-days"]
     x_search = routes["browser.x.search.seven-days"]
-    x_post = routes["browser.x.post.one-per-day"]
+    x_post = routes[X_JIT_ROUTE_ID]
     _require(gmail["match"]["methods"] == ["GET"], "Gmail route is not read-only")
+    _require(
+        gmail["match"].get("host") == "127.0.0.1"
+        and gmail["match"].get("port") == urlsplit(simulator.base_url).port,
+        "Gmail route is not bound to the local HTTPS provider simulator",
+    )
     _require(gmail["adapter"]["type"] == "gmail.v1", "Gmail route adapter mismatch")
     _require(
         gmail["adapter"]["config"].get("maxAgeDays") == 30
@@ -1234,6 +1564,11 @@ def _assert_policy_evidence(
         "Gmail route does not enforce and validate the 30-day boundary",
     )
     _require(x_search["match"]["methods"] == ["GET"], "X search route is not read-only")
+    _require(
+        x_search["match"].get("host") == "127.0.0.1"
+        and x_search["match"].get("port") == urlsplit(simulator.base_url).port,
+        "X search route is not bound to the local HTTPS provider simulator",
+    )
     _require(
         x_search["adapter"]["config"].get("blockWrites") is True,
         "X search route does not block writes",
@@ -1250,6 +1585,11 @@ def _assert_policy_evidence(
         "X route does not validate the seven-day response boundary",
     )
     _require(x_post["match"]["methods"] == ["POST"], "X posting route is not write-only")
+    _require(
+        x_post["match"].get("host") == "127.0.0.1"
+        and x_post["match"].get("port") == urlsplit(simulator.base_url).port,
+        "X posting route is not bound to the local simulator authority",
+    )
     _require(
         x_post["adapter"]["config"].get("appIds") == [simulator.X_CLIENT_ID],
         "X posting route is not bound to the verified OAuth app",
@@ -1268,6 +1608,20 @@ def _assert_policy_evidence(
         and (daily_limits[0].get("key") or {}).get("operationFields")
         == ["providerAccount"],
         "X posting route lost its provider-account UTC calendar quota",
+    )
+    jit = x_post.get("jit") or {}
+    authn = (jit.get("approvers") or {}).get("authn") or {}
+    _require(
+        jit.get("required") is True
+        and jit.get("mode") == "perOperation"
+        and jit.get("maxUses") == 1
+        and jit.get("consumeOn") == "forwardStart"
+        and (jit.get("approvers") or {}).get("users") == ["user:demo"]
+        and authn.get("webauthnRequired") is True
+        and authn.get("userVerification") == "required"
+        and authn.get("allowedAuthenticatorClasses") == ["dev"]
+        and authn.get("requireHardwareAttestation") is False,
+        "X posting route lost its one-use reviewer WebAuthn JIT binding",
     )
 
 
@@ -1322,58 +1676,274 @@ def _capture_element_screenshot(page: Any, selector: str, destination: Path) -> 
     target.screenshot(path=str(destination), type="png")
 
 
-def _create_browser_jit_approval(
-    *,
-    package_name: str = "@scope/browser-package",
-    package_version: str = "1.2.3",
-    digest_seed: str = "a",
-) -> dict[str, Any]:
+def _jit_state_snapshot(route_id: str, credential_id: str) -> dict[str, Any]:
     from serverware import db
-    from serverware.policy_bundle import get_policy_snapshot
 
+    def rows(conn: Any, sql: str, params: tuple[Any, ...]) -> list[dict[str, Any]]:
+        return [dict(item) for item in conn.execute(sql, params).fetchall()]
+
+    with db.connect() as conn:
+        credential_row = conn.execute(
+            """
+            SELECT credential_version, secret_updated_at, lifecycle_status
+            FROM credentials
+            WHERE id = ?
+            """,
+            (credential_id,),
+        ).fetchone()
+        _require(credential_row is not None, "callback credential disappeared")
+        approvals = rows(
+            conn,
+            """
+            SELECT id, status, principal_id, credential_id, credential_version,
+                   policy_hash, request_digest, operation_digest, approved_by,
+                   approval_challenge_id
+            FROM approval_requests
+            WHERE route_id = ?
+            ORDER BY requested_at, id
+            """,
+            (route_id,),
+        )
+        receipts = rows(
+            conn,
+            """
+            SELECT receipt.id, receipt.approval_request_id, receipt.reviewer_id,
+                   receipt.review_digest, receipt.used_at
+            FROM approval_review_receipts AS receipt
+            INNER JOIN approval_requests AS approval
+              ON approval.id = receipt.approval_request_id
+            WHERE approval.route_id = ?
+            ORDER BY receipt.created_at, receipt.id
+            """,
+            (route_id,),
+        )
+        grants = rows(
+            conn,
+            """
+            SELECT id, approval_request_id, state, uses_remaining,
+                   reserved_attempt_id, consumed_at
+            FROM approval_grants
+            WHERE route_id = ?
+            ORDER BY created_at, id
+            """,
+            (route_id,),
+        )
+        attempts = rows(
+            conn,
+            """
+            SELECT attempt_id, flow_id, state, credential_version, policy_hash,
+                   request_digest, operation_digest, grant_id,
+                   approval_request_id, completion_outcome
+            FROM release_authorization_attempts
+            WHERE route_id = ?
+            ORDER BY created_at, attempt_id
+            """,
+            (route_id,),
+        )
+        issuances = rows(
+            conn,
+            """
+            SELECT issuance.attempt_id, issuance.binding_digest,
+                   issuance.request_binding_sha256
+            FROM release_authorization_credential_issuances AS issuance
+            INNER JOIN release_authorization_attempts AS attempt
+              ON attempt.attempt_id = issuance.attempt_id
+            WHERE attempt.route_id = ?
+            ORDER BY issuance.created_at, issuance.attempt_id
+            """,
+            (route_id,),
+        )
+        quotas = rows(
+            conn,
+            """
+            SELECT quota.attempt_id, quota.constraint_id, quota.window_kind,
+                   quota.max_count, quota.count_after, quota.reservation_state
+            FROM release_authorization_quota_reservations AS quota
+            INNER JOIN release_authorization_attempts AS attempt
+              ON attempt.attempt_id = quota.attempt_id
+            WHERE attempt.route_id = ?
+            ORDER BY quota.created_at, quota.attempt_id, quota.counter_key
+            """,
+            (route_id,),
+        )
+        consumptions = rows(
+            conn,
+            """
+            SELECT id, grant_id, approval_request_id, attempt_id, outcome,
+                   uses_remaining_before, uses_remaining_after
+            FROM approval_grant_consumptions
+            WHERE route_id = ?
+            ORDER BY created_at, id
+            """,
+            (route_id,),
+        )
+        counters = rows(
+            conn,
+            """
+            SELECT counter_key, constraint_id, window_kind, max_count, count
+            FROM rate_limit_counters
+            WHERE route_id = ?
+            ORDER BY counter_key
+            """,
+            (route_id,),
+        )
+        release_event_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM release_authorization_events AS event
+            INNER JOIN release_authorization_attempts AS attempt
+              ON attempt.attempt_id = event.attempt_id
+            WHERE attempt.route_id = ?
+            """,
+            (route_id,),
+        ).fetchone()[0]
+    return {
+        "credential": dict(credential_row),
+        "approvals": approvals,
+        "reviewReceipts": receipts,
+        "grants": grants,
+        "attempts": attempts,
+        "credentialIssuances": issuances,
+        "quotaReservations": quotas,
+        "grantConsumptions": consumptions,
+        "rateLimitCounters": counters,
+        "releaseEventCount": int(release_event_count),
+    }
+
+
+def _simulator_resource_state(simulator: OAuthProviderSimulator) -> dict[str, Any]:
+    observations = simulator.observations()
+    google_counts = observations["counts"]["google"]
+    x_counts = observations["counts"]["x"]
+    return {
+        "googleResourceRequests": int(
+            google_counts.get("resource_requests") or 0
+        ),
+        "googleResourceRejections": int(
+            google_counts.get("resource_rejections") or 0
+        ),
+        "gmailLists": int(
+            google_counts.get("resource_gmail.messages.list") or 0
+        ),
+        "gmailMetadataGets": int(
+            google_counts.get("resource_gmail.message.get") or 0
+        ),
+        "googleRefreshRequests": int(
+            google_counts.get("refresh_exchanges") or 0
+        ),
+        "xResourceRequests": int(x_counts.get("resource_requests") or 0),
+        "xResourceRejections": int(x_counts.get("resource_rejections") or 0),
+        "tweetCreates": int(x_counts.get("resource_x.tweet.create") or 0),
+        "recentSearches": int(x_counts.get("resource_x.search.recent") or 0),
+        "xRefreshRequests": int(x_counts.get("refresh_exchanges") or 0),
+        "resourceEvents": [
+            {
+                "type": item.get("type"),
+                "provider": item.get("provider"),
+                "operation": item.get("operation"),
+                "reason": item.get("reason"),
+            }
+            for item in observations["events"]
+            if str(item.get("type") or "").startswith("resource_")
+        ],
+    }
+
+
+def _parse_http_response(raw: bytes) -> dict[str, Any]:
+    _require(len(raw) <= 2 * 1024 * 1024, "gate response exceeded test bound")
+    head, separator, body = raw.partition(b"\r\n\r\n")
+    _require(bool(separator), f"gate response omitted header terminator: {raw[:500]!r}")
+    lines = head.split(b"\r\n")
+    _require(bool(lines), "gate response omitted a status line")
+    status_parts = lines[0].split(b" ", 2)
     _require(
-        len(digest_seed) == 1 and digest_seed in "0123456789abcdef",
-        f"invalid browser approval digest seed: {digest_seed!r}",
+        len(status_parts) >= 2 and status_parts[1].isdigit(),
+        f"gate response status line was malformed: {lines[0]!r}",
     )
-    seed_index = int(digest_seed, 16)
-    digest_characters = "0123456789abcdef"
-    operation_seed = digest_characters[(seed_index + 1) % 16]
-    body_seed = digest_characters[(seed_index + 2) % 16]
-    snapshot = get_policy_snapshot()
-    _require(snapshot is not None, "demo policy is unavailable for approval review")
-    credential = db.get_credential("cred-demo-bearer")
-    _require(credential is not None, "demo credential is unavailable for approval review")
-    return db.ensure_jit_approval_request(
-        route_id="demo.npm.publish.jit",
-        method="PUT",
-        url=f"https://demo-upstream:8443/npm/{quote(package_name, safe='')}",
-        principal_id="agent:demo",
-        credential_id=credential["id"],
-        credential_version=int(credential["credential_version"]),
-        policy_hash=snapshot.hash,
-        request_digest="sha256:" + digest_seed * 64,
-        operation_digest="sha256:" + operation_seed * 64,
-        canonical_request={
-            "principal": "agent:demo",
-            "request": {
-                "method": "PUT",
-                "body_sha256": "sha256:" + body_seed * 64,
-            },
-            "operation": {
-                "type": "npm.publish",
-                "packageName": package_name,
-                "packageVersion": package_version,
-                "tarballIntegrity": "sha512-browser-fixture",
-            },
-        },
-        redacted_display={
-            "package": package_name,
-            "version": package_version,
-        },
-        pending_ttl_seconds=300,
-        grant_ttl_seconds=30,
-        grant_max_uses=1,
-    )
+    headers: dict[str, str] = {}
+    for line in lines[1:]:
+        name, separator, value = line.partition(b":")
+        _require(bool(separator), f"gate response header was malformed: {line!r}")
+        normalized_name = name.decode("ascii").lower()
+        _require(
+            normalized_name not in headers,
+            f"gate response duplicated header {normalized_name!r}",
+        )
+        headers[normalized_name] = value.decode("latin-1").strip()
+    content_length = headers.get("content-length")
+    if content_length is not None:
+        _require(content_length.isdigit(), "gate response Content-Length was invalid")
+        _require(
+            len(body) == int(content_length),
+            "gate response body length did not match Content-Length",
+        )
+    payload = json.loads(body) if body else None
+    return {
+        "status": int(status_parts[1]),
+        "headers": headers,
+        "body": body,
+        "json": payload,
+    }
+
+
+def _send_connect_tls_request(
+    gate: _DecisionGateProcess,
+    *,
+    authority_host: str,
+    authority_port: int,
+    request_bytes: bytes,
+) -> dict[str, Any]:
+    _require(type(request_bytes) is bytes, "proxy request must be immutable bytes")
+    sent_request_sha256 = "sha256:" + hashlib.sha256(request_bytes).hexdigest()
+    sent_request_length = len(request_bytes)
+    authority = f"{authority_host}:{authority_port}"
+    connect_request = (
+        f"CONNECT {authority} HTTP/1.1\r\n"
+        f"Host: {authority}\r\n"
+        "X-Serverware-Agent: demo-agent\r\n"
+        "Connection: keep-alive\r\n\r\n"
+    ).encode("ascii")
+    with socket.create_connection(("127.0.0.1", gate.proxy_port), timeout=10) as sock:
+        sock.settimeout(10)
+        sock.sendall(connect_request)
+        connect_response = b""
+        while b"\r\n\r\n" not in connect_response:
+            chunk = sock.recv(4096)
+            _require(bool(chunk), "gate closed before CONNECT response completed")
+            connect_response += chunk
+            _require(
+                len(connect_response) <= 64 * 1024,
+                "CONNECT response headers exceeded test bound",
+            )
+        connect_head, separator, connect_remainder = connect_response.partition(
+            b"\r\n\r\n"
+        )
+        _require(not connect_remainder, "gate sent bytes before the TLS handshake")
+        _require(
+            connect_head.startswith(b"HTTP/1.1 200 "),
+            f"gate CONNECT preflight failed: {connect_head[:1000]!r}",
+        )
+        context = ssl.create_default_context(cafile=str(gate.ca_cert_path))
+        with context.wrap_socket(sock, server_hostname=authority_host) as tls:
+            tls.settimeout(10)
+            tls.sendall(request_bytes)
+            response = b""
+            while True:
+                try:
+                    chunk = tls.recv(64 * 1024)
+                except ssl.SSLEOFError:
+                    break
+                if not chunk:
+                    break
+                response += chunk
+                _require(
+                    len(response) <= 2 * 1024 * 1024,
+                    "gate response exceeded test bound",
+                )
+    parsed = _parse_http_response(response)
+    parsed["sentRequestSha256"] = sent_request_sha256
+    parsed["sentRequestLength"] = sent_request_length
+    return parsed
 
 
 def _assert_storage_and_disk_do_not_leak_tokens(
@@ -1439,6 +2009,30 @@ def _assert_provider_observations(simulator: OAuthProviderSimulator) -> dict[str
         observations["active"]["authorizationCodes"] == 0,
         "simulator retained an unconsumed authorization code",
     )
+    _require(
+        observations["counts"]["google"].get("resource_requests") == 3
+        and observations["counts"]["google"].get(
+            "resource_gmail.messages.list"
+        )
+        == 1
+        and observations["counts"]["google"].get(
+            "resource_gmail.message.get"
+        )
+        == 2
+        and not observations["counts"]["google"].get("resource_rejections")
+        and not observations["counts"]["google"].get("refresh_exchanges"),
+        "simulator did not accept one callback-token Gmail list with two "
+        "metadata hydration requests and no refresh",
+    )
+    _require(
+        observations["counts"]["x"].get("resource_requests") == 2
+        and observations["counts"]["x"].get("resource_x.search.recent") == 1
+        and observations["counts"]["x"].get("resource_x.tweet.create") == 1
+        and not observations["counts"]["x"].get("resource_rejections")
+        and not observations["counts"]["x"].get("refresh_exchanges"),
+        "simulator did not accept one callback-token X search and one post "
+        "without refresh",
+    )
     rejected = [
         event for event in observations["events"] if "rejected" in event.get("type", "")
     ]
@@ -1448,11 +2042,616 @@ def _assert_provider_observations(simulator: OAuthProviderSimulator) -> dict[str
     return observations
 
 
+def _x_jit_route(simulator: OAuthProviderSimulator) -> dict[str, Any]:
+    simulator_port = urlsplit(simulator.base_url).port
+    _require(simulator_port is not None, "simulator URL omitted its port")
+    return {
+        "match": {
+            "scheme": "https",
+            "host": "127.0.0.1",
+            "port": simulator_port,
+            "resolvedCidrs": ["127.0.0.0/8"],
+            "methods": ["POST"],
+            "paths": ["/2/tweets"],
+        },
+        "adapter": {
+            "type": "x.v2",
+            "config": {
+                "mode": "controlledWrite",
+                "blockWrites": False,
+                "appIds": [simulator.X_CLIENT_ID],
+                "request": {
+                    "allowedHeaders": [
+                        "accept",
+                        "accept-encoding",
+                        "content-type",
+                        "user-agent",
+                    ],
+                    "allowedQueryKeys": [],
+                    "allowedMediaTypes": ["application/json"],
+                    "maxBodyBytes": 65536,
+                },
+                "response": {
+                    "mode": "json",
+                    "maxBodyBytes": 65536,
+                    "allowedFields": ["data.id", "data.text"],
+                    "allowedHeaders": [],
+                    "error": {
+                        "mode": "json",
+                        "maxBodyBytes": 65536,
+                        "allowedFields": [
+                            "title",
+                            "detail",
+                            "type",
+                            "status",
+                            "errors.title",
+                            "errors.detail",
+                            "errors.type",
+                            "errors.value",
+                        ],
+                        "allowedHeaders": ["retry-after"],
+                        "onInvalid": "block",
+                    },
+                },
+            },
+        },
+        "constraints": [
+            {
+                "id": "browser-x-only-tweet-create",
+                "type": "operationPolicy",
+                "allowedOperations": ["tweets.write"],
+            },
+            {
+                "id": "browser-x-one-post-per-day",
+                "type": "rateLimit",
+                "max": 1,
+                "calendarWindow": "utcDay",
+                "store": "shared",
+                "key": {
+                    "scope": ["route", "operation"],
+                    "operationFields": ["providerAccount"],
+                },
+            },
+            {
+                "id": "browser-x-plain-text-body",
+                "type": "jsonBody",
+                "contentTypes": ["application/json"],
+                "allowedFields": ["text", "reply_settings"],
+                "requiredFields": ["text"],
+                "deniedFields": ["media", "poll", "direct_message_deep_link"],
+                "fields": {
+                    "text": {"type": "string", "minLength": 1, "maxLength": 280},
+                    "reply_settings": {
+                        "type": "string",
+                        "enum": ["following", "mentionedUsers"],
+                    },
+                },
+            },
+        ],
+        "jit": {
+            "required": True,
+            "mode": "perOperation",
+            "ttlSeconds": 120,
+            "maxUses": 1,
+            "consumeOn": "forwardStart",
+            "binding": {
+                "type": "operationDigest",
+                "fields": [
+                    "principal",
+                    "routeId",
+                    "credentialRef",
+                    "credentialVersion",
+                    "policyHash",
+                    "method",
+                    "authority",
+                    "path",
+                    "query",
+                    "selectedHeaders",
+                    "bodySha256",
+                    "operation",
+                ],
+            },
+            "approvers": {
+                "quorum": 1,
+                "users": ["user:demo"],
+                "authn": {
+                    "webauthnRequired": True,
+                    "userVerification": "required",
+                    "allowedAuthenticatorClasses": ["dev"],
+                    "requireHardwareAttestation": False,
+                },
+            },
+        },
+    }
+
+
+def _localized_read_route(
+    page: Any,
+    *,
+    template_id: str,
+    simulator: OAuthProviderSimulator,
+) -> dict[str, Any]:
+    localized = page.evaluate(
+        """
+        (templateId) => {
+          const template = policyTemplates[templateId];
+          if (!template) return null;
+          return JSON.parse(JSON.stringify({
+            match: template.match,
+            adapter: template.adapter,
+            constraints: template.constraints || []
+          }));
+        }
+        """,
+        template_id,
+    )
+    _require(
+        isinstance(localized, dict),
+        f"portal omitted canonical policy template {template_id}",
+    )
+    simulator_port = urlsplit(simulator.base_url).port
+    _require(simulator_port is not None, "simulator URL omitted its port")
+    localized["match"]["host"] = "127.0.0.1"
+    localized["match"]["port"] = simulator_port
+    localized["match"]["resolvedCidrs"] = ["127.0.0.1/32"]
+    if localized["adapter"].get("type") == "x.v2":
+        localized["adapter"]["config"]["appIds"] = [simulator.X_CLIENT_ID]
+    return localized
+
+
+def _exercise_rust_reads(
+    *,
+    gate: _DecisionGateProcess,
+    simulator: OAuthProviderSimulator,
+) -> dict[str, Any]:
+    simulator_port = urlsplit(simulator.base_url).port
+    _require(simulator_port is not None, "simulator URL omitted its port")
+    before = _simulator_resource_state(simulator)
+
+    gmail_request = (
+        "GET /gmail/v1/users/me/messages?maxResults=2 HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{simulator_port}\r\n"
+        "Accept: application/json\r\n"
+        "User-Agent: serverware-browser-rust-gmail\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii")
+    gmail = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=simulator_port,
+        request_bytes=gmail_request,
+    )
+    gmail_payload = gmail["json"]
+    gmail_messages = (
+        gmail_payload.get("messages") if isinstance(gmail_payload, dict) else None
+    )
+    now_ms = int(time.time() * 1000)
+    _require(
+        gmail["status"] == 200
+        and isinstance(gmail_messages, list)
+        and len(gmail_messages) == 2
+        and all(
+            isinstance(item, dict)
+            and set(item).issubset(
+                {"id", "threadId", "internalDate", "serverwareAgeProof"}
+            )
+            and isinstance(item.get("id"), str)
+            and isinstance(item.get("threadId"), str)
+            and str(item.get("internalDate") or "").isdigit()
+            and item.get("serverwareAgeProof") == "validated"
+            and 0 <= now_ms - int(item["internalDate"]) <= 30 * 86_400_000
+            for item in gmail_messages
+        )
+        and "resultSizeEstimate" not in gmail_payload,
+        f"Rust Gmail route did not hydrate, validate, and project recent messages: {gmail}",
+    )
+
+    x_request = (
+        "GET /2/tweets/search/recent"
+        "?max_results=10&query=serverware&tweet.fields=created_at HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{simulator_port}\r\n"
+        "Accept: application/json\r\n"
+        "User-Agent: serverware-browser-rust-x-search\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii")
+    x_search = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=simulator_port,
+        request_bytes=x_request,
+    )
+    x_payload = x_search["json"]
+    x_items = x_payload.get("data") if isinstance(x_payload, dict) else None
+    _require(
+        x_search["status"] == 200
+        and isinstance(x_items, list)
+        and len(x_items) == 1
+        and set(x_payload).issubset({"data", "meta"})
+        and set(x_items[0]).issubset({"id", "text", "created_at"})
+        and x_items[0].get("id") == "x-search-result-1"
+        and isinstance(x_items[0].get("created_at"), str)
+        and (x_payload.get("meta") or {}).get("result_count") == 1,
+        f"Rust X route did not validate and project the recent search: {x_search}",
+    )
+
+    after = _simulator_resource_state(simulator)
+    _require(
+        after["googleResourceRequests"] == before["googleResourceRequests"] + 3
+        and after["gmailLists"] == before["gmailLists"] + 1
+        and after["gmailMetadataGets"] == before["gmailMetadataGets"] + 2
+        and after["googleResourceRejections"]
+        == before["googleResourceRejections"]
+        and after["googleRefreshRequests"] == before["googleRefreshRequests"]
+        and after["xResourceRequests"] == before["xResourceRequests"] + 1
+        and after["recentSearches"] == before["recentSearches"] + 1
+        and after["xResourceRejections"] == before["xResourceRejections"]
+        and after["xRefreshRequests"] == before["xRefreshRequests"],
+        f"callback-created read credentials did not reach the exact provider "
+        f"operations without refresh or rejection: {before} -> {after}",
+    )
+    return {
+        "gmail": {
+            "status": gmail["status"],
+            "requestBytesSha256": gmail["sentRequestSha256"],
+            "messages": [item["id"] for item in gmail_messages],
+            "metadataHydrations": 2,
+        },
+        "xSearch": {
+            "status": x_search["status"],
+            "requestBytesSha256": x_search["sentRequestSha256"],
+            "resultIds": [item["id"] for item in x_items],
+        },
+    }
+
+
+def _exercise_rust_jit(
+    *,
+    gate: _DecisionGateProcess,
+    operator_page: Any,
+    reviewer_page: Any,
+    browser_observations: list[dict[str, Any]],
+    public_url: str,
+    simulator: OAuthProviderSimulator,
+    policy_hash: str,
+    credential_id: str,
+    credential_version: int,
+    binary_digest: str,
+    screenshots_dir: Path | None,
+) -> dict[str, Any]:
+    from serverware import db
+
+    simulator_port = urlsplit(simulator.base_url).port
+    _require(simulator_port is not None, "simulator URL omitted its port")
+    body = json.dumps(
+        {"text": "Browser callback credential Rust JIT proof"},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    immutable_request = (
+        "POST /2/tweets HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{simulator_port}\r\n"
+        "Accept: application/json\r\n"
+        "Content-Type: application/json\r\n"
+        "User-Agent: serverware-browser-rust-jit\r\n"
+        f"Content-Length: {len(body)}\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii") + body
+    request_digest = "sha256:" + hashlib.sha256(immutable_request).hexdigest()
+    before = _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id)
+
+    gate_health = gate.wait_ready(
+        policy_hash=policy_hash,
+        binary_digest=binary_digest,
+    )
+    read_routes = _exercise_rust_reads(gate=gate, simulator=simulator)
+    provider_before = _simulator_resource_state(simulator)
+    first_send_digest = "sha256:" + hashlib.sha256(immutable_request).hexdigest()
+    first = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=simulator_port,
+        request_bytes=immutable_request,
+    )
+    decision = first["json"]
+    _require(first["status"] == 428 and isinstance(decision, dict), f"first gate request was not a JSON 428: {first}")
+    approval_id = decision.get("approval_id")
+    approval_url = decision.get("approval_url")
+    _require(
+        decision.get("action") == "jit_required"
+        and decision.get("allowed") is False
+        and (decision.get("payload") or {}).get("error") == "jit_grant_unavailable"
+        and isinstance(approval_id, str)
+        and approval_url == f"/approvals/{approval_id}"
+        and decision.get("approval_status") == "pending"
+        and decision.get("approval_created") is True
+        and decision.get("route_id") == X_JIT_ROUTE_ID
+        and decision.get("principal_id") == "agent:demo"
+        and decision.get("policy_hash") == policy_hash
+        and str(decision.get("request_digest") or "").startswith("sha256:")
+        and str(decision.get("operation_digest") or "").startswith("sha256:")
+        and (decision.get("jit") or {}).get("grant_store")
+        == "atomic_release_authorization",
+        f"Rust 428 lost its exact JIT binding: {decision}",
+    )
+    after_428 = _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id)
+    _require(
+        len(after_428["approvals"]) == len(before["approvals"]) + 1
+        and after_428["approvals"][-1]["id"] == approval_id
+        and after_428["approvals"][-1]["status"] == "pending"
+        and after_428["approvals"][-1]["principal_id"] == "agent:demo"
+        and after_428["approvals"][-1]["credential_id"] == credential_id
+        and after_428["approvals"][-1]["credential_version"]
+        == credential_version
+        and after_428["approvals"][-1]["policy_hash"] == policy_hash
+        and after_428["approvals"][-1]["request_digest"]
+        == decision.get("request_digest")
+        and after_428["approvals"][-1]["operation_digest"]
+        == decision.get("operation_digest")
+        and after_428["credential"] == before["credential"]
+        and after_428["reviewReceipts"] == before["reviewReceipts"]
+        and after_428["grants"] == before["grants"]
+        and after_428["attempts"] == before["attempts"]
+        and after_428["credentialIssuances"] == before["credentialIssuances"]
+        and after_428["quotaReservations"] == before["quotaReservations"]
+        and after_428["grantConsumptions"] == before["grantConsumptions"]
+        and after_428["rateLimitCounters"] == before["rateLimitCounters"]
+        and _simulator_resource_state(simulator) == provider_before,
+        f"initial 428 caused secret, release, quota, or upstream side effects: {before} -> {after_428}",
+    )
+    hot_health = gate.wait_ready(
+        policy_hash=policy_hash,
+        binary_digest=binary_digest,
+        require_hot_generation=True,
+    )
+
+    denied_review = _api_result(
+        operator_page, f"/api/approvals/{approval_id}/review"
+    )
+    denied_approve = _api_result(
+        operator_page,
+        f"/api/approvals/{approval_id}/approve",
+        method="POST",
+        payload={"reviewReceiptId": "00000000-0000-4000-8000-000000000000"},
+    )
+    _require(
+        denied_review["status"] == 403 and denied_approve["status"] == 403,
+        f"unlisted operator was not denied review and approval: {denied_review}, {denied_approve}",
+    )
+    _require(
+        _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id) == after_428,
+        "operator denial mutated JIT authority state",
+    )
+
+    exact_approval_url = public_url + approval_url
+    response = reviewer_page.goto(exact_approval_url, wait_until="domcontentloaded")
+    _require(
+        response is not None and response.status == 200,
+        "reviewer approval URL did not return the portal",
+    )
+    reviewer_page.locator("#admin-token").fill(ADMIN_TOKEN)
+    reviewer_page.locator("#admin-token").dispatch_event("change")
+    _wait_for_portal(reviewer_page, public_url, expected_url=exact_approval_url)
+    reviewer_page.wait_for_function(
+        "(id) => state.approvalReview?.id === id && state.approvalReview?.review_receipt?.id",
+        arg=approval_id,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    review = reviewer_page.evaluate("() => state.approvalReview")
+    receipt_id = (review.get("review_receipt") or {}).get("id")
+    _require(
+        review.get("id") == approval_id
+        and review.get("status") == "pending"
+        and review.get("route_id") == X_JIT_ROUTE_ID
+        and review.get("principal_id") == "agent:demo"
+        and review.get("credential_ref") == credential_id
+        and review.get("credential_version") == credential_version
+        and review.get("policy_hash") == policy_hash
+        and (review.get("retry_semantics") or {}).get("request_digest")
+        == decision.get("request_digest")
+        and (review.get("retry_semantics") or {}).get("operation_digest")
+        == decision.get("operation_digest")
+        and review.get("body_hash")
+        == "sha256:" + hashlib.sha256(body).hexdigest()
+        and isinstance(receipt_id, str),
+        f"review document did not match the Rust 428: {review}",
+    )
+    active_receipt = db.get_active_approval_review_receipt(
+        receipt_id,
+        approval_request_id=approval_id,
+        reviewer_id="user:demo",
+    )
+    _require(
+        active_receipt is not None
+        and active_receipt["review_digest"] == review.get("review_digest"),
+        "reviewer did not receive the exact active review receipt",
+    )
+    if screenshots_dir is not None:
+        _capture_element_screenshot(
+            reviewer_page,
+            ".approval-review-context",
+            screenshots_dir / "operator-portal-approval.png",
+        )
+    approval_button = reviewer_page.locator("#approval-review-actions").get_by_role(
+        "button", name="Approve", exact=True
+    )
+    approval_button.click()
+    reviewer_page.wait_for_function(
+        "(id) => state.approvalReview?.id === id && state.approvalReview?.status === 'approved'",
+        arg=approval_id,
+        timeout=DEFAULT_TIMEOUT_MS,
+    )
+    approved = _assert_single_approval_decision(
+        reviewer_page,
+        browser_observations,
+        approval_id,
+        "approve",
+        expected_request_count=2,
+        expected_denied_count=1,
+    )
+    stored_approval = db.get_approval_request(approval_id)
+    authn = (stored_approval or {}).get("approval_authn") or {}
+    _require(
+        approved.get("approved_by") == "user:demo"
+        and authn.get("method") == "webauthn"
+        and authn.get("user_id") == "user:demo"
+        and authn.get("user_verified") is True
+        and authn.get("review_receipt_id") == receipt_id
+        and db.get_active_approval_review_receipt(
+            receipt_id,
+            approval_request_id=approval_id,
+            reviewer_id="user:demo",
+        )
+        is None,
+        f"review receipt or WebAuthn authority was not consumed exactly once: {stored_approval}",
+    )
+    options_requests = [
+        item
+        for item in browser_observations
+        if item.get("type") == "request"
+        and item.get("method") == "POST"
+        and f"/api/approvals/{approval_id}/webauthn/options" in item.get("url", "")
+    ]
+    assertion_requests = [
+        item
+        for item in browser_observations
+        if item.get("type") == "request"
+        and item.get("method") == "POST"
+        and "/api/dev/webauthn/assertion" in item.get("url", "")
+    ]
+    _require(
+        len(options_requests) == 1 and len(assertion_requests) == 1,
+        "reviewer did not perform exactly one options and WebAuthn assertion request",
+    )
+
+    approved_state = _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id)
+    _require(
+        len(approved_state["grants"]) == 1
+        and approved_state["grants"][0]["state"] == "active"
+        and approved_state["grants"][0]["uses_remaining"] == 1
+        and approved_state["attempts"] == before["attempts"],
+        f"approval did not create exactly one unused grant: {approved_state}",
+    )
+    retry_send_digest = "sha256:" + hashlib.sha256(immutable_request).hexdigest()
+    retry = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=simulator_port,
+        request_bytes=immutable_request,
+    )
+    _require(
+        first["sentRequestSha256"]
+        == retry["sentRequestSha256"]
+        == first_send_digest
+        == retry_send_digest
+        == request_digest
+        and first["sentRequestLength"]
+        == retry["sentRequestLength"]
+        == len(immutable_request)
+        and retry["status"] == 201
+        and (retry["json"] or {}).get("data", {}).get("text")
+        == "Browser callback credential Rust JIT proof",
+        f"approved byte-identical retry did not reach the simulator: {retry}",
+    )
+    after_success = _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id)
+    provider_success = _simulator_resource_state(simulator)
+    _require(
+        len(after_success["attempts"]) == 1
+        and after_success["attempts"][0]["state"] == "committed"
+        and after_success["attempts"][0]["completion_outcome"] == "forwarded"
+        and after_success["attempts"][0]["approval_request_id"] == approval_id
+        and after_success["attempts"][0]["request_digest"]
+        == decision.get("request_digest")
+        and after_success["attempts"][0]["operation_digest"]
+        == decision.get("operation_digest")
+        and len(after_success["credentialIssuances"]) == 1
+        and len(after_success["quotaReservations"]) == 1
+        and after_success["quotaReservations"][0]["window_kind"] == "utcDay"
+        and after_success["quotaReservations"][0]["count_after"] == 1
+        and after_success["quotaReservations"][0]["reservation_state"] == "committed"
+        and len(after_success["grantConsumptions"]) == 1
+        and after_success["grantConsumptions"][0]["uses_remaining_before"] == 1
+        and after_success["grantConsumptions"][0]["uses_remaining_after"] == 0
+        and after_success["grants"][0]["state"] == "consumed"
+        and after_success["grants"][0]["uses_remaining"] == 0
+        and after_success["credential"] == before["credential"]
+        and provider_success["xResourceRequests"]
+        == provider_before["xResourceRequests"] + 1
+        and provider_success["tweetCreates"] == provider_before["tweetCreates"] + 1
+        and provider_success["xRefreshRequests"] == provider_before["xRefreshRequests"],
+        f"approved retry lost callback-token or atomic lifecycle evidence: {after_success}, {provider_success}",
+    )
+
+    third = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=simulator_port,
+        request_bytes=immutable_request,
+    )
+    third_decision = third["json"]
+    after_third = _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id)
+    _require(
+        third["status"] == 428
+        and third_decision.get("action") == "jit_required"
+        and third_decision.get("approval_created") is True
+        and third_decision.get("approval_id") != approval_id
+        and len(after_third["approvals"]) == len(after_success["approvals"]) + 1
+        and after_third["attempts"] == after_success["attempts"]
+        and after_third["credentialIssuances"] == after_success["credentialIssuances"]
+        and after_third["quotaReservations"] == after_success["quotaReservations"]
+        and after_third["grantConsumptions"] == after_success["grantConsumptions"]
+        and after_third["rateLimitCounters"] == after_success["rateLimitCounters"]
+        and _simulator_resource_state(simulator) == provider_success,
+        f"one-use retry did not create a fresh side-effect-free 428: {third}, {after_third}",
+    )
+
+    unknown_request = (
+        "GET /2/users/me HTTP/1.1\r\n"
+        f"Host: 127.0.0.1:{simulator_port}\r\n"
+        "Accept: application/json\r\n"
+        "User-Agent: serverware-browser-rust-unknown-route\r\n"
+        "Connection: close\r\n\r\n"
+    ).encode("ascii")
+    unknown_before = _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id)
+    provider_unknown_before = _simulator_resource_state(simulator)
+    unknown = _send_connect_tls_request(
+        gate,
+        authority_host="127.0.0.1",
+        authority_port=simulator_port,
+        request_bytes=unknown_request,
+    )
+    _require(
+        unknown["status"] == 403
+        and (unknown["json"] or {}).get("payload", {}).get("error")
+        == "unknown_route_denied"
+        and _jit_state_snapshot(X_JIT_ROUTE_ID, credential_id) == unknown_before
+        and _simulator_resource_state(simulator) == provider_unknown_before,
+        f"same-authority unknown route did not fail before secret/JIT/upstream effects: {unknown}",
+    )
+    return {
+        "approvalId": approval_id,
+        "freshApprovalId": third_decision["approval_id"],
+        "requestBytesSha256": request_digest,
+        "requestBytesLength": len(immutable_request),
+        "requestDigest": decision["request_digest"],
+        "operationDigest": decision["operation_digest"],
+        "credentialVersion": credential_version,
+        "readRoutes": read_routes,
+        "retryStatus": retry["status"],
+        "unknownRouteStatus": unknown["status"],
+        "gateHealth": gate_health,
+        "hotGateHealth": hot_health,
+    }
+
+
 def _run_browser_journey(
     public_url: str,
     data_dir: Path,
     simulator: OAuthProviderSimulator,
     screenshots_dir: Path | None,
+    decision_gate_binary: Path,
+    decision_gate_digest: str,
+    response_proof_fixture: Path,
+    install_enrollment_attestation_fixture: Callable[[], None],
 ) -> dict[str, Any]:
     try:
         from playwright.sync_api import sync_playwright
@@ -1465,6 +2664,7 @@ def _run_browser_journey(
     console_errors: list[str] = []
     page_errors: list[str] = []
     api_documents: list[Any] = []
+    gate: _DecisionGateProcess | None = None
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(
             headless=True,
@@ -1655,207 +2855,6 @@ def _run_browser_journey(
                 "browser WebAuthn shim was not installed",
             )
 
-            operator_page = page
-            page = reviewer_page
-            approval = _create_browser_jit_approval()
-            approval_url = f"{public_url}/approvals/{quote(approval['id'], safe='')}"
-            approval_response = page.goto(approval_url, wait_until="domcontentloaded")
-            _require(
-                approval_response is not None and approval_response.status == 200,
-                "approval deep link did not return the operator portal",
-            )
-            page.locator("#admin-token").fill(ADMIN_TOKEN)
-            page.locator("#admin-token").dispatch_event("change")
-            _wait_for_portal(page, public_url, expected_url=approval_url)
-            page.wait_for_function(
-                "(id) => state.approvalReview?.id === id",
-                arg=approval["id"],
-                timeout=DEFAULT_TIMEOUT_MS,
-            )
-            page.wait_for_function(
-                """
-                (id) => {
-                  const text = document.querySelector('#approval-review')?.textContent || '';
-                  return text.includes(id) && text.includes('Request digest');
-                }
-                """,
-                arg=approval["id"],
-                timeout=DEFAULT_TIMEOUT_MS,
-            )
-            review_panel = page.locator("#approval-review")
-            review_context = page.locator(".approval-review-context")
-            approval_actions = page.locator("#approval-review-actions")
-            _require(review_panel.is_visible(), "approval review panel is not visible")
-            _require(
-                approval_actions.is_visible(),
-                f"pending approval review controls are not visible: {_approval_diagnostics(page, approval['id'])}",
-            )
-            review_text = review_panel.text_content() or ""
-            for marker in (
-                approval["id"],
-                "demo.npm.publish.jit",
-                "Request digest",
-                "Operation digest",
-                "@scope/browser-package",
-            ):
-                _require(marker in review_text, f"approval review omitted {marker!r}")
-            _require(
-                page.evaluate("document.activeElement?.id") == "approval-review",
-                "approval deep link did not focus the canonical review document",
-            )
-            approval_note = approval_actions.get_by_label("Denial note", exact=True)
-            approval_button = approval_actions.get_by_role(
-                "button", name="Approve", exact=True
-            )
-            denial_button = approval_actions.get_by_role(
-                "button", name="Deny", exact=True
-            )
-            _require(
-                approval_note.get_attribute("maxlength") == "500"
-                and approval_note.get_attribute("autocomplete") == "off",
-                "review denial note lost its bounded keyboard-accessible field",
-            )
-            _require(
-                approval_button.is_enabled() and denial_button.is_enabled(),
-                f"pending reviewed approval controls are unexpectedly blocked: {_approval_diagnostics(page, approval['id'])}",
-            )
-            _assert_no_horizontal_overflow(page, label="desktop approval review")
-            if screenshots_dir is not None:
-                _capture_element_screenshot(
-                    page,
-                    ".approval-review-context",
-                    screenshots_dir / "operator-portal-approval.png",
-                )
-
-            page.set_viewport_size({"width": 390, "height": 844})
-            approval_actions.scroll_into_view_if_needed()
-            page.wait_for_timeout(150)
-            _assert_no_horizontal_overflow(page, label="mobile pending approval review")
-            for locator, label in (
-                (approval_note, "mobile review denial note"),
-                (approval_button, "mobile review approve button"),
-                (denial_button, "mobile review deny button"),
-            ):
-                _assert_control_within_viewport(page, locator, label=label)
-            if screenshots_dir is not None:
-                _settle_screenshot_focus(page)
-                review_context.screenshot(
-                    path=str(screenshots_dir / "operator-portal-approval-mobile.png"),
-                    type="png",
-                )
-
-            page.set_viewport_size({"width": 1440, "height": 1100})
-            approval_actions.scroll_into_view_if_needed()
-            try:
-                approval_button.click()
-                page.wait_for_function(
-                    """
-                    (id) => state.approvalReview?.id === id
-                      && state.approvalReview?.status === 'approved'
-                      && document.querySelector('#approval-review-actions')?.hidden === true
-                    """,
-                    arg=approval["id"],
-                    timeout=DEFAULT_TIMEOUT_MS,
-                )
-            except Exception as exc:
-                raise AssertionError(
-                    "approval from canonical review did not complete: "
-                    f"{_approval_diagnostics(page, approval['id'])}"
-                ) from exc
-            approved_record = _assert_single_approval_decision(
-                page, browser_observations, approval["id"], "approve"
-            )
-            _require(
-                "approved" in (review_panel.text_content() or "").lower(),
-                f"completed approval review omitted approved status: {_approval_diagnostics(page, approval['id'])}",
-            )
-            _assert_no_horizontal_overflow(page, label="desktop completed approval review")
-
-            denied_approval = _create_browser_jit_approval(
-                package_name="@scope/browser-denied",
-                package_version="9.9.9",
-                digest_seed="d",
-            )
-            denied_url = (
-                f"{public_url}/approvals/{quote(denied_approval['id'], safe='')}"
-            )
-            denied_response = page.goto(denied_url, wait_until="domcontentloaded")
-            _require(
-                denied_response is not None and denied_response.status == 200,
-                "denial approval deep link did not return the operator portal",
-            )
-            page.locator("#admin-token").fill(ADMIN_TOKEN)
-            page.locator("#admin-token").dispatch_event("change")
-            _wait_for_portal(page, public_url, expected_url=denied_url)
-            try:
-                page.wait_for_function(
-                    """
-                    (id) => state.approvalReview?.id === id
-                      && state.approvalReview?.status === 'pending'
-                      && document.querySelector('#approval-review-actions')?.hidden === false
-                    """,
-                    arg=denied_approval["id"],
-                    timeout=DEFAULT_TIMEOUT_MS,
-                )
-            except Exception as exc:
-                raise AssertionError(
-                    "denial review did not become actionable: "
-                    f"{_approval_diagnostics(page, denied_approval['id'])}"
-                ) from exc
-            page.set_viewport_size({"width": 390, "height": 844})
-            denial_actions = page.locator("#approval-review-actions")
-            denial_note = denial_actions.get_by_label("Denial note", exact=True)
-            denial_submit = denial_actions.get_by_role(
-                "button", name="Deny", exact=True
-            )
-            denial_reason = "Package provenance does not match the reviewed release."
-            denial_note.fill(denial_reason)
-            denial_actions.scroll_into_view_if_needed()
-            page.wait_for_timeout(150)
-            _assert_no_horizontal_overflow(page, label="mobile pending denial review")
-            _assert_control_within_viewport(
-                page, denial_note, label="mobile review denial note with reason"
-            )
-            _assert_control_within_viewport(
-                page, denial_submit, label="mobile review deny button"
-            )
-            try:
-                denial_submit.click()
-                page.wait_for_function(
-                    """
-                    ({id, reason}) => state.approvalReview?.id === id
-                      && state.approvalReview?.status === 'denied'
-                      && state.approvalReview?.decision_note === reason
-                      && document.querySelector('#approval-review-actions')?.hidden === true
-                    """,
-                    arg={"id": denied_approval["id"], "reason": denial_reason},
-                    timeout=DEFAULT_TIMEOUT_MS,
-                )
-            except Exception as exc:
-                raise AssertionError(
-                    "denial from canonical review did not complete: "
-                    f"{_approval_diagnostics(page, denied_approval['id'])}"
-                ) from exc
-            denied_record = _assert_single_approval_decision(
-                page,
-                browser_observations,
-                denied_approval["id"],
-                "deny",
-                reason=denial_reason,
-            )
-            _require(
-                denial_reason in (page.locator("#approval-review").text_content() or ""),
-                f"completed denial review omitted its reason: {_approval_diagnostics(page, denied_approval['id'])}",
-            )
-            _assert_no_horizontal_overflow(page, label="mobile completed denial review")
-            page.set_viewport_size({"width": 1440, "height": 1100})
-
-            page = operator_page
-            page.goto(public_url + "/", wait_until="domcontentloaded")
-            page.locator("#admin-token").fill(ADMIN_TOKEN)
-            page.locator("#admin-token").dispatch_event("change")
-            _wait_for_portal(page, public_url)
-
             page.locator("#setup-template").select_option("gmail_recent")
             page.wait_for_function(
                 """
@@ -1915,9 +2914,14 @@ def _run_browser_journey(
 
             gmail_policy = _preview_stage_activate_policy(
                 page,
-                template="gmail_recent",
+                template="custom_json",
                 route_id="browser.gmail.last-30-days",
                 credential_id=google_credential["id"],
+                custom_route=_localized_read_route(
+                    page,
+                    template_id="gmail_recent",
+                    simulator=simulator,
+                ),
             )
             api_documents.append(gmail_policy)
 
@@ -1946,26 +2950,23 @@ def _run_browser_journey(
 
             x_read_policy = _preview_stage_activate_policy(
                 page,
-                template="x_read_recent",
+                template="custom_json",
                 route_id="browser.x.search.seven-days",
                 credential_id=x_credential["id"],
+                custom_route=_localized_read_route(
+                    page,
+                    template_id="x_read_recent",
+                    simulator=simulator,
+                ),
             )
             api_documents.append(x_read_policy)
             final_policy = _preview_stage_activate_policy(
                 page,
-                template="x_one_post_daily",
-                route_id="browser.x.post.one-per-day",
+                template="custom_json",
+                route_id=X_JIT_ROUTE_ID,
                 credential_id=x_credential["id"],
+                custom_route=_x_jit_route(simulator),
             )
-            policy_summary = page.locator("#policy-template-summary").inner_text()
-            for marker in (
-                "X one text post per UTC calendar day",
-                "POST https://api.x.com/2/tweets",
-                "Quota: 1 per UTC calendar day",
-                "Request body:",
-                "Unknown host, path, method, or validation result is denied",
-            ):
-                _require(marker in policy_summary, f"policy effect summary omitted {marker!r}")
             _assert_policy_evidence(
                 final_policy,
                 google_credential["id"],
@@ -1982,6 +2983,41 @@ def _run_browser_journey(
             final_bootstrap = _api_json(page, "/api/bootstrap")
             final_policy_api = _api_json(page, "/api/policy")
             api_documents.extend([final_bootstrap, final_policy_api])
+            from serverware import db
+
+            stored_x_credential = db.get_credential(x_credential["id"])
+            _require(
+                stored_x_credential is not None,
+                "callback-created X credential disappeared before Rust startup",
+            )
+            x_credential_version = int(
+                stored_x_credential["credential_version"]
+            )
+            gate = _DecisionGateProcess(
+                binary=decision_gate_binary,
+                response_proof_fixture=response_proof_fixture,
+                data_dir=data_dir,
+                portal_url=public_url,
+                simulator=simulator,
+            )
+            gate.start()
+            rust_jit = _exercise_rust_jit(
+                gate=gate,
+                operator_page=page,
+                reviewer_page=reviewer_page,
+                browser_observations=browser_observations,
+                public_url=public_url,
+                simulator=simulator,
+                policy_hash=final_policy_api["policy_hash"],
+                credential_id=x_credential["id"],
+                credential_version=x_credential_version,
+                binary_digest=decision_gate_digest,
+                screenshots_dir=screenshots_dir,
+            )
+            api_documents.append(rust_jit)
+            gate.close()
+            gate = None
+            install_enrollment_attestation_fixture()
             page.locator("#enrollment-principal").select_option("agent:demo")
             page.locator("#agent-enrollment-form button[type='submit']").click()
             try:
@@ -2122,6 +3158,20 @@ def _run_browser_journey(
                 "browser journey did not observe requester self-approval and reviewer "
                 "direct-activation denials for both OAuth credentials",
             )
+            jit_separation_denials = [
+                item
+                for item in browser_observations
+                if item.get("type") == "response"
+                and item.get("status") == 403
+                and re.search(
+                    rf"/api/approvals/{re.escape(rust_jit['approvalId'])}/(?:review|approve)$",
+                    str(item.get("url") or ""),
+                )
+            ]
+            _require(
+                len(jit_separation_denials) == 2,
+                "browser journey did not observe operator review and approval denials",
+            )
             expected_console_428 = (
                 "Failed to load resource: the server responded with a status of 428 "
                 "(Precondition Required)"
@@ -2137,7 +3187,7 @@ def _run_browser_journey(
             ]
             _require(
                 console_errors.count(expected_console_428) == 2
-                and console_errors.count(expected_console_403) == 4
+                and console_errors.count(expected_console_403) == 6
                 and not unexpected_console_errors,
                 f"browser console errors occurred: {console_errors}",
             )
@@ -2179,41 +3229,40 @@ def _run_browser_journey(
                     "gmailRoute": "browser.gmail.last-30-days",
                     "unknownRouteCanary": unknown_route_canaries[0],
                 },
-                "approvalDecisions": {
-                    "approved": {
-                        "id": approved_record["id"],
-                        "status": approved_record["status"],
-                    },
-                    "denied": {
-                        "id": denied_record["id"],
-                        "status": denied_record["status"],
-                        "reason": denied_record["decision_note"],
-                    },
-                },
+                "rustJit": rust_jit,
                 "policyHash": final_policy_api["policy_hash"],
                 "routes": [
                     "browser.gmail.last-30-days",
                     "browser.x.search.seven-days",
-                    "browser.x.post.one-per-day",
+                    X_JIT_ROUTE_ID,
                 ],
                 "providerCounts": observations["counts"],
                 "testAssurance": {
                     "productionProof": False,
                     "identity": "header-selected-distinct-test-subjects",
                     "webauthn": "server-generated-development-authenticator",
-                    "jitOrigin": "database-fixture-not-rust-proxy",
+                    "attestation": (
+                        "signed-development-consistency; no TEE workload custody"
+                    ),
+                    "jitOrigin": "measured-host-rust-connect-tls",
+                    "dataPlaneBinaryDigest": decision_gate_digest,
+                    "byteIdenticalRetry": True,
+                    "oneUseGrantRuntimeAsserted": True,
                     "oauthActivationChallenges": len(
                         expected_activation_challenges
                     ),
                     "oauthSeparationDenials": len(expected_separation_denials),
+                    "jitSeparationDenials": len(jit_separation_denials),
                     "downloadedPacketExactBytesVerified": True,
-                    "unknownRouteRuntimeAsserted": False,
+                    "unknownRouteRuntimeAsserted": True,
                 },
                 "screenshots": str(screenshots_dir)
                 if screenshots_dir is not None
                 else None,
             }
         finally:
+            if gate is not None:
+                gate.close()
             reviewer_context.close()
             context.close()
             browser.close()
@@ -2228,8 +3277,39 @@ def main() -> None:
         type=Path,
         help="refresh the canonical portal, approval, OAuth, and policy screenshots",
     )
+    parser.add_argument(
+        "--decision-gate-binary",
+        type=Path,
+        default=ROOT
+        / "data-plane"
+        / "decision-gate-rs"
+        / "target"
+        / "debug"
+        / "serverware-decision-gate",
+    )
+    parser.add_argument(
+        "--response-proof-fixture",
+        type=Path,
+        default=ROOT
+        / "data-plane"
+        / "decision-gate-rs"
+        / "target"
+        / "debug"
+        / "serverware-response-proof-fixture",
+    )
     args = parser.parse_args()
     screenshots_dir = args.screenshots_dir.resolve() if args.screenshots_dir else None
+    decision_gate_binary = args.decision_gate_binary.resolve()
+    response_proof_fixture = args.response_proof_fixture.resolve()
+    _require(
+        decision_gate_binary.is_file(),
+        f"build the host decision gate before this journey: {decision_gate_binary}",
+    )
+    _require(
+        response_proof_fixture.is_file(),
+        f"build the response proof fixture before this journey: {response_proof_fixture}",
+    )
+    decision_gate_digest = _sha256_path(decision_gate_binary)
     if screenshots_dir is not None:
         screenshots_dir.mkdir(parents=True, exist_ok=True)
 
@@ -2245,6 +3325,7 @@ def main() -> None:
         simulator = OAuthProviderSimulator(
             tmp / "provider",
             redirect_base_url=public_url,
+            authorization_token_ttl_seconds=300,
         )
         portal: _UvicornThread | None = None
         original_providers: Any = None
@@ -2256,7 +3337,12 @@ def main() -> None:
         try:
             simulator.start()
             _assert_simulator_contract(simulator)
-            _configure_environment(tmp / "serverware", public_url, simulator)
+            _configure_environment(
+                tmp / "serverware",
+                public_url,
+                simulator,
+                decision_gate_digest,
+            )
 
             from serverware import app as app_module
             from serverware import oauth as oauth_module
@@ -2323,41 +3409,45 @@ def main() -> None:
             app_module._start_oauth_revocation_reconciler = lambda: None
             original_attestation_document = app_module.attestation_document
 
-            def browser_attestation_document(
-                nonce: str | None = None,
-            ) -> dict[str, Any]:
-                snapshot = app_module.get_policy_snapshot()
-                if snapshot is None:
-                    return original_attestation_document(nonce)
-                metadata = snapshot.raw.get("metadata") or {}
-                return {
-                    "nonce": nonce,
-                    "policy_bundle_digest": snapshot.hash,
-                    "policy_signing_key_id": metadata.get("signingKeyId"),
-                    "policy_sequence": metadata.get("sequence"),
-                    "rollback_epoch": metadata.get("rollbackEpoch"),
-                    "policy_high_water_digest": "sha256:" + "1" * 64,
-                    "release_channel": "dev",
-                    "ca_intermediate_spki_sha256": "sha256:" + "2" * 64,
-                    "data_plane_binary_digest": DATA_PLANE_DIGEST,
-                    "runtime_manifest_digest": "sha256:" + "3" * 64,
-                    "response_signing_key_id": response_public_key_info()[
-                        "spki_sha256"
-                    ],
-                    "provenance_digest": "sha256:" + "5" * 64,
-                    "image_signatures_digest": "sha256:" + "6" * 64,
-                    "source_tree_digest": "sha256:" + "7" * 64,
-                    "assurance": {
-                        "class": "deterministic-browser-simulator",
-                        "fact_origin": "test-fixture",
-                        "hardware_proof": False,
-                        "workload_custody_proven": False,
-                        "tls_peer_binding_proven": False,
-                        "reason": "Browser contract test; not production TEE evidence.",
-                    },
-                }
+            def install_enrollment_attestation_fixture() -> None:
+                def browser_attestation_document(
+                    nonce: str | None = None,
+                ) -> dict[str, Any]:
+                    snapshot = app_module.get_policy_snapshot()
+                    if snapshot is None:
+                        return original_attestation_document(nonce)
+                    metadata = snapshot.raw.get("metadata") or {}
+                    return {
+                        "nonce": nonce,
+                        "policy_bundle_digest": snapshot.hash,
+                        "policy_signing_key_id": metadata.get("signingKeyId"),
+                        "policy_sequence": metadata.get("sequence"),
+                        "rollback_epoch": metadata.get("rollbackEpoch"),
+                        "policy_high_water_digest": "sha256:" + "1" * 64,
+                        "release_channel": "dev",
+                        "ca_intermediate_spki_sha256": "sha256:" + "2" * 64,
+                        "data_plane_binary_digest": decision_gate_digest,
+                        "runtime_manifest_digest": "sha256:" + "3" * 64,
+                        "response_signing_key_id": response_public_key_info()[
+                            "spki_sha256"
+                        ],
+                        "provenance_digest": "sha256:" + "5" * 64,
+                        "image_signatures_digest": "sha256:" + "6" * 64,
+                        "source_tree_digest": "sha256:" + "7" * 64,
+                        "assurance": {
+                            "class": "deterministic-browser-simulator",
+                            "fact_origin": "test-fixture",
+                            "hardware_proof": False,
+                            "workload_custody_proven": False,
+                            "tls_peer_binding_proven": False,
+                            "reason": (
+                                "Enrollment UI contract fixture installed only after "
+                                "the measured Rust gate proof completed."
+                            ),
+                        },
+                    }
 
-            app_module.attestation_document = browser_attestation_document
+                app_module.attestation_document = browser_attestation_document
 
             portal = _UvicornThread(app_module.app, listener, simulator)
             portal.start()
@@ -2366,6 +3456,10 @@ def main() -> None:
                 tmp / "serverware",
                 simulator,
                 screenshots_dir,
+                decision_gate_binary,
+                decision_gate_digest,
+                response_proof_fixture,
+                install_enrollment_attestation_fixture,
             )
             print(json.dumps(result, indent=2, sort_keys=True))
         finally:

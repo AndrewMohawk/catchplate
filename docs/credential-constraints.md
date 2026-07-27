@@ -158,9 +158,23 @@ The demo policy includes:
 - X recent search limited to seven days, capped at 100 results, with response `created_at` validation.
 - X controlled posting limited to one plain-text tweet for the demo's single simulated account per UTC calendar day, resetting at 00:00 UTC. The production template and common example key the same limit by the OAuth callback-verified provider subject.
 - X bounded read access covering every explicitly cataloged current GET endpoint while writes, unknown endpoints, and streaming endpoints stay blocked.
-- npm publish/dist-tag writes guarded by operation allowlists and per-operation JIT approval.
+- npm publish, revision-bound unpublish, dist-tag, token-revocation, and bounded metadata/access writes guarded by operation allowlists and per-operation JIT approval. Token creation is recognized and denied before credential or approval work.
 
 [policies/credential-limits.examples.json](../policies/credential-limits.examples.json) adds ready-to-adapt examples for Slack posting; GitHub issue listing scoped to an exact owner and repository allowlist; Stripe customer access scoped to one exact customer with request/response binding; tokenized PaymentIntent creation with a required bounded idempotency key, amount caps, and hardware-backed JIT approval; and object-store writes scoped to one bucket and bounded key grammar under one assignment-wide shared quota. The bucket/key captures constrain each request but are deliberately not quota dimensions, so changing object names cannot reset the assignment's hourly allowance. Each provider has a separate credential reference so copying the examples does not imply cross-provider credential reuse.
+
+## npm Wire Contracts
+
+The `npm.registry` adapter uses a closed method, path, and body grammar in both Python and Rust. Unknown or adjacent shapes fail before credential-generation lookup, JIT, quota, release authorization, or upstream contact. The common route models five policy operations:
+
+- `npm.publish`: package-document `PUT` with a canonical attachment and Serverware-derived SHA-512 SRI.
+- `npm.unpublish`: revision-bound `PUT /{package}/-rev/{revision}` with matching path/body revision, package identity, a nonempty remaining version map, consistent dist-tags, and no attachment or revision-history payload. Legacy bodyless `DELETE` remains a separately classified admitted form when policy allows it.
+- `npm.distTagWrite`: `PUT` accepts the real npm JSON-string version body; `DELETE` must be bodyless.
+- `npm.tokenWrite`: only bounded token revocation at `DELETE /-/npm/v1/tokens/token/{token}` is admitted. `POST /-/npm/v1/tokens` is classified as token creation and always fails with `npm_token_creation_denied`; releasing a newly minted token to the requesting agent would violate credential custody.
+- `npm.metadataWrite`: bounded package access, profile/team operations, and packument deprecation updates. Team-access deletion accepts only `{"package":"@scope/package"}` matching the path scope. A deprecation packument must bind package/version identity, contain at least one bounded string `deprecated` field, keep every dist-tag pointed at a retained version, and carry no attachment data.
+
+All admitted operations bind the exact request and normalized operation fields into one-use JIT authority. The policy can therefore require a hardware-attested reviewer for every write while preserving distinct review context such as package, version, revision, tag, scope, team, and request-body digest.
+
+Two limits are deliberate. First, npm CLI prerequisite reads such as packument, dist-tag, and token-list fetches need separately configured bounded read routes; the write route does not become a general registry proxy. Second, unpublish and deprecation send a complete replacement packument. Serverware validates the final document and binds its exact bytes to approval, but without a trusted pre-write fetch and comparison it cannot prove that the only delta was one removed version or one deprecation field. Operators should review that full operation digest and use a compatible registry with revision conflict checks; a future stronger profile should perform an authenticated pre-read and exact delta comparison. Package-access, profile, and team `PUT` field semantics also remain operation/body-digest bound unless a narrower typed route is configured.
 
 ## X Endpoint Catalog
 

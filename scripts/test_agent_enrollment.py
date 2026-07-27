@@ -1039,6 +1039,11 @@ print(json.dumps({
                 package_source / "requirements.lock",
             )
             shutil.copytree(ROOT / "serverware_agent_trust", package_source / "serverware_agent_trust")
+            (package_source / "scripts").mkdir()
+            shutil.copy2(
+                ROOT / "scripts" / "verify_onboarding_evidence.py",
+                package_source / "scripts" / "verify_onboarding_evidence.py",
+            )
             wheel_dir = Path(tmp) / "wheel"
             wheel_dir.mkdir()
             packaging_python = getattr(sys, "_base_executable", None) or shutil.which("python3") or sys.executable

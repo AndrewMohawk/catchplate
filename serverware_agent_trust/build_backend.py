@@ -19,6 +19,8 @@ VERSION = __version__
 NORMALIZED_VERSION = re.sub(r"[^A-Za-z0-9.]+", "_", VERSION)
 DIST_INFO = f"{NORMALIZED_NAME}-{NORMALIZED_VERSION}.dist-info"
 WHEEL_NAME = f"{NORMALIZED_NAME}-{NORMALIZED_VERSION}-py3-none-any.whl"
+ONBOARDING_EVIDENCE_SOURCE = Path("scripts/verify_onboarding_evidence.py")
+ONBOARDING_EVIDENCE_MODULE = Path("serverware_agent_trust/onboarding_evidence.py")
 
 
 def _metadata() -> bytes:
@@ -47,6 +49,7 @@ def _entry_points() -> bytes:
     return (
         "[console_scripts]\n"
         "serverware-attestation = serverware_agent_trust.attestation:console_main\n"
+        "serverware-evidence = serverware_agent_trust.onboarding_evidence:main\n"
         f"{ENROLLMENT_CLI_COMMAND} = serverware_agent_trust.enrollment:console_main\n"
     ).encode("ascii")
 
@@ -76,6 +79,19 @@ def _wheel_files(root: Path) -> dict[str, bytes]:
     }
     if "serverware_agent_trust/__init__.py" not in files:
         raise ValueError("clean-room package is missing serverware_agent_trust/__init__.py")
+    evidence_source = root / ONBOARDING_EVIDENCE_SOURCE
+    if not evidence_source.is_file():
+        raise ValueError(
+            "clean-room package is missing canonical onboarding evidence source "
+            f"{ONBOARDING_EVIDENCE_SOURCE.as_posix()}"
+        )
+    evidence_module = ONBOARDING_EVIDENCE_MODULE.as_posix()
+    if evidence_module in files:
+        raise ValueError(
+            f"{evidence_module} must be sourced only from "
+            f"{ONBOARDING_EVIDENCE_SOURCE.as_posix()}"
+        )
+    files[evidence_module] = evidence_source.read_bytes()
     files[f"{DIST_INFO}/METADATA"] = _metadata()
     files[f"{DIST_INFO}/WHEEL"] = _wheel_metadata()
     files[f"{DIST_INFO}/entry_points.txt"] = _entry_points()

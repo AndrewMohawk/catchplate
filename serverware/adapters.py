@@ -2453,20 +2453,58 @@ class NpmRegistryAdapter(ApiAdapter):
         return path
 
     @staticmethod
-    def _json_body(flow: Any) -> dict[str, Any] | None:
+    def _json_body(flow: Any) -> Any:
         raw = flow.request.raw_content or b""
         if not raw:
             return None
-        body = strict_json_loads(raw)
-        if not isinstance(body, dict):
-            raise ValueError("npm write body must be a JSON object")
-        return body
+        return strict_json_loads(raw)
+
+    @staticmethod
+    def _valid_package_name(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        if value.startswith("@"):
+            if value.count("/") != 1:
+                return False
+            scope, package = value.split("/", 1)
+            return bool(
+                len(scope) - 1 <= 214
+                and len(package) <= 214
+                and re.fullmatch(r"@[A-Za-z0-9._~-]+", scope)
+                and re.fullmatch(r"[A-Za-z0-9@._~-]+", package)
+            )
+        return bool(
+            "/" not in value
+            and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9@._~-]{0,213}", value)
+        )
+
+    @staticmethod
+    def _valid_dist_tag_version(value: Any) -> bool:
+        return bool(
+            isinstance(value, str)
+            and len(value.encode("utf-8")) <= 256
+            and re.fullmatch(r"[0-9A-Za-z][0-9A-Za-z._+~-]{0,255}", value)
+        )
+
+    @staticmethod
+    def _has_publish_attachment_payload(body: dict[str, Any]) -> bool:
+        if "tarball_integrity" in body:
+            return True
+        attachments = body.get("_attachments")
+        if attachments is None:
+            return False
+        if not isinstance(attachments, dict):
+            return True
+        return any(
+            not isinstance(attachment, dict) or "data" in attachment
+            for attachment in attachments.values()
+        )
 
     def _operation_name(
         self,
         flow: Any,
         params: dict[str, str],
-        body: dict[str, Any] | None = None,
+        body: Any = None,
     ) -> str:
         method = flow.request.method.upper()
         path = self._registry_path(flow)
@@ -2490,10 +2528,9 @@ class NpmRegistryAdapter(ApiAdapter):
                 and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9@._~-]{0,213}", value)
             )
 
+        if method == "POST" and segments == ["-", "npm", "v1", "tokens"]:
+            return "tokenCreate"
         if (
-            method == "POST"
-            and segments == ["-", "npm", "v1", "tokens"]
-        ) or (
             method == "DELETE"
             and len(segments) == 6
             and segments[:5] == ["-", "npm", "v1", "tokens", "token"]
@@ -2510,7 +2547,7 @@ class NpmRegistryAdapter(ApiAdapter):
         ):
             return "distTagWrite"
         if (
-            method == "DELETE"
+            method in {"PUT", "DELETE"}
             and len(segments) == 3
             and package_segment(segments[0])
             and segments[1] == "-rev"
@@ -2548,15 +2585,7 @@ class NpmRegistryAdapter(ApiAdapter):
             and package_segment(segments[0])
             and isinstance(body, dict)
         ):
-            if any(
-                field in body
-                for field in (
-                    "_attachments",
-                    "versions",
-                    "dist-tags",
-                    "tarball_integrity",
-                )
-            ):
+            if self._has_publish_attachment_payload(body):
                 return "publish"
             return "metadataWrite" if "_rev" in body else "publish"
         raise ValueError("npm operation does not match the closed write grammar")
@@ -2565,16 +2594,19 @@ class NpmRegistryAdapter(ApiAdapter):
         method = flow.request.method.upper()
         body = self._json_body(flow) if method not in {"GET", "HEAD"} else None
         operation = self._operation_name(flow, params, body)
-        if method in {"PUT", "POST"} and not isinstance(body, dict):
-            raise ValueError("npm_write_body_required")
-        if method == "DELETE" and body is not None:
-            raise ValueError("npm_delete_body_denied")
-        return self._operation_fields(operation, body, params)
+        self._validate_operation_body(
+            operation=operation,
+            method=method,
+            body=body,
+            params=params,
+        )
+        return self._operation_fields(operation, method, body, params)
 
     def _operation_fields(
         self,
         operation: str,
-        body: dict[str, Any] | None,
+        method: str,
+        body: Any,
         params: dict[str, str],
     ) -> dict[str, str]:
         fields: dict[str, str] = {
@@ -2583,7 +2615,23 @@ class NpmRegistryAdapter(ApiAdapter):
         package = params.get("package")
         if package:
             fields["packageName"] = unquote(package)
+        for parameter, field in (
+            ("revision", "revision"),
+            ("tarball", "tarball"),
+            ("tag", "tag"),
+            ("scope", "scope"),
+            ("team", "team"),
+            ("token", "tokenKey"),
+        ):
+            value = params.get(parameter)
+            if value:
+                fields[field] = unquote(value)
+        if operation == "distTagWrite" and method == "PUT" and isinstance(body, str):
+            fields["packageVersion"] = body
         if isinstance(body, dict):
+            body_package = body.get("package")
+            if operation == "metadataWrite" and isinstance(body_package, str):
+                fields["packageName"] = body_package
             if (
                 "_rev" in body
                 and (not isinstance(body["_rev"], str) or not body["_rev"])
@@ -2672,6 +2720,168 @@ class NpmRegistryAdapter(ApiAdapter):
                 fields["attachmentBytes"] = str(len(tarball))
         return fields
 
+    def _validate_unpublish_update(
+        self,
+        body: Any,
+        params: dict[str, str],
+    ) -> None:
+        if not isinstance(body, dict):
+            raise ValueError("npm_unpublish_body_required")
+        revision = body.get("_rev")
+        path_revision = unquote(params.get("revision") or "")
+        if not isinstance(revision, str) or not revision:
+            raise ValueError("npm_unpublish_revision_invalid")
+        if not path_revision or revision != path_revision:
+            raise ValueError("npm_unpublish_revision_mismatch")
+        package = unquote(params.get("package") or "")
+        document_name = body.get("name")
+        if not self._valid_package_name(document_name):
+            raise ValueError("npm_unpublish_package_missing")
+        if package and package != document_name:
+            raise ValueError("npm_unpublish_package_mismatch")
+        if "_attachments" in body or "_revisions" in body:
+            raise ValueError("npm_unpublish_forbidden_field")
+        versions = body.get("versions")
+        if not isinstance(versions, dict) or not versions:
+            raise ValueError("npm_unpublish_versions_invalid")
+        for version, document in versions.items():
+            if (
+                not self._valid_dist_tag_version(version)
+                or not isinstance(document, dict)
+                or document.get("version") != version
+            ):
+                raise ValueError("npm_unpublish_versions_invalid")
+            version_name = document.get("name")
+            if version_name is not None and version_name != document_name:
+                raise ValueError("npm_unpublish_package_mismatch")
+        dist_tags = body.get("dist-tags")
+        if not isinstance(dist_tags, dict):
+            raise ValueError("npm_unpublish_dist_tags_invalid")
+        latest = dist_tags.get("latest")
+        if not isinstance(latest, str) or latest not in versions:
+            raise ValueError("npm_unpublish_dist_tags_invalid")
+        if any(
+            not isinstance(tag, str)
+            or not tag
+            or not isinstance(version, str)
+            or version not in versions
+            for tag, version in dist_tags.items()
+        ):
+            raise ValueError("npm_unpublish_dist_tags_invalid")
+
+    def _validate_team_access_delete(
+        self,
+        body: Any,
+        params: dict[str, str],
+    ) -> None:
+        if not isinstance(body, dict) or set(body) != {"package"}:
+            raise ValueError("npm_team_access_delete_body_invalid")
+        package = body.get("package")
+        if not self._valid_package_name(package):
+            raise ValueError("npm_team_access_package_invalid")
+        scope = unquote(params.get("scope") or "")
+        if not scope or not package.startswith(f"@{scope}/"):
+            raise ValueError("npm_team_access_scope_mismatch")
+
+    def _validate_deprecation_packument(
+        self,
+        body: dict[str, Any],
+        params: dict[str, str],
+    ) -> None:
+        package = unquote(params.get("package") or "")
+        document_name = body.get("name")
+        if not self._valid_package_name(document_name):
+            raise ValueError("npm_metadata_package_missing")
+        if package and package != document_name:
+            raise ValueError("npm_metadata_package_mismatch")
+        if "tarball_integrity" in body:
+            raise ValueError("npm_metadata_publish_payload_denied")
+        attachments = body.get("_attachments")
+        if attachments is not None:
+            if not isinstance(attachments, dict) or any(
+                not isinstance(attachment, dict) or "data" in attachment
+                for attachment in attachments.values()
+            ):
+                raise ValueError("npm_metadata_publish_payload_denied")
+        versions = body.get("versions")
+        dist_tags = body.get("dist-tags")
+        if not isinstance(versions, dict) or not versions or not isinstance(dist_tags, dict):
+            raise ValueError("npm_metadata_packument_invalid")
+        deprecation_fields = 0
+        for version, document in versions.items():
+            if (
+                not self._valid_dist_tag_version(version)
+                or not isinstance(document, dict)
+                or document.get("version") != version
+            ):
+                raise ValueError("npm_metadata_packument_invalid")
+            version_name = document.get("name")
+            if version_name is not None and version_name != document_name:
+                raise ValueError("npm_metadata_package_mismatch")
+            if "deprecated" in document:
+                deprecated = document["deprecated"]
+                if (
+                    not isinstance(deprecated, str)
+                    or len(deprecated.encode("utf-8")) > 4096
+                ):
+                    raise ValueError("npm_metadata_deprecation_invalid")
+                deprecation_fields += 1
+        if deprecation_fields == 0:
+            raise ValueError("npm_metadata_deprecation_required")
+        if any(
+            not isinstance(tag, str)
+            or not tag
+            or not isinstance(version, str)
+            or version not in versions
+            for tag, version in dist_tags.items()
+        ):
+            raise ValueError("npm_metadata_dist_tags_invalid")
+
+    def _validate_operation_body(
+        self,
+        *,
+        operation: str,
+        method: str,
+        body: Any,
+        params: dict[str, str],
+    ) -> None:
+        if operation == "tokenCreate":
+            raise ValueError("npm_token_creation_denied")
+        if operation == "distTagWrite":
+            if method == "PUT":
+                if not self._valid_dist_tag_version(body):
+                    raise ValueError("npm_dist_tag_version_invalid")
+            elif body is not None:
+                raise ValueError("npm_delete_body_denied")
+            return
+        if operation == "unpublish":
+            if method == "PUT":
+                self._validate_unpublish_update(body, params)
+            elif body is not None:
+                raise ValueError("npm_delete_body_denied")
+            return
+        if operation == "metadataWrite" and method == "DELETE":
+            self._validate_team_access_delete(body, params)
+            return
+        if method in {"PUT", "POST"} and not isinstance(body, dict):
+            raise ValueError("npm_write_body_required")
+        if method == "DELETE" and body is not None:
+            raise ValueError("npm_delete_body_denied")
+        if (
+            operation == "metadataWrite"
+            and isinstance(body, dict)
+            and "_rev" in body
+            and (not isinstance(body["_rev"], str) or not body["_rev"])
+        ):
+            raise ValueError("npm_metadata_revision_invalid")
+        if (
+            operation == "metadataWrite"
+            and method == "PUT"
+            and isinstance(body, dict)
+            and any(field in body for field in ("versions", "dist-tags", "_attachments"))
+        ):
+            self._validate_deprecation_packument(body, params)
+
     def _validate_publish_document(
         self,
         body: dict[str, Any] | None,
@@ -2753,7 +2963,7 @@ class NpmRegistryAdapter(ApiAdapter):
             return PolicyDecision(
                 allowed=False,
                 status_code=403,
-                reason="npm write body must be a strict JSON object",
+                reason="npm write body must be strict JSON",
                 payload={"error": "npm_write_invalid_json"},
             )
         try:
@@ -2765,19 +2975,20 @@ class NpmRegistryAdapter(ApiAdapter):
                 reason="npm request does not match a configured write operation",
                 payload={"error": "npm_operation_unclassified"},
             )
-        if method in {"PUT", "POST"} and not isinstance(body, dict):
-            return PolicyDecision(
-                allowed=False,
-                status_code=403,
-                reason="npm write operation requires a strict JSON object body",
-                payload={"error": "npm_write_body_required"},
+        try:
+            self._validate_operation_body(
+                operation=operation,
+                method=method,
+                body=body,
+                params=params,
             )
-        if method == "DELETE" and body is not None:
+        except ValueError as exc:
+            error = str(exc)
             return PolicyDecision(
                 allowed=False,
                 status_code=403,
-                reason="npm delete operation must not include a body",
-                payload={"error": "npm_delete_body_denied"},
+                reason="npm request body does not match the closed operation grammar",
+                payload={"error": error},
             )
         allowed_operations = set(route.adapter_config.get("operations") or [])
         if operation not in allowed_operations:
@@ -2787,24 +2998,12 @@ class NpmRegistryAdapter(ApiAdapter):
                 reason=f"npm operation {operation} is not allowed by route policy",
                 payload={"error": "npm_operation_not_allowed", "operation": operation},
             )
-        if (
-            operation == "metadataWrite"
-            and isinstance(body, dict)
-            and "_rev" in body
-            and (not isinstance(body["_rev"], str) or not body["_rev"])
-        ):
-            return PolicyDecision(
-                allowed=False,
-                status_code=403,
-                reason="npm metadata replacement revision must be a nonempty string",
-                payload={"error": "npm_metadata_revision_invalid"},
-            )
         if operation == "publish":
             document_decision = self._validate_publish_document(body, params)
             if not document_decision.allowed:
                 return document_decision
             try:
-                fields = self._operation_fields(operation, body, params)
+                fields = self._operation_fields(operation, method, body, params)
             except ValueError as exc:
                 error = str(exc)
                 return PolicyDecision(

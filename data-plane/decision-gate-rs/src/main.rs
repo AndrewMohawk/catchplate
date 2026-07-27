@@ -17642,6 +17642,41 @@ fn npm_package_segment(value: &str) -> bool {
     !value.starts_with('@') && !value.contains('%') && valid_npm_package_part(value, false)
 }
 
+fn npm_package_name(value: &str) -> bool {
+    if let Some((scope, package)) = value.split_once('/') {
+        return !package.contains('/')
+            && scope.starts_with('@')
+            && valid_npm_package_part(scope, true)
+            && valid_npm_package_part(package, false);
+    }
+    !value.starts_with('@') && valid_npm_package_part(value, false)
+}
+
+fn npm_dist_tag_version(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 256
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'+' | b'~' | b'-')
+        })
+}
+
+fn npm_has_publish_attachment_payload(body: &Map<String, Value>) -> bool {
+    if body.contains_key("tarball_integrity") {
+        return true;
+    }
+    let Some(attachments) = body.get("_attachments") else {
+        return false;
+    };
+    let Some(attachments) = attachments.as_object() else {
+        return true;
+    };
+    attachments.values().any(|attachment| {
+        attachment
+            .as_object()
+            .is_none_or(|item| item.contains_key("data"))
+    })
+}
+
 fn npm_operation(url: &Url, method: &str, body: &str) -> Result<&'static str, Value> {
     let method = method.to_ascii_uppercase();
     let path = npm_registry_path(url);
@@ -17658,7 +17693,7 @@ fn npm_operation(url: &Url, method: &str, body: &str) -> Result<&'static str, Va
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>();
     match (method.as_str(), segments.as_slice()) {
-        ("POST", ["-", "npm", "v1", "tokens"]) => Ok("tokenWrite"),
+        ("POST", ["-", "npm", "v1", "tokens"]) => Ok("tokenCreate"),
         ("DELETE", ["-", "npm", "v1", "tokens", "token", token]) if !token.is_empty() => {
             Ok("tokenWrite")
         }
@@ -17667,7 +17702,7 @@ fn npm_operation(url: &Url, method: &str, body: &str) -> Result<&'static str, Va
         {
             Ok("distTagWrite")
         }
-        ("DELETE", [package, "-rev", revision])
+        ("PUT" | "DELETE", [package, "-rev", revision])
             if npm_package_segment(package) && !revision.is_empty() =>
         {
             Ok("unpublish")
@@ -17699,10 +17734,7 @@ fn npm_operation(url: &Url, method: &str, body: &str) -> Result<&'static str, Va
             let body = body
                 .as_object()
                 .ok_or_else(|| json!({"error":"npm_write_invalid_json"}))?;
-            if ["_attachments", "versions", "dist-tags", "tarball_integrity"]
-                .iter()
-                .any(|field| body.contains_key(*field))
-            {
+            if npm_has_publish_attachment_payload(body) {
                 Ok("publish")
             } else if body.contains_key("_rev") {
                 Ok("metadataWrite")
@@ -17718,6 +17750,181 @@ fn npm_operation(url: &Url, method: &str, body: &str) -> Result<&'static str, Va
     }
 }
 
+fn npm_validate_unpublish_update(
+    body: &Map<String, Value>,
+    params: &BTreeMap<String, String>,
+) -> Result<(), Value> {
+    let revision = body
+        .get("_rev")
+        .and_then(Value::as_str)
+        .filter(|revision| !revision.is_empty())
+        .ok_or_else(|| json!({"error":"npm_unpublish_revision_invalid"}))?;
+    let path_revision = params
+        .get("revision")
+        .filter(|revision| !revision.is_empty())
+        .ok_or_else(|| json!({"error":"npm_unpublish_revision_mismatch"}))?;
+    if revision != path_revision {
+        return Err(json!({"error":"npm_unpublish_revision_mismatch"}));
+    }
+    let document_name = body
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| npm_package_name(name))
+        .ok_or_else(|| json!({"error":"npm_unpublish_package_missing"}))?;
+    if params
+        .get("package")
+        .map(|package| decode_npm_scoped_name(package))
+        .is_some_and(|package| package != document_name)
+    {
+        return Err(json!({"error":"npm_unpublish_package_mismatch"}));
+    }
+    if body.contains_key("_attachments") || body.contains_key("_revisions") {
+        return Err(json!({"error":"npm_unpublish_forbidden_field"}));
+    }
+    let versions = body
+        .get("versions")
+        .and_then(Value::as_object)
+        .filter(|versions| !versions.is_empty())
+        .ok_or_else(|| json!({"error":"npm_unpublish_versions_invalid"}))?;
+    for (version, document) in versions {
+        let Some(document) = document.as_object() else {
+            return Err(json!({"error":"npm_unpublish_versions_invalid"}));
+        };
+        if !npm_dist_tag_version(version)
+            || document.get("version").and_then(Value::as_str) != Some(version.as_str())
+        {
+            return Err(json!({"error":"npm_unpublish_versions_invalid"}));
+        }
+        if document
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name != document_name)
+        {
+            return Err(json!({"error":"npm_unpublish_package_mismatch"}));
+        }
+    }
+    let dist_tags = body
+        .get("dist-tags")
+        .and_then(Value::as_object)
+        .ok_or_else(|| json!({"error":"npm_unpublish_dist_tags_invalid"}))?;
+    if dist_tags
+        .get("latest")
+        .and_then(Value::as_str)
+        .is_none_or(|version| !versions.contains_key(version))
+        || dist_tags.iter().any(|(tag, version)| {
+            tag.is_empty()
+                || version
+                    .as_str()
+                    .is_none_or(|version| !versions.contains_key(version))
+        })
+    {
+        return Err(json!({"error":"npm_unpublish_dist_tags_invalid"}));
+    }
+    Ok(())
+}
+
+fn npm_validate_team_access_delete(
+    body: &Map<String, Value>,
+    params: &BTreeMap<String, String>,
+) -> Result<(), Value> {
+    if body.len() != 1 || !body.contains_key("package") {
+        return Err(json!({"error":"npm_team_access_delete_body_invalid"}));
+    }
+    let package = body
+        .get("package")
+        .and_then(Value::as_str)
+        .filter(|package| npm_package_name(package))
+        .ok_or_else(|| json!({"error":"npm_team_access_package_invalid"}))?;
+    let scope = params
+        .get("scope")
+        .filter(|scope| !scope.is_empty())
+        .ok_or_else(|| json!({"error":"npm_team_access_scope_mismatch"}))?;
+    if !package.starts_with(&format!("@{scope}/")) {
+        return Err(json!({"error":"npm_team_access_scope_mismatch"}));
+    }
+    Ok(())
+}
+
+fn npm_validate_deprecation_packument(
+    body: &Map<String, Value>,
+    params: &BTreeMap<String, String>,
+) -> Result<(), Value> {
+    let document_name = body
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| npm_package_name(name))
+        .ok_or_else(|| json!({"error":"npm_metadata_package_missing"}))?;
+    if params
+        .get("package")
+        .map(|package| decode_npm_scoped_name(package))
+        .is_some_and(|package| package != document_name)
+    {
+        return Err(json!({"error":"npm_metadata_package_mismatch"}));
+    }
+    if body.contains_key("tarball_integrity") {
+        return Err(json!({"error":"npm_metadata_publish_payload_denied"}));
+    }
+    if let Some(attachments) = body.get("_attachments") {
+        let attachments = attachments
+            .as_object()
+            .ok_or_else(|| json!({"error":"npm_metadata_publish_payload_denied"}))?;
+        if attachments.values().any(|attachment| {
+            attachment
+                .as_object()
+                .is_none_or(|item| item.contains_key("data"))
+        }) {
+            return Err(json!({"error":"npm_metadata_publish_payload_denied"}));
+        }
+    }
+    let versions = body
+        .get("versions")
+        .and_then(Value::as_object)
+        .filter(|versions| !versions.is_empty())
+        .ok_or_else(|| json!({"error":"npm_metadata_packument_invalid"}))?;
+    let dist_tags = body
+        .get("dist-tags")
+        .and_then(Value::as_object)
+        .ok_or_else(|| json!({"error":"npm_metadata_packument_invalid"}))?;
+    let mut deprecation_fields = 0usize;
+    for (version, document) in versions {
+        let Some(document) = document.as_object() else {
+            return Err(json!({"error":"npm_metadata_packument_invalid"}));
+        };
+        if !npm_dist_tag_version(version)
+            || document.get("version").and_then(Value::as_str) != Some(version.as_str())
+        {
+            return Err(json!({"error":"npm_metadata_packument_invalid"}));
+        }
+        if document
+            .get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| name != document_name)
+        {
+            return Err(json!({"error":"npm_metadata_package_mismatch"}));
+        }
+        if let Some(deprecated) = document.get("deprecated") {
+            let deprecated = deprecated
+                .as_str()
+                .filter(|value| value.len() <= 4096)
+                .ok_or_else(|| json!({"error":"npm_metadata_deprecation_invalid"}))?;
+            let _ = deprecated;
+            deprecation_fields += 1;
+        }
+    }
+    if deprecation_fields == 0 {
+        return Err(json!({"error":"npm_metadata_deprecation_required"}));
+    }
+    if dist_tags.iter().any(|(tag, version)| {
+        tag.is_empty()
+            || version
+                .as_str()
+                .is_none_or(|version| !versions.contains_key(version))
+    }) {
+        return Err(json!({"error":"npm_metadata_dist_tags_invalid"}));
+    }
+    Ok(())
+}
+
 fn npm_operation_fields(
     url: &Url,
     method: &str,
@@ -17725,6 +17932,7 @@ fn npm_operation_fields(
     body: &str,
 ) -> Result<Value, Value> {
     let operation = npm_operation(url, method, body)?;
+    let method = method.to_ascii_uppercase();
     let mut fields = Map::new();
     fields.insert(
         "operation".to_string(),
@@ -17736,11 +17944,26 @@ fn npm_operation_fields(
     if let Some(package) = route_package.as_ref() {
         fields.insert("packageName".to_string(), Value::String(package.clone()));
     }
+    for (parameter, field) in [
+        ("revision", "revision"),
+        ("tarball", "tarball"),
+        ("tag", "tag"),
+        ("scope", "scope"),
+        ("team", "team"),
+        ("token", "tokenKey"),
+    ] {
+        if let Some(value) = params.get(parameter).filter(|value| !value.is_empty()) {
+            fields.insert(
+                field.to_string(),
+                Value::String(decode_npm_scoped_name(value)),
+            );
+        }
+    }
     let body_json = if body.trim().is_empty() {
         None
     } else {
         match strict_json_value_from_str(body) {
-            Ok(Value::Object(body_json)) => Some(body_json),
+            Ok(body_json) => Some(body_json),
             _ => {
                 return Err(json!({
                     "error":"npm_write_invalid_json",
@@ -17749,15 +17972,78 @@ fn npm_operation_fields(
             }
         }
     };
-    if (method.eq_ignore_ascii_case("PUT") || method.eq_ignore_ascii_case("POST"))
-        && body_json.is_none()
-    {
-        return Err(json!({"error":"npm_write_body_required"}));
+    if operation == "tokenCreate" {
+        return Err(json!({"error":"npm_token_creation_denied"}));
     }
-    if method.eq_ignore_ascii_case("DELETE") && body_json.is_some() {
-        return Err(json!({"error":"npm_delete_body_denied"}));
+    match (operation, method.as_str()) {
+        ("distTagWrite", "PUT") => {
+            let version = body_json
+                .as_ref()
+                .and_then(Value::as_str)
+                .filter(|version| npm_dist_tag_version(version))
+                .ok_or_else(|| json!({"error":"npm_dist_tag_version_invalid"}))?;
+            fields.insert(
+                "packageVersion".to_string(),
+                Value::String(version.to_string()),
+            );
+        }
+        ("distTagWrite", "DELETE") | ("unpublish", "DELETE") | ("tokenWrite", "DELETE") => {
+            if body_json.is_some() {
+                return Err(json!({"error":"npm_delete_body_denied"}));
+            }
+        }
+        ("unpublish", "PUT") => {
+            let body = body_json
+                .as_ref()
+                .and_then(Value::as_object)
+                .ok_or_else(|| json!({"error":"npm_unpublish_body_required"}))?;
+            npm_validate_unpublish_update(body, params)?;
+        }
+        ("metadataWrite", "DELETE") => {
+            let body = body_json
+                .as_ref()
+                .and_then(Value::as_object)
+                .ok_or_else(|| json!({"error":"npm_team_access_delete_body_invalid"}))?;
+            npm_validate_team_access_delete(body, params)?;
+        }
+        (_, "PUT" | "POST") => {
+            if body_json.as_ref().and_then(Value::as_object).is_none() {
+                return Err(json!({"error":"npm_write_body_required"}));
+            }
+        }
+        (_, "DELETE") if body_json.is_some() => {
+            return Err(json!({"error":"npm_delete_body_denied"}));
+        }
+        _ => {}
     }
-    if let Some(body_json) = body_json {
+    let body_object = body_json.as_ref().and_then(Value::as_object);
+    if operation == "metadataWrite" && method == "PUT" {
+        if let Some(body) = body_object {
+            if body.contains_key("_rev")
+                && body
+                    .get("_rev")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+            {
+                return Err(json!({"error":"npm_metadata_revision_invalid"}));
+            }
+            if ["versions", "dist-tags", "_attachments"]
+                .iter()
+                .any(|field| body.contains_key(*field))
+            {
+                npm_validate_deprecation_packument(body, params)?;
+            }
+        }
+    }
+    if let Some(body_json) = body_object {
+        if operation == "metadataWrite" {
+            if let Some(package) = body_json.get("package").and_then(Value::as_str) {
+                fields.insert(
+                    "packageName".to_string(),
+                    Value::String(package.to_string()),
+                );
+            }
+        }
         if body_json.contains_key("_rev") {
             let valid_revision = body_json
                 .get("_rev")
@@ -18432,6 +18718,7 @@ fn validate_adapter(
         }
         "npm.registry" => {
             let operation = npm_operation(url, &req.method, &req.body)?;
+            let fields = npm_operation_fields(url, &req.method, &route_match.params, &req.body)?;
             let allowed = config
                 .get("operations")
                 .and_then(Value::as_array)
@@ -18442,7 +18729,6 @@ fn validate_adapter(
             if !allowed.contains(operation) {
                 return Err(json!({"error":"npm_operation_not_allowed","operation":operation}));
             }
-            let fields = npm_operation_fields(url, &req.method, &route_match.params, &req.body)?;
             if operation == "publish" {
                 let missing = ["packageName", "packageVersion", "tarballIntegrity"]
                     .iter()
@@ -40585,7 +40871,7 @@ mod tests {
     }
 
     #[test]
-    fn npm_unknown_operation_precedes_credential_jit_quota_and_upstream_access() {
+    fn npm_malformed_operations_precede_credential_jit_quota_and_upstream_access() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("npm side-effect listener");
         listener
             .set_nonblocking(true)
@@ -40621,8 +40907,18 @@ mod tests {
         route.scheme = "http".to_string();
         route.host = address.ip().to_string();
         route.port = address.port();
-        route.methods = HashSet::from(["POST".to_string()]);
-        route.paths = vec![compile_template("/{package}").expect("npm package template")];
+        route.methods =
+            HashSet::from(["PUT".to_string(), "POST".to_string(), "DELETE".to_string()]);
+        route.paths = [
+            "/{package}",
+            "/{package}/-rev/{revision}",
+            "/-/package/{package}/dist-tags/{tag}",
+            "/-/team/{scope}/{team}/package",
+            "/-/npm/v1/tokens",
+        ]
+        .into_iter()
+        .map(|path| compile_template(path).expect("npm test path template"))
+        .collect();
         route.credential_ref = Some("credential:npm".to_string());
         route.adapter_type = "npm.registry".to_string();
         route.adapter_config = json!({
@@ -40644,37 +40940,78 @@ mod tests {
         state.grant_consume_url = Some(format!("http://{address}/grants/consume"));
         state.rate_limit_consume_url = Some(format!("http://{address}/rate-limits/consume"));
 
-        let result = forward_absolute_request_inner(
-            &state,
-            &snapshot,
-            IncomingRequest {
-                method: "POST".to_string(),
-                target: format!("http://{address}/package"),
-                headers: BTreeMap::from([(
-                    "content-type".to_string(),
-                    "application/json".to_string(),
-                )]),
-                body: b"{}".to_vec(),
-                client_ip: Some("127.0.0.1".to_string()),
-            },
-            Some("agent:test"),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-        );
-        let ForwardResult::Buffered(response) = result else {
-            panic!("unknown npm operation unexpectedly streamed");
-        };
-        let response = String::from_utf8(response).expect("unknown npm denial response");
-        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
-        assert!(
-            response.contains("npm_operation_unclassified"),
-            "{response}"
-        );
+        for (method, path, body, expected_error) in [
+            ("POST", "/package", "{}", "npm_operation_unclassified"),
+            (
+                "PUT",
+                "/-/package/package/dist-tags/next",
+                r#"{"version":"1.2.3"}"#,
+                "npm_dist_tag_version_invalid",
+            ),
+            (
+                "PUT",
+                "/package/-rev/42-deadbeef",
+                r#"{
+                    "_rev":"43-attacker",
+                    "name":"package",
+                    "dist-tags":{"latest":"2.0.0"},
+                    "versions":{"2.0.0":{"name":"package","version":"2.0.0"}}
+                }"#,
+                "npm_unpublish_revision_mismatch",
+            ),
+            (
+                "DELETE",
+                "/-/team/scope/owners/package",
+                r#"{"package":"@other/package"}"#,
+                "npm_team_access_scope_mismatch",
+            ),
+            (
+                "PUT",
+                "/package",
+                r#"{
+                    "_rev":"42-deadbeef",
+                    "name":"package",
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"name":"package","version":"1.2.3"}}
+                }"#,
+                "npm_metadata_deprecation_required",
+            ),
+            (
+                "POST",
+                "/-/npm/v1/tokens",
+                r#"{"name":"agent-created","password":"must-not-be-forwarded"}"#,
+                "npm_token_creation_denied",
+            ),
+        ] {
+            let result = forward_absolute_request_inner(
+                &state,
+                &snapshot,
+                IncomingRequest {
+                    method: method.to_string(),
+                    target: format!("http://{address}{path}"),
+                    headers: BTreeMap::from([(
+                        "content-type".to_string(),
+                        "application/json".to_string(),
+                    )]),
+                    body: body.as_bytes().to_vec(),
+                    client_ip: Some("127.0.0.1".to_string()),
+                },
+                Some("agent:test"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                false,
+            );
+            let ForwardResult::Buffered(response) = result else {
+                panic!("malformed npm operation unexpectedly streamed");
+            };
+            let response = String::from_utf8(response).expect("npm denial response");
+            assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+            assert!(response.contains(expected_error), "{response}");
+        }
         assert!(state
             .credential_leases
             .lock()
@@ -43684,15 +44021,15 @@ mod tests {
             ),
             (
                 "https://registry.test/npm/-/package/@scope%2fpkg/dist-tags/next",
-                "DELETE",
-                "",
+                "PUT",
+                r#""1.2.3""#,
                 "distTagWrite",
             ),
             (
-                "https://registry.test/npm/-/npm/v1/tokens",
-                "POST",
-                r#"{"readonly":true}"#,
-                "tokenWrite",
+                "https://registry.test/npm/-/package/@scope%2fpkg/dist-tags/next",
+                "DELETE",
+                "",
+                "distTagWrite",
             ),
             (
                 "https://registry.test/npm/-/npm/v1/tokens/token/token-key",
@@ -43729,6 +44066,134 @@ mod tests {
             assert_eq!(fields["operation"], format!("npm.{expected}"));
         }
 
+        let unpublish_url = Url::parse("https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef")
+            .expect("specific-version unpublish URL");
+        let unpublish_params = BTreeMap::from([
+            ("package".to_string(), "@scope%2fpkg".to_string()),
+            ("revision".to_string(), "42-deadbeef".to_string()),
+        ]);
+        let unpublish_body = r#"{
+            "_rev":"42-deadbeef",
+            "name":"@scope/pkg",
+            "dist-tags":{"latest":"2.0.0"},
+            "versions":{"2.0.0":{"name":"@scope/pkg","version":"2.0.0"}}
+        }"#;
+        assert_eq!(
+            npm_operation(&unpublish_url, "PUT", unpublish_body)
+                .expect("specific-version unpublish PUT must classify"),
+            "unpublish"
+        );
+        let unpublish_fields =
+            npm_operation_fields(&unpublish_url, "PUT", &unpublish_params, unpublish_body)
+                .expect("specific-version unpublish PUT fields");
+        assert_eq!(unpublish_fields["operation"], "npm.unpublish");
+        assert_eq!(unpublish_fields["revision"], "42-deadbeef");
+
+        let team_delete_url = Url::parse("https://registry.test/npm/-/team/scope/owners/package")
+            .expect("team delete URL");
+        let team_params = BTreeMap::from([
+            ("scope".to_string(), "scope".to_string()),
+            ("team".to_string(), "owners".to_string()),
+        ]);
+        let team_delete_fields = npm_operation_fields(
+            &team_delete_url,
+            "DELETE",
+            &team_params,
+            r#"{"package":"@scope/pkg"}"#,
+        )
+        .expect("real npm team access DELETE body");
+        assert_eq!(team_delete_fields["operation"], "npm.metadataWrite");
+        assert_eq!(team_delete_fields["packageName"], "@scope/pkg");
+
+        let deprecation_packument = r#"{
+            "_id":"@scope/pkg",
+            "_rev":"42-existing",
+            "name":"@scope/pkg",
+            "dist-tags":{"latest":"1.2.3"},
+            "versions":{
+                "1.2.3":{
+                    "name":"@scope/pkg",
+                    "version":"1.2.3",
+                    "deprecated":"use 2.x"
+                }
+            },
+            "_attachments":{"pkg-1.2.3.tgz":{"stub":true,"length":7}}
+        }"#;
+        assert_eq!(
+            npm_operation(&url, "PUT", deprecation_packument)
+                .expect("deprecation packument must classify"),
+            "metadataWrite"
+        );
+        let deprecation_fields = npm_operation_fields(&url, "PUT", &params, deprecation_packument)
+            .expect("bounded deprecation packument");
+        assert_eq!(deprecation_fields["operation"], "npm.metadataWrite");
+
+        let token_create_url =
+            Url::parse("https://registry.test/npm/-/npm/v1/tokens").expect("token create URL");
+        assert_eq!(
+            npm_operation(
+                &token_create_url,
+                "POST",
+                r#"{"name":"agent-created","password":"must-not-be-forwarded"}"#
+            )
+            .expect("token creation must have its own class"),
+            "tokenCreate"
+        );
+        let denied_token_create = npm_operation_fields(
+            &token_create_url,
+            "POST",
+            &BTreeMap::new(),
+            r#"{"name":"agent-created","password":"must-not-be-forwarded"}"#,
+        )
+        .expect_err("token creation must never inherit token revocation");
+        assert_eq!(denied_token_create["error"], "npm_token_creation_denied");
+
+        for (target, method, params, body, expected_error) in [
+            (
+                "https://registry.test/npm/-/package/@scope%2fpkg/dist-tags/next",
+                "PUT",
+                params.clone(),
+                r#"{"version":"1.2.3"}"#,
+                "npm_dist_tag_version_invalid",
+            ),
+            (
+                "https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef",
+                "PUT",
+                unpublish_params.clone(),
+                r#"{
+                    "_rev":"43-attacker",
+                    "name":"@scope/pkg",
+                    "dist-tags":{"latest":"2.0.0"},
+                    "versions":{"2.0.0":{"name":"@scope/pkg","version":"2.0.0"}}
+                }"#,
+                "npm_unpublish_revision_mismatch",
+            ),
+            (
+                "https://registry.test/npm/-/team/scope/owners/package",
+                "DELETE",
+                team_params.clone(),
+                r#"{"package":"@other/pkg"}"#,
+                "npm_team_access_scope_mismatch",
+            ),
+            (
+                "https://registry.test/npm/@scope%2fpkg",
+                "PUT",
+                params.clone(),
+                r#"{
+                    "_rev":"42-existing",
+                    "name":"@scope/pkg",
+                    "dist-tags":{"latest":"1.2.3"},
+                    "versions":{"1.2.3":{"name":"@scope/pkg","version":"1.2.3"}}
+                }"#,
+                "npm_metadata_deprecation_required",
+            ),
+        ] {
+            let target = Url::parse(target).expect("malformed npm wire-form URL");
+            let denied = npm_operation_fields(&target, method, &params, body)
+                .expect_err("malformed npm wire form must fail closed");
+            assert_eq!(denied["error"], expected_error);
+        }
+
         for revision in [Value::Null, json!(false), json!(0), json!(""), json!({})] {
             let body = json!({
                 "_rev":revision,
@@ -43754,12 +44219,12 @@ mod tests {
         .to_string();
         assert_eq!(
             npm_operation(&url, "PUT", &revision_bearing_packument)
-                .expect("publish-bearing metadata must classify as publish"),
-            "publish"
+                .expect("revision-bearing packument must classify as metadata"),
+            "metadataWrite"
         );
         let denied = npm_operation_fields(&url, "PUT", &params, &revision_bearing_packument)
-            .expect_err("revision-bearing publish without attachment must fail closed");
-        assert_eq!(denied["error"], "npm_publish_attachment_missing");
+            .expect_err("non-deprecation metadata packument must fail closed");
+        assert_eq!(denied["error"], "npm_metadata_deprecation_required");
 
         for (target, method, body) in [
             (
@@ -43804,11 +44269,6 @@ mod tests {
                 "DELETE",
                 "",
             ),
-            (
-                "https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef",
-                "PUT",
-                r#"{"_rev":"42-deadbeef"}"#,
-            ),
         ] {
             let target = Url::parse(target).expect("unknown npm operation URL");
             let denied = npm_operation(&target, method, body)
@@ -43824,7 +44284,7 @@ mod tests {
                 "https://registry.test/npm/-/npm/v1/tokens",
                 "POST",
                 "",
-                "npm_write_body_required",
+                "npm_token_creation_denied",
             ),
             (
                 "https://registry.test/npm/@scope%2fpkg/-rev/42-deadbeef",

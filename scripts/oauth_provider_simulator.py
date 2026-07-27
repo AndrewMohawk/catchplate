@@ -28,6 +28,7 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 MAX_REQUEST_LINE_BYTES = 8 * 1024
 MAX_HEADER_BYTES = 32 * 1024
 MAX_FORM_BYTES = 16 * 1024
+MAX_RESOURCE_BODY_BYTES = 16 * 1024
 MAX_RESPONSE_BYTES = 64 * 1024
 MAX_EVENTS = 256
 MAX_QUERY_FIELDS = 24
@@ -114,10 +115,24 @@ class OAuthProviderSimulator:
         host: str = "127.0.0.1",
         port: int = 0,
         redirect_base_url: str = "https://serverware.test",
+        authorization_token_ttl_seconds: int = 1,
+        refresh_token_ttl_seconds: int = 300,
     ) -> None:
+        for name, value in (
+            ("authorization_token_ttl_seconds", authorization_token_ttl_seconds),
+            ("refresh_token_ttl_seconds", refresh_token_ttl_seconds),
+        ):
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or not 1 <= value <= 3600
+            ):
+                raise ValueError(f"{name} must be an integer between 1 and 3600")
         self.work_dir = Path(work_dir)
         self.host = host
         self.port = port
+        self.authorization_token_ttl_seconds = authorization_token_ttl_seconds
+        self.refresh_token_ttl_seconds = refresh_token_ttl_seconds
         self.redirect_base_url, self.redirect_hostname = self._validated_redirect_base(
             redirect_base_url
         )
@@ -198,8 +213,15 @@ class OAuthProviderSimulator:
                 },
                 "bounds": {
                     "maxFormBytes": MAX_FORM_BYTES,
+                    "maxResourceBodyBytes": MAX_RESOURCE_BODY_BYTES,
                     "maxResponseBytes": MAX_RESPONSE_BYTES,
                     "maxEvents": MAX_EVENTS,
+                },
+                "tokenLifetimes": {
+                    "authorizationCodeExchangeSeconds": (
+                        self.authorization_token_ttl_seconds
+                    ),
+                    "refreshExchangeSeconds": self.refresh_token_ttl_seconds,
                 },
             }
         self.assert_no_token_values(json.dumps(payload, sort_keys=True).encode("utf-8"))
@@ -233,6 +255,15 @@ class OAuthProviderSimulator:
 
             def do_POST(self) -> None:  # noqa: N802
                 simulator._handle_post(self)
+
+            def do_DELETE(self) -> None:  # noqa: N802
+                simulator._handle_unsupported_resource_method(self)
+
+            def do_PATCH(self) -> None:  # noqa: N802
+                simulator._handle_unsupported_resource_method(self)
+
+            def do_PUT(self) -> None:  # noqa: N802
+                simulator._handle_unsupported_resource_method(self)
 
             def log_message(self, _format: str, *args: object) -> None:
                 return
@@ -487,6 +518,12 @@ class OAuthProviderSimulator:
         if parsed.path == "/__test__/observations" and not parsed.query:
             self._send_json(handler, 200, self.observations())
             return
+        if parsed.path.startswith("/gmail/v1/"):
+            self._gmail_resource(handler, parsed)
+            return
+        if parsed.path == "/2/tweets/search/recent":
+            self._x_search_resource(handler, parsed)
+            return
         match = re.fullmatch(r"/(google|x)/(authorize|identity)", parsed.path)
         if match is None:
             self._send_json(handler, 404, {"error": "not_found"})
@@ -504,6 +541,9 @@ class OAuthProviderSimulator:
         if not self._request_headers_are_bounded(handler):
             return
         parsed = urllib.parse.urlsplit(handler.path)
+        if parsed.path == "/2/tweets":
+            self._x_post_resource(handler, parsed)
+            return
         if parsed.query:
             self._send_json(handler, 400, {"error": "invalid_request"})
             return
@@ -519,6 +559,353 @@ class OAuthProviderSimulator:
             self._token(handler, provider, form)
         else:
             self._revoke(handler, provider, form)
+
+    def _handle_unsupported_resource_method(
+        self, handler: BaseHTTPRequestHandler
+    ) -> None:
+        if not self._request_headers_are_bounded(handler):
+            return
+        parsed = urllib.parse.urlsplit(handler.path)
+        if parsed.path.startswith("/gmail/v1/") or parsed.path.startswith("/2/"):
+            self._send_json(handler, 405, {"error": "method_not_allowed"})
+            return
+        self._send_json(handler, 404, {"error": "not_found"})
+
+    def _authorized_grant(
+        self,
+        handler: BaseHTTPRequestHandler,
+        *,
+        provider: str,
+        required_scope: str,
+        operation: str,
+    ) -> _Grant | None:
+        authorization = handler.headers.get("Authorization", "")
+        if (
+            not authorization.startswith("Bearer ")
+            or len(authorization) > 1024
+            or authorization.count(" ") != 1
+        ):
+            self._record(
+                provider,
+                "resource_rejected",
+                operation=operation,
+                reason="invalid_token",
+            )
+            self._send_json(handler, 401, {"error": "invalid_token"})
+            return None
+        token = authorization.removeprefix("Bearer ")
+        with self._lock:
+            reference = self._access_tokens.get(token)
+            grant = (
+                self._grants.get(reference.grant_id) if reference is not None else None
+            )
+            valid = bool(
+                reference
+                and reference.active
+                and grant
+                and grant.active
+                and grant.provider == provider
+            )
+            scope_allowed = bool(valid and required_scope in grant.scopes)
+            if not valid:
+                self._counts[provider]["resource_rejections"] += 1
+                self._record_locked(
+                    provider,
+                    "resource_rejected",
+                    operation=operation,
+                    reason="invalid_token",
+                )
+            elif not scope_allowed:
+                self._counts[provider]["resource_rejections"] += 1
+                self._record_locked(
+                    provider,
+                    "resource_rejected",
+                    operation=operation,
+                    reason="insufficient_scope",
+                )
+            else:
+                self._counts[provider]["resource_requests"] += 1
+                self._counts[provider][f"resource_{operation}"] += 1
+                self._record_locked(
+                    provider,
+                    "resource_authorized",
+                    operation=operation,
+                )
+        if not valid:
+            self._send_json(handler, 401, {"error": "invalid_token"})
+            return None
+        if not scope_allowed:
+            self._send_json(handler, 403, {"error": "insufficient_scope"})
+            return None
+        return grant
+
+    def _parse_query(
+        self,
+        handler: BaseHTTPRequestHandler,
+        query: str,
+        *,
+        allowed: set[str],
+    ) -> dict[str, list[str]] | None:
+        try:
+            encoded_query = query.encode("ascii")
+        except UnicodeEncodeError:
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return None
+        if len(encoded_query) > MAX_REQUEST_LINE_BYTES:
+            self._send_json(handler, 413, {"error": "request_too_large"})
+            return None
+        try:
+            parsed = urllib.parse.parse_qs(
+                query,
+                keep_blank_values=True,
+                strict_parsing=True,
+                max_num_fields=MAX_QUERY_FIELDS,
+            )
+        except ValueError:
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return None
+        if not set(parsed).issubset(allowed):
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return None
+        return parsed
+
+    def _read_json_object(
+        self, handler: BaseHTTPRequestHandler
+    ) -> dict[str, Any] | None:
+        if handler.headers.get("Transfer-Encoding"):
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return None
+        if handler.headers.get_content_type().lower() != "application/json":
+            self._send_json(handler, 415, {"error": "invalid_content_type"})
+            return None
+        raw_length = handler.headers.get("Content-Length")
+        try:
+            length = int(raw_length or "")
+        except ValueError:
+            self._send_json(handler, 411, {"error": "length_required"})
+            return None
+        if length < 1 or length > MAX_RESOURCE_BODY_BYTES:
+            self._send_json(handler, 413, {"error": "request_too_large"})
+            return None
+        body = handler.rfile.read(length)
+        if len(body) != length:
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return None
+
+        def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate JSON key")
+                result[key] = value
+            return result
+
+        def reject_constant(_value: str) -> Any:
+            raise ValueError("non-standard JSON constant")
+
+        try:
+            value = json.loads(
+                body,
+                object_pairs_hook=reject_duplicate_keys,
+                parse_constant=reject_constant,
+            )
+        except (UnicodeDecodeError, ValueError, RecursionError):
+            self._send_json(handler, 400, {"error": "invalid_json"})
+            return None
+        if not isinstance(value, dict):
+            self._send_json(handler, 400, {"error": "invalid_json"})
+            return None
+        return value
+
+    def _gmail_resource(
+        self,
+        handler: BaseHTTPRequestHandler,
+        parsed: urllib.parse.SplitResult,
+    ) -> None:
+        match = re.fullmatch(
+            r"/gmail/v1/users/(me)/messages(?:/([A-Za-z0-9_-]{1,128}))?",
+            parsed.path,
+        )
+        if match is None:
+            self._send_json(handler, 404, {"error": "not_found"})
+            return
+        message_id = match.group(2)
+        operation = "gmail.message.get" if message_id else "gmail.messages.list"
+        if (
+            self._authorized_grant(
+                handler,
+                provider="google",
+                required_scope="https://www.googleapis.com/auth/gmail.readonly",
+                operation=operation,
+            )
+            is None
+        ):
+            return
+        query = self._parse_query(
+            handler,
+            parsed.query,
+            allowed={
+                "fields",
+                "format",
+                "includeSpamTrash",
+                "labelIds",
+                "maxResults",
+                "pageToken",
+                "q",
+            },
+        )
+        if query is None:
+            return
+        now_ms = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
+        messages = {
+            "gmail-recent-1": {
+                "id": "gmail-recent-1",
+                "threadId": "gmail-thread-1",
+                "labelIds": ["INBOX"],
+                "snippet": "Recent fixture message one",
+                "internalDate": str(now_ms - 3_600_000),
+            },
+            "gmail-recent-2": {
+                "id": "gmail-recent-2",
+                "threadId": "gmail-thread-2",
+                "labelIds": ["INBOX"],
+                "snippet": "Recent fixture message two",
+                "internalDate": str(now_ms - 7 * 86_400_000),
+            },
+        }
+        if message_id is None:
+            max_results_values = query.get("maxResults", ["10"])
+            if (
+                len(max_results_values) != 1
+                or not max_results_values[0].isdigit()
+                or not 1 <= int(max_results_values[0]) <= 100
+            ):
+                self._send_json(handler, 400, {"error": "invalid_request"})
+                return
+            limit = min(int(max_results_values[0]), len(messages))
+            self._send_json(
+                handler,
+                200,
+                {
+                    "messages": [
+                        {"id": item["id"], "threadId": item["threadId"]}
+                        for item in list(messages.values())[:limit]
+                    ],
+                    "resultSizeEstimate": limit,
+                },
+            )
+            return
+        message = messages.get(message_id)
+        if message is None:
+            self._send_json(handler, 404, {"error": {"code": 404}})
+            return
+        if query.get("format") == ["metadata"] and query.get("fields") == [
+            "id,internalDate"
+        ]:
+            self._send_json(
+                handler,
+                200,
+                {"id": message["id"], "internalDate": message["internalDate"]},
+            )
+            return
+        self._send_json(handler, 200, message)
+
+    def _x_search_resource(
+        self,
+        handler: BaseHTTPRequestHandler,
+        parsed: urllib.parse.SplitResult,
+    ) -> None:
+        if (
+            self._authorized_grant(
+                handler,
+                provider="x",
+                required_scope="tweet.read",
+                operation="x.search.recent",
+            )
+            is None
+        ):
+            return
+        query = self._parse_query(
+            handler,
+            parsed.query,
+            allowed={"end_time", "max_results", "query", "start_time", "tweet.fields"},
+        )
+        if query is None:
+            return
+        if len(query.get("query", [])) != 1 or not query["query"][0]:
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return
+        max_results = query.get("max_results", ["10"])
+        if (
+            len(max_results) != 1
+            or not max_results[0].isdigit()
+            or not 1 <= int(max_results[0]) <= 100
+        ):
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return
+        created_at = (
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=1)
+        ).isoformat(timespec="seconds").replace("+00:00", "Z")
+        self._send_json(
+            handler,
+            200,
+            {
+                "data": [
+                    {
+                        "id": "x-search-result-1",
+                        "text": "Bounded recent-search fixture",
+                        "created_at": created_at,
+                    }
+                ],
+                "meta": {"result_count": 1},
+            },
+        )
+
+    def _x_post_resource(
+        self,
+        handler: BaseHTTPRequestHandler,
+        parsed: urllib.parse.SplitResult,
+    ) -> None:
+        if parsed.query:
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return
+        if (
+            self._authorized_grant(
+                handler,
+                provider="x",
+                required_scope="tweet.write",
+                operation="x.tweet.create",
+            )
+            is None
+        ):
+            return
+        payload = self._read_json_object(handler)
+        if payload is None:
+            return
+        if set(payload) - {"reply_settings", "text"}:
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return
+        text = payload.get("text")
+        if not isinstance(text, str) or not 1 <= len(text) <= 280:
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return
+        reply_settings = payload.get("reply_settings")
+        if reply_settings is not None and reply_settings not in {
+            "following",
+            "mentionedUsers",
+        }:
+            self._send_json(handler, 400, {"error": "invalid_request"})
+            return
+        self._send_json(
+            handler,
+            201,
+            {
+                "data": {
+                    "id": "x-created-tweet-1",
+                    "text": text,
+                }
+            },
+        )
 
     def _read_form(
         self, handler: BaseHTTPRequestHandler
@@ -818,7 +1205,11 @@ class OAuthProviderSimulator:
             "refresh_token": refresh_token,
             "token_type": "Bearer",
             "scope": " ".join(scopes),
-            "expires_in": 1,
+            "expires_in": (
+                self.authorization_token_ttl_seconds
+                if grant_type == "authorization_code"
+                else self.refresh_token_ttl_seconds
+            ),
             "refresh_token_expires_in": 3600,
         }
 

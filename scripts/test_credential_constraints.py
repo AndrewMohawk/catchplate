@@ -4405,7 +4405,12 @@ def main() -> None:
             {"package": "@scope%2fexample"},
         )
         assert not incomplete_decision.allowed, (publish_key, incomplete_decision)
-        assert incomplete_decision.payload.get("error", "").startswith("npm_publish_"), (
+        expected_prefix = (
+            "npm_publish_"
+            if publish_key in {"_attachments", "tarball_integrity"}
+            else "npm_metadata_"
+        )
+        assert incomplete_decision.payload.get("error", "").startswith(expected_prefix), (
             publish_key,
             incomplete_decision.payload,
         )
@@ -4416,7 +4421,7 @@ def main() -> None:
                 {"package": "@scope%2fexample"},
             )
         except ValueError as exc:
-            assert str(exc).startswith("npm_publish_"), (publish_key, exc)
+            assert str(exc).startswith(expected_prefix), (publish_key, exc)
         else:
             assert incomplete_fields["operation"] == "npm.publish", (
                 publish_key,
@@ -4589,6 +4594,23 @@ def main() -> None:
             "npm.unpublish",
         ),
         (
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef",
+            {
+                "_rev": "42-deadbeef",
+                "name": "@scope/example",
+                "dist-tags": {"latest": "2.0.0"},
+                "versions": {
+                    "2.0.0": {
+                        "name": "@scope/example",
+                        "version": "2.0.0",
+                    }
+                },
+            },
+            {"package": "@scope%2fexample", "revision": "42-deadbeef"},
+            "npm.unpublish",
+        ),
+        (
             "DELETE",
             "https://registry.npmjs.org/@scope%2fexample/-/example.tgz/-rev/42-deadbeef",
             None,
@@ -4598,16 +4620,9 @@ def main() -> None:
         (
             "PUT",
             "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next",
-            {"version": "1.2.3"},
+            "1.2.3",
             {"package": "@scope%2fexample", "tag": "next"},
             "npm.distTagWrite",
-        ),
-        (
-            "POST",
-            "https://registry.npmjs.org/-/npm/v1/tokens",
-            {"readonly": True},
-            {},
-            "npm.tokenWrite",
         ),
         (
             "DELETE",
@@ -4638,9 +4653,41 @@ def main() -> None:
             "npm.metadataWrite",
         ),
         (
+            "DELETE",
+            "https://registry.npmjs.org/-/team/scope/owners/package",
+            {"package": "@scope/example"},
+            {"scope": "scope", "team": "owners"},
+            "npm.metadataWrite",
+        ),
+        (
             "PUT",
             "https://registry.npmjs.org/@scope%2fexample",
             {"_rev": "42-deadbeef", "name": "@scope/example", "description": "metadata only"},
+            {"package": "@scope%2fexample"},
+            "npm.metadataWrite",
+        ),
+        (
+            "PUT",
+            "https://registry.npmjs.org/@scope%2fexample",
+            {
+                "_id": "@scope/example",
+                "_rev": "42-deadbeef",
+                "name": "@scope/example",
+                "dist-tags": {"latest": "1.2.3"},
+                "versions": {
+                    "1.2.3": {
+                        "name": "@scope/example",
+                        "version": "1.2.3",
+                        "deprecated": "use 2.x",
+                    }
+                },
+                "_attachments": {
+                    "example-1.2.3.tgz": {
+                        "stub": True,
+                        "length": len(tarball),
+                    }
+                },
+            },
             {"package": "@scope%2fexample"},
             "npm.metadataWrite",
         ),
@@ -4649,6 +4696,91 @@ def main() -> None:
         known_request = flow(method, target, body)
         fields = npm_adapter.operation_fields(known_request, npm_route, params)
         assert fields["operation"] == expected_operation, (target, fields)
+        assert npm_adapter.validate_request(known_request, npm_route, params).allowed, (
+            target,
+            fields,
+        )
+
+    malformed_wire_forms = (
+        (
+            flow(
+                "PUT",
+                "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next",
+                {"version": "1.2.3"},
+            ),
+            {"package": "@scope%2fexample", "tag": "next"},
+            "npm_dist_tag_version_invalid",
+        ),
+        (
+            flow(
+                "PUT",
+                "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef",
+                {
+                    "_rev": "43-attacker",
+                    "name": "@scope/example",
+                    "dist-tags": {"latest": "2.0.0"},
+                    "versions": {
+                        "2.0.0": {
+                            "name": "@scope/example",
+                            "version": "2.0.0",
+                        }
+                    },
+                },
+            ),
+            {"package": "@scope%2fexample", "revision": "42-deadbeef"},
+            "npm_unpublish_revision_mismatch",
+        ),
+        (
+            flow(
+                "DELETE",
+                "https://registry.npmjs.org/-/team/scope/owners/package",
+                {"package": "@other/example"},
+            ),
+            {"scope": "scope", "team": "owners"},
+            "npm_team_access_scope_mismatch",
+        ),
+        (
+            flow(
+                "PUT",
+                "https://registry.npmjs.org/@scope%2fexample",
+                {
+                    "_rev": "42-deadbeef",
+                    "name": "@scope/example",
+                    "dist-tags": {"latest": "1.2.3"},
+                    "versions": {
+                        "1.2.3": {
+                            "name": "@scope/example",
+                            "version": "1.2.3",
+                        }
+                    },
+                },
+            ),
+            {"package": "@scope%2fexample"},
+            "npm_metadata_deprecation_required",
+        ),
+        (
+            flow(
+                "POST",
+                "https://registry.npmjs.org/-/npm/v1/tokens",
+                {"name": "agent-created", "password": "must-not-be-forwarded"},
+            ),
+            {},
+            "npm_token_creation_denied",
+        ),
+    )
+    for malformed_request, params, expected_error in malformed_wire_forms:
+        assert_denied(
+            npm_adapter.validate_request(malformed_request, npm_route, params),
+            expected_error,
+        )
+        try:
+            npm_adapter.operation_fields(malformed_request, npm_route, params)
+        except ValueError as exc:
+            assert str(exc) == expected_error, (expected_error, exc)
+        else:
+            raise AssertionError(
+                f"npm accepted malformed wire form {malformed_request.request.pretty_url}"
+            )
 
     for revision in (None, False, 0, "", {}):
         invalid_revision_document = {
@@ -4739,7 +4871,7 @@ def main() -> None:
     for invalid_request, expected_error in (
         (
             flow("POST", "https://registry.npmjs.org/-/npm/v1/tokens"),
-            "npm_write_body_required",
+            "npm_token_creation_denied",
         ),
         (
             flow(
@@ -4905,6 +5037,59 @@ def main() -> None:
                 npm_document,
             )
             blocked_unknown_npm.request.headers["X-Serverware-Agent"] = "example-agent"
+            blocked_dist_tag = flow(
+                "PUT",
+                "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next",
+                {"version": "1.2.3"},
+            )
+            blocked_unpublish = flow(
+                "PUT",
+                "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef",
+                {
+                    "_rev": "43-attacker",
+                    "name": "@scope/example",
+                    "dist-tags": {"latest": "2.0.0"},
+                    "versions": {
+                        "2.0.0": {
+                            "name": "@scope/example",
+                            "version": "2.0.0",
+                        }
+                    },
+                },
+            )
+            blocked_team_delete = flow(
+                "DELETE",
+                "https://registry.npmjs.org/-/team/scope/owners/package",
+                {"package": "@other/example"},
+            )
+            blocked_deprecation = flow(
+                "PUT",
+                "https://registry.npmjs.org/@scope%2fexample",
+                {
+                    "_rev": "42-deadbeef",
+                    "name": "@scope/example",
+                    "dist-tags": {"latest": "1.2.3"},
+                    "versions": {
+                        "1.2.3": {
+                            "name": "@scope/example",
+                            "version": "1.2.3",
+                        }
+                    },
+                },
+            )
+            blocked_token_create = flow(
+                "POST",
+                "https://registry.npmjs.org/-/npm/v1/tokens",
+                {"name": "agent-created", "password": "must-not-be-forwarded"},
+            )
+            for blocked_npm_request in (
+                blocked_dist_tag,
+                blocked_unpublish,
+                blocked_team_delete,
+                blocked_deprecation,
+                blocked_token_create,
+            ):
+                blocked_npm_request.request.headers["X-Serverware-Agent"] = "example-agent"
             blocked_gmail = flow(
                 "GET",
                 "https://gmail.googleapis.com/gmail/v1/users/me/messages?unknown=1",
@@ -4928,6 +5113,11 @@ def main() -> None:
                 (blocked_x_write, "request_content_type_denied", 415),
                 (blocked_npm, "npm_write_invalid_json", 403),
                 (blocked_unknown_npm, "npm_operation_unclassified", 403),
+                (blocked_dist_tag, "npm_dist_tag_version_invalid", 403),
+                (blocked_unpublish, "npm_unpublish_revision_mismatch", 403),
+                (blocked_team_delete, "npm_team_access_scope_mismatch", 403),
+                (blocked_deprecation, "npm_metadata_deprecation_required", 403),
+                (blocked_token_create, "npm_token_creation_denied", 403),
             ):
                 ServerwareAddon().request(blocked_request)
                 assert credential_reads == [], credential_reads
@@ -5326,6 +5516,25 @@ def main() -> None:
         ),
         (
             flow(
+                "PUT",
+                "https://registry.npmjs.org/@scope%2fexample/-rev/42-deadbeef",
+                {
+                    "_rev": "42-deadbeef",
+                    "name": "@scope/example",
+                    "dist-tags": {"latest": "2.0.0"},
+                    "versions": {
+                        "2.0.0": {
+                            "name": "@scope/example",
+                            "version": "2.0.0",
+                        }
+                    },
+                },
+            ),
+            {"package": "@scope%2fexample", "revision": "42-deadbeef"},
+            "npm.unpublish",
+        ),
+        (
+            flow(
                 "DELETE",
                 "https://registry.npmjs.org/@scope%2fexample/-/example.tgz/-rev/42-deadbeef",
             ),
@@ -5333,14 +5542,18 @@ def main() -> None:
             "npm.unpublish",
         ),
         (
-            flow("DELETE", "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next"),
+            flow(
+                "PUT",
+                "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next",
+                "1.2.3",
+            ),
             {"package": "@scope%2fexample", "tag": "next"},
             "npm.distTagWrite",
         ),
         (
-            flow("POST", "https://registry.npmjs.org/-/npm/v1/tokens", {"readonly": True}),
-            {},
-            "npm.tokenWrite",
+            flow("DELETE", "https://registry.npmjs.org/-/package/@scope%2fexample/dist-tags/next"),
+            {"package": "@scope%2fexample", "tag": "next"},
+            "npm.distTagWrite",
         ),
         (
             flow("DELETE", "https://registry.npmjs.org/-/npm/v1/tokens/token/token-key"),
@@ -5355,6 +5568,15 @@ def main() -> None:
         (
             flow("POST", "https://registry.npmjs.org/-/npm/v1/user", {"email": "owner@example.test"}),
             {},
+            "npm.metadataWrite",
+        ),
+        (
+            flow(
+                "DELETE",
+                "https://registry.npmjs.org/-/team/scope/owners/package",
+                {"package": "@scope/example"},
+            ),
+            {"scope": "scope", "team": "owners"},
             "npm.metadataWrite",
         ),
         (

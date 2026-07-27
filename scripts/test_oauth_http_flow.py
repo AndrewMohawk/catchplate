@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import argparse
 import asyncio
 import base64
 import hashlib
@@ -341,6 +342,233 @@ def provider_form_request(
     return status, body
 
 
+def provider_access_token(
+    simulator: OAuthProviderSimulator,
+    *,
+    provider: str,
+    scopes: list[str],
+) -> str:
+    verifier = "V" * 43
+    state = ("G" if provider == "google" else "X") * 43
+    params = {
+        "response_type": "code",
+        "client_id": (
+            simulator.GOOGLE_CLIENT_ID
+            if provider == "google"
+            else simulator.X_CLIENT_ID
+        ),
+        "redirect_uri": (
+            f"https://serverware.test/api/oauth/callback/{provider}"
+        ),
+        "scope": " ".join(scopes),
+        "state": state,
+        "code_challenge": b64url(hashlib.sha256(verifier.encode("ascii")).digest()),
+        "code_challenge_method": "S256",
+    }
+    if provider == "google":
+        params.update(
+            {
+                "access_type": "offline",
+                "prompt": "consent",
+                "include_granted_scopes": "true",
+            }
+        )
+    location = provider_redirect(
+        simulator,
+        simulator.provider_urls(provider)["authorization_url"]
+        + "?"
+        + urllib.parse.urlencode(params),
+    )
+    code = urllib.parse.parse_qs(
+        urllib.parse.urlsplit(location).query,
+        strict_parsing=True,
+    ).get("code", [None])[0]
+    if not isinstance(code, str):
+        raise AssertionError(f"{provider} resource fixture authorization omitted code")
+    form = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": params["redirect_uri"],
+        "client_id": params["client_id"],
+        "code_verifier": verifier,
+    }
+    headers: dict[str, str] | None = None
+    if provider == "google":
+        form["client_secret"] = simulator.GOOGLE_CLIENT_SECRET
+    else:
+        credentials = (
+            f"{simulator.X_CLIENT_ID}:{simulator.X_CLIENT_SECRET}".encode("utf-8")
+        )
+        headers = {
+            "Authorization": "Basic "
+            + base64.b64encode(credentials).decode("ascii")
+        }
+    status, body = provider_form_request(
+        simulator,
+        simulator.provider_urls(provider)["token_url"],
+        form,
+        headers=headers,
+    )
+    if status != 200:
+        raise AssertionError(
+            f"{provider} resource fixture token exchange failed: HTTP {status}"
+        )
+    payload = json.loads(body)
+    token = payload.get("access_token")
+    if not isinstance(token, str) or not token:
+        raise AssertionError(f"{provider} resource fixture token was malformed")
+    return token
+
+
+def exercise_provider_resource_contract(work_dir: Path) -> None:
+    for value in (0, 3601, True, 1.5):
+        try:
+            OAuthProviderSimulator(
+                work_dir / f"invalid-token-ttl-{value!s}",
+                authorization_token_ttl_seconds=value,
+            )
+        except ValueError:
+            continue
+        raise AssertionError(
+            f"OAuth provider fixture accepted invalid token lifetime: {value!r}"
+        )
+    with OAuthProviderSimulator(work_dir) as simulator:
+        google_token = provider_access_token(
+            simulator,
+            provider="google",
+            scopes=[
+                "openid",
+                "email",
+                "https://www.googleapis.com/auth/gmail.readonly",
+            ],
+        )
+        x_token = provider_access_token(
+            simulator,
+            provider="x",
+            scopes=["tweet.read", "tweet.write", "users.read", "offline.access"],
+        )
+
+        def resource_request(
+            method: str,
+            target: str,
+            *,
+            token: str,
+            payload: dict[str, Any] | None = None,
+        ) -> tuple[int, dict[str, Any]]:
+            body = (
+                json.dumps(
+                    payload,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=True,
+                ).encode("utf-8")
+                if payload is not None
+                else None
+            )
+            headers = {"Authorization": f"Bearer {token}"}
+            if body is not None:
+                headers["Content-Type"] = "application/json"
+            request = urllib.request.Request(
+                simulator.base_url + target,
+                data=body,
+                headers=headers,
+                method=method,
+            )
+            status, _, response_body = https_request(
+                request,
+                context=simulator.client_ssl_context,
+            )
+            simulator.assert_no_token_values(response_body)
+            return status, json.loads(response_body)
+
+        list_status, listed = resource_request(
+            "GET",
+            "/gmail/v1/users/me/messages?q=newer_than%3A30d&maxResults=10",
+            token=google_token,
+        )
+        if list_status != 200 or len(listed.get("messages", [])) != 2:
+            raise AssertionError(
+                f"Gmail resource fixture list contract failed: HTTP {list_status}"
+            )
+        message_id = listed["messages"][0]["id"]
+        metadata_status, metadata = resource_request(
+            "GET",
+            (
+                f"/gmail/v1/users/me/messages/{message_id}"
+                "?format=metadata&fields=id%2CinternalDate"
+            ),
+            token=google_token,
+        )
+        if (
+            metadata_status != 200
+            or metadata.get("id") != message_id
+            or not str(metadata.get("internalDate", "")).isdigit()
+        ):
+            raise AssertionError(
+                f"Gmail resource fixture metadata contract failed: HTTP {metadata_status}"
+            )
+
+        search_status, search = resource_request(
+            "GET",
+            (
+                "/2/tweets/search/recent?query=serverware"
+                "&tweet.fields=created_at&max_results=10"
+            ),
+            token=x_token,
+        )
+        if (
+            search_status != 200
+            or search.get("meta", {}).get("result_count") != 1
+            or not search.get("data", [{}])[0].get("created_at")
+        ):
+            raise AssertionError(
+                f"X resource fixture search contract failed: HTTP {search_status}"
+            )
+        post_status, posted = resource_request(
+            "POST",
+            "/2/tweets",
+            token=x_token,
+            payload={"text": "bounded provider fixture"},
+        )
+        if (
+            post_status != 201
+            or posted.get("data", {}).get("text") != "bounded provider fixture"
+        ):
+            raise AssertionError(
+                f"X resource fixture post contract failed: HTTP {post_status}"
+            )
+
+        wrong_provider_status, _ = resource_request(
+            "GET",
+            "/2/tweets/search/recent?query=serverware",
+            token=google_token,
+        )
+        if wrong_provider_status != 401:
+            raise AssertionError("X resource fixture accepted a Google access token")
+        unsupported_status, _ = resource_request(
+            "DELETE",
+            "/gmail/v1/users/me/messages",
+            token=google_token,
+        )
+        if unsupported_status != 405:
+            raise AssertionError("Gmail resource fixture accepted a write method")
+
+        observations = simulator.observations()
+        if (
+            observations["counts"]["google"].get("resource_requests") != 2
+            or observations["counts"]["x"].get("resource_requests") != 2
+            or observations["counts"]["x"].get("resource_rejections") != 1
+            or observations["tokenLifetimes"]
+            != {
+                "authorizationCodeExchangeSeconds": 1,
+                "refreshExchangeSeconds": 300,
+            }
+        ):
+            raise AssertionError(
+                f"resource fixture observations were incomplete: {observations}"
+            )
+
+
 def expect_status(response: ASGIResponse, expected: int, label: str) -> None:
     if response.status_code != expected:
         raise AssertionError(
@@ -353,8 +581,24 @@ def b64url(value: bytes) -> str:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Exercise the bounded OAuth provider resources and the complete "
+            "Serverware OAuth HTTP lifecycle."
+        )
+    )
+    parser.add_argument(
+        "--resource-contract-only",
+        action="store_true",
+        help="exercise only the bounded Gmail and X provider resource endpoints",
+    )
+    args = parser.parse_args()
     with tempfile.TemporaryDirectory() as raw_tmp:
         tmp = Path(raw_tmp)
+        exercise_provider_resource_contract(tmp / "resource-provider")
+        if args.resource_contract_only:
+            print("OAuth provider resource contract passed")
+            return
         with OAuthProviderSimulator(tmp / "provider") as simulator:
             configure_environment(tmp / "serverware", simulator)
 
@@ -1065,34 +1309,75 @@ def main() -> None:
                     },
                     routes=(route,),
                 )
-                recipient_key = x25519.X25519PrivateKey.generate()
-                recipient_public = recipient_key.public_key().public_bytes(
-                    serialization.Encoding.Raw,
-                    serialization.PublicFormat.Raw,
+                def credential_lease(
+                    *,
+                    purpose: str,
+                    nonce_label: str,
+                    expected_version: int | None,
+                    expected_metadata_sha256: str | None,
+                ) -> ASGIResponse:
+                    recipient_key = x25519.X25519PrivateKey.generate()
+                    recipient_public = recipient_key.public_key().public_bytes(
+                        serialization.Encoding.Raw,
+                        serialization.PublicFormat.Raw,
+                    )
+                    recipient_nonce = hashlib.sha256(
+                        nonce_label.encode("ascii")
+                    ).digest()
+                    return request(
+                        client,
+                        "POST",
+                        "/api/data-plane/credential-leases",
+                        json_body={
+                            "apiVersion": "serverware.credentialLeaseRequest/v3",
+                            "purpose": purpose,
+                            "principalId": "agent:oauth-http-flow",
+                            "routeId": route.id,
+                            "credentialId": x_credential_id,
+                            "expectedCredentialVersion": expected_version,
+                            "expectedMetadataSha256": expected_metadata_sha256,
+                            "releaseAuthorization": None,
+                            "recipientPublicKey": b64url(recipient_public),
+                            "recipientKeyId": "sha256:"
+                            + hashlib.sha256(recipient_public).hexdigest(),
+                            "recipientNonce": b64url(recipient_nonce),
+                            "policyHash": POLICY_HASH,
+                            "dataPlaneBinaryDigest": DATA_PLANE_DIGEST,
+                            "maxTtlSeconds": 1,
+                        },
+                        extra_headers={
+                            "X-Serverware-Data-Plane-Token": DATA_PLANE_TOKEN
+                        },
+                    )
+
+                generation = credential_lease(
+                    purpose="generationMetadata",
+                    nonce_label="oauth-http-flow-generation-before-refresh",
+                    expected_version=None,
+                    expected_metadata_sha256=None,
                 )
-                recipient_nonce = hashlib.sha256(
-                    b"oauth-http-flow-recipient-nonce"
-                ).digest()
-                lease = request(
-                    client,
-                    "POST",
-                    "/api/data-plane/credential-leases",
-                    json_body={
-                        "apiVersion": "serverware.credentialLeaseRequest/v2",
-                        "principalId": "agent:oauth-http-flow",
-                        "routeId": route.id,
-                        "credentialId": x_credential_id,
-                        "recipientPublicKey": b64url(recipient_public),
-                        "recipientKeyId": "sha256:"
-                        + hashlib.sha256(recipient_public).hexdigest(),
-                        "recipientNonce": b64url(recipient_nonce),
-                        "policyHash": POLICY_HASH,
-                        "dataPlaneBinaryDigest": DATA_PLANE_DIGEST,
-                        "maxTtlSeconds": 1,
-                    },
-                    extra_headers={"X-Serverware-Data-Plane-Token": DATA_PLANE_TOKEN},
+                expect_status(
+                    generation,
+                    200,
+                    "managed X OAuth credential generation metadata",
                 )
-                expect_status(lease, 200, "managed X OAuth credential lease")
+                initial_metadata = app_module._credential_lease_public_metadata(
+                    x_initial_stored
+                )
+                initial_metadata_sha256 = (
+                    app_module._credential_lease_metadata_sha256(initial_metadata)
+                )
+                refresh_race = credential_lease(
+                    purpose="dispatchSecret",
+                    nonce_label="oauth-http-flow-dispatch-refresh-race",
+                    expected_version=x_initial_version,
+                    expected_metadata_sha256=initial_metadata_sha256,
+                )
+                expect_status(
+                    refresh_race,
+                    409,
+                    "managed X OAuth refresh generation race",
+                )
                 x_refreshed = db.get_credential(x_credential_id)
                 if (
                     x_refreshed is None
@@ -1102,6 +1387,19 @@ def main() -> None:
                         "credential lease did not use the managed X OAuth refresh path"
                     )
                 x_refreshed_version = int(x_refreshed["credential_version"])
+                refreshed_metadata = app_module._credential_lease_public_metadata(
+                    x_refreshed
+                )
+                refreshed_metadata_sha256 = (
+                    app_module._credential_lease_metadata_sha256(refreshed_metadata)
+                )
+                lease = credential_lease(
+                    purpose="dispatchSecret",
+                    nonce_label="oauth-http-flow-dispatch-after-refresh",
+                    expected_version=x_refreshed_version,
+                    expected_metadata_sha256=refreshed_metadata_sha256,
+                )
+                expect_status(lease, 200, "managed X OAuth credential dispatch lease")
                 if (
                     simulator.observations()["counts"]["x"].get("refresh_exchanges")
                     != 1
